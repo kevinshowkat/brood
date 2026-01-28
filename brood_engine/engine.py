@@ -337,6 +337,72 @@ class BroodEngine:
             return None, None
         return payload, last_version
 
+    def last_version_snapshot(self) -> dict[str, Any] | None:
+        if not self.thread.versions:
+            return None
+        last_version = self.thread.versions[-1]
+        settings = dict(last_version.settings or {})
+        provider_options = settings.get("provider_options")
+        if isinstance(provider_options, dict):
+            settings["provider_options"] = dict(provider_options)
+        return {
+            "version_id": last_version.version_id,
+            "prompt": last_version.prompt,
+            "settings": settings,
+        }
+
+    def apply_recommendations(
+        self,
+        settings: dict[str, Any],
+        recommendations: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], list[str], list[str]]:
+        updated = dict(settings or {})
+        provider_options = updated.get("provider_options")
+        if not isinstance(provider_options, dict):
+            provider_options = {}
+        summary: list[str] = []
+        skipped: list[str] = []
+        for rec in recommendations or []:
+            if not isinstance(rec, dict):
+                continue
+            name = rec.get("setting_name")
+            if not name:
+                continue
+            value = rec.get("setting_value")
+            target = rec.get("setting_target") or "provider_options"
+            target = str(target)
+            if target in {"request", "top_level"}:
+                if str(name).lower() == "model" and value:
+                    self.image_model = str(value)
+                    summary.append(f"model={value}")
+                elif str(name).lower() == "size":
+                    allowed = self._allowed_sizes_for_current_model()
+                    if allowed and value not in allowed:
+                        skipped.append(f"size={value} (unsupported)")
+                    else:
+                        updated[str(name)] = value
+                        summary.append(f"{name}={value}")
+                else:
+                    updated[str(name)] = value
+                    summary.append(f"{name}={value}")
+            elif target in {"provider_options", "provider", "options"}:
+                provider_options[str(name)] = value
+                summary.append(f"provider_options.{name}={value}")
+        if provider_options:
+            updated["provider_options"] = provider_options
+        return updated, summary, skipped
+
+    def _allowed_sizes_for_current_model(self) -> list[str] | None:
+        model = self.image_model or ""
+        provider = ""
+        selection = self.model_selector.select(model, "image")
+        if selection and selection.model:
+            provider = selection.model.provider
+            model = selection.model.name
+        if provider == "openai" and model.startswith("gpt-image"):
+            return ["1024x1024", "1024x1536", "1536x1024", "auto"]
+        return None
+
     def record_feedback(self, version_id: str, artifact_id: str, rating: str, reason: str | None = None) -> None:
         feedback = self.feedback_writer.record(version_id, artifact_id, rating, reason)
         self.thread.record_feedback(version_id, feedback)

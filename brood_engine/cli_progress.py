@@ -29,6 +29,12 @@ def progress_once(label: str) -> float:
     return origin
 
 
+def elapsed_line(label: str, seconds: float, width: int | None = None) -> str:
+    duration = _format_duration(int(max(0, seconds)))
+    line = _separator_line(f"{label} {duration}", width if width else 100)
+    return f"{_GREY}{line}{_RESET}"
+
+
 class ProgressTicker:
     def __init__(
         self,
