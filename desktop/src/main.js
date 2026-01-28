@@ -29,6 +29,7 @@ const state = {
   blobUrls: new Map(),
   pendingEchoes: [],
   echoBuffer: "",
+  systemBuffer: "",
 };
 
 function setStatus(message, isError = false) {
@@ -124,7 +125,7 @@ document.addEventListener("keydown", (event) => {
 listen("pty-data", (event) => {
   state.ptyReady = true;
   setStatus("Engine: connected");
-  term.write(highlightEchoes(event.payload));
+  term.write(styleSystemLines(highlightEchoes(event.payload)));
 });
 
 listen("pty-exit", () => {
@@ -133,6 +134,8 @@ listen("pty-exit", () => {
 });
 
 const INPUT_COLOR = "\x1b[38;2;139;213;255m";
+const SYSTEM_COLOR = "\x1b[38;2;150;157;165m";
+const ITALIC = "\x1b[3m";
 const RESET_COLOR = "\x1b[0m";
 
 function highlightEchoes(payload) {
@@ -171,6 +174,34 @@ function highlightEchoes(payload) {
     state.echoBuffer = "";
   }
   return output;
+}
+
+function styleSystemLines(payload) {
+  if (!payload) return payload;
+  let combined = state.systemBuffer + payload;
+  const endsWithNewline = combined.endsWith("\n");
+  const parts = combined.split("\n");
+  if (!endsWithNewline) {
+    state.systemBuffer = parts.pop() || "";
+  } else {
+    state.systemBuffer = "";
+  }
+  const styled = parts.map((line) => styleSystemLine(line)).join("\n");
+  return endsWithNewline ? `${styled}\n` : styled;
+}
+
+function styleSystemLine(line) {
+  if (!line) return line;
+  if (line.includes("\x1b[")) return line;
+  const trimmed = line.trimStart();
+  if (
+    trimmed.startsWith("[brood]") ||
+    trimmed.startsWith("/text_model") ||
+    trimmed.startsWith("/image_model")
+  ) {
+    return `${SYSTEM_COLOR}${ITALIC}${line}${RESET_COLOR}`;
+  }
+  return line;
 }
 
 const settings = {
