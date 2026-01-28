@@ -333,9 +333,12 @@ async function readEvents() {
 function handleEvent(event) {
   if (event.type === "plan_preview") {
     const count = event.plan?.images || 0;
+    const [width, height] = resolveSize(event.plan?.size);
     state.placeholders = Array.from({ length: count }).map((_, idx) => ({
       artifact_id: `placeholder-${Date.now()}-${idx}`,
       placeholder: true,
+      width,
+      height,
     }));
     renderGallery();
   }
@@ -385,8 +388,17 @@ function renderGallery() {
   galleryEl.innerHTML = "";
   for (const placeholder of state.placeholders) {
     const card = document.createElement("div");
-    card.className = "card";
-    card.innerHTML = `<div class=\"meta\">placeholder</div>`;
+    card.className = "card placeholder";
+    const frame = document.createElement("div");
+    frame.className = "placeholder-frame";
+    if (placeholder.width && placeholder.height) {
+      frame.style.aspectRatio = `${placeholder.width} / ${placeholder.height}`;
+    }
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = placeholder.width && placeholder.height ? `generating • ${placeholder.width}x${placeholder.height}` : "generating";
+    card.appendChild(frame);
+    card.appendChild(meta);
     galleryEl.appendChild(card);
   }
   for (const artifact of state.artifacts.values()) {
@@ -406,6 +418,23 @@ function renderGallery() {
     galleryEl.appendChild(card);
   }
   renderDetail();
+}
+
+function resolveSize(size) {
+  if (!size) return [1024, 1024];
+  const normalized = String(size).trim().toLowerCase();
+  if (["portrait", "tall"].includes(normalized)) return [1024, 1536];
+  if (["landscape", "wide"].includes(normalized)) return [1536, 1024];
+  if (["square", "1:1"].includes(normalized)) return [1024, 1024];
+  if (normalized.includes("x")) {
+    const parts = normalized.split("x");
+    const w = Number(parts[0]);
+    const h = Number(parts[1]);
+    if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+      return [w, h];
+    }
+  }
+  return [1024, 1024];
 }
 
 async function loadImageBinary(path, imgEl) {
