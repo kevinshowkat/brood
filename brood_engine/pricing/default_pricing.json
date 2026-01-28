@@ -12,6 +12,14 @@
     "cost_per_image_usd": 0.04,
     "latency_per_image_s": 2.0
   },
+  "openai-gpt-image-1-mini": {
+    "cost_per_image_usd": null,
+    "latency_per_image_s": null
+  },
+  "openai-gpt-image-1.5": {
+    "cost_per_image_usd": null,
+    "latency_per_image_s": null
+  },
   "openai-gpt-4o-mini": {
     "cost_per_1k_tokens_usd": 0.15,
     "latency_per_call_s": 0.4,
