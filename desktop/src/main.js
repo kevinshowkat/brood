@@ -29,7 +29,7 @@ const state = {
   blobUrls: new Map(),
   pendingEchoes: [],
   echoBuffer: "",
-  systemBuffer: "",
+  echoMode: "suppress",
 };
 
 function setStatus(message, isError = false) {
@@ -92,7 +92,9 @@ async function sendTerminalInput() {
       return;
     }
   }
+  writeUserLine(value);
   state.pendingEchoes.push(value);
+  state.echoMode = "suppress";
   invoke("write_pty", { data: `${value}\n` }).catch((err) => {
     term.writeln(`\r\n[brood] send failed: ${err}`);
     setStatus(`Engine: send failed (${err})`, true);
@@ -134,6 +136,8 @@ listen("pty-exit", () => {
 });
 
 const INPUT_COLOR = "\x1b[38;2;139;213;255m";
+const USER_BG = "\x1b[48;2;44;50;60m";
+const USER_FG = "\x1b[38;2;216;222;229m";
 const SYSTEM_COLOR = "\x1b[38;2;150;157;165m";
 const ITALIC = "\x1b[3m";
 const RESET_COLOR = "\x1b[0m";
@@ -163,12 +167,17 @@ function highlightEchoes(payload) {
     const index = combined.indexOf(needle, cursor);
     if (index === -1) break;
     output += combined.slice(cursor, index);
-    output += `${INPUT_COLOR}${needle}${RESET_COLOR}`;
+    if (state.echoMode === "highlight") {
+      output += `${INPUT_COLOR}${needle}${RESET_COLOR}`;
+    }
     cursor = index + needle.length;
     state.pendingEchoes.shift();
   }
   output += combined.slice(cursor);
   state.echoBuffer = state.pendingEchoes.length ? tail : "";
+  if (!state.pendingEchoes.length) {
+    state.echoMode = "highlight";
+  }
   if (!state.pendingEchoes.length && state.echoBuffer) {
     output += state.echoBuffer;
     state.echoBuffer = "";
@@ -178,16 +187,10 @@ function highlightEchoes(payload) {
 
 function styleSystemLines(payload) {
   if (!payload) return payload;
-  let combined = state.systemBuffer + payload;
-  const endsWithNewline = combined.endsWith("\n");
-  const parts = combined.split("\n");
-  if (!endsWithNewline) {
-    state.systemBuffer = parts.pop() || "";
-  } else {
-    state.systemBuffer = "";
-  }
-  const styled = parts.map((line) => styleSystemLine(line)).join("\n");
-  return endsWithNewline ? `${styled}\n` : styled;
+  return payload
+    .split("\n")
+    .map((line) => (line.includes("\x1b[") ? line : styleSystemLine(line)))
+    .join("\n");
 }
 
 function styleSystemLine(line) {
@@ -204,6 +207,10 @@ function styleSystemLine(line) {
     return `${SYSTEM_COLOR}${ITALIC}${line}${RESET_COLOR}`;
   }
   return line;
+}
+
+function writeUserLine(value) {
+  term.writeln(`${USER_BG}${USER_FG}> ${value}${RESET_COLOR}`);
 }
 
 const settings = {
