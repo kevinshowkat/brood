@@ -43,7 +43,7 @@ function reportError(err) {
 
 const term = new Terminal({
   fontFamily: "IBM Plex Mono",
-  fontSize: 13,
+  fontSize: 15,
   cursorBlink: false,
   cursorStyle: "bar",
   disableStdin: true,
