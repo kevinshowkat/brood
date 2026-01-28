@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from .chat.intent_parser import parse_intent
+from .chat.refine import extract_model_directive, is_refinement
 from .engine import BroodEngine
 from .runs.export import export_html
 from .utils import now_utc_iso, load_dotenv
@@ -111,8 +112,14 @@ def _handle_chat(args: argparse.Namespace) -> int:
             continue
         if intent.action == "generate":
             prompt = intent.prompt or ""
-            if last_prompt and len(prompt.split()) < 6:
-                prompt = f"{last_prompt} Update: {prompt}"
+            prompt, model_directive = extract_model_directive(prompt)
+            if model_directive:
+                engine.image_model = model_directive
+                print(f"Image model set to {engine.image_model}")
+            if not prompt and last_prompt:
+                prompt = last_prompt
+            elif last_prompt and is_refinement(prompt):
+                prompt = f\"{last_prompt} Update: {prompt}\"
             last_prompt = prompt
             progress_once("Planning run")
             usage = engine.track_context(prompt, "", engine.text_model)
