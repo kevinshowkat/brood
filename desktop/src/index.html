@@ -50,10 +50,12 @@
       </header>
       <main class="layout">
         <section class="pane terminal-pane">
-          <div id="terminal"></div>
-          <div id="goal-chips" class="goal-chips hidden" aria-live="polite">
-            <div class="goal-hint">Pick goals to optimize the next iteration.</div>
-            <div id="goal-row" class="goal-row" role="group" aria-label="Optimization goals"></div>
+          <div class="terminal-shell">
+            <div id="terminal"></div>
+            <div id="goal-chips" class="goal-chips hidden" aria-live="polite">
+              <div class="goal-hint">Pick goals to optimize the next iteration.</div>
+              <div id="goal-row" class="goal-row" role="group" aria-label="Optimization goals"></div>
+            </div>
           </div>
           <div class="terminal-input">
             <input id="terminal-input" type="text" placeholder="Generate an image of a boat" />

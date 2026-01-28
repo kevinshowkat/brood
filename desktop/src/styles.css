@@ -118,12 +118,21 @@ body {
   padding: 8px;
 }
 
-#terminal {
+.terminal-shell {
+  position: relative;
   flex: 1;
+  min-height: 320px;
+}
+
+.terminal-shell.goal-active {
+  padding-bottom: var(--goal-chips-height, 96px);
+}
+
+#terminal {
   border-radius: 10px;
   overflow: hidden;
   background: var(--panel);
-  min-height: 320px;
+  height: 100%;
 }
 
 #terminal .xterm,
@@ -132,14 +141,18 @@ body {
 }
 
 .goal-chips {
-  margin-top: 8px;
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 0;
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: rgba(18, 26, 37, 0.7);
+  background: rgba(18, 26, 37, 0.9);
   display: flex;
   flex-direction: column;
   gap: 8px;
+  z-index: 2;
 }
 
 .goal-chips.hidden {

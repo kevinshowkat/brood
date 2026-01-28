@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 
 @dataclass
 class AnalysisResult:
-    recommendations: list[str]
+    recommendations: list[dict[str, Any]]
     analysis_excerpt: str
 
 
@@ -124,7 +124,7 @@ def _extract_output_text(response: dict[str, Any]) -> str:
     return "\n".join(parts).strip()
 
 
-def _parse_analysis_response(text: str) -> tuple[str, list[str]]:
+def _parse_analysis_response(text: str) -> tuple[str, list[dict[str, Any]]]:
     payload = _extract_json_object(text)
     if isinstance(payload, dict):
         excerpt = payload.get("analysis_excerpt")
@@ -148,11 +148,31 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _coerce_recommendations(recs: Any) -> list[str]:
+def _coerce_recommendations(recs: Any) -> list[dict[str, Any]]:
     if isinstance(recs, list):
-        return [str(item).strip() for item in recs if str(item).strip()]
+        normalized: list[dict[str, Any]] = []
+        for item in recs:
+            if isinstance(item, dict):
+                normalized.append(item)
+            elif isinstance(item, str) and item.strip():
+                normalized.append(
+                    {
+                        "setting_name": "note",
+                        "setting_value": item.strip(),
+                        "setting_target": "comment",
+                        "rationale": "",
+                    }
+                )
+        return normalized
     if isinstance(recs, str) and recs.strip():
-        return [recs.strip()]
+        return [
+            {
+                "setting_name": "note",
+                "setting_value": recs.strip(),
+                "setting_target": "comment",
+                "rationale": "",
+            }
+        ]
     return []
 
 
@@ -200,12 +220,20 @@ def _build_analysis_prompt(receipt: dict[str, Any], goals: list[str] | None) -> 
         "latency_per_image_s": latency,
     }
     prompt_line = prompt.strip().replace("\n", " ")
+    size_hint = ""
+    if provider == "openai":
+        size_hint = "Allowed sizes: 1024x1024, 1024x1536, 1536x1024, auto.\n"
     return (
         "You are optimizing image generation settings for the next iteration.\n"
         f"Goals: {goals_line}\n"
         f"Prompt: {prompt_line}\n"
         f"Receipt summary JSON: {json.dumps(payload, ensure_ascii=True)}\n"
-        "Return ONLY JSON with keys: analysis_excerpt (string) and recommendations (array of strings).\n"
+        f"{size_hint}"
+        "Return ONLY JSON with keys: analysis_excerpt (string) and recommendations (array).\n"
+        "Each recommendation must be an object with keys: setting_name, setting_value, setting_target, rationale.\n"
+        "Allowed setting_target values: request, provider_options.\n"
+        "Allowed request settings: size, n, seed, output_format, background.\n"
+        "If provider is openai, only recommend sizes from the allowed list.\n"
         "Recommendations should be concrete parameter changes that best satisfy the goals."
     )
 
@@ -214,13 +242,33 @@ def _stub_analysis(receipt: dict[str, Any], goals: list[str] | None) -> Analysis
     prompt = str(receipt.get("request", {}).get("prompt", ""))
     goals_line = ", ".join(goals) if goals else "none"
     excerpt = f"Receipt analyzed for goals ({goals_line}) and prompt: {prompt[:80]}"
-    recommendation = "Try a different size"
+    recommendation = {
+        "setting_name": "size",
+        "setting_value": "1024x1024",
+        "setting_target": "request",
+        "rationale": "Default size.",
+    }
     if goals:
         lowered = " ".join(goals).lower()
         if "minimize cost" in lowered or "minimize time" in lowered:
-            recommendation = "Try a smaller size"
+            recommendation = {
+                "setting_name": "size",
+                "setting_value": "1024x1024",
+                "setting_target": "request",
+                "rationale": "Use the smallest supported size to reduce cost and latency.",
+            }
         elif "maximize quality" in lowered:
-            recommendation = "Try a higher quality preset"
+            recommendation = {
+                "setting_name": "size",
+                "setting_value": "1536x1024",
+                "setting_target": "request",
+                "rationale": "Larger size can improve quality.",
+            }
         elif "retrieval" in lowered:
-            recommendation = "Try clearer text or simpler composition"
+            recommendation = {
+                "setting_name": "size",
+                "setting_value": "1024x1024",
+                "setting_target": "request",
+                "rationale": "Square framing improves readability.",
+            }
     return AnalysisResult(recommendations=[recommendation], analysis_excerpt=excerpt)
