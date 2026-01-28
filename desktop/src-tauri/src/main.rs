@@ -1,10 +1,52 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
+use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Manager, State};
+
+fn find_repo_root(start: &Path) -> Option<PathBuf> {
+    let mut current = Some(start);
+    while let Some(dir) = current {
+        if dir.join("brood_engine").is_dir() || dir.join("pyproject.toml").exists() {
+            return Some(dir.to_path_buf());
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+fn parse_dotenv(path: &Path) -> HashMap<String, String> {
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let mut vars = HashMap::new();
+    for raw_line in content.lines() {
+        let mut line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(stripped) = line.strip_prefix("export ") {
+            line = stripped.trim();
+        }
+        let Some((key, value)) = line.split_once('=') else { continue };
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let mut value = value.trim().to_string();
+        if value.len() >= 2 {
+            let bytes = value.as_bytes();
+            if (bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+                || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'')
+            {
+                value = value[1..value.len() - 1].to_string();
+            }
+        }
+        vars.insert(key.to_string(), value);
+    }
+    vars
+}
 
 struct PtyState {
     writer: Option<Box<dyn Write + Send>>,
@@ -53,10 +95,20 @@ fn spawn_pty(
     if let Some(dir) = cwd {
         cmd.cwd(PathBuf::from(dir));
     }
-    if let Some(vars) = env {
-        for (key, value) in vars {
-            cmd.env(key, value);
+    let mut merged_env = env.unwrap_or_default();
+    if let Ok(current_dir) = std::env::current_dir() {
+        if let Some(repo_root) = find_repo_root(&current_dir) {
+            let env_path = repo_root.join(".env");
+            if env_path.exists() {
+                let dotenv_vars = parse_dotenv(&env_path);
+                for (key, value) in dotenv_vars {
+                    merged_env.entry(key).or_insert(value);
+                }
+            }
         }
+    }
+    for (key, value) in merged_env {
+        cmd.env(key, value);
     }
 
     let child = pair

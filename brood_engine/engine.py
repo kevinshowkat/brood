@@ -307,11 +307,20 @@ class BroodEngine:
         self.events.emit("cost_latency_update", **cost_payload)
         return artifacts
 
-    def analyze_last_receipt(self, goals: list[str] | None = None) -> dict[str, Any] | None:
+    def analyze_last_receipt(
+        self,
+        goals: list[str] | None = None,
+        *,
+        mode: str | None = None,
+        round_idx: int | None = None,
+        round_total: int | None = None,
+    ) -> dict[str, Any] | None:
         payload, last_version = self.last_receipt_payload()
         if not payload or not last_version:
             return None
+        analysis_started = time.monotonic()
         analysis = analyze_receipt(payload, goals=goals, model=self.text_model)
+        analysis_elapsed = time.monotonic() - analysis_started
         if goals:
             last_version.intent = dict(last_version.intent)
             last_version.intent["goals"] = list(goals)
@@ -322,8 +331,21 @@ class BroodEngine:
             recommendations=analysis.recommendations,
             analysis_excerpt=analysis.analysis_excerpt,
             goals=goals or [],
+            analysis_elapsed_s=analysis_elapsed,
+            analysis_model=self.text_model,
+            mode=mode,
+            round=round_idx,
+            round_total=round_total,
         )
-        return {"recommendations": analysis.recommendations, "analysis_excerpt": analysis.analysis_excerpt}
+        return {
+            "recommendations": analysis.recommendations,
+            "analysis_excerpt": analysis.analysis_excerpt,
+            "analysis_elapsed_s": analysis_elapsed,
+            "analysis_model": self.text_model,
+            "mode": mode,
+            "round": round_idx,
+            "round_total": round_total,
+        }
 
     def last_receipt_payload(self) -> tuple[dict[str, Any] | None, Any | None]:
         if not self.thread.versions:
@@ -373,21 +395,33 @@ class BroodEngine:
             target = str(target)
             if target in {"request", "top_level"}:
                 if str(name).lower() == "model" and value:
-                    self.image_model = str(value)
-                    summary.append(f"model={value}")
+                    current = self.image_model
+                    if current == value:
+                        skipped.append(f"model={value} (unchanged)")
+                    else:
+                        self.image_model = str(value)
+                        summary.append(f"model={value}")
                 elif str(name).lower() == "size":
                     allowed = self._allowed_sizes_for_current_model()
                     if allowed and value not in allowed:
                         skipped.append(f"size={value} (unsupported)")
+                    elif updated.get("size") == value:
+                        skipped.append(f"size={value} (unchanged)")
                     else:
                         updated[str(name)] = value
                         summary.append(f"{name}={value}")
                 else:
-                    updated[str(name)] = value
-                    summary.append(f"{name}={value}")
+                    if updated.get(str(name)) == value:
+                        skipped.append(f"{name}={value} (unchanged)")
+                    else:
+                        updated[str(name)] = value
+                        summary.append(f"{name}={value}")
             elif target in {"provider_options", "provider", "options"}:
-                provider_options[str(name)] = value
-                summary.append(f"provider_options.{name}={value}")
+                if provider_options.get(str(name)) == value:
+                    skipped.append(f"provider_options.{name}={value} (unchanged)")
+                else:
+                    provider_options[str(name)] = value
+                    summary.append(f"provider_options.{name}={value}")
         if provider_options:
             updated["provider_options"] = provider_options
         return updated, summary, skipped
