@@ -10,6 +10,7 @@ COMMANDS = {
     "/quality": "Quality preset",
     "/cheaper": "Lower cost preset",
     "/better": "Higher quality preset",
+    "/optimize": "Analyze last receipt with goals",
     "/recreate": "Recreate from reference image",
     "/export": "Export report",
     "/help": "Show help",
