@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import shutil
 import sys
 import threading
 import time
 from typing import TextIO
+
+_BOLD = "\x1b[1m"
+_GREY = "\x1b[38;2;150;157;165m"
+_RESET = "\x1b[0m"
 
 
 def progress_line(label: str, start: float | None = None, done: bool = False) -> tuple[str, float]:
@@ -45,31 +50,32 @@ class ProgressTicker:
         if not self._enabled:
             line, origin = progress_line(self.label, self.start)
             self.start = origin
-            self.stream.write(f"{line}\n")
+            self.stream.write(f"{_BOLD}{line}{_RESET}\n")
             self.stream.flush()
             return
         line, origin = progress_line(self.label, self.start)
         self.start = origin
-        self._write_line(line, newline=False)
+        self._write_line(f"{_BOLD}{line}{_RESET}", newline=False)
         self._started = True
         self._thread.start()
 
     def stop(self, done: bool = True) -> None:
         if not self._started and not self._enabled:
             if done:
-                line, _ = progress_line(self.label, self.start, done=True)
-                self.stream.write(f"{line}\n")
-                self.stream.flush()
+                self._write_done_line()
             return
         self._stop.set()
         self._thread.join(timeout=0.5)
-        line, _ = progress_line(self.label, self.start, done=done)
-        self._write_line(line, newline=True)
+        if done:
+            self._write_done_line()
+        else:
+            line, _ = progress_line(self.label, self.start, done=False)
+            self._write_line(f"{_BOLD}{line}{_RESET}", newline=True)
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval_s):
             line, _ = progress_line(self.label, self.start, done=False)
-            self._write_line(line, newline=False)
+            self._write_line(f"{_BOLD}{line}{_RESET}", newline=False)
 
     def _write_line(self, line: str, newline: bool) -> None:
         if not self._enabled:
@@ -82,3 +88,43 @@ class ProgressTicker:
         if newline:
             self.stream.write("\n")
         self.stream.flush()
+
+    def _write_done_line(self) -> None:
+        elapsed = max(0, int(time.monotonic() - (self.start or time.monotonic())))
+        duration = _format_duration(elapsed)
+        width = 0
+        if self._enabled:
+            try:
+                width = shutil.get_terminal_size(fallback=(100, 20)).columns
+            except Exception:
+                width = 100
+        line = _separator_line(f"Generated in {duration}", width if width else 100)
+        styled = f"{_GREY}{line}{_RESET}"
+        if self._enabled:
+            self.stream.write("\r")
+            self.stream.write(styled)
+            self.stream.write("\033[K\n")
+            self.stream.flush()
+        else:
+            self.stream.write(f"{styled}\n")
+            self.stream.flush()
+
+
+def _format_duration(seconds: int) -> str:
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m {secs:02d}s"
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
+
+
+def _separator_line(label: str, width: int) -> str:
+    content = f" {label} "
+    if width <= len(content) + 2:
+        return content.strip()
+    remaining = width - len(content)
+    left = remaining // 2
+    right = remaining - left
+    return f\"{'─' * left}{content}{'─' * right}\"
