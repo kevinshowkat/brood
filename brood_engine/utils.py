@@ -9,6 +9,7 @@ import time
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import tomllib
 from typing import Any, Mapping
 
 
@@ -81,6 +82,56 @@ def getenv_flag(key: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def load_dotenv(path: Path | None = None, override: bool = False) -> bool:
+    env_path = path or _default_env_path()
+    if not env_path.exists():
+        return False
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if value and value[0] == value[-1] and value.startswith(("\"", "'")):
+            value = value[1:-1]
+        if not override and key in os.environ:
+            continue
+        os.environ[key] = value
+    return True
+
+
+def _default_env_path() -> Path:
+    cwd = Path.cwd()
+    repo_root = _find_repo_root(cwd)
+    if repo_root:
+        env_path = repo_root / ".env"
+        if env_path.exists():
+            return env_path
+    return cwd / ".env"
+
+
+def _find_repo_root(start: Path) -> Path | None:
+    for current in (start,) + tuple(start.parents):
+        if (current / "brood_engine").is_dir():
+            return current
+        pyproject = current / "pyproject.toml"
+        if pyproject.exists():
+            try:
+                data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if data.get("project", {}).get("name") == "brood":
+                return current
+    return None
 
 
 def monotonic_ms() -> int:
