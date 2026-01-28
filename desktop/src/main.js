@@ -166,11 +166,18 @@ function highlightEchoes(payload) {
     const needle = state.pendingEchoes[0];
     const index = combined.indexOf(needle, cursor);
     if (index === -1) break;
-    output += combined.slice(cursor, index);
-    if (state.echoMode === "highlight") {
-      output += `${INPUT_COLOR}${needle}${RESET_COLOR}`;
+    const lineStart = combined.lastIndexOf("\n", index - 1) + 1;
+    const lineEnd = combined.indexOf("\n", index);
+    const endIndex = lineEnd === -1 ? combined.length : lineEnd + 1;
+    const prefix = combined.slice(lineStart, index).replace(/\r/g, "");
+    const isPromptLine = /^\s*>+\s*$/.test(prefix);
+    if (isPromptLine) {
+      output += combined.slice(cursor, lineStart);
+      cursor = endIndex;
+    } else {
+      output += combined.slice(cursor, index);
+      cursor = index + needle.length;
     }
-    cursor = index + needle.length;
     state.pendingEchoes.shift();
   }
   output += combined.slice(cursor);
@@ -210,7 +217,10 @@ function styleSystemLine(line) {
 }
 
 function writeUserLine(value) {
-  term.writeln(`${USER_BG}${USER_FG}> ${value}${RESET_COLOR}`);
+  const prefix = `> ${value}`;
+  const cols = term?.cols || 0;
+  const pad = cols > prefix.length ? " ".repeat(cols - prefix.length) : "";
+  term.writeln(`${USER_BG}${USER_FG}${prefix}${pad}${RESET_COLOR}`);
 }
 
 const settings = {
