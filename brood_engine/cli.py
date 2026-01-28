@@ -42,21 +42,21 @@ def _build_parser() -> argparse.ArgumentParser:
     chat = sub.add_parser("chat", help="Interactive chat loop")
     chat.add_argument("--out", required=True, help="Run output directory")
     chat.add_argument("--events", help="Path to events.jsonl")
-    chat.add_argument("--text-model", dest="text_model", default="gpt-5.1-codex-max")
+    chat.add_argument("--text-model", dest="text_model", default="gpt-5.2")
     chat.add_argument("--image-model", dest="image_model")
 
     run = sub.add_parser("run", help="Single-run generation")
     run.add_argument("--prompt", required=True)
     run.add_argument("--out", required=True)
     run.add_argument("--events")
-    run.add_argument("--text-model", dest="text_model", default="gpt-5.1-codex-max")
+    run.add_argument("--text-model", dest="text_model", default="gpt-5.2")
     run.add_argument("--image-model", dest="image_model")
 
     recreate = sub.add_parser("recreate", help="Recreate from reference image")
     recreate.add_argument("--reference", required=True, help="Path to reference image")
     recreate.add_argument("--out", required=True)
     recreate.add_argument("--events")
-    recreate.add_argument("--text-model", dest="text_model", default="gpt-5.1-codex-max")
+    recreate.add_argument("--text-model", dest="text_model", default="gpt-5.2")
     recreate.add_argument("--image-model", dest="image_model")
 
     export = sub.add_parser("export", help="Export run to HTML")
@@ -134,26 +134,75 @@ def _handle_chat(args: argparse.Namespace) -> int:
             continue
         if intent.action == "optimize":
             goals = intent.command_args.get("goals") or []
+            mode = (intent.command_args.get("mode") or "auto").lower()
+            if mode not in {"auto", "review"}:
+                mode = "auto"
             if not goals:
-                print("No goals provided. Use /optimize quality,cost,time,retrieval")
+                print("No goals provided. Use /optimize [review] quality,cost,time,retrieval")
                 continue
-            print(f"Optimizing for: {', '.join(goals)}")
+            print(f"Optimizing for: {', '.join(goals)} ({mode})")
             max_rounds = 3
-            rounds_left = max_rounds - 1
-            for round_idx in range(rounds_left):
-                analysis_started = time.monotonic()
+            if mode == "review":
                 payload, _ = engine.last_receipt_payload()
-                snapshot = engine.last_version_snapshot()
-                if not payload or not snapshot:
+                if not payload:
                     print("No receipt available to analyze.")
-                    break
+                    continue
+                analysis_ticker = ProgressTicker("Optimizing call")
+                analysis_ticker.start_ticking()
+                analysis = None
                 reasoning_prompt = build_optimize_reasoning_prompt(payload, list(goals))
                 reasoning = reasoning_summary(
                     reasoning_prompt, engine.text_model, compact=False
                 )
                 if reasoning:
                     print(f"Reasoning: {reasoning}")
-                analysis = engine.analyze_last_receipt(goals=list(goals))
+                try:
+                    analysis = engine.analyze_last_receipt(goals=list(goals), mode=mode)
+                finally:
+                    analysis_ticker.stop(done=True)
+                if not analysis:
+                    print("No receipt available to analyze.")
+                    continue
+                if analysis.get("analysis_excerpt"):
+                    print(f"Analysis: {analysis['analysis_excerpt']}")
+                recommendations = analysis.get("recommendations") or []
+                if recommendations:
+                    print("Recommendations:")
+                    for rec in recommendations:
+                        if isinstance(rec, dict):
+                            print(f"- {_format_recommendation(rec)}")
+                analysis_elapsed = analysis.get("analysis_elapsed_s")
+                if analysis_elapsed is not None:
+                    print(elapsed_line("Optimize analysis in", analysis_elapsed))
+                print("Review mode: no changes applied.")
+                continue
+            rounds_left = max_rounds - 1
+            for round_idx in range(rounds_left):
+                payload, _ = engine.last_receipt_payload()
+                snapshot = engine.last_version_snapshot()
+                if not payload or not snapshot:
+                    print("No receipt available to analyze.")
+                    break
+                analysis_ticker = ProgressTicker(
+                    f"Optimize round {round_idx + 2}/{max_rounds} • Optimizing call"
+                )
+                analysis_ticker.start_ticking()
+                analysis = None
+                reasoning_prompt = build_optimize_reasoning_prompt(payload, list(goals))
+                reasoning = reasoning_summary(
+                    reasoning_prompt, engine.text_model, compact=False
+                )
+                if reasoning:
+                    print(f"Reasoning: {reasoning}")
+                try:
+                    analysis = engine.analyze_last_receipt(
+                        goals=list(goals),
+                        mode=mode,
+                        round_idx=round_idx + 2,
+                        round_total=max_rounds,
+                    )
+                finally:
+                    analysis_ticker.stop(done=True)
                 if not analysis:
                     print("No receipt available to analyze.")
                     break
@@ -174,13 +223,18 @@ def _handle_chat(args: argparse.Namespace) -> int:
                     print(f"Applying: {', '.join(summary)}")
                 if skipped:
                     print(f"Skipped: {', '.join(skipped)}")
-                analysis_elapsed = time.monotonic() - analysis_started
-                print(elapsed_line("Optimize analysis in", analysis_elapsed))
+                if not summary:
+                    print("No parameter changes to apply; stopping optimize loop.")
+                    break
+                analysis_elapsed = analysis.get("analysis_elapsed_s")
+                if analysis_elapsed is not None:
+                    print(elapsed_line("Optimize analysis in", analysis_elapsed))
                 ticker = ProgressTicker(
                     f"Optimize round {round_idx + 2}/{max_rounds} • Generating images"
                 )
                 ticker.start_ticking()
                 error = None
+                gen_started = time.monotonic()
                 try:
                     engine.generate(
                         snapshot["prompt"],
@@ -195,6 +249,16 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 except Exception as exc:
                     error = exc
                 finally:
+                    gen_elapsed = time.monotonic() - gen_started
+                    engine.events.emit(
+                        "optimize_generation_done",
+                        round=round_idx + 2,
+                        round_total=max_rounds,
+                        elapsed_s=gen_elapsed,
+                        goals=list(goals),
+                        success=error is None,
+                        error=str(error) if error else None,
+                    )
                     ticker.stop(done=True)
                 if error:
                     print(f"Generation failed: {error}")

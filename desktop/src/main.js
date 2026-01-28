@@ -11,6 +11,7 @@ const terminalEl = document.getElementById("terminal");
 const terminalShell = document.querySelector(".terminal-shell");
 const terminalInput = document.getElementById("terminal-input");
 const terminalSend = document.getElementById("terminal-send");
+const goalsToggle = document.getElementById("goals-toggle");
 const engineStatus = document.getElementById("engine-status");
 const galleryEl = document.getElementById("gallery");
 const detailEl = document.getElementById("detail");
@@ -18,6 +19,12 @@ const runInfoEl = document.getElementById("run-info");
 const contextEl = document.getElementById("context-usage");
 const goalChipsEl = document.getElementById("goal-chips");
 const goalRowEl = document.getElementById("goal-row");
+const optimizeModeSelect = document.getElementById("optimize-mode");
+const optimizeTimingEl = document.getElementById("optimize-timing");
+const optimizePanel = document.getElementById("optimize-panel");
+const optimizeMetaEl = document.getElementById("optimize-meta");
+const optimizeAnalysisEl = document.getElementById("optimize-analysis");
+const optimizeRecsEl = document.getElementById("optimize-recs");
 
 const state = {
   runDir: null,
@@ -38,6 +45,18 @@ const state = {
   goalSelections: new Set(),
   goalSendTimer: null,
   goalAnalyzeInFlight: false,
+  optimizeMode: "auto",
+  optimize: {
+    goals: [],
+    analysisExcerpt: "",
+    recommendations: [],
+    analysisElapsedS: null,
+    generationElapsedS: null,
+    round: null,
+    roundTotal: null,
+    mode: "auto",
+    error: null,
+  },
 };
 
 function setStatus(message, isError = false) {
@@ -133,6 +152,119 @@ const GOAL_OPTIONS = [
   },
 ];
 
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds)) return "—";
+  const total = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours) return `${hours}h ${minutes}m ${String(secs).padStart(2, "0")}s`;
+  if (minutes) return `${minutes}m ${String(secs).padStart(2, "0")}s`;
+  return `${secs}s`;
+}
+
+function updateOptimizeTiming() {
+  if (!optimizeTimingEl) return;
+  const analysis = formatDuration(state.optimize.analysisElapsedS);
+  const generation = formatDuration(state.optimize.generationElapsedS);
+  optimizeTimingEl.textContent = `Analysis ${analysis} · Generate ${generation}`;
+}
+
+function formatRecommendation(rec) {
+  if (typeof rec === "string") return rec;
+  if (!rec || typeof rec !== "object") return "";
+  const name = rec.setting_name;
+  const value = rec.setting_value;
+  const target = rec.setting_target || "provider_options";
+  if (target === "comment") return String(value || "");
+  if (target === "request" || target === "top_level") {
+    return `${name}=${value}`;
+  }
+  return `provider_options.${name}=${value}`;
+}
+
+function renderOptimizePanel() {
+  if (!optimizePanel) return;
+  const data = state.optimize;
+  const hasContent =
+    Boolean(data.analysisExcerpt) ||
+    (data.recommendations && data.recommendations.length > 0) ||
+    Number.isFinite(data.analysisElapsedS) ||
+    Number.isFinite(data.generationElapsedS);
+  if (!hasContent) {
+    optimizePanel.classList.add("hidden");
+    return;
+  }
+  optimizePanel.classList.remove("hidden");
+  if (optimizeMetaEl) {
+    const parts = [];
+    if (data.mode) parts.push(`Mode: ${data.mode}`);
+    if (data.round && data.roundTotal) {
+      parts.push(`Round ${data.round}/${data.roundTotal}`);
+    }
+    if (data.goals && data.goals.length) {
+      parts.push(`Goals: ${data.goals.join(", ")}`);
+    }
+    if (Number.isFinite(data.analysisElapsedS)) {
+      parts.push(`Analysis ${formatDuration(data.analysisElapsedS)}`);
+    }
+    if (Number.isFinite(data.generationElapsedS)) {
+      parts.push(`Generate ${formatDuration(data.generationElapsedS)}`);
+    }
+    optimizeMetaEl.textContent = parts.join(" · ");
+  }
+  if (optimizeAnalysisEl) {
+    if (data.analysisExcerpt) {
+      optimizeAnalysisEl.textContent = `Analysis: ${data.analysisExcerpt}`;
+      optimizeAnalysisEl.style.display = "block";
+    } else {
+      optimizeAnalysisEl.textContent = "";
+      optimizeAnalysisEl.style.display = "none";
+    }
+  }
+  if (optimizeRecsEl) {
+    optimizeRecsEl.innerHTML = "";
+    if (!data.recommendations || data.recommendations.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "optimize-rec";
+      empty.textContent = "No recommendations.";
+      optimizeRecsEl.appendChild(empty);
+    } else {
+      for (const rec of data.recommendations) {
+        const row = document.createElement("div");
+        row.className = "optimize-rec";
+        const line = document.createElement("div");
+        line.textContent = formatRecommendation(rec);
+        row.appendChild(line);
+        if (rec?.rationale) {
+          const note = document.createElement("div");
+          note.className = "optimize-rec-note";
+          note.textContent = rec.rationale;
+          row.appendChild(note);
+        }
+        optimizeRecsEl.appendChild(row);
+      }
+    }
+  }
+  updateOptimizeTiming();
+}
+
+function resetOptimizeState() {
+  state.optimize = {
+    goals: [],
+    analysisExcerpt: "",
+    recommendations: [],
+    analysisElapsedS: null,
+    generationElapsedS: null,
+    round: null,
+    roundTotal: null,
+    mode: state.optimizeMode || "auto",
+    error: null,
+  };
+  renderOptimizePanel();
+  updateOptimizeTiming();
+}
+
 function renderGoalChips() {
   if (!goalRowEl) return;
   goalRowEl.innerHTML = "";
@@ -177,6 +309,7 @@ function showGoalChips() {
 function hideGoalChips() {
   if (!goalChipsEl) return;
   goalChipsEl.classList.add("hidden");
+  state.goalChipsShown = false;
   if (terminalShell) {
     terminalShell.classList.remove("goal-active");
     terminalShell.style.removeProperty("--goal-chips-height");
@@ -252,7 +385,8 @@ function triggerGoalAnalyze() {
   state.goalAnalyzeInFlight = true;
   setStatus("Engine: optimizing…");
   hideGoalChips();
-  const command = `/optimize ${selectedTokens.join(",")}`;
+  const mode = state.optimizeMode || "auto";
+  const command = `/optimize ${mode} ${selectedTokens.join(",")}`;
   sendPtyCommand(command);
 }
 
@@ -516,7 +650,9 @@ function styleSystemLine(line) {
     trimmed.startsWith("> Image model set to") ||
     trimmed.startsWith("• Planning run") ||
     trimmed.startsWith("Context usage:") ||
-    trimmed.startsWith("Plan:")
+    trimmed.startsWith("Plan:") ||
+    trimmed.startsWith("Reasoning:") ||
+    trimmed.startsWith("Analysis:")
   ) {
     return `${SYSTEM_COLOR}${ITALIC}${line}${RESET_COLOR}`;
   }
@@ -540,19 +676,29 @@ function formatUserBlock(line) {
 
 const settings = {
   memory: localStorage.getItem("brood.memory") === "1",
-  textModel: localStorage.getItem("brood.textModel") || "gpt-5.1-codex-max",
+  textModel: localStorage.getItem("brood.textModel") || "gpt-5.2",
   imageModel: localStorage.getItem("brood.imageModel") || "dryrun-image-1",
+  optimizeMode: localStorage.getItem("brood.optimizeMode") || "auto",
 };
+if (!["auto", "review"].includes(settings.optimizeMode)) {
+  settings.optimizeMode = "auto";
+}
 
 const memoryToggle = document.getElementById("memory-toggle");
 const textModelSelect = document.getElementById("text-model");
 const imageModelSelect = document.getElementById("image-model");
 
+state.optimizeMode = settings.optimizeMode;
+state.optimize.mode = settings.optimizeMode;
+
 memoryToggle.checked = settings.memory;
 textModelSelect.value = settings.textModel;
 imageModelSelect.value = settings.imageModel;
+if (optimizeModeSelect) {
+  optimizeModeSelect.value = settings.optimizeMode;
+}
 if (textModelSelect.value !== settings.textModel) {
-  settings.textModel = "gpt-5.1-codex-max";
+  settings.textModel = "gpt-5.2";
   textModelSelect.value = settings.textModel;
   localStorage.setItem("brood.textModel", settings.textModel);
 }
@@ -575,6 +721,17 @@ imageModelSelect.addEventListener("change", () => {
   invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
 });
 
+if (optimizeModeSelect) {
+  optimizeModeSelect.addEventListener("change", () => {
+    settings.optimizeMode = optimizeModeSelect.value;
+    localStorage.setItem("brood.optimizeMode", settings.optimizeMode);
+    state.optimizeMode = settings.optimizeMode;
+    state.optimize.mode = settings.optimizeMode;
+    renderOptimizePanel();
+    updateOptimizeTiming();
+  });
+}
+
 async function createRun() {
   try {
     setStatus("Engine: creating run…");
@@ -588,6 +745,7 @@ async function createRun() {
     state.goalChipsShown = false;
     state.goalSelections.clear();
     state.goalAnalyzeInFlight = false;
+    resetOptimizeState();
     hideGoalChips();
     if (detailEl) {
       detailEl.textContent = "";
@@ -635,6 +793,7 @@ async function openRun() {
   state.goalChipsShown = false;
   state.goalSelections.clear();
   state.goalAnalyzeInFlight = false;
+  resetOptimizeState();
   hideGoalChips();
   if (detailEl) {
     detailEl.textContent = "";
@@ -718,6 +877,27 @@ function handleEvent(event) {
       state.goalAnalyzeInFlight = false;
       setStatus("Engine: analysis ready");
     }
+    state.optimize.analysisExcerpt = event.analysis_excerpt || "";
+    state.optimize.recommendations = Array.isArray(event.recommendations) ? event.recommendations : [];
+    state.optimize.analysisElapsedS =
+      typeof event.analysis_elapsed_s === "number" ? event.analysis_elapsed_s : null;
+    state.optimize.goals = Array.isArray(event.goals) ? event.goals : [];
+    state.optimize.round = typeof event.round === "number" ? event.round : null;
+    state.optimize.roundTotal = typeof event.round_total === "number" ? event.round_total : null;
+    state.optimize.mode = event.mode || state.optimize.mode || state.optimizeMode;
+    state.optimize.generationElapsedS = null;
+    state.optimize.error = null;
+    renderOptimizePanel();
+  }
+  if (event.type === "optimize_generation_done") {
+    state.optimize.generationElapsedS =
+      typeof event.elapsed_s === "number" ? event.elapsed_s : null;
+    state.optimize.round = typeof event.round === "number" ? event.round : state.optimize.round;
+    state.optimize.roundTotal =
+      typeof event.round_total === "number" ? event.round_total : state.optimize.roundTotal;
+    state.optimize.goals = Array.isArray(event.goals) ? event.goals : state.optimize.goals;
+    state.optimize.error = event.success === false ? event.error || "Generation failed." : null;
+    renderOptimizePanel();
   }
   if (event.type === "generation_failed") {
     const msg = event.error ? `Generation failed: ${event.error}` : "Generation failed.";
@@ -945,6 +1125,15 @@ if (!newRunBtn) {
 }
 if (openRunBtn) {
   openRunBtn.addEventListener("click", () => openRun().catch((err) => reportError(err)));
+}
+if (goalsToggle) {
+  goalsToggle.addEventListener("click", () => {
+    if (state.goalChipsShown) {
+      hideGoalChips();
+    } else {
+      showGoalChips();
+    }
+  });
 }
 if (uploadBtn) {
   uploadBtn.addEventListener("click", () => uploadReference().catch((err) => reportError(err)));

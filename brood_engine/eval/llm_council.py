@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -29,14 +30,26 @@ def analyze_receipt(
     api_key = _get_api_key()
     model_name = model or os.getenv("BROOD_ANALYZER_MODEL") or DEFAULT_ANALYZER_MODEL
     if not api_key:
+        _log_analyzer_error("OPENAI_API_KEY missing; using stub analyzer")
         return _stub_analysis(receipt, goals)
     prompt = _build_analysis_prompt(receipt, goals)
     try:
         response_text = _call_openai_analysis(prompt, model_name, api_key)
-    except Exception:
+    except Exception as exc:
+        _log_analyzer_error("analysis request failed; using stub analyzer", exc)
         return _stub_analysis(receipt, goals)
     excerpt, recommendations = _parse_analysis_response(response_text)
     return AnalysisResult(recommendations=recommendations, analysis_excerpt=excerpt)
+
+
+def _log_analyzer_error(message: str, exc: Exception | None = None) -> None:
+    try:
+        if exc:
+            print(f"[brood] analyzer: {message}: {exc}", file=sys.stderr)
+        else:
+            print(f"[brood] analyzer: {message}", file=sys.stderr)
+    except Exception:
+        return
 
 
 def _get_api_key() -> str | None:
