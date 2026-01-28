@@ -84,6 +84,14 @@ def getenv_flag(key: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def has_flux_key() -> bool:
+    return bool(os.getenv("BFL_API_KEY") or os.getenv("FLUX_API_KEY"))
+
+
+def is_flux_model(model: str | None) -> bool:
+    return bool(model and model.strip().lower().startswith("flux"))
+
+
 def load_dotenv(path: Path | None = None, override: bool = False) -> bool:
     env_path = path or _default_env_path()
     if not env_path.exists():
@@ -141,3 +149,16 @@ def _find_repo_root(start: Path) -> Path | None:
 
 def monotonic_ms() -> int:
     return int(time.monotonic() * 1000)
+
+
+def format_cost_generation_cents(cost_usd: float | None) -> str | None:
+    if cost_usd is None:
+        return None
+    cents = int(round(cost_usd * 100))
+    return f"{cents} cents"
+
+
+def format_latency_seconds(latency_per_image_s: float | None) -> str | None:
+    if latency_per_image_s is None:
+        return None
+    return f"{latency_per_image_s:.1f}s"

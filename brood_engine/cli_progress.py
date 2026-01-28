@@ -65,15 +65,24 @@ class ProgressTicker:
                 self._write_done_line()
             return
         self._stop.set()
-        self._thread.join(timeout=0.5)
+        self._thread.join()
         if done:
             self._write_done_line()
         else:
             line, _ = progress_line(self.label, self.start, done=False)
             self._write_line(f"{_BOLD}{line}{_RESET}", newline=True)
 
+    def update_label(self, label: str) -> None:
+        self.label = label
+        if not self._enabled or not self._started or self._stop.is_set():
+            return
+        line, _ = progress_line(self.label, self.start, done=False)
+        self._write_line(f"{_BOLD}{line}{_RESET}", newline=False)
+
     def _run(self) -> None:
         while not self._stop.wait(self.interval_s):
+            if self._stop.is_set():
+                break
             line, _ = progress_line(self.label, self.start, done=False)
             self._write_line(f"{_BOLD}{line}{_RESET}", newline=False)
 

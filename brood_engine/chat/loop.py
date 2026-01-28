@@ -6,11 +6,26 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .intent_parser import parse_intent
-from .refine import extract_model_directive, is_refinement
+from .refine import extract_model_directive, is_refinement, is_repeat_request
 from ..engine import BroodEngine
 from ..runs.export import export_html
 from ..utils import now_utc_iso
 from ..cli_progress import progress_once, ProgressTicker
+from ..reasoning import start_reasoning_summary
+from ..utils import (
+    format_cost_generation_cents,
+    format_latency_seconds,
+    has_flux_key,
+    is_flux_model,
+)
+
+
+def _maybe_warn_missing_flux_key(model: str | None) -> None:
+    if not is_flux_model(model):
+        return
+    if has_flux_key():
+        return
+    print("Flux requires BFL_API_KEY (or FLUX_API_KEY). Set it before generating.")
 
 
 @dataclass
@@ -49,6 +64,7 @@ class ChatLoop:
             if intent.action == "set_image_model":
                 self.engine.image_model = intent.command_args.get("model") or self.engine.image_model
                 print(f"Image model set to {self.engine.image_model}")
+                _maybe_warn_missing_flux_key(self.engine.image_model)
                 continue
             if intent.action == "set_quality":
                 self.state.quality_preset = intent.settings_update.get("quality_preset")
@@ -76,7 +92,8 @@ class ChatLoop:
                 if model_directive:
                     self.engine.image_model = model_directive
                     print(f"Image model set to {self.engine.image_model}")
-                if not prompt and self.last_prompt:
+                    _maybe_warn_missing_flux_key(self.engine.image_model)
+                if (not prompt or is_repeat_request(prompt)) and self.last_prompt:
                     prompt = self.last_prompt
                 elif self.last_prompt and is_refinement(prompt):
                     prompt = f"{self.last_prompt} Update: {prompt}"
@@ -94,16 +111,26 @@ class ChatLoop:
                 )
                 ticker = ProgressTicker("Generating images")
                 ticker.start_ticking()
+                start_reasoning_summary(prompt, self.engine.text_model, ticker)
                 try:
                     self.engine.generate(prompt, settings, {"action": "generate"})
                 finally:
                     ticker.stop(done=True)
                 if self.engine.last_fallback_reason:
                     print(f"Model fallback: {self.engine.last_fallback_reason}")
-                if self.engine.last_cost_latency:
-                    cost = self.engine.last_cost_latency.get("cost_per_1k_images_usd")
-                    latency = self.engine.last_cost_latency.get("latency_per_image_s")
-                    print(f"Cost per 1K images: {cost} | Latency per image (s): {latency}")
+                cost_raw = (
+                    self.engine.last_cost_latency.get("cost_total_usd")
+                    if self.engine.last_cost_latency
+                    else None
+                )
+                latency_raw = (
+                    self.engine.last_cost_latency.get("latency_per_image_s")
+                    if self.engine.last_cost_latency
+                    else None
+                )
+                cost = format_cost_generation_cents(cost_raw) or "N/A"
+                latency = format_latency_seconds(latency_raw) or "N/A"
+                print(f"Cost of generation: {cost} | Latency per image: {latency}")
                 print("Generation complete.")
 
         self.engine.finish()

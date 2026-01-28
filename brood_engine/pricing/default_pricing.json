@@ -9,15 +9,55 @@
     "context_window": 8192
   },
   "openai-gpt-image-1": {
-    "cost_per_image_usd": 0.04,
+    "cost_per_image_usd": 0.042,
     "latency_per_image_s": 2.0
   },
   "openai-gpt-image-1-mini": {
-    "cost_per_image_usd": null,
+    "cost_per_image_usd": 0.011,
     "latency_per_image_s": null
   },
   "openai-gpt-image-1.5": {
-    "cost_per_image_usd": null,
+    "cost_per_image_usd": 0.034,
+    "latency_per_image_s": null
+  },
+  "google-gemini-2.5-flash-image": {
+    "cost_per_image_usd": 0.039,
+    "latency_per_image_s": null
+  },
+  "google-gemini-3-pro-image-preview": {
+    "cost_per_image_usd": 0.134,
+    "latency_per_image_s": null
+  },
+  "google-imagen-4.0-ultra": {
+    "cost_per_image_usd": 0.06,
+    "latency_per_image_s": null
+  },
+  "google-imagen-4": {
+    "cost_per_image_usd": 0.04,
+    "latency_per_image_s": null
+  },
+  "google-imagen-4.0-fast": {
+    "cost_per_image_usd": 0.02,
+    "latency_per_image_s": null
+  },
+  "google-imagen-4.0-standard": {
+    "cost_per_image_usd": 0.04,
+    "latency_per_image_s": null
+  },
+  "google-imagen-3": {
+    "cost_per_image_usd": 0.03,
+    "latency_per_image_s": null
+  },
+  "flux-2-pro": {
+    "cost_per_image_usd": 0.03,
+    "latency_per_image_s": null
+  },
+  "flux-2-flex": {
+    "cost_per_image_usd": 0.06,
+    "latency_per_image_s": null
+  },
+  "flux-2": {
+    "cost_per_image_usd": 0.03,
     "latency_per_image_s": null
   },
   "openai-gpt-4o-mini": {

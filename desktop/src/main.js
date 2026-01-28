@@ -39,18 +39,19 @@ function setStatus(message, isError = false) {
 
 function reportError(err) {
   const msg = err?.message || String(err);
-  term.writeln(`\r\n[brood] error: ${msg}`);
+  term.writeln(formatBroodLine(`\r\n[brood] error: ${msg}`));
   setStatus(`Engine: error (${msg})`, true);
 }
 
 const term = new Terminal({
   fontFamily: "IBM Plex Mono",
   fontSize: 15,
+  lineHeight: 1.3,
   cursorBlink: false,
   cursorStyle: "bar",
   disableStdin: true,
   theme: {
-    background: "#0d1117",
+    background: "#0d1219",
     foreground: "#e6edf3",
     cursor: "#ffb300",
   },
@@ -59,15 +60,25 @@ const fitAddon = new FitAddon();
 term.loadAddon(fitAddon);
 term.open(terminalEl);
 terminalEl.setAttribute("tabindex", "0");
+function resizePty() {
+  const cols = term?.cols || 0;
+  const rows = term?.rows || 0;
+  if (!cols || !rows) return;
+  invoke("resize_pty", { cols, rows }).catch(() => {});
+}
 requestAnimationFrame(() => {
   fitAddon.fit();
-  term.writeln("[brood] terminal ready");
+  resizePty();
+  term.writeln(formatBroodLine("[brood] terminal ready."));
   term.write("\u001b[?25h");
   if (terminalInput) {
     terminalInput.focus();
   }
 });
-window.addEventListener("resize", () => fitAddon.fit());
+window.addEventListener("resize", () => {
+  fitAddon.fit();
+  resizePty();
+});
 setStatus("Engine: idle — click New Run");
 
 window.addEventListener("error", (event) => {
@@ -93,7 +104,7 @@ async function sendTerminalInput() {
   }
   state.pendingEchoes.push(value);
   invoke("write_pty", { data: `${value}\n` }).catch((err) => {
-    term.writeln(`\r\n[brood] send failed: ${err}`);
+    term.writeln(formatBroodLine(`\r\n[brood] send failed: ${err}`));
     setStatus(`Engine: send failed (${err})`, true);
   });
   setStatus("Engine: sent input");
@@ -128,23 +139,26 @@ listen("pty-data", (event) => {
 });
 
 listen("pty-exit", () => {
-  term.writeln("\r\n[brood] engine exited");
   setStatus("Engine: exited", true);
 });
 
 const INPUT_COLOR = "\x1b[38;2;139;213;255m";
-const USER_BG = "\x1b[48;2;52;59;72m";
-const USER_FG = "\x1b[38;2;216;222;229m";
+const USER_BG = "\x1b[48;2;46;46;46m";
+const USER_FG = "\x1b[38;2;230;237;243m";
 const SYSTEM_COLOR = "\x1b[38;2;150;157;165m";
+const BROOD_COLOR = "\x1b[38;2;255;107;107m";
 const ITALIC = "\x1b[3m";
 const RESET_COLOR = "\x1b[0m";
+const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
 
 function highlightEchoes(payload) {
   let combined = state.echoBuffer + payload;
   const hasTrailingNewline = combined.endsWith("\n");
   const lines = combined.split("\n");
+  let tail = null;
   if (!hasTrailingNewline) {
-    state.echoBuffer = lines.pop() || "";
+    tail = lines.pop() || "";
+    state.echoBuffer = "";
   } else {
     state.echoBuffer = "";
   }
@@ -162,47 +176,119 @@ function highlightEchoes(payload) {
       outputLines.push(line);
     }
   }
+  if (tail !== null) {
+    if (tail.includes("\x1b[") || tail.includes("\r")) {
+      outputLines.push(tail);
+    } else {
+      state.echoBuffer = tail;
+    }
+  }
   const output = outputLines.join("\n");
   return hasTrailingNewline ? `${output}\n` : output;
 }
 
 function styleSystemLines(payload) {
   if (!payload) return payload;
-  return payload
-    .split("\n")
-    .map((line) => (line.includes("\x1b[") ? line : styleSystemLine(line)))
-    .join("\n");
+  const styled = [];
+  let lastWasBlank = false;
+  let lastHidden = false;
+  for (const line of payload.split("\n")) {
+    const normalized = normalizeCarriage(line);
+    if (shouldHideLine(normalized)) {
+      lastHidden = true;
+      continue;
+    }
+    const plain = normalized.replace(ANSI_PATTERN, "").replace(/^\r/, "");
+    const isBlank = !plain.trim();
+    if (isBlank) {
+      if (lastWasBlank || lastHidden) {
+        continue;
+      }
+      lastWasBlank = true;
+      lastHidden = false;
+      styled.push(styleTerminalLine(normalized));
+      continue;
+    }
+    lastWasBlank = false;
+    lastHidden = false;
+    styled.push(styleTerminalLine(normalized));
+  }
+  return styled.join("\n");
+}
+
+function normalizeCarriage(line) {
+  if (!line) return line;
+  const idx = line.lastIndexOf("\r");
+  if (idx === -1) return line;
+  return `\r${line.slice(idx + 1)}`;
+}
+
+function shouldHideLine(line) {
+  if (line.includes(USER_BG) || line.includes(USER_FG)) return false;
+  const plain = line.replace(ANSI_PATTERN, "").replace(/^\r/, "");
+  const trimmed = plain.trim();
+  if (!trimmed) return false;
+  if (trimmed === "[brood] engine exited") return true;
+  if (trimmed === "Brood chat started. Type /help for commands.") return true;
+  if (trimmed.startsWith("/text_model")) return true;
+  if (trimmed.startsWith("/image_model")) return true;
+  if (trimmed.startsWith("Text model set to")) return true;
+  if (trimmed.startsWith("Image model set to")) return true;
+  if (trimmed.startsWith("> Text model set to")) return true;
+  if (trimmed.startsWith("> Image model set to")) return true;
+  return false;
+}
+
+function styleTerminalLine(line) {
+  if (!line) return line;
+  const hasCarriage = line.startsWith("\r");
+  const body = hasCarriage ? line.slice(1) : line;
+  if (body.includes("\x1b[")) return line;
+  const styled = styleSystemLine(body);
+  return hasCarriage ? `\r${styled}` : styled;
 }
 
 function styleSystemLine(line) {
   if (!line) return line;
   if (line.includes("\x1b[")) return line;
   const trimmed = line.trimStart();
+  const broodIndex = line.indexOf("[brood]");
+  if (broodIndex !== -1) {
+    return formatBroodLine(line, broodIndex);
+  }
   if (
     trimmed.startsWith("[brood]") ||
     trimmed.startsWith("/text_model") ||
     trimmed.startsWith("/image_model") ||
     trimmed.startsWith("> Text model set to") ||
-    trimmed.startsWith("> Image model set to")
+    trimmed.startsWith("> Image model set to") ||
+    trimmed.startsWith("• Planning run") ||
+    trimmed.startsWith("Context usage:") ||
+    trimmed.startsWith("Plan:")
   ) {
     return `${SYSTEM_COLOR}${ITALIC}${line}${RESET_COLOR}`;
   }
   return line;
 }
 
+function formatBroodLine(line, broodIndex = line.indexOf("[brood]")) {
+  if (broodIndex === -1) return line;
+  const before = line.slice(0, broodIndex);
+  const after = line.slice(broodIndex + "[brood]".length);
+  return `${before}${BROOD_COLOR}[brood]${RESET_COLOR}${after}`;
+}
+
 function formatUserBlock(line) {
   const cols = term?.cols || 80;
   const clean = line.replace(/\r/g, "");
   const pad = cols > clean.length ? " ".repeat(cols - clean.length) : "";
-  const blank = " ".repeat(cols);
   const full = `${USER_BG}${USER_FG}${clean}${pad}${RESET_COLOR}`;
-  const spacer = `${USER_BG}${blank}${RESET_COLOR}`;
-  return `${spacer}\n${full}\n${spacer}`;
+  return full;
 }
 
 const settings = {
   memory: localStorage.getItem("brood.memory") === "1",
-  textModel: localStorage.getItem("brood.textModel") || "dryrun-text-1",
+  textModel: localStorage.getItem("brood.textModel") || "gpt-5.1-codex-max",
   imageModel: localStorage.getItem("brood.imageModel") || "dryrun-image-1",
 };
 
@@ -213,11 +299,16 @@ const imageModelSelect = document.getElementById("image-model");
 memoryToggle.checked = settings.memory;
 textModelSelect.value = settings.textModel;
 imageModelSelect.value = settings.imageModel;
+if (textModelSelect.value !== settings.textModel) {
+  settings.textModel = "gpt-5.1-codex-max";
+  textModelSelect.value = settings.textModel;
+  localStorage.setItem("brood.textModel", settings.textModel);
+}
 
 memoryToggle.addEventListener("change", () => {
   settings.memory = memoryToggle.checked;
   localStorage.setItem("brood.memory", settings.memory ? "1" : "0");
-  term.writeln("\r\n[brood] memory setting will apply to next run");
+  term.writeln(formatBroodLine("\r\n[brood] memory setting will apply to next run"));
 });
 
 textModelSelect.addEventListener("change", () => {
@@ -253,7 +344,7 @@ async function createRun() {
 async function spawnEngine() {
   if (!state.runDir) return;
   setStatus("Engine: starting…");
-  term.writeln("[brood] starting engine...");
+  term.writeln(formatBroodLine("[brood] starting engine..."));
   try {
     await invoke("spawn_pty", {
       command: "brood",
@@ -261,11 +352,12 @@ async function spawnEngine() {
       cwd: state.runDir,
       env: { BROOD_MEMORY: settings.memory ? "1" : "0" },
     });
+    resizePty();
     setStatus("Engine: started");
     invoke("write_pty", { data: `/text_model ${settings.textModel}\n` }).catch(() => {});
     invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
   } catch (err) {
-    term.writeln(`\r\n[brood] failed to spawn engine: ${err}`);
+    term.writeln(formatBroodLine(`\r\n[brood] failed to spawn engine: ${err}`));
     setStatus(`Engine: failed (${err})`, true);
   }
 }
@@ -442,7 +534,7 @@ async function loadImageBinary(path, imgEl) {
     state.blobUrls.set(path, url);
     imgEl.src = url;
   } catch (err) {
-    term.writeln(`\r\n[brood] failed to load image: ${err}`);
+    term.writeln(formatBroodLine(`\r\n[brood] failed to load image: ${err}`));
   }
 }
 
@@ -462,7 +554,11 @@ async function renderDetail() {
     if (receipt) {
       try {
         const payload = JSON.parse(receipt);
-        detail = JSON.stringify(payload.result_metadata || {}, null, 2);
+        const detailPayload = {
+          warnings: payload.warnings || [],
+          metrics: payload.result_metadata || {},
+        };
+        detail = JSON.stringify(detailPayload, null, 2);
         promptText = payload.request?.prompt || "";
       } catch {
         detail = "";
@@ -546,7 +642,7 @@ if (!newRunBtn) {
 } else {
   newRunBtn.addEventListener("click", () => {
     setStatus("Engine: New Run clicked");
-    term.writeln("[brood] New Run clicked");
+    term.writeln(formatBroodLine("[brood] New Run clicked"));
     createRun().catch((err) => reportError(err));
   });
 }
