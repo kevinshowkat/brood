@@ -338,6 +338,7 @@ def fetch_reasoning_summary(
     *,
     effort: str = "low",
     summary: str = "auto",
+    enable_web_search: bool = False,
     api_base: str | None = None,
     timeout_s: float = 30.0,
 ) -> str | None:
@@ -350,6 +351,8 @@ def fetch_reasoning_summary(
         "input": prompt,
         "reasoning": {"effort": effort, "summary": summary},
     }
+    if enable_web_search:
+        payload["tools"] = [{"type": "web_search"}]
     _, response = _post_json(endpoint, payload, api_key, timeout_s)
     return _extract_reasoning_summary(response)
 

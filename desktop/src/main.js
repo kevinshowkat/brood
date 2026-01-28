@@ -15,6 +15,8 @@ const galleryEl = document.getElementById("gallery");
 const detailEl = document.getElementById("detail");
 const runInfoEl = document.getElementById("run-info");
 const contextEl = document.getElementById("context-usage");
+const goalChipsEl = document.getElementById("goal-chips");
+const goalRowEl = document.getElementById("goal-row");
 
 const state = {
   runDir: null,
@@ -29,6 +31,11 @@ const state = {
   blobUrls: new Map(),
   pendingEchoes: [],
   echoBuffer: "",
+  controlBuffer: "",
+  lastError: null,
+  goalChipsShown: false,
+  goalSelections: new Set(),
+  goalSendTimer: null,
 };
 
 function setStatus(message, isError = false) {
@@ -60,6 +67,11 @@ const fitAddon = new FitAddon();
 term.loadAddon(fitAddon);
 term.open(terminalEl);
 terminalEl.setAttribute("tabindex", "0");
+const resizeObserver = new ResizeObserver(() => {
+  fitAddon.fit();
+  resizePty();
+});
+resizeObserver.observe(terminalEl);
 function resizePty() {
   const cols = term?.cols || 0;
   const rows = term?.rows || 0;
@@ -93,6 +105,108 @@ terminalEl.addEventListener("click", () => {
   if (terminalInput) terminalInput.focus();
 });
 
+const GOAL_OPTIONS = [
+  {
+    id: "quality",
+    label: "Maximize quality",
+    token: "quality",
+  },
+  {
+    id: "cost",
+    label: "Minimize cost",
+    token: "cost",
+  },
+  {
+    id: "time",
+    label: "Minimize time",
+    token: "time",
+  },
+  {
+    id: "retrieval",
+    label: "Maximize retrieval",
+    token: "retrieval",
+  },
+];
+
+function renderGoalChips() {
+  if (!goalRowEl) return;
+  goalRowEl.innerHTML = "";
+  for (const goal of GOAL_OPTIONS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "goal-chip";
+    button.textContent = goal.label;
+    button.dataset.goalId = goal.id;
+    button.addEventListener("click", () => toggleGoal(goal));
+    goalRowEl.appendChild(button);
+  }
+  syncGoalChipState();
+}
+
+function syncGoalChipState() {
+  if (!goalRowEl) return;
+  for (const button of goalRowEl.querySelectorAll(".goal-chip")) {
+    const goalId = button.dataset.goalId;
+    button.classList.toggle("selected", state.goalSelections.has(goalId));
+  }
+}
+
+function showGoalChips() {
+  if (!goalChipsEl || state.goalChipsShown) return;
+  state.goalChipsShown = true;
+  renderGoalChips();
+  goalChipsEl.classList.remove("hidden");
+}
+
+function hideGoalChips() {
+  if (!goalChipsEl) return;
+  goalChipsEl.classList.add("hidden");
+}
+
+function toggleGoal(goal) {
+  if (state.goalSelections.has(goal.id)) {
+    state.goalSelections.delete(goal.id);
+  } else {
+    state.goalSelections.add(goal.id);
+  }
+  syncGoalChipState();
+  scheduleGoalAnalyze();
+}
+
+function scheduleGoalAnalyze() {
+  if (state.goalSendTimer) {
+    clearTimeout(state.goalSendTimer);
+  }
+  if (state.goalSelections.size === 0) return;
+  state.goalSendTimer = setTimeout(() => {
+    state.goalSendTimer = null;
+    triggerGoalAnalyze();
+  }, 700);
+}
+
+function triggerGoalAnalyze() {
+  const selectedTokens = GOAL_OPTIONS.filter((goal) => state.goalSelections.has(goal.id)).map(
+    (goal) => goal.token
+  );
+  if (!selectedTokens.length) return;
+  const command = `/optimize ${selectedTokens.join(",")}`;
+  sendPtyCommand(command);
+}
+
+function sendPtyCommand(command) {
+  if (!command) return;
+  if (!state.runDir) return;
+  state.pendingEchoes.push(command);
+  invoke("write_pty", { data: `${command}\n` }).catch((err) => {
+    term.writeln(formatBroodLine(`\r\n[brood] send failed: ${err}`));
+    setStatus(`Engine: send failed (${err})`, true);
+  });
+  setStatus("Engine: sent input");
+  if (!state.ptyReady) {
+    term.writeln(command);
+  }
+}
+
 async function sendTerminalInput() {
   const value = terminalInput.value.trim();
   if (!value) return;
@@ -102,15 +216,7 @@ async function sendTerminalInput() {
       return;
     }
   }
-  state.pendingEchoes.push(value);
-  invoke("write_pty", { data: `${value}\n` }).catch((err) => {
-    term.writeln(formatBroodLine(`\r\n[brood] send failed: ${err}`));
-    setStatus(`Engine: send failed (${err})`, true);
-  });
-  setStatus("Engine: sent input");
-  if (!state.ptyReady) {
-    term.writeln(value);
-  }
+  sendPtyCommand(value);
   terminalInput.value = "";
   terminalInput.focus();
 }
@@ -135,7 +241,11 @@ document.addEventListener("keydown", (event) => {
 listen("pty-data", (event) => {
   state.ptyReady = true;
   setStatus("Engine: connected");
-  term.write(styleSystemLines(highlightEchoes(event.payload)));
+  const formatted = styleSystemLines(highlightEchoes(event.payload));
+  term.write(normalizeNewlines(formatted));
+  if (!state.goalChipsShown && state.artifacts.size > 0) {
+    showGoalChips();
+  }
 });
 
 listen("pty-exit", () => {
@@ -151,14 +261,32 @@ const ITALIC = "\x1b[3m";
 const RESET_COLOR = "\x1b[0m";
 const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
 
+function normalizeNewlines(payload) {
+  if (!payload) return payload;
+  let out = "";
+  for (let i = 0; i < payload.length; i += 1) {
+    const ch = payload[i];
+    if (ch === "\n") {
+      if (i === 0 || payload[i - 1] !== "\r") {
+        out += "\r";
+      }
+      out += "\n";
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 function highlightEchoes(payload) {
-  let combined = state.echoBuffer + payload;
+  let combined = state.echoBuffer + state.controlBuffer + payload;
+  state.echoBuffer = "";
+  state.controlBuffer = "";
   const hasTrailingNewline = combined.endsWith("\n");
   const lines = combined.split("\n");
   let tail = null;
   if (!hasTrailingNewline) {
     tail = lines.pop() || "";
-    state.echoBuffer = "";
   } else {
     state.echoBuffer = "";
   }
@@ -177,8 +305,15 @@ function highlightEchoes(payload) {
     }
   }
   if (tail !== null) {
-    if (tail.includes("\x1b[") || tail.includes("\r")) {
-      outputLines.push(tail);
+    const hasAnsi = tail.includes("\x1b[");
+    const hasCarriage = tail.includes("\r");
+    const hasClear = tail.includes("\x1b[K");
+    if (hasAnsi || hasCarriage) {
+      if (hasClear) {
+        outputLines.push(tail);
+      } else {
+        state.controlBuffer = tail;
+      }
     } else {
       state.echoBuffer = tail;
     }
@@ -189,6 +324,9 @@ function highlightEchoes(payload) {
 
 function styleSystemLines(payload) {
   if (!payload) return payload;
+  if (payload.includes("\r") && !payload.includes("\n")) {
+    return normalizeCarriage(payload);
+  }
   const styled = [];
   let lastWasBlank = false;
   let lastHidden = false;
@@ -218,9 +356,59 @@ function styleSystemLines(payload) {
 
 function normalizeCarriage(line) {
   if (!line) return line;
-  const idx = line.lastIndexOf("\r");
-  if (idx === -1) return line;
-  return `\r${line.slice(idx + 1)}`;
+  let normalized = line;
+  if (normalized.endsWith("\r")) {
+    normalized = normalized.slice(0, -1);
+  }
+  const idx = normalized.lastIndexOf("\r");
+  const coalesced =
+    idx === -1 ? coalesceProgressFragments(normalized) : coalesceProgressFragments(`\r${normalized.slice(idx + 1)}`);
+  return simplifyReasoningLine(coalesced);
+}
+
+function coalesceProgressFragments(line) {
+  if (!line) return line;
+  const hasCarriage = line.startsWith("\r");
+  const raw = hasCarriage ? line.slice(1) : line;
+  if (!raw.includes("esc to")) return line;
+  const matches = [...raw.matchAll(/• [^•]*\(/g)];
+  if (matches.length === 0) return line;
+  const last = matches[matches.length - 1];
+  if (last.index == null) return line;
+  if (last.index === 0) return line;
+  const prefix = hasCarriage ? "\r" : "";
+  const ansiPrefixMatch = raw.match(/^(?:\x1b\[[0-9;]*m)+/);
+  const ansiPrefix = ansiPrefixMatch ? ansiPrefixMatch[0] : "";
+  return `${prefix}${ansiPrefix}${raw.slice(last.index)}`;
+}
+
+function simplifyReasoningLine(line) {
+  if (!line || !line.includes("Reasoning:")) return line;
+  const raw = line.startsWith("\r") ? line.slice(1) : line;
+  const ansiPrefixMatch = raw.match(/^(?:\x1b\[[0-9;]*m)+/);
+  const ansiPrefix = ansiPrefixMatch ? ansiPrefixMatch[0] : "";
+  const content = raw.slice(ansiPrefix.length);
+  const lastIdx = content.lastIndexOf("• Reasoning:");
+  if (lastIdx === -1) return line;
+  const segment = content.slice(lastIdx);
+  const match = segment.match(/\(([^)]*)\)/);
+  let timePart = "";
+  let suffixPart = "";
+  if (match) {
+    const inside = match[1];
+    const parts = inside.split("•").map((part) => part.trim()).filter(Boolean);
+    timePart = parts[0] || "";
+    suffixPart = parts.slice(1).join(" • ");
+  }
+  let rebuilt = "• Generating image";
+  if (timePart) {
+    rebuilt += ` (${timePart}`;
+    if (suffixPart) {
+      rebuilt += ` • ${suffixPart}`;
+    }
+    rebuilt += ")";
+  }
+  return `\r${ansiPrefix}${rebuilt}\x1b[K`;
 }
 
 function shouldHideLine(line) {
@@ -282,7 +470,7 @@ function formatUserBlock(line) {
   const cols = term?.cols || 80;
   const clean = line.replace(/\r/g, "");
   const pad = cols > clean.length ? " ".repeat(cols - clean.length) : "";
-  const full = `${USER_BG}${USER_FG}${clean}${pad}${RESET_COLOR}`;
+  const full = `${USER_BG}${USER_FG}${clean}${pad}${RESET_COLOR}\x1b[K`;
   return full;
 }
 
@@ -332,6 +520,9 @@ async function createRun() {
     state.eventsOffset = 0;
     state.artifacts.clear();
     state.selected.clear();
+    state.goalChipsShown = false;
+    state.goalSelections.clear();
+    hideGoalChips();
     runInfoEl.textContent = `Run: ${state.runDir}`;
     await spawnEngine();
     await startWatching();
@@ -370,6 +561,9 @@ async function openRun() {
   state.eventsOffset = 0;
   state.artifacts.clear();
   state.selected.clear();
+  state.goalChipsShown = false;
+  state.goalSelections.clear();
+  hideGoalChips();
   runInfoEl.textContent = `Run: ${state.runDir}`;
   await startWatching();
 }
@@ -411,6 +605,7 @@ async function readEvents() {
 
 function handleEvent(event) {
   if (event.type === "plan_preview") {
+    state.lastError = null;
     const count = event.plan?.images || 0;
     const [width, height] = resolveSize(event.plan?.size);
     state.placeholders = Array.from({ length: count }).map((_, idx) => ({
@@ -422,6 +617,7 @@ function handleEvent(event) {
     renderGallery();
   }
   if (event.type === "artifact_created") {
+    state.lastError = null;
     const artifact = {
       artifact_id: event.artifact_id,
       image_path: event.image_path,
@@ -433,10 +629,21 @@ function handleEvent(event) {
       state.placeholders.pop();
     }
     renderGallery();
+    if (!state.goalChipsShown && state.ptyReady) {
+      showGoalChips();
+    }
   }
   if (event.type === "context_window_update") {
     const pct = Math.round((event.pct || 0) * 100);
     contextEl.textContent = `Context: ${pct}%`;
+  }
+  if (event.type === "generation_failed") {
+    const msg = event.error ? `Generation failed: ${event.error}` : "Generation failed.";
+    state.lastError = msg;
+    setStatus(`Engine: ${msg}`, true);
+    if (state.selected.size === 0) {
+      detailEl.textContent = msg;
+    }
   }
 }
 
@@ -542,9 +749,16 @@ async function renderDetail() {
   detailEl.innerHTML = "";
   const selectedIds = Array.from(state.selected);
   if (selectedIds.length === 0) {
-    detailEl.textContent = "Select an image to view details.";
+    detailEl.textContent = "";
+    if (state.lastError) {
+      detailEl.textContent = state.lastError;
+      detailEl.classList.remove("hidden");
+    } else {
+      detailEl.classList.add("hidden");
+    }
     return;
   }
+  detailEl.classList.remove("hidden");
   if (selectedIds.length === 1) {
     const artifact = state.artifacts.get(selectedIds[0]);
     if (!artifact) return;

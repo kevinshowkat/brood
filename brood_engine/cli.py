@@ -27,7 +27,11 @@ def _maybe_warn_missing_flux_key(model: str | None) -> None:
         return
     print("Flux requires BFL_API_KEY (or FLUX_API_KEY). Set it before generating.")
 from .cli_progress import progress_once, ProgressTicker
-from .reasoning import start_reasoning_summary
+from .reasoning import (
+    start_reasoning_summary,
+    reasoning_summary,
+    build_optimize_reasoning_prompt,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -92,7 +96,10 @@ def _handle_chat(args: argparse.Namespace) -> int:
         if intent.action == "noop":
             continue
         if intent.action == "help":
-            print("Commands: /profile /text_model /image_model /fast /quality /cheaper /better /recreate /export")
+            print(
+                "Commands: /profile /text_model /image_model /fast /quality /cheaper "
+                "/better /optimize /recreate /export"
+            )
             continue
         if intent.action == "set_profile":
             engine.profile = intent.command_args.get("profile") or "default"
@@ -110,6 +117,32 @@ def _handle_chat(args: argparse.Namespace) -> int:
         if intent.action == "set_quality":
             state["quality_preset"] = intent.settings_update.get("quality_preset")
             print(f"Quality preset: {state['quality_preset']}")
+            continue
+        if intent.action == "optimize":
+            goals = intent.command_args.get("goals") or []
+            if not goals:
+                print("No goals provided. Use /optimize quality,cost,time,retrieval")
+                continue
+            payload, _ = engine.last_receipt_payload()
+            if not payload:
+                print("No receipt available to analyze.")
+                continue
+            print(f"Optimizing for: {', '.join(goals)}")
+            reasoning_prompt = build_optimize_reasoning_prompt(payload, list(goals))
+            reasoning = reasoning_summary(reasoning_prompt, engine.text_model)
+            if reasoning:
+                print(f"Reasoning: {reasoning}")
+            analysis = engine.analyze_last_receipt(goals=list(goals))
+            if not analysis:
+                print("No receipt available to analyze.")
+                continue
+            if analysis.get("analysis_excerpt"):
+                print(f"Analysis: {analysis['analysis_excerpt']}")
+            recommendations = analysis.get("recommendations") or []
+            if recommendations:
+                print("Recommendations:")
+                for rec in recommendations:
+                    print(f"- {rec}")
             continue
         if intent.action == "export":
             out_path = run_dir / f"export-{now_utc_iso().replace(':', '').replace('-', '')}.html"
@@ -153,8 +186,11 @@ def _handle_chat(args: argparse.Namespace) -> int:
             ticker = ProgressTicker("Generating images")
             ticker.start_ticking()
             start_reasoning_summary(prompt, engine.text_model, ticker)
+            error: Exception | None = None
             try:
                 engine.generate(prompt, settings, {"action": "generate"})
+            except Exception as exc:
+                error = exc
             finally:
                 ticker.stop(done=True)
             if engine.last_fallback_reason:
@@ -164,7 +200,10 @@ def _handle_chat(args: argparse.Namespace) -> int:
             cost = format_cost_generation_cents(cost_raw) or "N/A"
             latency = format_latency_seconds(latency_raw) or "N/A"
             print(f"Cost of generation: {cost} | Latency per image: {latency}")
-            print("Generation complete.")
+            if error:
+                print(f"Generation failed: {error}")
+            else:
+                print("Generation complete.")
             continue
 
     engine.finish()
@@ -189,8 +228,11 @@ def _handle_run(args: argparse.Namespace) -> int:
     ticker = ProgressTicker("Generating images")
     ticker.start_ticking()
     start_reasoning_summary(args.prompt, engine.text_model, ticker)
+    error: Exception | None = None
     try:
         engine.generate(args.prompt, settings, {"action": "generate"})
+    except Exception as exc:
+        error = exc
     finally:
         ticker.stop(done=True)
     if engine.last_fallback_reason:
@@ -201,6 +243,9 @@ def _handle_run(args: argparse.Namespace) -> int:
     latency = format_latency_seconds(latency_raw) or "N/A"
     print(f"Cost of generation: {cost} | Latency per image: {latency}")
     engine.finish()
+    if error:
+        print(f"Generation failed: {error}")
+        return 1
     return 0
 
 
