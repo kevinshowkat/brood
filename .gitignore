@@ -1,0 +1,34 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+brood.egg-info/
+
+# Node
+node_modules/
+desktop/node_modules/
+desktop/.vite/
+
+# Tauri build artifacts
+desktop/src-tauri/target/
+desktop/dist/
+desktop/src-tauri/gen/
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+
+# Logs
+npm-debug.log*
+
+# Editor
+.idea/
+.vscode/
