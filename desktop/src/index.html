@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Brood</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">Brood</div>
+        <div class="controls">
+          <label class="toggle">
+            <input id="memory-toggle" type="checkbox" />
+            Memory
+          </label>
+          <select id="text-model">
+            <option value="dryrun-text-1">dryrun-text-1</option>
+            <option value="gpt-4o-mini">gpt-4o-mini</option>
+          </select>
+          <select id="image-model">
+            <option value="dryrun-image-1">dryrun-image-1</option>
+            <option value="gpt-image-1">gpt-image-1</option>
+            <option value="sdxl">sdxl</option>
+          </select>
+          <button id="new-run">New Run</button>
+          <button id="open-run">Open Run</button>
+          <button id="upload">Upload</button>
+          <button id="export">Export</button>
+        </div>
+      </header>
+      <main class="layout">
+        <section class="pane terminal-pane">
+          <div id="terminal"></div>
+        </section>
+        <section class="pane canvas-pane">
+          <div class="canvas-header">
+            <div class="context">
+              <div id="run-info">No run</div>
+              <div id="context-usage">Context: 0%</div>
+            </div>
+            <div class="compare-controls">
+              <button id="compare">Compare</button>
+              <button id="flicker">Flicker</button>
+            </div>
+          </div>
+          <div id="gallery" class="gallery"></div>
+          <div id="detail" class="detail"></div>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

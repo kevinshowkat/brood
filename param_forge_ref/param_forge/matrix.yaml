@@ -1,0 +1,13 @@
+version: 1
+defaults:
+  n: 1
+  output_format: jpeg
+  background: null
+
+matrix:
+  - provider: openai
+    model: [gpt-image-1.5]
+    size: [1024x1024]
+    seed: [101]
+    provider_options:
+      quality: [high]

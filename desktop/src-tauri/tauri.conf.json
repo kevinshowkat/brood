@@ -1,0 +1,31 @@
+{
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev",
+    "devPath": "http://localhost:5173",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "Brood",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": true
+    },
+    "windows": [
+      {
+        "title": "Brood",
+        "width": 1400,
+        "height": 900,
+        "resizable": true
+      }
+    ],
+    "bundle": {
+      "identifier": "com.brood.app",
+      "active": true,
+      "targets": ["dmg"],
+      "icon": []
+    }
+  }
+}

@@ -1,1 +1,55 @@
-# brood
+# Brood
+
+Brood is a desktop "creative IDE" for image generation with a terminal-like command experience and a live canvas.
+
+## Quickstart (engine)
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .[dev]
+
+# Chat loop
+brood chat --out /tmp/brood-run --events /tmp/brood-run/events.jsonl
+
+# Single run
+brood run --prompt "hero image for Series A" --out /tmp/brood-run
+
+# Recreate flow
+brood recreate --reference path/to/image.png --out /tmp/brood-recreate
+```
+
+## Desktop app (Tauri)
+
+```bash
+cd desktop
+npm install
+npm run tauri dev
+```
+
+Build:
+
+```bash
+cd desktop
+npm install
+npm run tauri build
+```
+
+## Memory
+
+Enable local memory:
+
+```bash
+export BROOD_MEMORY=1
+```
+
+## Pricing overrides
+
+Edit `~/.brood/pricing_overrides.json` to override pricing or latency values.
+
+## Project layout
+
+- `brood_engine/` core engine and CLI
+- `desktop/` Tauri desktop app
+- `tests/` pytest suite
+- `docs/param_forge_reference.md` Param Forge reference notes
