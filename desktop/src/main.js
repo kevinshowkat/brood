@@ -42,6 +42,7 @@ const state = {
   controlBuffer: "",
   lastError: null,
   goalChipsShown: false,
+  goalChipsSuppressed: false,
   goalSelections: new Set(),
   goalSendTimer: null,
   goalAnalyzeInFlight: false,
@@ -356,6 +357,28 @@ function findLineIndex(buffer, needle) {
   return null;
 }
 
+function shouldAutoShowGoalChips() {
+  if (state.goalChipsShown || state.goalChipsSuppressed) return false;
+  if (!state.ptyReady) return false;
+  return state.artifacts.size > 0;
+}
+
+function updateGoalChipsSuppression(command) {
+  if (!command) return;
+  const trimmed = command.trim();
+  if (!trimmed) return;
+  const normalized = trimmed.toLowerCase();
+  if (normalized.startsWith("/optimize")) {
+    state.goalChipsSuppressed = true;
+    return;
+  }
+  const isPrompt = !normalized.startsWith("/");
+  const isRecreate = normalized.startsWith("/recreate");
+  if (isPrompt || isRecreate) {
+    state.goalChipsSuppressed = false;
+  }
+}
+
 function toggleGoal(goal) {
   if (state.goalSelections.has(goal.id)) {
     state.goalSelections.delete(goal.id);
@@ -383,6 +406,7 @@ function triggerGoalAnalyze() {
   );
   if (!selectedTokens.length) return;
   state.goalAnalyzeInFlight = true;
+  state.goalChipsSuppressed = true;
   setStatus("Engine: optimizing…");
   hideGoalChips();
   const mode = state.optimizeMode || "auto";
@@ -393,6 +417,7 @@ function triggerGoalAnalyze() {
 function sendPtyCommand(command) {
   if (!command) return;
   if (!state.runDir) return;
+  updateGoalChipsSuppression(command);
   state.pendingEchoes.push(command);
   invoke("write_pty", { data: `${command}\n` }).catch((err) => {
     term.writeln(formatBroodLine(`\r\n[brood] send failed: ${err}`));
@@ -441,7 +466,7 @@ listen("pty-data", (event) => {
   const formatted = styleSystemLines(highlightEchoes(event.payload));
   term.write(normalizeNewlines(formatted));
   positionGoalChips();
-  if (!state.goalChipsShown && state.artifacts.size > 0) {
+  if (shouldAutoShowGoalChips()) {
     showGoalChips();
   }
 });
@@ -649,6 +674,7 @@ function styleSystemLine(line) {
     trimmed.startsWith("> Text model set to") ||
     trimmed.startsWith("> Image model set to") ||
     trimmed.startsWith("• Planning run") ||
+    trimmed.startsWith("Optimizing for:") ||
     trimmed.startsWith("Context usage:") ||
     trimmed.startsWith("Plan:") ||
     trimmed.startsWith("Reasoning:") ||
@@ -743,6 +769,7 @@ async function createRun() {
     state.selected.clear();
     state.lastError = null;
     state.goalChipsShown = false;
+    state.goalChipsSuppressed = false;
     state.goalSelections.clear();
     state.goalAnalyzeInFlight = false;
     resetOptimizeState();
@@ -791,6 +818,7 @@ async function openRun() {
   state.selected.clear();
   state.lastError = null;
   state.goalChipsShown = false;
+  state.goalChipsSuppressed = false;
   state.goalSelections.clear();
   state.goalAnalyzeInFlight = false;
   resetOptimizeState();
@@ -864,7 +892,7 @@ function handleEvent(event) {
       state.placeholders.pop();
     }
     renderGallery();
-    if (!state.goalChipsShown && state.ptyReady) {
+    if (shouldAutoShowGoalChips()) {
       showGoalChips();
     }
   }
@@ -1031,11 +1059,13 @@ async function renderDetail() {
     if (receipt) {
       try {
         const payload = JSON.parse(receipt);
-        const detailPayload = {
-          warnings: payload.warnings || [],
-          metrics: payload.result_metadata || {},
-        };
-        detail = JSON.stringify(detailPayload, null, 2);
+        const requestPayload =
+          payload.provider_request?.payload ??
+          payload.provider_request?.payloads ??
+          payload.provider_request ??
+          payload.request ??
+          {};
+        detail = JSON.stringify(requestPayload, null, 2);
         promptText = payload.request?.prompt || "";
       } catch {
         detail = "";

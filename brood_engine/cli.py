@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from .chat.intent_parser import parse_intent
-from .chat.refine import extract_model_directive, is_refinement, is_repeat_request
+from .chat.refine import extract_model_directive, detect_edit_model, is_refinement, is_repeat_request
 from .engine import BroodEngine
 from .runs.export import export_html
 from .utils import (
@@ -16,6 +16,7 @@ from .utils import (
     load_dotenv,
     format_cost_generation_cents,
     format_latency_seconds,
+    ansi_highlight,
     has_flux_key,
     is_flux_model,
 )
@@ -27,6 +28,11 @@ def _maybe_warn_missing_flux_key(model: str | None) -> None:
     if has_flux_key():
         return
     print("Flux requires BFL_API_KEY (or FLUX_API_KEY). Set it before generating.")
+
+
+def _print_progress_safe(message: str) -> None:
+    prefix = "\r\n" if getattr(sys.stdout, "isatty", lambda: False)() else ""
+    print(f"{prefix}{message}")
 from .cli_progress import progress_once, ProgressTicker, elapsed_line
 from .reasoning import (
     start_reasoning_summary,
@@ -99,6 +105,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
         "quality_preset": "quality",
     }
     last_prompt: str | None = None
+    last_artifact_path: str | None = None
 
     print("Brood chat started. Type /help for commands.")
     while True:
@@ -155,7 +162,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
                     reasoning_prompt, engine.text_model, compact=False
                 )
                 if reasoning:
-                    print(f"Reasoning: {reasoning}")
+                    _print_progress_safe(f"Reasoning: {reasoning}")
                 try:
                     analysis = engine.analyze_last_receipt(goals=list(goals), mode=mode)
                 finally:
@@ -193,7 +200,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
                     reasoning_prompt, engine.text_model, compact=False
                 )
                 if reasoning:
-                    print(f"Reasoning: {reasoning}")
+                    _print_progress_safe(f"Reasoning: {reasoning}")
                 try:
                     analysis = engine.analyze_last_receipt(
                         goals=list(goals),
@@ -216,8 +223,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 for rec in recommendations:
                     if isinstance(rec, dict):
                         print(f"- {_format_recommendation(rec)}")
-                updated_settings, summary, skipped = engine.apply_recommendations(
-                    snapshot["settings"], recommendations
+                updated_settings, updated_prompt, summary, skipped = engine.apply_recommendations(
+                    snapshot["settings"], recommendations, prompt=snapshot.get("prompt")
                 )
                 if summary:
                     print(f"Applying: {', '.join(summary)}")
@@ -235,9 +242,10 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 ticker.start_ticking()
                 error = None
                 gen_started = time.monotonic()
+                artifacts: list[dict[str, object]] = []
                 try:
-                    engine.generate(
-                        snapshot["prompt"],
+                    artifacts = engine.generate(
+                        updated_prompt or snapshot["prompt"],
                         updated_settings,
                         {
                             "action": "optimize",
@@ -260,6 +268,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
                         error=str(error) if error else None,
                     )
                     ticker.stop(done=True)
+                if not error and artifacts:
+                    last_artifact_path = str(artifacts[-1].get("image_path") or last_artifact_path or "")
                 if error:
                     print(f"Generation failed: {error}")
                     break
@@ -284,15 +294,42 @@ def _handle_chat(args: argparse.Namespace) -> int:
         if intent.action == "generate":
             prompt = intent.prompt or ""
             prompt, model_directive = extract_model_directive(prompt)
+            is_edit = False
+            if not model_directive:
+                edit_model = detect_edit_model(prompt)
+                if edit_model:
+                    model_directive = edit_model
+                    is_edit = True
             if model_directive:
                 engine.image_model = model_directive
                 print(f"Image model set to {engine.image_model}")
                 _maybe_warn_missing_flux_key(engine.image_model)
-            if (not prompt or is_repeat_request(prompt)) and last_prompt:
+            generic_edit = prompt.strip().lower()
+            generic_edit_phrases = {
+                "edit the image",
+                "edit image",
+                "edit the photo",
+                "edit photo",
+                "edit this",
+                "edit that",
+                "edit it",
+                "replace the image",
+                "replace image",
+                "replace the photo",
+                "replace photo",
+                "replace it",
+                "replace this",
+                "replace that",
+            }
+            if is_edit and generic_edit in generic_edit_phrases and last_prompt:
                 prompt = last_prompt
-            elif last_prompt and is_refinement(prompt):
-                prompt = f"{last_prompt} Update: {prompt}"
-            last_prompt = prompt
+            elif not is_edit:
+                if (not prompt or is_repeat_request(prompt)) and last_prompt:
+                    prompt = last_prompt
+                elif last_prompt and is_refinement(prompt):
+                    prompt = f"{last_prompt} Update: {prompt}"
+            if prompt:
+                last_prompt = prompt
             progress_once("Planning run")
             usage = engine.track_context(prompt, "", engine.text_model)
             pct = int(usage.get("pct", 0) * 100)
@@ -311,19 +348,24 @@ def _handle_chat(args: argparse.Namespace) -> int:
             ticker.start_ticking()
             start_reasoning_summary(prompt, engine.text_model, ticker)
             error: Exception | None = None
+            if is_edit and last_artifact_path:
+                settings["init_image"] = last_artifact_path
+            artifacts: list[dict[str, object]] = []
             try:
-                engine.generate(prompt, settings, {"action": "generate"})
+                artifacts = engine.generate(prompt, settings, {"action": "generate"})
             except Exception as exc:
                 error = exc
             finally:
                 ticker.stop(done=True)
+            if not error and artifacts:
+                last_artifact_path = str(artifacts[-1].get("image_path") or last_artifact_path or "")
             if engine.last_fallback_reason:
                 print(f"Model fallback: {engine.last_fallback_reason}")
             cost_raw = engine.last_cost_latency.get("cost_total_usd") if engine.last_cost_latency else None
             latency_raw = engine.last_cost_latency.get("latency_per_image_s") if engine.last_cost_latency else None
             cost = format_cost_generation_cents(cost_raw) or "N/A"
             latency = format_latency_seconds(latency_raw) or "N/A"
-            print(f"Cost of generation: {cost} | Latency per image: {latency}")
+            print(f"Cost of generation: {ansi_highlight(cost)} | Latency per image: {ansi_highlight(latency)}")
             if error:
                 print(f"Generation failed: {error}")
             else:
@@ -368,7 +410,7 @@ def _handle_run(args: argparse.Namespace) -> int:
     latency_raw = engine.last_cost_latency.get("latency_per_image_s") if engine.last_cost_latency else None
     cost = format_cost_generation_cents(cost_raw) or "N/A"
     latency = format_latency_seconds(latency_raw) or "N/A"
-    print(f"Cost of generation: {cost} | Latency per image: {latency}")
+    print(f"Cost of generation: {ansi_highlight(cost)} | Latency per image: {ansi_highlight(latency)}")
     engine.finish()
     if error:
         print(f"Generation failed: {error}")

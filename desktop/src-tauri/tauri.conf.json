@@ -29,7 +29,7 @@
       "identifier": "com.brood.app",
       "active": true,
       "targets": ["dmg"],
-      "icon": []
+      "icon": ["icons/icon.icns", "icons/icon.png"]
     }
   }
 }

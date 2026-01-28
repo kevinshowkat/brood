@@ -21,7 +21,7 @@ from .recreate.loop import RecreateLoop
 from .runs.cache import CacheStore
 from .runs.events import EventWriter
 from .runs.feedback import FeedbackWriter
-from .runs.receipts import ImageRequest, ResolvedRequest, build_receipt, write_receipt
+from .runs.receipts import ImageInputs, ImageRequest, ResolvedRequest, build_receipt, write_receipt
 from .runs.summary import RunSummary, write_summary
 from .runs.thread_manifest import ThreadManifest
 from .utils import now_utc_iso, stable_hash, read_json, getenv_flag
@@ -83,10 +83,17 @@ class BroodEngine:
     def preview_plan(self, prompt: str, settings: dict[str, Any]) -> dict[str, Any]:
         image_selection = self.model_selector.select(self.image_model, "image")
         model_spec = image_selection.model
-        size = settings.get("size", "1024x1024")
-        n = int(settings.get("n", 1))
+        effective_settings = self._apply_quality_preset(settings, model_spec)
+        size = effective_settings.get("size", "1024x1024")
+        n = int(effective_settings.get("n", 1))
         cache_key = stable_hash(
-            {"prompt": prompt, "size": size, "n": n, "model": model_spec.name, "options": settings}
+            {
+                "prompt": prompt,
+                "size": size,
+                "n": n,
+                "model": model_spec.name,
+                "options": effective_settings,
+            }
         )
         cached = self.cache.get(cache_key) is not None
         return {
@@ -129,6 +136,7 @@ class BroodEngine:
         if image_selection.fallback_reason:
             intent["model_fallback"] = image_selection.fallback_reason
         self.last_fallback_reason = image_selection.fallback_reason
+        settings = self._apply_quality_preset(settings, model_spec)
 
         provider = self.providers.get(model_spec.provider)
         if not provider:
@@ -138,6 +146,7 @@ class BroodEngine:
         n = int(settings.get("n", 1))
         output_format = settings.get("output_format")
         seed = settings.get("seed")
+        inputs = _coerce_image_inputs(settings)
         request = ImageRequest(
             prompt=prompt,
             size=size,
@@ -146,6 +155,7 @@ class BroodEngine:
             output_format=output_format,
             provider=model_spec.provider,
             model=model_spec.name,
+            inputs=inputs,
             provider_options=settings.get("provider_options", {}),
             out_dir=str(self.run_dir),
         )
@@ -377,11 +387,14 @@ class BroodEngine:
         self,
         settings: dict[str, Any],
         recommendations: list[dict[str, Any]],
-    ) -> tuple[dict[str, Any], list[str], list[str]]:
+        *,
+        prompt: str | None = None,
+    ) -> tuple[dict[str, Any], str | None, list[str], list[str]]:
         updated = dict(settings or {})
         provider_options = updated.get("provider_options")
         if not isinstance(provider_options, dict):
             provider_options = {}
+        updated_prompt = prompt
         summary: list[str] = []
         skipped: list[str] = []
         for rec in recommendations or []:
@@ -401,6 +414,23 @@ class BroodEngine:
                     else:
                         self.image_model = str(value)
                         summary.append(f"model={value}")
+                elif str(name).lower() == "prompt":
+                    next_prompt = str(value).strip() if value is not None else ""
+                    if not next_prompt:
+                        skipped.append("prompt=(empty)")
+                    elif updated_prompt == next_prompt:
+                        skipped.append("prompt=(unchanged)")
+                    else:
+                        updated_prompt = next_prompt
+                        preview = next_prompt if len(next_prompt) <= 60 else f"{next_prompt[:57]}..."
+                        summary.append(f"prompt={preview}")
+                elif str(name).lower() in {"quality", "quality_preset"}:
+                    key = "quality_preset"
+                    if updated.get(key) == value:
+                        skipped.append(f"{key}={value} (unchanged)")
+                    else:
+                        updated[key] = value
+                        summary.append(f"{key}={value}")
                 elif str(name).lower() == "size":
                     allowed = self._allowed_sizes_for_current_model()
                     if allowed and value not in allowed:
@@ -417,6 +447,12 @@ class BroodEngine:
                         updated[str(name)] = value
                         summary.append(f"{name}={value}")
             elif target in {"provider_options", "provider", "options"}:
+                if str(name).lower() == "quality" and self._allowed_sizes_for_current_model():
+                    normalized = self._normalize_openai_quality_value(value)
+                    if not normalized:
+                        skipped.append(f"provider_options.quality={value} (unsupported)")
+                        continue
+                    value = normalized
                 if provider_options.get(str(name)) == value:
                     skipped.append(f"provider_options.{name}={value} (unchanged)")
                 else:
@@ -424,7 +460,71 @@ class BroodEngine:
                     summary.append(f"provider_options.{name}={value}")
         if provider_options:
             updated["provider_options"] = provider_options
-        return updated, summary, skipped
+        return updated, updated_prompt, summary, skipped
+
+    def _apply_quality_preset(self, settings: dict[str, Any], model_spec: Any) -> dict[str, Any]:
+        updated = dict(settings or {})
+        preset = str(updated.get("quality_preset") or "").strip().lower()
+        if not preset:
+            return updated
+        if not model_spec or getattr(model_spec, "provider", None) != "openai":
+            return updated
+        if not str(getattr(model_spec, "name", "")).startswith("gpt-image"):
+            return updated
+        provider_options = updated.get("provider_options")
+        if not isinstance(provider_options, dict):
+            provider_options = {}
+        quality_value = None
+        if preset in {"fast", "cheaper"}:
+            quality_value = "low"
+        elif preset in {"quality", "better"}:
+            quality_value = "high"
+        elif preset in {"standard", "medium"}:
+            quality_value = "medium"
+        elif preset == "auto":
+            quality_value = "auto"
+        if quality_value:
+            provider_options = dict(provider_options)
+            provider_options["quality"] = quality_value
+            updated["provider_options"] = provider_options
+        return updated
+
+    def _normalize_openai_quality_value(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        if not text:
+            return None
+        mapping = {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "auto": "auto",
+            "hd": "high",
+            "standard": "medium",
+            "quality": "high",
+            "better": "high",
+            "fast": "low",
+            "cheaper": "low",
+        }
+        return mapping.get(text)
+
+
+def _coerce_image_inputs(settings: dict[str, Any]) -> ImageInputs:
+    init_image = settings.get("init_image") if isinstance(settings, dict) else None
+    mask = settings.get("mask") if isinstance(settings, dict) else None
+    reference_images = []
+    if isinstance(settings, dict) and settings.get("reference_images"):
+        raw_refs = settings.get("reference_images")
+        if isinstance(raw_refs, (list, tuple)):
+            reference_images = [str(item) for item in raw_refs if item]
+        else:
+            reference_images = [str(raw_refs)]
+    return ImageInputs(
+        init_image=str(init_image) if init_image else None,
+        mask=str(mask) if mask else None,
+        reference_images=reference_images,
+    )
 
     def _allowed_sizes_for_current_model(self) -> list[str] | None:
         model = self.image_model or ""

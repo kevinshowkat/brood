@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 import threading
@@ -31,7 +32,8 @@ def progress_once(label: str) -> float:
 
 def elapsed_line(label: str, seconds: float, width: int | None = None) -> str:
     duration = _format_duration(int(max(0, seconds)))
-    line = _separator_line(f"{label} {duration}", width if width else 100)
+    resolved_width = width if width is not None else _resolve_terminal_width(sys.stdout, 100)
+    line = _separator_line(f"{label} {duration}", resolved_width)
     return f"{_GREY}{line}{_RESET}"
 
 
@@ -107,13 +109,8 @@ class ProgressTicker:
     def _write_done_line(self) -> None:
         elapsed = max(0, int(time.monotonic() - (self.start or time.monotonic())))
         duration = _format_duration(elapsed)
-        width = 0
-        if self._enabled:
-            try:
-                width = shutil.get_terminal_size(fallback=(100, 20)).columns
-            except Exception:
-                width = 100
-        line = _separator_line(f"Generated in {duration}", width if width else 100)
+        width = _resolve_terminal_width(self.stream, 100)
+        line = _separator_line(f"Generated in {duration}", width)
         styled = f"{_GREY}{line}{_RESET}"
         if self._enabled:
             self.stream.write("\r")
@@ -143,3 +140,15 @@ def _separator_line(label: str, width: int) -> str:
     left = remaining // 2
     right = remaining - left
     return f"{'─' * left}{content}{'─' * right}"
+
+
+def _resolve_terminal_width(stream: TextIO | None, fallback: int) -> int:
+    if stream and hasattr(stream, "fileno"):
+        try:
+            return os.get_terminal_size(stream.fileno()).columns
+        except OSError:
+            pass
+    try:
+        return shutil.get_terminal_size(fallback=(fallback, 20)).columns
+    except Exception:
+        return fallback

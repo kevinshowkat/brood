@@ -24,7 +24,10 @@ _MODEL_ALIASES = {
     "dryrun": "dryrun-image-1",
 }
 
-_MODEL_DIRECTIVE_RE = re.compile(r"(?:^|\\s|,|;)(?:and\\s+)?(?:use|with)\\s+(?P<model>[\\w.\\-]+)", re.IGNORECASE)
+_MODEL_DIRECTIVE_RE = re.compile(
+    r"(?:^|\s|,|;)(?:and\s+)?(?:use|using|with)\s+(?P<model>[\w.\-]+)",
+    re.IGNORECASE,
+)
 
 _REFINE_PREFIXES = {
     "make",
@@ -87,7 +90,12 @@ _REPEAT_PHRASES = {
 }
 
 _REPEAT_RE = re.compile(
-    r"^(generate|make|render|create|do|redo|rerun|try)\s+(it|that|this)(\s+again)?$",
+    r"^(?:now|please|just)?\s*(generate|make|render|create|do|redo|rerun|try)\s+(it|that|this)(\s+again)?$",
+    re.IGNORECASE,
+)
+
+_EDIT_TRIGGER_RE = re.compile(
+    r"^(?:now|please|just)?\s*(edit|replace)\b",
     re.IGNORECASE,
 )
 
@@ -124,6 +132,15 @@ def is_repeat_request(prompt: str) -> bool:
     if normalized in _REPEAT_PHRASES:
         return True
     return _REPEAT_RE.match(normalized) is not None
+
+
+def detect_edit_model(prompt: str, registry: ModelRegistry | None = None) -> str | None:
+    normalized = prompt.strip().lower()
+    if not normalized:
+        return None
+    if not _EDIT_TRIGGER_RE.match(normalized):
+        return None
+    return _resolve_model("gemini-3-pro-image-preview", registry or ModelRegistry())
 
 
 def _resolve_model(raw_model: str, registry: ModelRegistry) -> str | None:

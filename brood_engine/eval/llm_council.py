@@ -31,23 +31,29 @@ def analyze_receipt(
     model_name = model or os.getenv("BROOD_ANALYZER_MODEL") or DEFAULT_ANALYZER_MODEL
     if not api_key:
         _log_analyzer_error("OPENAI_API_KEY missing; using stub analyzer")
-        return _stub_analysis(receipt, goals)
+        fallback = _stub_analysis(receipt, goals)
+        sanitized = _sanitize_recommendations(receipt, goals, fallback.recommendations)
+        return AnalysisResult(recommendations=sanitized, analysis_excerpt=fallback.analysis_excerpt)
     prompt = _build_analysis_prompt(receipt, goals)
     try:
         response_text = _call_openai_analysis(prompt, model_name, api_key)
     except Exception as exc:
         _log_analyzer_error("analysis request failed; using stub analyzer", exc)
-        return _stub_analysis(receipt, goals)
+        fallback = _stub_analysis(receipt, goals)
+        sanitized = _sanitize_recommendations(receipt, goals, fallback.recommendations)
+        return AnalysisResult(recommendations=sanitized, analysis_excerpt=fallback.analysis_excerpt)
     excerpt, recommendations = _parse_analysis_response(response_text)
-    return AnalysisResult(recommendations=recommendations, analysis_excerpt=excerpt)
+    sanitized = _sanitize_recommendations(receipt, goals, recommendations)
+    return AnalysisResult(recommendations=sanitized, analysis_excerpt=excerpt)
 
 
 def _log_analyzer_error(message: str, exc: Exception | None = None) -> None:
     try:
+        prefix = "\r\n" if getattr(sys.stderr, "isatty", lambda: False)() else ""
         if exc:
-            print(f"[brood] analyzer: {message}: {exc}", file=sys.stderr)
+            print(f"{prefix}[brood] analyzer: {message}: {exc}", file=sys.stderr)
         else:
-            print(f"[brood] analyzer: {message}", file=sys.stderr)
+            print(f"{prefix}[brood] analyzer: {message}", file=sys.stderr)
     except Exception:
         return
 
@@ -64,7 +70,8 @@ def _call_openai_analysis(prompt: str, model: str, api_key: str) -> str:
     }
     use_xhigh = model.startswith("gpt-5.2") and "codex" not in model
     if use_xhigh:
-        payload["reasoning"] = {"effort": "xhigh", "summary": "auto"}
+        payload["reasoning"] = {"effort": "high", "summary": "auto"}
+    if os.getenv("BROOD_ANALYZER_WEB_SEARCH") == "1":
         payload["tools"] = [{"type": "web_search"}]
     endpoint = "https://api.openai.com/v1/responses"
     try:
@@ -81,7 +88,7 @@ def _call_openai_analysis(prompt: str, model: str, api_key: str) -> str:
             raise
     text = _extract_output_text(response)
     if not text:
-        raise RuntimeError("Empty analysis response.")
+        return ""
     return text
 
 
@@ -121,6 +128,11 @@ def _extract_output_text(response: dict[str, Any]) -> str:
     parts: list[str] = []
     for item in output:
         if not isinstance(item, dict):
+            continue
+        if item.get("type") in {"output_text", "text"}:
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
             continue
         if item.get("type") != "message":
             continue
@@ -196,6 +208,179 @@ def _compact_excerpt(text: str) -> str:
     return cleaned
 
 
+def _sanitize_recommendations(
+    receipt: dict[str, Any],
+    goals: list[str] | None,
+    recommendations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    allowed_sizes = _allowed_sizes_for_receipt(receipt)
+    if not allowed_sizes:
+        return recommendations
+    sanitized: list[dict[str, Any]] = []
+    for rec in recommendations or []:
+        if not isinstance(rec, dict):
+            continue
+        name = str(rec.get("setting_name") or "").strip().lower()
+        target = str(rec.get("setting_target") or "provider_options").strip().lower()
+        if name == "size" and target in {"request", "top_level"}:
+            normalized = _normalize_size_value(rec.get("setting_value"))
+            if normalized not in allowed_sizes:
+                normalized = _fallback_size_for_goals(goals, allowed_sizes)
+            if not normalized:
+                continue
+            next_rec = dict(rec)
+            next_rec["setting_value"] = normalized
+            sanitized.append(next_rec)
+            continue
+        sanitized.append(rec)
+    sanitized = _maybe_add_quality_recommendation(receipt, goals, sanitized)
+    return _maybe_add_model_recommendation(receipt, goals, sanitized)
+
+
+def _maybe_add_model_recommendation(
+    receipt: dict[str, Any],
+    goals: list[str] | None,
+    recommendations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not _should_prefer_cheaper_model(goals):
+        return recommendations
+    provider, model = _provider_model_from_receipt(receipt)
+    if provider != "openai":
+        return recommendations
+    if not model or not model.startswith("gpt-image-1"):
+        return recommendations
+    if model.endswith("-mini"):
+        return recommendations
+    for rec in recommendations:
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("setting_name") or "").strip().lower() == "model":
+            return recommendations
+    updated = list(recommendations)
+    updated.append(
+        {
+            "setting_name": "model",
+            "setting_value": "gpt-image-1-mini",
+            "setting_target": "request",
+            "rationale": "Cheaper/faster model for cost/time goals.",
+        }
+    )
+    return updated
+
+
+def _maybe_add_quality_recommendation(
+    receipt: dict[str, Any],
+    goals: list[str] | None,
+    recommendations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not goals:
+        return recommendations
+    lowered = " ".join(goals).lower()
+    want_cheaper = "minimize cost" in lowered or "minimize time" in lowered
+    want_quality = "maximize quality" in lowered
+    if not (want_cheaper or want_quality):
+        return recommendations
+    provider, model = _provider_model_from_receipt(receipt)
+    if provider != "openai" or not model.startswith("gpt-image"):
+        return recommendations
+    for rec in recommendations:
+        if not isinstance(rec, dict):
+            continue
+        name = str(rec.get("setting_name") or "").strip().lower()
+        target = str(rec.get("setting_target") or "").strip().lower()
+        if name in {"quality", "quality_preset"}:
+            return recommendations
+        if name == "quality" and target in {"provider_options", "provider", "options"}:
+            return recommendations
+    if want_cheaper and not want_quality:
+        value = "cheaper"
+        rationale = "Lower cost/time via cheaper quality preset."
+    elif want_quality and not want_cheaper:
+        value = "better"
+        rationale = "Higher quality preset for better results."
+    else:
+        return recommendations
+    updated = list(recommendations)
+    updated.append(
+        {
+            "setting_name": "quality_preset",
+            "setting_value": value,
+            "setting_target": "request",
+            "rationale": rationale,
+        }
+    )
+    return updated
+
+
+def _should_prefer_cheaper_model(goals: list[str] | None) -> bool:
+    if not goals:
+        return False
+    lowered = " ".join(goals).lower()
+    return "minimize cost" in lowered or "minimize time" in lowered
+
+
+def _allowed_sizes_for_receipt(receipt: dict[str, Any]) -> list[str] | None:
+    provider, model = _provider_model_from_receipt(receipt)
+    if provider == "openai" and model.startswith("gpt-image"):
+        return ["1024x1024", "1024x1536", "1536x1024", "auto"]
+    return None
+
+
+def _provider_model_from_receipt(receipt: dict[str, Any]) -> tuple[str, str]:
+    request = receipt.get("request") if isinstance(receipt, dict) else {}
+    resolved = receipt.get("resolved") if isinstance(receipt, dict) else {}
+    provider = ""
+    model = ""
+    if isinstance(request, dict):
+        provider = str(request.get("provider") or "")
+        model = str(request.get("model") or "")
+    if isinstance(resolved, dict):
+        provider = str(resolved.get("provider") or provider)
+        model = str(resolved.get("model") or model)
+    return provider, model
+
+
+def _normalize_size_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text == "auto":
+        return "auto"
+    if text in {"portrait", "tall"}:
+        return "1024x1536"
+    if text in {"landscape", "wide"}:
+        return "1536x1024"
+    if text in {"square", "1:1"}:
+        return "1024x1024"
+    compact = text.replace(" ", "")
+    if "x" in compact:
+        parts = compact.split("x", 1)
+        try:
+            return f"{int(parts[0])}x{int(parts[1])}"
+        except Exception:
+            return None
+    return text
+
+
+def _fallback_size_for_goals(goals: list[str] | None, allowed_sizes: list[str]) -> str | None:
+    if not allowed_sizes:
+        return None
+    lowered = " ".join(goals or []).lower()
+    if "maximize quality" in lowered:
+        if "1536x1024" in allowed_sizes:
+            return "1536x1024"
+        if "1024x1536" in allowed_sizes:
+            return "1024x1536"
+    if "minimize cost" in lowered or "minimize time" in lowered:
+        if "1024x1024" in allowed_sizes:
+            return "1024x1024"
+        if "auto" in allowed_sizes:
+            return "auto"
+    return allowed_sizes[0] if allowed_sizes else None
+
+
 def _build_analysis_prompt(receipt: dict[str, Any], goals: list[str] | None) -> str:
     request = receipt.get("request") if isinstance(receipt, dict) else {}
     resolved = receipt.get("resolved") if isinstance(receipt, dict) else {}
@@ -234,18 +419,23 @@ def _build_analysis_prompt(receipt: dict[str, Any], goals: list[str] | None) -> 
     }
     prompt_line = prompt.strip().replace("\n", " ")
     size_hint = ""
+    model_hint = ""
     if provider == "openai":
         size_hint = "Allowed sizes: 1024x1024, 1024x1536, 1536x1024, auto.\n"
+        if model.startswith("gpt-image-1") and not model.endswith("-mini"):
+            model_hint = "Cheaper model option: gpt-image-1-mini.\n"
+        model_hint += "Quality presets: fast, cheaper, quality, better (maps to quality=low/high). Quality values: low, medium, high, auto.\n"
     return (
         "You are optimizing image generation settings for the next iteration.\n"
         f"Goals: {goals_line}\n"
         f"Prompt: {prompt_line}\n"
         f"Receipt summary JSON: {json.dumps(payload, ensure_ascii=True)}\n"
         f"{size_hint}"
+        f"{model_hint}"
         "Return ONLY JSON with keys: analysis_excerpt (string) and recommendations (array).\n"
         "Each recommendation must be an object with keys: setting_name, setting_value, setting_target, rationale.\n"
         "Allowed setting_target values: request, provider_options.\n"
-        "Allowed request settings: size, n, seed, output_format, background.\n"
+        "Allowed request settings: prompt, size, n, seed, output_format, background, quality_preset (or quality), model.\n"
         "If provider is openai, only recommend sizes from the allowed list.\n"
         "Recommendations should be concrete parameter changes that best satisfy the goals."
     )
