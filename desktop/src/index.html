@@ -54,11 +54,20 @@
             <div id="terminal"></div>
             <div id="goal-chips" class="goal-chips hidden" aria-live="polite">
               <div class="goal-hint">Pick goals to optimize the next iteration.</div>
+              <div class="goal-controls">
+                <label class="goal-label" for="optimize-mode">Mode</label>
+                <select id="optimize-mode">
+                  <option value="auto">Auto</option>
+                  <option value="review">Review</option>
+                </select>
+                <div id="optimize-timing" class="optimize-timing">Analysis — · Generate —</div>
+              </div>
               <div id="goal-row" class="goal-row" role="group" aria-label="Optimization goals"></div>
             </div>
           </div>
           <div class="terminal-input">
             <input id="terminal-input" type="text" placeholder="Generate an image of a boat" />
+            <button id="goals-toggle" type="button">Goals</button>
             <button id="terminal-send" type="button">Send</button>
           </div>
           <div id="engine-status" class="engine-status">Engine: idle</div>
@@ -73,6 +82,16 @@
               <button id="compare">Compare</button>
               <button id="flicker">Flicker</button>
             </div>
+          </div>
+          <div id="optimize-panel" class="optimize-panel hidden">
+            <div class="optimize-header">
+              <div>
+                <div class="optimize-title">Optimization</div>
+                <div id="optimize-meta" class="optimize-meta"></div>
+              </div>
+            </div>
+            <div id="optimize-analysis" class="optimize-analysis"></div>
+            <div id="optimize-recs" class="optimize-recs"></div>
           </div>
           <div id="gallery" class="gallery"></div>
           <div id="detail" class="detail"></div>

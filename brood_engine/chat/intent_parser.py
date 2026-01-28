@@ -46,6 +46,23 @@ def _parse_goals(arg: str) -> list[str]:
     return deduped
 
 
+def _parse_optimize_args(arg: str) -> tuple[list[str], str | None]:
+    if not arg:
+        return [], None
+    parts = arg.split()
+    mode: str | None = None
+    goals_arg = arg
+    if parts:
+        head = parts[0].lower()
+        if head in {"review", "auto"}:
+            mode = head
+            goals_arg = " ".join(parts[1:])
+        elif head.startswith("mode="):
+            mode = head.split("=", 1)[1]
+            goals_arg = " ".join(parts[1:])
+    return _parse_goals(goals_arg), mode
+
+
 def parse_intent(text: str) -> Intent:
     raw = text.strip()
     if not raw:
@@ -63,8 +80,8 @@ def parse_intent(text: str) -> Intent:
         if command in {"fast", "quality", "cheaper", "better"}:
             return Intent(action="set_quality", raw=text, settings_update={"quality_preset": command})
         if command == "optimize":
-            goals = _parse_goals(arg)
-            return Intent(action="optimize", raw=text, command_args={"goals": goals})
+            goals, mode = _parse_optimize_args(arg)
+            return Intent(action="optimize", raw=text, command_args={"goals": goals, "mode": mode})
         if command == "recreate":
             return Intent(action="recreate", raw=text, command_args={"path": arg})
         if command == "export":
