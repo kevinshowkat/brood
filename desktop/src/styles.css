@@ -23,6 +23,18 @@ body {
   min-height: 100vh;
 }
 
+.boot-error {
+  background: #2a0d0d;
+  color: #ffb3b3;
+  padding: 8px 12px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.boot-error.hidden {
+  display: none;
+}
+
 #app {
   display: flex;
   flex-direction: column;
@@ -105,6 +117,52 @@ body {
   border-radius: 10px;
   overflow: hidden;
   background: #0d1117;
+  min-height: 320px;
+}
+
+#terminal .xterm,
+#terminal .xterm-screen {
+  height: 100%;
+}
+
+.terminal-input {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.terminal-input input {
+  flex: 1;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #0d1117;
+  color: var(--text);
+  padding: 8px 10px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 15px;
+}
+
+.terminal-input button {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 8px 12px;
+  font-family: "IBM Plex Mono", monospace;
+  cursor: pointer;
+}
+
+
+.engine-status {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.engine-status.error {
+  color: #ff6b6b;
 }
 
 .canvas-pane {
