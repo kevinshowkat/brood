@@ -24,7 +24,7 @@ _MODEL_ALIASES = {
     "dryrun": "dryrun-image-1",
 }
 
-_MODEL_DIRECTIVE_RE = re.compile(r"(?:^|\\s|,|;)(?:and\\s+)?(?:use|with)\\s+(?P<model>[\\w\\-.]+)", re.IGNORECASE)
+_MODEL_DIRECTIVE_RE = re.compile(r"(?:^|\\s|,|;)(?:and\\s+)?(?:use|with)\\s+(?P<model>[\\w.\\-]+)", re.IGNORECASE)
 
 _REFINE_PREFIXES = {
     "make",
