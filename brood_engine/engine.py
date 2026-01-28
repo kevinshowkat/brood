@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -168,22 +169,33 @@ class BroodEngine:
             self.thread.save()
             return artifacts
 
+        started_at = time.monotonic()
         response = provider.generate(request)
+        elapsed = max(time.monotonic() - started_at, 0.0)
+        measured_latency = elapsed / max(1, n)
         cost_estimate = self.pricing.estimate_image_cost(model_spec.pricing_key)
         latency_estimate = self.latency.estimate_image_latency(model_spec.latency_key)
+        latency_value = latency_estimate.latency_per_image_s
+        if latency_value is None:
+            latency_value = measured_latency
+        cost_total_usd = None
+        if cost_estimate.cost_per_image_usd is not None:
+            cost_total_usd = cost_estimate.cost_per_image_usd * n
         self.last_cost_latency = {
             "provider": model_spec.provider,
             "model": model_spec.name,
+            "cost_total_usd": cost_total_usd,
             "cost_per_1k_images_usd": cost_estimate.cost_per_1k_images_usd,
-            "latency_per_image_s": latency_estimate.latency_per_image_s,
+            "latency_per_image_s": latency_value,
         }
-        if cost_estimate.cost_per_1k_images_usd is not None or latency_estimate.latency_per_image_s is not None:
+        if cost_estimate.cost_per_1k_images_usd is not None or latency_value is not None:
             self.events.emit(
                 "cost_latency_update",
                 provider=model_spec.provider,
                 model=model_spec.name,
+                cost_total_usd=cost_total_usd,
                 cost_per_1k_images_usd=cost_estimate.cost_per_1k_images_usd,
-                latency_per_image_s=latency_estimate.latency_per_image_s,
+                latency_per_image_s=latency_value,
             )
 
         for idx, result in enumerate(response.results, start=1):
@@ -208,8 +220,9 @@ class BroodEngine:
                 warnings=response.warnings,
             )
             metadata = {
+                "cost_total_usd": cost_total_usd,
                 "cost_per_1k_images_usd": cost_estimate.cost_per_1k_images_usd,
-                "latency_per_image_s": latency_estimate.latency_per_image_s,
+                "latency_per_image_s": latency_value,
             }
             receipt = build_receipt(
                 request=request,

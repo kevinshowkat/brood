@@ -7,11 +7,27 @@ import sys
 from pathlib import Path
 
 from .chat.intent_parser import parse_intent
-from .chat.refine import extract_model_directive, is_refinement
+from .chat.refine import extract_model_directive, is_refinement, is_repeat_request
 from .engine import BroodEngine
 from .runs.export import export_html
-from .utils import now_utc_iso, load_dotenv
+from .utils import (
+    now_utc_iso,
+    load_dotenv,
+    format_cost_generation_cents,
+    format_latency_seconds,
+    has_flux_key,
+    is_flux_model,
+)
+
+
+def _maybe_warn_missing_flux_key(model: str | None) -> None:
+    if not is_flux_model(model):
+        return
+    if has_flux_key():
+        return
+    print("Flux requires BFL_API_KEY (or FLUX_API_KEY). Set it before generating.")
 from .cli_progress import progress_once, ProgressTicker
+from .reasoning import start_reasoning_summary
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -21,21 +37,21 @@ def _build_parser() -> argparse.ArgumentParser:
     chat = sub.add_parser("chat", help="Interactive chat loop")
     chat.add_argument("--out", required=True, help="Run output directory")
     chat.add_argument("--events", help="Path to events.jsonl")
-    chat.add_argument("--text-model", dest="text_model")
+    chat.add_argument("--text-model", dest="text_model", default="gpt-5.1-codex-max")
     chat.add_argument("--image-model", dest="image_model")
 
     run = sub.add_parser("run", help="Single-run generation")
     run.add_argument("--prompt", required=True)
     run.add_argument("--out", required=True)
     run.add_argument("--events")
-    run.add_argument("--text-model", dest="text_model")
+    run.add_argument("--text-model", dest="text_model", default="gpt-5.1-codex-max")
     run.add_argument("--image-model", dest="image_model")
 
     recreate = sub.add_parser("recreate", help="Recreate from reference image")
     recreate.add_argument("--reference", required=True, help="Path to reference image")
     recreate.add_argument("--out", required=True)
     recreate.add_argument("--events")
-    recreate.add_argument("--text-model", dest="text_model")
+    recreate.add_argument("--text-model", dest="text_model", default="gpt-5.1-codex-max")
     recreate.add_argument("--image-model", dest="image_model")
 
     export = sub.add_parser("export", help="Export run to HTML")
@@ -89,6 +105,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
         if intent.action == "set_image_model":
             engine.image_model = intent.command_args.get("model") or engine.image_model
             print(f"Image model set to {engine.image_model}")
+            _maybe_warn_missing_flux_key(engine.image_model)
             continue
         if intent.action == "set_quality":
             state["quality_preset"] = intent.settings_update.get("quality_preset")
@@ -116,7 +133,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
             if model_directive:
                 engine.image_model = model_directive
                 print(f"Image model set to {engine.image_model}")
-            if not prompt and last_prompt:
+                _maybe_warn_missing_flux_key(engine.image_model)
+            if (not prompt or is_repeat_request(prompt)) and last_prompt:
                 prompt = last_prompt
             elif last_prompt and is_refinement(prompt):
                 prompt = f"{last_prompt} Update: {prompt}"
@@ -134,16 +152,18 @@ def _handle_chat(args: argparse.Namespace) -> int:
             )
             ticker = ProgressTicker("Generating images")
             ticker.start_ticking()
+            start_reasoning_summary(prompt, engine.text_model, ticker)
             try:
                 engine.generate(prompt, settings, {"action": "generate"})
             finally:
                 ticker.stop(done=True)
             if engine.last_fallback_reason:
                 print(f"Model fallback: {engine.last_fallback_reason}")
-            if engine.last_cost_latency:
-                cost = engine.last_cost_latency.get("cost_per_1k_images_usd")
-                latency = engine.last_cost_latency.get("latency_per_image_s")
-                print(f"Cost per 1K images: {cost} | Latency per image (s): {latency}")
+            cost_raw = engine.last_cost_latency.get("cost_total_usd") if engine.last_cost_latency else None
+            latency_raw = engine.last_cost_latency.get("latency_per_image_s") if engine.last_cost_latency else None
+            cost = format_cost_generation_cents(cost_raw) or "N/A"
+            latency = format_latency_seconds(latency_raw) or "N/A"
+            print(f"Cost of generation: {cost} | Latency per image: {latency}")
             print("Generation complete.")
             continue
 
@@ -168,16 +188,18 @@ def _handle_run(args: argparse.Namespace) -> int:
     )
     ticker = ProgressTicker("Generating images")
     ticker.start_ticking()
+    start_reasoning_summary(args.prompt, engine.text_model, ticker)
     try:
         engine.generate(args.prompt, settings, {"action": "generate"})
     finally:
         ticker.stop(done=True)
     if engine.last_fallback_reason:
         print(f"Model fallback: {engine.last_fallback_reason}")
-    if engine.last_cost_latency:
-        cost = engine.last_cost_latency.get("cost_per_1k_images_usd")
-        latency = engine.last_cost_latency.get("latency_per_image_s")
-        print(f"Cost per 1K images: {cost} | Latency per image (s): {latency}")
+    cost_raw = engine.last_cost_latency.get("cost_total_usd") if engine.last_cost_latency else None
+    latency_raw = engine.last_cost_latency.get("latency_per_image_s") if engine.last_cost_latency else None
+    cost = format_cost_generation_cents(cost_raw) or "N/A"
+    latency = format_latency_seconds(latency_raw) or "N/A"
+    print(f"Cost of generation: {cost} | Latency per image: {latency}")
     engine.finish()
     return 0
 

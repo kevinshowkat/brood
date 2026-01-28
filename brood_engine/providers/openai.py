@@ -330,3 +330,46 @@ def _summarize_response(response: Mapping[str, Any], status_code: int, count: in
     if "usage" in response:
         summary["usage"] = response.get("usage")
     return summary
+
+
+def fetch_reasoning_summary(
+    prompt: str,
+    model: str,
+    *,
+    effort: str = "low",
+    summary: str = "auto",
+    api_base: str | None = None,
+    timeout_s: float = 30.0,
+) -> str | None:
+    api_key = _get_api_key()
+    if not api_key:
+        return None
+    endpoint = f"{(api_base or 'https://api.openai.com/v1').rstrip('/')}/responses"
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": prompt,
+        "reasoning": {"effort": effort, "summary": summary},
+    }
+    _, response = _post_json(endpoint, payload, api_key, timeout_s)
+    return _extract_reasoning_summary(response)
+
+
+def _extract_reasoning_summary(response: Mapping[str, Any]) -> str | None:
+    output = response.get("output")
+    if not isinstance(output, list):
+        return None
+    for item in output:
+        if not isinstance(item, Mapping):
+            continue
+        if item.get("type") != "reasoning":
+            continue
+        summary = item.get("summary")
+        if isinstance(summary, list):
+            for entry in summary:
+                if isinstance(entry, Mapping) and entry.get("type") == "summary_text":
+                    text = entry.get("text")
+                    if isinstance(text, str) and text.strip():
+                        return text.strip()
+        if isinstance(summary, str) and summary.strip():
+            return summary.strip()
+    return None
