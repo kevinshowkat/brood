@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import time
 import sys
 from pathlib import Path
 
@@ -11,6 +10,7 @@ from .chat.intent_parser import parse_intent
 from .engine import BroodEngine
 from .runs.export import export_html
 from .utils import now_utc_iso, load_dotenv
+from .cli_progress import progress_once, ProgressTicker
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -53,16 +53,6 @@ def _settings_from_state(state: dict[str, object]) -> dict[str, object]:
         "provider_options": state.get("provider_options", {}),
         "quality_preset": state.get("quality_preset", "quality"),
     }
-
-def _progress(label: str, start: float | None = None, done: bool = False) -> float:
-    now = time.monotonic()
-    elapsed = 0 if start is None else max(0, int(now - start))
-    minutes = elapsed // 60
-    seconds = elapsed % 60
-    suffix = "done" if done else "esc to interrupt"
-    print(f"• {label} ({minutes}m {seconds:02d}s • {suffix})")
-    return now if start is None else start
-
 
 def _handle_chat(args: argparse.Namespace) -> int:
     run_dir = Path(args.out)
@@ -124,7 +114,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
             if last_prompt and len(prompt.split()) < 6:
                 prompt = f"{last_prompt} Update: {prompt}"
             last_prompt = prompt
-            progress_start = _progress("Planning run")
+            progress_once("Planning run")
             usage = engine.track_context(prompt, "", engine.text_model)
             pct = int(usage.get("pct", 0) * 100)
             alert = usage.get("alert_level")
@@ -135,9 +125,12 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 f"Plan: {plan['images']} images via {plan['provider']}:{plan['model']} "
                 f"size={plan['size']} cached={plan['cached']}"
             )
-            _progress("Generating images", progress_start)
-            engine.generate(prompt, settings, {"action": "generate"})
-            _progress("Generating images", progress_start, done=True)
+            ticker = ProgressTicker("Generating images")
+            ticker.start_ticking()
+            try:
+                engine.generate(prompt, settings, {"action": "generate"})
+            finally:
+                ticker.stop(done=True)
             if engine.last_fallback_reason:
                 print(f"Model fallback: {engine.last_fallback_reason}")
             if engine.last_cost_latency:
@@ -155,7 +148,7 @@ def _handle_run(args: argparse.Namespace) -> int:
     run_dir = Path(args.out)
     events_path = Path(args.events) if args.events else run_dir / "events.jsonl"
     engine = BroodEngine(run_dir, events_path, text_model=args.text_model, image_model=args.image_model)
-    progress_start = _progress("Planning run")
+    progress_once("Planning run")
     usage = engine.track_context(args.prompt, "", engine.text_model)
     pct = int(usage.get("pct", 0) * 100)
     alert = usage.get("alert_level")
@@ -166,9 +159,12 @@ def _handle_run(args: argparse.Namespace) -> int:
         f"Plan: {plan['images']} images via {plan['provider']}:{plan['model']} "
         f"size={plan['size']} cached={plan['cached']}"
     )
-    _progress("Generating images", progress_start)
-    engine.generate(args.prompt, settings, {"action": "generate"})
-    _progress("Generating images", progress_start, done=True)
+    ticker = ProgressTicker("Generating images")
+    ticker.start_ticking()
+    try:
+        engine.generate(args.prompt, settings, {"action": "generate"})
+    finally:
+        ticker.stop(done=True)
     if engine.last_fallback_reason:
         print(f"Model fallback: {engine.last_fallback_reason}")
     if engine.last_cost_latency:

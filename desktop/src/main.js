@@ -1,12 +1,16 @@
 import { Terminal } from "xterm";
 import "xterm/css/xterm.css";
 import { FitAddon } from "xterm-addon-fit";
-import { invoke, listen, convertFileSrc } from "@tauri-apps/api/tauri";
-import { readTextFile, readDir, exists, watch } from "@tauri-apps/api/fs";
+import { invoke, convertFileSrc } from "@tauri-apps/api/tauri";
+import { listen } from "@tauri-apps/api/event";
+import { readTextFile, readDir, exists, readBinaryFile } from "@tauri-apps/api/fs";
 import { open } from "@tauri-apps/api/dialog";
 import { writeText } from "@tauri-apps/api/clipboard";
 
 const terminalEl = document.getElementById("terminal");
+const terminalInput = document.getElementById("terminal-input");
+const terminalSend = document.getElementById("terminal-send");
+const engineStatus = document.getElementById("engine-status");
 const galleryEl = document.getElementById("gallery");
 const detailEl = document.getElementById("detail");
 const runInfoEl = document.getElementById("run-info");
@@ -20,50 +24,107 @@ const state = {
   selected: new Set(),
   placeholders: [],
   flickerTimer: null,
+  ptyReady: false,
+  poller: null,
+  blobUrls: new Map(),
 };
+
+function setStatus(message, isError = false) {
+  if (!engineStatus) return;
+  engineStatus.textContent = message;
+  engineStatus.classList.toggle("error", isError);
+}
+
+function reportError(err) {
+  const msg = err?.message || String(err);
+  term.writeln(`\r\n[brood] error: ${msg}`);
+  setStatus(`Engine: error (${msg})`, true);
+}
 
 const term = new Terminal({
   fontFamily: "IBM Plex Mono",
   fontSize: 13,
-  cursorBlink: true,
+  cursorBlink: false,
   cursorStyle: "bar",
+  disableStdin: true,
   theme: {
     background: "#0d1117",
     foreground: "#e6edf3",
+    cursor: "#ffb300",
   },
 });
 const fitAddon = new FitAddon();
 term.loadAddon(fitAddon);
 term.open(terminalEl);
-fitAddon.fit();
 terminalEl.setAttribute("tabindex", "0");
-term.focus();
-term.writeln("[brood] terminal ready");
-term.write("\u001b[?25h");
+requestAnimationFrame(() => {
+  fitAddon.fit();
+  term.focus();
+  term.writeln("[brood] terminal ready");
+  term.write("\u001b[?25h");
+});
 window.addEventListener("resize", () => fitAddon.fit());
+setStatus("Engine: idle — click New Run");
+
+window.addEventListener("error", (event) => {
+  reportError(event.error || event.message);
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  reportError(event.reason);
+});
 
 terminalEl.addEventListener("click", () => {
   term.focus();
 });
 
+async function sendTerminalInput() {
+  const value = terminalInput.value.trim();
+  if (!value) return;
+  if (!state.runDir) {
+    await createRun();
+    if (!state.runDir) {
+      return;
+    }
+  }
+  invoke("write_pty", { data: `${value}\n` }).catch((err) => {
+    term.writeln(`\r\n[brood] send failed: ${err}`);
+    setStatus(`Engine: send failed (${err})`, true);
+  });
+  setStatus("Engine: sent input");
+  if (!state.ptyReady) {
+    term.writeln(value);
+  }
+  terminalInput.value = "";
+  term.focus();
+}
+
+terminalInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  sendTerminalInput().catch(() => {});
+});
+
+terminalSend.addEventListener("click", () => {
+  sendTerminalInput().catch(() => {});
+});
+
 document.addEventListener("keydown", (event) => {
   const tag = event.target?.tagName;
   if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
-  if (event.key.length === 1) {
-    term.focus();
+  if (terminalInput && document.activeElement !== terminalInput) {
+    terminalInput.focus();
   }
 });
 
-term.onData((data) => {
-  invoke("write_pty", { data }).catch(() => {});
-});
-
 listen("pty-data", (event) => {
+  state.ptyReady = true;
+  setStatus("Engine: connected");
   term.write(event.payload);
 });
 
 listen("pty-exit", () => {
   term.writeln("\r\n[brood] engine exited");
+  setStatus("Engine: exited", true);
 });
 
 const settings = {
@@ -99,19 +160,26 @@ imageModelSelect.addEventListener("change", () => {
 });
 
 async function createRun() {
-  const payload = await invoke("create_run_dir");
-  state.runDir = payload.run_dir;
-  state.eventsPath = payload.events_path;
-  state.eventsOffset = 0;
-  state.artifacts.clear();
-  state.selected.clear();
-  runInfoEl.textContent = `Run: ${state.runDir}`;
-  await spawnEngine();
-  await startWatching();
+  try {
+    setStatus("Engine: creating run…");
+    const payload = await invoke("create_run_dir");
+    state.runDir = payload.run_dir;
+    state.eventsPath = payload.events_path;
+    state.eventsOffset = 0;
+    state.artifacts.clear();
+    state.selected.clear();
+    runInfoEl.textContent = `Run: ${state.runDir}`;
+    await spawnEngine();
+    await startWatching();
+  } catch (err) {
+    setStatus(`Engine: failed to create run (${err})`, true);
+    reportError(err);
+  }
 }
 
 async function spawnEngine() {
   if (!state.runDir) return;
+  setStatus("Engine: starting…");
   term.writeln("[brood] starting engine...");
   try {
     await invoke("spawn_pty", {
@@ -120,10 +188,12 @@ async function spawnEngine() {
       cwd: state.runDir,
       env: { BROOD_MEMORY: settings.memory ? "1" : "0" },
     });
+    setStatus("Engine: started");
     invoke("write_pty", { data: `/text_model ${settings.textModel}\n` }).catch(() => {});
     invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
   } catch (err) {
     term.writeln(`\r\n[brood] failed to spawn engine: ${err}`);
+    setStatus(`Engine: failed (${err})`, true);
   }
 }
 
@@ -144,20 +214,20 @@ async function startWatching() {
   const eventsExists = await exists(state.eventsPath);
   if (eventsExists) {
     await readEvents();
-    await watch(state.eventsPath, () => {
-      readEvents().catch(() => {});
-    });
+    await pollEvents();
     return;
   }
   await loadReceiptsFallback();
-  await watch(state.runDir, async () => {
-    const hasEvents = await exists(state.eventsPath);
-    if (!hasEvents) return;
+  await pollEvents();
+}
+
+async function pollEvents() {
+  if (state.poller) return;
+  state.poller = setInterval(async () => {
+    const existsNow = await exists(state.eventsPath);
+    if (!existsNow) return;
     await readEvents().catch(() => {});
-    await watch(state.eventsPath, () => {
-      readEvents().catch(() => {});
-    });
-  });
+  }, 750);
 }
 
 async function readEvents() {
@@ -238,6 +308,9 @@ function renderGallery() {
     card.className = "card" + (state.selected.has(artifact.artifact_id) ? " selected" : "");
     const img = document.createElement("img");
     img.src = convertFileSrc(artifact.image_path);
+    img.onerror = () => {
+      loadImageBinary(artifact.image_path, img).catch(() => {});
+    };
     const meta = document.createElement("div");
     meta.className = "meta";
     meta.textContent = `${artifact.version_id} • ${artifact.artifact_id}`;
@@ -247,6 +320,28 @@ function renderGallery() {
     galleryEl.appendChild(card);
   }
   renderDetail();
+}
+
+async function loadImageBinary(path, imgEl) {
+  if (!path) return;
+  if (state.blobUrls.has(path)) {
+    imgEl.src = state.blobUrls.get(path);
+    return;
+  }
+  try {
+    const data = await readBinaryFile(path);
+    const mime = path.endsWith(".jpg") || path.endsWith(".jpeg")
+      ? "image/jpeg"
+      : path.endsWith(".webp")
+        ? "image/webp"
+        : "image/png";
+    const blob = new Blob([data], { type: mime });
+    const url = URL.createObjectURL(blob);
+    state.blobUrls.set(path, url);
+    imgEl.src = url;
+  } catch (err) {
+    term.writeln(`\r\n[brood] failed to load image: ${err}`);
+  }
 }
 
 async function renderDetail() {
@@ -337,11 +432,36 @@ async function exportReport() {
 
 // Buttons
 
-document.getElementById("new-run").addEventListener("click", () => createRun());
-document.getElementById("open-run").addEventListener("click", () => openRun());
-document.getElementById("upload").addEventListener("click", () => uploadReference());
-document.getElementById("export").addEventListener("click", () => exportReport());
-document.getElementById("compare").addEventListener("click", () => renderDetail());
-document.getElementById("flicker").addEventListener("click", () => flicker());
+const newRunBtn = document.getElementById("new-run");
+const openRunBtn = document.getElementById("open-run");
+const uploadBtn = document.getElementById("upload");
+const exportBtn = document.getElementById("export");
+const compareBtn = document.getElementById("compare");
+const flickerBtn = document.getElementById("flicker");
 
-createRun().catch(() => {});
+if (!newRunBtn) {
+  setStatus("Engine: UI error (missing #new-run)", true);
+} else {
+  newRunBtn.addEventListener("click", () => {
+    setStatus("Engine: New Run clicked");
+    term.writeln("[brood] New Run clicked");
+    createRun().catch((err) => reportError(err));
+  });
+}
+if (openRunBtn) {
+  openRunBtn.addEventListener("click", () => openRun().catch((err) => reportError(err)));
+}
+if (uploadBtn) {
+  uploadBtn.addEventListener("click", () => uploadReference().catch((err) => reportError(err)));
+}
+if (exportBtn) {
+  exportBtn.addEventListener("click", () => exportReport().catch((err) => reportError(err)));
+}
+if (compareBtn) {
+  compareBtn.addEventListener("click", () => renderDetail());
+}
+if (flickerBtn) {
+  flickerBtn.addEventListener("click", () => flicker());
+}
+
+createRun().catch((err) => reportError(err));

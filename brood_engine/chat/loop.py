@@ -9,6 +9,7 @@ from .intent_parser import parse_intent
 from ..engine import BroodEngine
 from ..runs.export import export_html
 from ..utils import now_utc_iso
+from ..cli_progress import progress_once, ProgressTicker
 
 
 @dataclass
@@ -73,6 +74,7 @@ class ChatLoop:
                 if self.last_prompt and len(prompt.split()) < 6:
                     prompt = f"{self.last_prompt} Update: {prompt}"
                 self.last_prompt = prompt
+                progress_once("Planning run")
                 usage = self.engine.track_context(prompt, "", self.engine.text_model)
                 pct = int(usage.get("pct", 0) * 100)
                 alert = usage.get("alert_level")
@@ -83,8 +85,12 @@ class ChatLoop:
                     f"Plan: {plan['images']} images via {plan['provider']}:{plan['model']} "
                     f"size={plan['size']} cached={plan['cached']}"
                 )
-                print("Generating...")
-                self.engine.generate(prompt, settings, {"action": "generate"})
+                ticker = ProgressTicker("Generating images")
+                ticker.start_ticking()
+                try:
+                    self.engine.generate(prompt, settings, {"action": "generate"})
+                finally:
+                    ticker.stop(done=True)
                 if self.engine.last_fallback_reason:
                     print(f"Model fallback: {self.engine.last_fallback_reason}")
                 if self.engine.last_cost_latency:
@@ -101,3 +107,4 @@ class ChatLoop:
             "n": self.state.n,
             "quality_preset": self.state.quality_preset,
         }
+
