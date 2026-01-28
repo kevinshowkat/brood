@@ -27,6 +27,8 @@ const state = {
   ptyReady: false,
   poller: null,
   blobUrls: new Map(),
+  pendingEchoes: [],
+  echoBuffer: "",
 };
 
 function setStatus(message, isError = false) {
@@ -87,6 +89,7 @@ async function sendTerminalInput() {
       return;
     }
   }
+  state.pendingEchoes.push(value);
   invoke("write_pty", { data: `${value}\n` }).catch((err) => {
     term.writeln(`\r\n[brood] send failed: ${err}`);
     setStatus(`Engine: send failed (${err})`, true);
@@ -119,13 +122,54 @@ document.addEventListener("keydown", (event) => {
 listen("pty-data", (event) => {
   state.ptyReady = true;
   setStatus("Engine: connected");
-  term.write(event.payload);
+  term.write(highlightEchoes(event.payload));
 });
 
 listen("pty-exit", () => {
   term.writeln("\r\n[brood] engine exited");
   setStatus("Engine: exited", true);
 });
+
+const INPUT_COLOR = "\x1b[38;2;139;213;255m";
+const RESET_COLOR = "\x1b[0m";
+
+function highlightEchoes(payload) {
+  if (!state.pendingEchoes.length) {
+    if (state.echoBuffer) {
+      const combined = state.echoBuffer + payload;
+      state.echoBuffer = "";
+      return combined;
+    }
+    return payload;
+  }
+
+  const maxNeedle = Math.max(...state.pendingEchoes.map((item) => item.length), 1);
+  let combined = state.echoBuffer + payload;
+  let tail = "";
+  if (combined.length >= maxNeedle) {
+    tail = combined.slice(-maxNeedle + 1);
+    combined = combined.slice(0, combined.length - (maxNeedle - 1));
+  }
+
+  let output = "";
+  let cursor = 0;
+  while (state.pendingEchoes.length) {
+    const needle = state.pendingEchoes[0];
+    const index = combined.indexOf(needle, cursor);
+    if (index === -1) break;
+    output += combined.slice(cursor, index);
+    output += `${INPUT_COLOR}${needle}${RESET_COLOR}`;
+    cursor = index + needle.length;
+    state.pendingEchoes.shift();
+  }
+  output += combined.slice(cursor);
+  state.echoBuffer = state.pendingEchoes.length ? tail : "";
+  if (!state.pendingEchoes.length && state.echoBuffer) {
+    output += state.echoBuffer;
+    state.echoBuffer = "";
+  }
+  return output;
+}
 
 const settings = {
   memory: localStorage.getItem("brood.memory") === "1",
