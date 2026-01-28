@@ -29,7 +29,6 @@ const state = {
   blobUrls: new Map(),
   pendingEchoes: [],
   echoBuffer: "",
-  echoMode: "suppress",
 };
 
 function setStatus(message, isError = false) {
@@ -92,9 +91,7 @@ async function sendTerminalInput() {
       return;
     }
   }
-  writeUserLine(value);
   state.pendingEchoes.push(value);
-  state.echoMode = "suppress";
   invoke("write_pty", { data: `${value}\n` }).catch((err) => {
     term.writeln(`\r\n[brood] send failed: ${err}`);
     setStatus(`Engine: send failed (${err})`, true);
@@ -136,60 +133,37 @@ listen("pty-exit", () => {
 });
 
 const INPUT_COLOR = "\x1b[38;2;139;213;255m";
-const USER_BG = "\x1b[48;2;44;50;60m";
+const USER_BG = "\x1b[48;2;52;59;72m";
 const USER_FG = "\x1b[38;2;216;222;229m";
 const SYSTEM_COLOR = "\x1b[38;2;150;157;165m";
 const ITALIC = "\x1b[3m";
 const RESET_COLOR = "\x1b[0m";
 
 function highlightEchoes(payload) {
-  if (!state.pendingEchoes.length) {
-    if (state.echoBuffer) {
-      const combined = state.echoBuffer + payload;
-      state.echoBuffer = "";
-      return combined;
-    }
-    return payload;
-  }
-
-  const maxNeedle = Math.max(...state.pendingEchoes.map((item) => item.length), 1);
   let combined = state.echoBuffer + payload;
-  let tail = "";
-  if (combined.length >= maxNeedle) {
-    tail = combined.slice(-maxNeedle + 1);
-    combined = combined.slice(0, combined.length - (maxNeedle - 1));
-  }
-
-  let output = "";
-  let cursor = 0;
-  while (state.pendingEchoes.length) {
-    const needle = state.pendingEchoes[0];
-    const index = combined.indexOf(needle, cursor);
-    if (index === -1) break;
-    const lineStart = combined.lastIndexOf("\n", index - 1) + 1;
-    const lineEnd = combined.indexOf("\n", index);
-    const endIndex = lineEnd === -1 ? combined.length : lineEnd + 1;
-    const prefix = combined.slice(lineStart, index).replace(/\r/g, "");
-    const isPromptLine = /^\s*>+\s*$/.test(prefix);
-    if (isPromptLine) {
-      output += combined.slice(cursor, lineStart);
-      cursor = endIndex;
-    } else {
-      output += combined.slice(cursor, index);
-      cursor = index + needle.length;
-    }
-    state.pendingEchoes.shift();
-  }
-  output += combined.slice(cursor);
-  state.echoBuffer = state.pendingEchoes.length ? tail : "";
-  if (!state.pendingEchoes.length) {
-    state.echoMode = "highlight";
-  }
-  if (!state.pendingEchoes.length && state.echoBuffer) {
-    output += state.echoBuffer;
+  const hasTrailingNewline = combined.endsWith("\n");
+  const lines = combined.split("\n");
+  if (!hasTrailingNewline) {
+    state.echoBuffer = lines.pop() || "";
+  } else {
     state.echoBuffer = "";
   }
-  return output;
+
+  const outputLines = [];
+  for (const line of lines) {
+    if (
+      state.pendingEchoes.length &&
+      !line.includes("\x1b[") &&
+      line.includes(state.pendingEchoes[0])
+    ) {
+      outputLines.push(formatUserBlock(line));
+      state.pendingEchoes.shift();
+    } else {
+      outputLines.push(line);
+    }
+  }
+  const output = outputLines.join("\n");
+  return hasTrailingNewline ? `${output}\n` : output;
 }
 
 function styleSystemLines(payload) {
@@ -216,11 +190,14 @@ function styleSystemLine(line) {
   return line;
 }
 
-function writeUserLine(value) {
-  const prefix = `> ${value}`;
-  const cols = term?.cols || 0;
-  const pad = cols > prefix.length ? " ".repeat(cols - prefix.length) : "";
-  term.writeln(`${USER_BG}${USER_FG}${prefix}${pad}${RESET_COLOR}`);
+function formatUserBlock(line) {
+  const cols = term?.cols || 80;
+  const clean = line.replace(/\r/g, "");
+  const pad = cols > clean.length ? " ".repeat(cols - clean.length) : "";
+  const blank = " ".repeat(cols);
+  const full = `${USER_BG}${USER_FG}${clean}${pad}${RESET_COLOR}`;
+  const spacer = `${USER_BG}${blank}${RESET_COLOR}`;
+  return `${spacer}\n${full}\n${spacer}`;
 }
 
 const settings = {
