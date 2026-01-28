@@ -61,9 +61,11 @@ term.open(terminalEl);
 terminalEl.setAttribute("tabindex", "0");
 requestAnimationFrame(() => {
   fitAddon.fit();
-  term.focus();
   term.writeln("[brood] terminal ready");
   term.write("\u001b[?25h");
+  if (terminalInput) {
+    terminalInput.focus();
+  }
 });
 window.addEventListener("resize", () => fitAddon.fit());
 setStatus("Engine: idle — click New Run");
@@ -77,7 +79,7 @@ window.addEventListener("unhandledrejection", (event) => {
 });
 
 terminalEl.addEventListener("click", () => {
-  term.focus();
+  if (terminalInput) terminalInput.focus();
 });
 
 async function sendTerminalInput() {
@@ -99,7 +101,7 @@ async function sendTerminalInput() {
     term.writeln(value);
   }
   terminalInput.value = "";
-  term.focus();
+  terminalInput.focus();
 }
 
 terminalInput.addEventListener("keydown", (event) => {
