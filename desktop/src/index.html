@@ -12,7 +12,9 @@
         App failed to initialize. Check the terminal for errors.
       </div>
       <header class="topbar">
-        <div class="brand">Brood</div>
+        <div class="brand">
+          <img src="./assets/logo.jpeg" alt="Brood" />
+        </div>
         <div class="controls">
           <label class="toggle">
             <input id="memory-toggle" type="checkbox" />
@@ -49,6 +51,10 @@
       <main class="layout">
         <section class="pane terminal-pane">
           <div id="terminal"></div>
+          <div id="goal-chips" class="goal-chips hidden" aria-live="polite">
+            <div class="goal-hint">Pick goals to optimize the next iteration.</div>
+            <div id="goal-row" class="goal-row" role="group" aria-label="Optimization goals"></div>
+          </div>
           <div class="terminal-input">
             <input id="terminal-input" type="text" placeholder="Generate an image of a boat" />
             <button id="terminal-send" type="button">Send</button>

@@ -54,7 +54,10 @@ class ContextTracker:
             return None
         # Simple heuristic summary: keep the last 3 turns and summarize earlier text.
         if len(self.history) <= 3:
-            return None
+            snapshot = " ".join(self.history)
+            summary = snapshot[:500] + ("..." if len(snapshot) > 500 else "")
+            self.used_tokens = int(self.max_tokens * 0.5)
+            return summary
         older = " ".join(self.history[:-3])
         summary = older[:500] + ("..." if len(older) > 500 else "")
         self.history = self.history[-3:]

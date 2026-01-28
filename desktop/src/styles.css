@@ -3,6 +3,7 @@
 :root {
   --bg: #0b0f14;
   --panel: #0d1219;
+  --panel-wash: #121a25;
   --panel-2: #171f2a;
   --accent: #ffb300;
   --accent-2: #6ee7ff;
@@ -51,9 +52,14 @@ body {
 }
 
 .brand {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+}
+
+.brand img {
+  height: 28px;
+  width: auto;
+  display: block;
 }
 
 .controls button {
@@ -125,6 +131,55 @@ body {
   height: 100%;
 }
 
+.goal-chips {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(18, 26, 37, 0.7);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.goal-chips.hidden {
+  display: none;
+}
+
+.goal-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.goal-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.goal-chip {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-family: "IBM Plex Mono", monospace;
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease;
+}
+
+.goal-chip:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.goal-chip.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  background: rgba(255, 179, 0, 0.12);
+}
+
 .terminal-input {
   margin-top: 8px;
   border-top: 1px solid var(--border);
@@ -167,6 +222,7 @@ body {
 
 .canvas-pane {
   padding: 12px;
+  background: var(--panel-wash);
 }
 
 .canvas-header {
@@ -194,15 +250,18 @@ body {
 }
 
 .gallery {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 12px;
-  overflow-y: auto;
+  --gallery-card-size: 480px;
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
   padding-bottom: 12px;
   flex: 1;
 }
 
 .card {
+  flex: 0 0 var(--gallery-card-size);
+  width: var(--gallery-card-size);
   background: #0f151d;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -286,12 +345,16 @@ body {
 
 .detail {
   margin-top: 12px;
-  background: var(--panel);
+  background: var(--panel-wash);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 12px;
   font-size: 13px;
   color: var(--muted);
+}
+
+.detail.hidden {
+  display: none;
 }
 
 .detail button {

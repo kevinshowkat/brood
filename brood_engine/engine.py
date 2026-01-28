@@ -98,6 +98,31 @@ class BroodEngine:
             "fallback_reason": image_selection.fallback_reason,
         }
 
+    def _build_cost_latency_payload(
+        self,
+        model_spec: Any,
+        n: int,
+        measured_latency: float,
+        cached: bool = False,
+    ) -> dict[str, Any]:
+        cost_estimate = self.pricing.estimate_image_cost(model_spec.pricing_key)
+        latency_estimate = self.latency.estimate_image_latency(model_spec.latency_key)
+        latency_value = latency_estimate.latency_per_image_s
+        if latency_value is None:
+            latency_value = measured_latency
+        cost_total_usd = None
+        if cost_estimate.cost_per_image_usd is not None:
+            cost_total_usd = 0.0 if cached else cost_estimate.cost_per_image_usd * n
+        payload = {
+            "provider": model_spec.provider,
+            "model": model_spec.name,
+            "cost_total_usd": cost_total_usd,
+            "cost_per_1k_images_usd": cost_estimate.cost_per_1k_images_usd,
+            "latency_per_image_s": latency_value,
+        }
+        self.last_cost_latency = dict(payload)
+        return payload
+
     def generate(self, prompt: str, settings: dict[str, Any], intent: dict[str, Any]) -> list[dict[str, Any]]:
         image_selection = self.model_selector.select(self.image_model, "image")
         model_spec = image_selection.model
@@ -154,6 +179,12 @@ class BroodEngine:
 
         artifacts: list[dict[str, Any]] = []
         if cached:
+            cost_payload = self._build_cost_latency_payload(
+                model_spec,
+                n=n,
+                measured_latency=0.0,
+                cached=True,
+            )
             for item in cached.get("artifacts", []):
                 artifact = dict(item)
                 artifacts.append(artifact)
@@ -167,36 +198,37 @@ class BroodEngine:
                     metrics=artifact.get("metrics", {}),
                 )
             self.thread.save()
+            self.events.emit("cost_latency_update", **cost_payload)
             return artifacts
 
         started_at = time.monotonic()
-        response = provider.generate(request)
+        response = None
+        error: Exception | None = None
+        try:
+            response = provider.generate(request)
+        except Exception as exc:
+            error = exc
         elapsed = max(time.monotonic() - started_at, 0.0)
         measured_latency = elapsed / max(1, n)
-        cost_estimate = self.pricing.estimate_image_cost(model_spec.pricing_key)
-        latency_estimate = self.latency.estimate_image_latency(model_spec.latency_key)
-        latency_value = latency_estimate.latency_per_image_s
-        if latency_value is None:
-            latency_value = measured_latency
-        cost_total_usd = None
-        if cost_estimate.cost_per_image_usd is not None:
-            cost_total_usd = cost_estimate.cost_per_image_usd * n
-        self.last_cost_latency = {
-            "provider": model_spec.provider,
-            "model": model_spec.name,
-            "cost_total_usd": cost_total_usd,
-            "cost_per_1k_images_usd": cost_estimate.cost_per_1k_images_usd,
-            "latency_per_image_s": latency_value,
-        }
-        if cost_estimate.cost_per_1k_images_usd is not None or latency_value is not None:
+        cost_payload = self._build_cost_latency_payload(
+            model_spec,
+            n=n,
+            measured_latency=measured_latency,
+        )
+        if error is not None:
+            self.events.emit("cost_latency_update", **cost_payload)
             self.events.emit(
-                "cost_latency_update",
+                "generation_failed",
+                version_id=version.version_id,
                 provider=model_spec.provider,
                 model=model_spec.name,
-                cost_total_usd=cost_total_usd,
-                cost_per_1k_images_usd=cost_estimate.cost_per_1k_images_usd,
-                latency_per_image_s=latency_value,
+                error=str(error),
             )
+            raise error
+
+        cost_total_usd = cost_payload["cost_total_usd"]
+        cost_per_1k_images_usd = cost_payload["cost_per_1k_images_usd"]
+        latency_value = cost_payload["latency_per_image_s"]
 
         for idx, result in enumerate(response.results, start=1):
             artifact_id = f"{version.version_id}-{idx:02d}-{uuid.uuid4().hex[:8]}"
@@ -221,7 +253,7 @@ class BroodEngine:
             )
             metadata = {
                 "cost_total_usd": cost_total_usd,
-                "cost_per_1k_images_usd": cost_estimate.cost_per_1k_images_usd,
+                "cost_per_1k_images_usd": cost_per_1k_images_usd,
                 "latency_per_image_s": latency_value,
             }
             receipt = build_receipt(
@@ -272,26 +304,38 @@ class BroodEngine:
 
         self.thread.save()
         self.cache.set(cache_key, {"artifacts": artifacts})
+        self.events.emit("cost_latency_update", **cost_payload)
         return artifacts
 
-    def analyze_last_receipt(self) -> dict[str, Any] | None:
-        if not self.thread.versions:
+    def analyze_last_receipt(self, goals: list[str] | None = None) -> dict[str, Any] | None:
+        payload, last_version = self.last_receipt_payload()
+        if not payload or not last_version:
             return None
-        last_version = self.thread.versions[-1]
-        if not last_version.artifacts:
-            return None
-        receipt_path = Path(last_version.artifacts[-1]["receipt_path"])
-        payload = read_json(receipt_path, {}) if receipt_path.exists() else {}
-        if not isinstance(payload, dict):
-            return None
-        analysis = analyze_receipt(payload)
+        analysis = analyze_receipt(payload, goals=goals, model=self.text_model)
+        if goals:
+            last_version.intent = dict(last_version.intent)
+            last_version.intent["goals"] = list(goals)
+            self.thread.save()
         self.events.emit(
             "analysis_ready",
             version_id=last_version.version_id,
             recommendations=analysis.recommendations,
             analysis_excerpt=analysis.analysis_excerpt,
+            goals=goals or [],
         )
         return {"recommendations": analysis.recommendations, "analysis_excerpt": analysis.analysis_excerpt}
+
+    def last_receipt_payload(self) -> tuple[dict[str, Any] | None, Any | None]:
+        if not self.thread.versions:
+            return None, None
+        last_version = self.thread.versions[-1]
+        if not last_version.artifacts:
+            return None, None
+        receipt_path = Path(last_version.artifacts[-1]["receipt_path"])
+        payload = read_json(receipt_path, {}) if receipt_path.exists() else {}
+        if not isinstance(payload, dict):
+            return None, None
+        return payload, last_version
 
     def record_feedback(self, version_id: str, artifact_id: str, rating: str, reason: str | None = None) -> None:
         feedback = self.feedback_writer.record(version_id, artifact_id, rating, reason)
