@@ -8,6 +8,7 @@ import { open } from "@tauri-apps/api/dialog";
 import { writeText } from "@tauri-apps/api/clipboard";
 
 const terminalEl = document.getElementById("terminal");
+const terminalShell = document.querySelector(".terminal-shell");
 const terminalInput = document.getElementById("terminal-input");
 const terminalSend = document.getElementById("terminal-send");
 const engineStatus = document.getElementById("engine-status");
@@ -36,6 +37,7 @@ const state = {
   goalChipsShown: false,
   goalSelections: new Set(),
   goalSendTimer: null,
+  goalAnalyzeInFlight: false,
 };
 
 function setStatus(message, isError = false) {
@@ -70,6 +72,7 @@ terminalEl.setAttribute("tabindex", "0");
 const resizeObserver = new ResizeObserver(() => {
   fitAddon.fit();
   resizePty();
+  positionGoalChips();
 });
 resizeObserver.observe(terminalEl);
 function resizePty() {
@@ -81,6 +84,7 @@ function resizePty() {
 requestAnimationFrame(() => {
   fitAddon.fit();
   resizePty();
+  positionGoalChips();
   term.writeln(formatBroodLine("[brood] terminal ready."));
   term.write("\u001b[?25h");
   if (terminalInput) {
@@ -90,6 +94,7 @@ requestAnimationFrame(() => {
 window.addEventListener("resize", () => {
   fitAddon.fit();
   resizePty();
+  positionGoalChips();
 });
 setStatus("Engine: idle — click New Run");
 
@@ -156,11 +161,66 @@ function showGoalChips() {
   state.goalChipsShown = true;
   renderGoalChips();
   goalChipsEl.classList.remove("hidden");
+  if (terminalShell) {
+    requestAnimationFrame(() => {
+      const height = goalChipsEl.getBoundingClientRect().height;
+      const padding = Math.ceil(height + 12);
+      terminalShell.style.setProperty("--goal-chips-height", `${padding}px`);
+      terminalShell.classList.add("goal-active");
+      fitAddon.fit();
+      resizePty();
+      positionGoalChips();
+    });
+  }
 }
 
 function hideGoalChips() {
   if (!goalChipsEl) return;
   goalChipsEl.classList.add("hidden");
+  if (terminalShell) {
+    terminalShell.classList.remove("goal-active");
+    terminalShell.style.removeProperty("--goal-chips-height");
+    fitAddon.fit();
+    resizePty();
+  }
+}
+
+function positionGoalChips() {
+  if (!goalChipsEl || !terminalEl || !state.goalChipsShown) return;
+  const height = terminalEl.clientHeight;
+  if (!height || !term?.rows) return;
+  const cellHeight = height / term.rows;
+  let targetRow = null;
+  const buffer = term.buffer?.active;
+  if (buffer) {
+    const index =
+      findLineIndex(buffer, "Generation complete.") ??
+      findLineIndex(buffer, "Generated in");
+    if (index != null) {
+      const viewportY = buffer.viewportY || 0;
+      targetRow = index - viewportY + 1;
+    }
+  }
+  if (targetRow == null || !Number.isFinite(targetRow)) {
+    targetRow = term.rows - 1;
+  }
+  targetRow = Math.max(0, Math.min(term.rows - 1, targetRow));
+  const chipsHeight = goalChipsEl.getBoundingClientRect().height;
+  const maxTop = Math.max(8, height - chipsHeight - 6);
+  let top = Math.round(targetRow * cellHeight + 2);
+  top = Math.min(top, maxTop);
+  goalChipsEl.style.top = `${top}px`;
+}
+
+function findLineIndex(buffer, needle) {
+  if (!buffer || !needle) return null;
+  for (let i = buffer.length - 1; i >= 0; i -= 1) {
+    const line = buffer.getLine(i);
+    if (!line) continue;
+    const text = line.translateToString(true).trimEnd();
+    if (text.includes(needle)) return i;
+  }
+  return null;
 }
 
 function toggleGoal(goal) {
@@ -189,6 +249,9 @@ function triggerGoalAnalyze() {
     (goal) => goal.token
   );
   if (!selectedTokens.length) return;
+  state.goalAnalyzeInFlight = true;
+  setStatus("Engine: optimizing…");
+  hideGoalChips();
   const command = `/optimize ${selectedTokens.join(",")}`;
   sendPtyCommand(command);
 }
@@ -243,6 +306,7 @@ listen("pty-data", (event) => {
   setStatus("Engine: connected");
   const formatted = styleSystemLines(highlightEchoes(event.payload));
   term.write(normalizeNewlines(formatted));
+  positionGoalChips();
   if (!state.goalChipsShown && state.artifacts.size > 0) {
     showGoalChips();
   }
@@ -520,9 +584,15 @@ async function createRun() {
     state.eventsOffset = 0;
     state.artifacts.clear();
     state.selected.clear();
+    state.lastError = null;
     state.goalChipsShown = false;
     state.goalSelections.clear();
+    state.goalAnalyzeInFlight = false;
     hideGoalChips();
+    if (detailEl) {
+      detailEl.textContent = "";
+      detailEl.classList.add("hidden");
+    }
     runInfoEl.textContent = `Run: ${state.runDir}`;
     await spawnEngine();
     await startWatching();
@@ -561,9 +631,15 @@ async function openRun() {
   state.eventsOffset = 0;
   state.artifacts.clear();
   state.selected.clear();
+  state.lastError = null;
   state.goalChipsShown = false;
   state.goalSelections.clear();
+  state.goalAnalyzeInFlight = false;
   hideGoalChips();
+  if (detailEl) {
+    detailEl.textContent = "";
+    detailEl.classList.add("hidden");
+  }
   runInfoEl.textContent = `Run: ${state.runDir}`;
   await startWatching();
 }
@@ -637,12 +713,19 @@ function handleEvent(event) {
     const pct = Math.round((event.pct || 0) * 100);
     contextEl.textContent = `Context: ${pct}%`;
   }
+  if (event.type === "analysis_ready") {
+    if (state.goalAnalyzeInFlight) {
+      state.goalAnalyzeInFlight = false;
+      setStatus("Engine: analysis ready");
+    }
+  }
   if (event.type === "generation_failed") {
     const msg = event.error ? `Generation failed: ${event.error}` : "Generation failed.";
     state.lastError = msg;
     setStatus(`Engine: ${msg}`, true);
     if (state.selected.size === 0) {
       detailEl.textContent = msg;
+      detailEl.classList.remove("hidden");
     }
   }
 }

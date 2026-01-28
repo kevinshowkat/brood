@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
 
 from .intent_parser import parse_intent
 from .refine import extract_model_directive, is_refinement, is_repeat_request
 from ..engine import BroodEngine
 from ..runs.export import export_html
 from ..utils import now_utc_iso
-from ..cli_progress import progress_once, ProgressTicker
+from ..cli_progress import progress_once, ProgressTicker, elapsed_line
 from ..reasoning import (
     start_reasoning_summary,
     reasoning_summary,
@@ -83,27 +84,79 @@ class ChatLoop:
                 if not goals:
                     print("No goals provided. Use /optimize quality,cost,time,retrieval")
                     continue
-                payload, _ = self.engine.last_receipt_payload()
-                if not payload:
-                    print("No receipt available to analyze.")
-                    continue
                 self.state.goals = list(goals)
                 print(f"Optimizing for: {', '.join(goals)}")
-                reasoning_prompt = build_optimize_reasoning_prompt(payload, list(goals))
-                reasoning = reasoning_summary(reasoning_prompt, self.engine.text_model)
-                if reasoning:
-                    print(f"Reasoning: {reasoning}")
-                analysis = self.engine.analyze_last_receipt(goals=list(goals))
-                if not analysis:
-                    print("No receipt available to analyze.")
-                    continue
-                if analysis.get("analysis_excerpt"):
-                    print(f"Analysis: {analysis['analysis_excerpt']}")
-                recommendations = analysis.get("recommendations") or []
-                if recommendations:
+                max_rounds = 3
+                rounds_left = max_rounds - 1
+                for round_idx in range(rounds_left):
+                    analysis_started = time.monotonic()
+                    payload, _ = self.engine.last_receipt_payload()
+                    snapshot = self.engine.last_version_snapshot()
+                    if not payload or not snapshot:
+                        print("No receipt available to analyze.")
+                        break
+                    reasoning_prompt = build_optimize_reasoning_prompt(payload, list(goals))
+                    reasoning = reasoning_summary(
+                        reasoning_prompt, self.engine.text_model, compact=False
+                    )
+                    if reasoning:
+                        print(f"Reasoning: {reasoning}")
+                    analysis = self.engine.analyze_last_receipt(goals=list(goals))
+                    if not analysis:
+                        print("No receipt available to analyze.")
+                        break
+                    if analysis.get("analysis_excerpt"):
+                        print(f"Analysis: {analysis['analysis_excerpt']}")
+                    recommendations = analysis.get("recommendations") or []
+                    if not recommendations:
+                        print("No recommendations; stopping optimize loop.")
+                        break
                     print("Recommendations:")
                     for rec in recommendations:
-                        print(f"- {rec}")
+                        if isinstance(rec, dict):
+                            name = rec.get("setting_name")
+                            value = rec.get("setting_value")
+                            target = rec.get("setting_target") or "provider_options"
+                            if target == "comment":
+                                print(f"- {value}")
+                                continue
+                            if target in {"request", "top_level"}:
+                                print(f"- {name}={value}")
+                            else:
+                                print(f"- provider_options.{name}={value}")
+                    updated_settings, summary, skipped = self.engine.apply_recommendations(
+                        snapshot["settings"], recommendations
+                    )
+                    if summary:
+                        print(f"Applying: {', '.join(summary)}")
+                    if skipped:
+                        print(f"Skipped: {', '.join(skipped)}")
+                    analysis_elapsed = time.monotonic() - analysis_started
+                    print(elapsed_line("Optimize analysis in", analysis_elapsed))
+                    ticker = ProgressTicker(
+                        f"Optimize round {round_idx + 2}/{max_rounds} • Generating images"
+                    )
+                    ticker.start_ticking()
+                    error = None
+                    try:
+                        self.engine.generate(
+                            snapshot["prompt"],
+                            updated_settings,
+                            {
+                                "action": "optimize",
+                                "parent_version_id": snapshot["version_id"],
+                                "goals": list(goals),
+                                "round": round_idx + 2,
+                            },
+                        )
+                    except Exception as exc:
+                        error = exc
+                    finally:
+                        ticker.stop(done=True)
+                    if error:
+                        print(f"Generation failed: {error}")
+                        break
+                print("Optimize loop complete.")
                 continue
             if intent.action == "export":
                 out_path = self.engine.run_dir / f"export-{now_utc_iso().replace(':', '').replace('-', '')}.html"
@@ -137,7 +190,10 @@ class ChatLoop:
                 usage = self.engine.track_context(prompt, "", self.engine.text_model)
                 pct = int(usage.get("pct", 0) * 100)
                 alert = usage.get("alert_level")
-                print(f"Context usage: {pct}% (alert {alert})")
+                if alert and alert != "none":
+                    print(f"Context usage: {pct}% (alert {alert})")
+                else:
+                    print(f"Context usage: {pct}%")
                 settings = self._settings()
                 plan = self.engine.preview_plan(prompt, settings)
                 print(

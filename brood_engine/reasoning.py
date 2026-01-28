@@ -16,6 +16,7 @@ def reasoning_summary(
     *,
     effort: str = "low",
     summary: str = "auto",
+    compact: bool = True,
 ) -> str | None:
     if not model:
         return None
@@ -49,12 +50,14 @@ def reasoning_summary(
         return None
     if not summary_text:
         return None
-    width = None
-    try:
-        width = shutil.get_terminal_size(fallback=(100, 20)).columns
-    except Exception:
+    if compact:
         width = None
-    return _compact_summary(summary_text, width)
+        try:
+            width = shutil.get_terminal_size(fallback=(100, 20)).columns
+        except Exception:
+            width = None
+        return _compact_summary(summary_text, width)
+    return _clean_summary(summary_text)
 
 
 def start_reasoning_summary(
@@ -84,6 +87,12 @@ def _compact_summary(text: str, width: int | None) -> str:
         max_len = max(40, width - 30)
     if len(cleaned) > max_len:
         cleaned = cleaned[: max_len - 1].rstrip() + "…"
+    return cleaned
+
+
+def _clean_summary(text: str) -> str:
+    cleaned = re.sub(r"[*_`]+", "", text)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
 
 
