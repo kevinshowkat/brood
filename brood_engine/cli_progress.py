@@ -127,4 +127,4 @@ def _separator_line(label: str, width: int) -> str:
     remaining = width - len(content)
     left = remaining // 2
     right = remaining - left
-    return f\"{'─' * left}{content}{'─' * right}\"
+    return f"{'─' * left}{content}{'─' * right}"
