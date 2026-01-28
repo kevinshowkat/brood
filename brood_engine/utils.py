@@ -116,6 +116,11 @@ def _default_env_path() -> Path:
         env_path = repo_root / ".env"
         if env_path.exists():
             return env_path
+    module_root = _find_repo_root(Path(__file__).resolve().parent)
+    if module_root:
+        env_path = module_root / ".env"
+        if env_path.exists():
+            return env_path
     return cwd / ".env"
 
 
