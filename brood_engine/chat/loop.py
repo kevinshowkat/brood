@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import time
+import sys
 
 from .intent_parser import parse_intent
-from .refine import extract_model_directive, is_refinement, is_repeat_request
+from .refine import extract_model_directive, detect_edit_model, is_refinement, is_repeat_request
 from ..engine import BroodEngine
 from ..runs.export import export_html
 from ..utils import now_utc_iso
@@ -20,6 +21,7 @@ from ..reasoning import (
 from ..utils import (
     format_cost_generation_cents,
     format_latency_seconds,
+    ansi_highlight,
     has_flux_key,
     is_flux_model,
 )
@@ -31,6 +33,11 @@ def _maybe_warn_missing_flux_key(model: str | None) -> None:
     if has_flux_key():
         return
     print("Flux requires BFL_API_KEY (or FLUX_API_KEY). Set it before generating.")
+
+
+def _print_progress_safe(message: str) -> None:
+    prefix = "\r\n" if getattr(sys.stdout, "isatty", lambda: False)() else ""
+    print(f"{prefix}{message}")
 
 
 @dataclass
@@ -46,6 +53,7 @@ class ChatLoop:
         self.engine = engine
         self.state = ChatState()
         self.last_prompt: str | None = None
+        self.last_artifact_path: str | None = None
 
     def run(self) -> None:
         print("Brood chat started. Type /help for commands.")
@@ -103,7 +111,7 @@ class ChatLoop:
                         reasoning_prompt, self.engine.text_model, compact=False
                     )
                     if reasoning:
-                        print(f"Reasoning: {reasoning}")
+                        _print_progress_safe(f"Reasoning: {reasoning}")
                     try:
                         analysis = self.engine.analyze_last_receipt(goals=list(goals), mode=mode)
                     finally:
@@ -150,7 +158,7 @@ class ChatLoop:
                         reasoning_prompt, self.engine.text_model, compact=False
                     )
                     if reasoning:
-                        print(f"Reasoning: {reasoning}")
+                        _print_progress_safe(f"Reasoning: {reasoning}")
                     try:
                         analysis = self.engine.analyze_last_receipt(
                             goals=list(goals),
@@ -182,8 +190,8 @@ class ChatLoop:
                                 print(f"- {name}={value}")
                             else:
                                 print(f"- provider_options.{name}={value}")
-                    updated_settings, summary, skipped = self.engine.apply_recommendations(
-                        snapshot["settings"], recommendations
+                    updated_settings, updated_prompt, summary, skipped = self.engine.apply_recommendations(
+                        snapshot["settings"], recommendations, prompt=snapshot.get("prompt")
                     )
                     if summary:
                         print(f"Applying: {', '.join(summary)}")
@@ -201,9 +209,10 @@ class ChatLoop:
                     ticker.start_ticking()
                     error = None
                     gen_started = time.monotonic()
+                    artifacts: list[dict[str, object]] = []
                     try:
-                        self.engine.generate(
-                            snapshot["prompt"],
+                        artifacts = self.engine.generate(
+                            updated_prompt or snapshot["prompt"],
                             updated_settings,
                             {
                                 "action": "optimize",
@@ -226,6 +235,10 @@ class ChatLoop:
                             error=str(error) if error else None,
                         )
                         ticker.stop(done=True)
+                    if not error and artifacts:
+                        self.last_artifact_path = str(
+                            artifacts[-1].get("image_path") or self.last_artifact_path or ""
+                        )
                     if error:
                         print(f"Generation failed: {error}")
                         break
@@ -250,15 +263,42 @@ class ChatLoop:
             if intent.action == "generate":
                 prompt = intent.prompt or ""
                 prompt, model_directive = extract_model_directive(prompt)
+                is_edit = False
+                if not model_directive:
+                    edit_model = detect_edit_model(prompt)
+                    if edit_model:
+                        model_directive = edit_model
+                        is_edit = True
                 if model_directive:
                     self.engine.image_model = model_directive
                     print(f"Image model set to {self.engine.image_model}")
                     _maybe_warn_missing_flux_key(self.engine.image_model)
-                if (not prompt or is_repeat_request(prompt)) and self.last_prompt:
+                generic_edit = prompt.strip().lower()
+                generic_edit_phrases = {
+                    "edit the image",
+                    "edit image",
+                    "edit the photo",
+                    "edit photo",
+                    "edit this",
+                    "edit that",
+                    "edit it",
+                    "replace the image",
+                    "replace image",
+                    "replace the photo",
+                    "replace photo",
+                    "replace it",
+                    "replace this",
+                    "replace that",
+                }
+                if is_edit and generic_edit in generic_edit_phrases and self.last_prompt:
                     prompt = self.last_prompt
-                elif self.last_prompt and is_refinement(prompt):
-                    prompt = f"{self.last_prompt} Update: {prompt}"
-                self.last_prompt = prompt
+                elif not is_edit:
+                    if (not prompt or is_repeat_request(prompt)) and self.last_prompt:
+                        prompt = self.last_prompt
+                    elif self.last_prompt and is_refinement(prompt):
+                        prompt = f"{self.last_prompt} Update: {prompt}"
+                if prompt:
+                    self.last_prompt = prompt
                 progress_once("Planning run")
                 usage = self.engine.track_context(prompt, "", self.engine.text_model)
                 pct = int(usage.get("pct", 0) * 100)
@@ -277,12 +317,17 @@ class ChatLoop:
                 ticker.start_ticking()
                 start_reasoning_summary(prompt, self.engine.text_model, ticker)
                 error: Exception | None = None
+                if is_edit and self.last_artifact_path:
+                    settings["init_image"] = self.last_artifact_path
+                artifacts: list[dict[str, object]] = []
                 try:
-                    self.engine.generate(prompt, settings, {"action": "generate"})
+                    artifacts = self.engine.generate(prompt, settings, {"action": "generate"})
                 except Exception as exc:
                     error = exc
                 finally:
                     ticker.stop(done=True)
+                if not error and artifacts:
+                    self.last_artifact_path = str(artifacts[-1].get("image_path") or self.last_artifact_path or "")
                 if self.engine.last_fallback_reason:
                     print(f"Model fallback: {self.engine.last_fallback_reason}")
                 cost_raw = (
@@ -297,7 +342,7 @@ class ChatLoop:
                 )
                 cost = format_cost_generation_cents(cost_raw) or "N/A"
                 latency = format_latency_seconds(latency_raw) or "N/A"
-                print(f"Cost of generation: {cost} | Latency per image: {latency}")
+                print(f"Cost of generation: {ansi_highlight(cost)} | Latency per image: {ansi_highlight(latency)}")
                 if error:
                     print(f"Generation failed: {error}")
                 else:

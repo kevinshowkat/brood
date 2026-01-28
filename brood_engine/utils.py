@@ -162,3 +162,11 @@ def format_latency_seconds(latency_per_image_s: float | None) -> str | None:
     if latency_per_image_s is None:
         return None
     return f"{latency_per_image_s:.1f}s"
+
+
+def ansi_bold(text: str) -> str:
+    return f"\x1b[1m{text}\x1b[22m"
+
+
+def ansi_highlight(text: str) -> str:
+    return f"\x1b[1m\x1b[38;2;107;214;255m{text}\x1b[39m\x1b[22m"
