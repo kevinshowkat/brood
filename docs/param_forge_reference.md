@@ -1,5 +1,7 @@
 # Param Forge reference notes (for Brood)
 
+Note: This file documents the reference tarball (`param_forge_ref/`) and should be treated as read-only context for compatibility.
+
 This doc records the Param Forge receipt schema and loop patterns to mirror. It is based on the reference tarball in `param_forge_ref/` (see `scripts/forge_image_api/*`, `scripts/param_forge.py`, and `docs/`).
 
 ## Receipt schema (Param Forge)

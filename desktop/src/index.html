@@ -8,6 +8,9 @@
   </head>
   <body>
     <div id="app">
+      <div id="boot-error" class="boot-error hidden">
+        App failed to initialize. Check the terminal for errors.
+      </div>
       <header class="topbar">
         <div class="brand">Brood</div>
         <div class="controls">
@@ -18,10 +21,23 @@
           <select id="text-model">
             <option value="dryrun-text-1">dryrun-text-1</option>
             <option value="gpt-4o-mini">gpt-4o-mini</option>
+            <option value="gpt-5.2">gpt-5.2</option>
+            <option value="gpt-5.1-codex-max">gpt-5.1-codex-max</option>
+            <option value="claude-opus-4-5-20251101">claude-opus-4-5-20251101</option>
+            <option value="gemini-3-pro-preview">gemini-3-pro-preview</option>
           </select>
           <select id="image-model">
             <option value="dryrun-image-1">dryrun-image-1</option>
+            <option value="gpt-image-1.5">gpt-image-1.5</option>
+            <option value="gpt-image-1-mini">gpt-image-1-mini</option>
             <option value="gpt-image-1">gpt-image-1</option>
+            <option value="gemini-2.5-flash-image">gemini-2.5-flash-image</option>
+            <option value="gemini-3-pro-image-preview">gemini-3-pro-image-preview</option>
+            <option value="imagen-4.0-ultra">imagen-4.0-ultra</option>
+            <option value="imagen-4">imagen-4</option>
+            <option value="flux-2-flex">flux-2-flex</option>
+            <option value="flux-2-pro">flux-2-pro</option>
+            <option value="flux-2">flux-2</option>
             <option value="sdxl">sdxl</option>
           </select>
           <button id="new-run">New Run</button>
@@ -33,6 +49,11 @@
       <main class="layout">
         <section class="pane terminal-pane">
           <div id="terminal"></div>
+          <div class="terminal-input">
+            <input id="terminal-input" type="text" placeholder="Generate an image of a boat" />
+            <button id="terminal-send" type="button">Send</button>
+          </div>
+          <div id="engine-status" class="engine-status">Engine: idle</div>
         </section>
         <section class="pane canvas-pane">
           <div class="canvas-header">
@@ -50,6 +71,21 @@
         </section>
       </main>
     </div>
-    <script type="module" src="./main.js"></script>
+    <script type="module">
+      window.__brood_booted = false;
+      const bootEl = document.getElementById("boot-error");
+      import("./main.js")
+        .then(() => {
+          window.__brood_booted = true;
+          if (bootEl) bootEl.classList.add("hidden");
+        })
+        .catch((err) => {
+          console.error(err);
+          if (bootEl) {
+            bootEl.classList.remove("hidden");
+            bootEl.textContent = `App failed to initialize: ${err?.message || err}`;
+          }
+        });
+    </script>
   </body>
 </html>

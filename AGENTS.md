@@ -20,6 +20,10 @@ Desktop:
 - `npm run tauri dev` — run the desktop app (requires Tauri CLI).
 - `npm run tauri build` — build the app bundle.
 
+Desktop usage:
+- Type commands in the **input field at the bottom of the left pane** and press **Enter** or **Send**.
+- Example: `Generate an image of a boat`
+
 Tests:
 - `python -m pytest` — run all engine tests.
 
@@ -42,3 +46,5 @@ Tests:
 - Memory is opt-in: set `BROOD_MEMORY=1` for the engine.
 - Pricing overrides live at `~/.brood/pricing_overrides.json`.
 - Desktop uses a real PTY; keep terminal output stable and machine-readable via `events.jsonl`.
+- Desktop file access requires Tauri FS scope (see `desktop/src-tauri/tauri.conf.json`).
+- API keys are listed in `.env.example` and should be stored in a local `.env` (gitignored).

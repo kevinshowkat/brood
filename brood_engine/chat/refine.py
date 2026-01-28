@@ -58,6 +58,39 @@ _REFINE_PHRASES = {
     "less ",
 }
 
+_REPEAT_PHRASES = {
+    "again",
+    "same",
+    "same thing",
+    "same as before",
+    "same as last",
+    "repeat",
+    "rerun",
+    "try again",
+    "generate again",
+    "generate it again",
+    "generate it",
+    "generate this",
+    "generate that",
+    "make it",
+    "make this",
+    "make that",
+    "do it",
+    "do this",
+    "do that",
+    "render it",
+    "render this",
+    "render that",
+    "create it",
+    "create this",
+    "create that",
+}
+
+_REPEAT_RE = re.compile(
+    r"^(generate|make|render|create|do|redo|rerun|try)\s+(it|that|this)(\s+again)?$",
+    re.IGNORECASE,
+)
+
 
 def extract_model_directive(prompt: str, registry: ModelRegistry | None = None) -> tuple[str, str | None]:
     match = _MODEL_DIRECTIVE_RE.search(prompt)
@@ -82,6 +115,15 @@ def is_refinement(prompt: str, *, word_threshold: int = 6) -> bool:
     if words[0] in _REFINE_PREFIXES:
         return True
     return any(phrase in normalized for phrase in _REFINE_PHRASES)
+
+
+def is_repeat_request(prompt: str) -> bool:
+    normalized = " ".join(prompt.strip().lower().split())
+    if not normalized:
+        return True
+    if normalized in _REPEAT_PHRASES:
+        return True
+    return _REPEAT_RE.match(normalized) is not None
 
 
 def _resolve_model(raw_model: str, registry: ModelRegistry) -> str | None:

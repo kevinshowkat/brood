@@ -2,7 +2,7 @@
 
 :root {
   --bg: #0b0f14;
-  --panel: #121922;
+  --panel: #0d1219;
   --panel-2: #171f2a;
   --accent: #ffb300;
   --accent-2: #6ee7ff;
@@ -116,7 +116,7 @@ body {
   flex: 1;
   border-radius: 10px;
   overflow: hidden;
-  background: #0d1117;
+  background: var(--panel);
   min-height: 320px;
 }
 
@@ -137,7 +137,7 @@ body {
   flex: 1;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: #0d1117;
+  background: var(--panel-2);
   color: var(--text);
   padding: 8px 10px;
   font-family: "IBM Plex Mono", monospace;
@@ -286,7 +286,7 @@ body {
 
 .detail {
   margin-top: 12px;
-  background: #0d1219;
+  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 12px;
