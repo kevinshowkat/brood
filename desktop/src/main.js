@@ -197,7 +197,9 @@ function styleSystemLine(line) {
   if (
     trimmed.startsWith("[brood]") ||
     trimmed.startsWith("/text_model") ||
-    trimmed.startsWith("/image_model")
+    trimmed.startsWith("/image_model") ||
+    trimmed.startsWith("> Text model set to") ||
+    trimmed.startsWith("> Image model set to")
   ) {
     return `${SYSTEM_COLOR}${ITALIC}${line}${RESET_COLOR}`;
   }
