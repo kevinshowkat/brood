@@ -79,7 +79,7 @@ class ChatLoop:
                 if not prompt and self.last_prompt:
                     prompt = self.last_prompt
                 elif self.last_prompt and is_refinement(prompt):
-                    prompt = f\"{self.last_prompt} Update: {prompt}\"
+                    prompt = f"{self.last_prompt} Update: {prompt}"
                 self.last_prompt = prompt
                 progress_once("Planning run")
                 usage = self.engine.track_context(prompt, "", self.engine.text_model)

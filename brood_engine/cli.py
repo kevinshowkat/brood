@@ -119,7 +119,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
             if not prompt and last_prompt:
                 prompt = last_prompt
             elif last_prompt and is_refinement(prompt):
-                prompt = f\"{last_prompt} Update: {prompt}\"
+                prompt = f"{last_prompt} Update: {prompt}"
             last_prompt = prompt
             progress_once("Planning run")
             usage = engine.track_context(prompt, "", engine.text_model)
