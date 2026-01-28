@@ -1,0 +1,24 @@
+{
+  "dryrun-image": {
+    "cost_per_image_usd": 0.0,
+    "latency_per_image_s": 0.2
+  },
+  "dryrun-text": {
+    "cost_per_1k_tokens_usd": 0.0,
+    "latency_per_call_s": 0.05,
+    "context_window": 8192
+  },
+  "openai-gpt-image-1": {
+    "cost_per_image_usd": 0.04,
+    "latency_per_image_s": 2.0
+  },
+  "openai-gpt-4o-mini": {
+    "cost_per_1k_tokens_usd": 0.15,
+    "latency_per_call_s": 0.4,
+    "context_window": 128000
+  },
+  "replicate-sdxl": {
+    "cost_per_image_usd": 0.01,
+    "latency_per_image_s": 3.5
+  }
+}

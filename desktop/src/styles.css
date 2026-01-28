@@ -1,0 +1,196 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap");
+
+:root {
+  --bg: #0b0f14;
+  --panel: #121922;
+  --panel-2: #171f2a;
+  --accent: #ffb300;
+  --accent-2: #6ee7ff;
+  --text: #e6edf3;
+  --muted: #8ea2b5;
+  --border: #243041;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Space Grotesk", sans-serif;
+  color: var(--text);
+  background: radial-gradient(circle at top left, #1b2532, #0b0f14 55%);
+  min-height: 100vh;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: rgba(10, 14, 20, 0.9);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.controls button {
+  margin-left: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-family: "IBM Plex Mono", monospace;
+  cursor: pointer;
+}
+
+.controls select {
+  margin-left: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.toggle {
+  margin-right: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.controls button:hover {
+  border-color: var(--accent);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr;
+  gap: 12px;
+  padding: 12px;
+  flex: 1;
+  overflow: hidden;
+}
+
+.pane {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-pane {
+  padding: 8px;
+}
+
+#terminal {
+  flex: 1;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0d1117;
+}
+
+.canvas-pane {
+  padding: 12px;
+}
+
+.canvas-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.context {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.compare-controls button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  margin-left: 6px;
+  border-radius: 8px;
+}
+
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  overflow-y: auto;
+  padding-bottom: 12px;
+  flex: 1;
+}
+
+.card {
+  background: #0f151d;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.card img {
+  width: 100%;
+  border-radius: 6px;
+}
+
+.card .meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.detail {
+  margin-top: 12px;
+  background: #0d1219;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.detail button {
+  margin-top: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}

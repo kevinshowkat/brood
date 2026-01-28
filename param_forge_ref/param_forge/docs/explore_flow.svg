@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1200" height="1040" viewBox="0 0 1200 1040" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .bg { fill: #fff7ea; }
+      .title { font: 700 32px "Menlo", "Courier New", monospace; fill: #1f1f1f; }
+      .label { font: 700 18px "Menlo", "Courier New", monospace; fill: #1f1f1f; }
+      .text { font: 400 15px "Menlo", "Courier New", monospace; fill: #1f1f1f; }
+      .code { font: 400 14px "Menlo", "Courier New", monospace; fill: #1f1f1f; }
+      .goals-box { fill: #3b0a45; stroke: #1f1f1f; stroke-width: 3; }
+      .goals-label { font: 800 22px "SF Pro", "SF-Pro", "Helvetica Neue", Helvetica, Arial, sans-serif; fill: #ffffff; }
+      .goals-code { font: 600 17px "SF Pro", "SF-Pro", "Helvetica Neue", Helvetica, Arial, sans-serif; fill: #ffffff; }
+      .node { stroke: #1f1f1f; stroke-width: 2; }
+      .ring { fill: none; stroke: #1f1f1f; stroke-width: 2; stroke-dasharray: 8 8; }
+      .arrow { stroke: #1f1f1f; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead); }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1f1f1f"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1200" height="1040"/>
+  <text class="title" x="40" y="54">Optimize Mode - Feedback Loop</text>
+
+  <!-- Loop ring -->
+  <circle class="ring" cx="600" cy="360" r="210"/>
+
+  <!-- Nodes -->
+  <circle class="node" cx="600" cy="150" r="78" fill="#ffe066"/>
+  <text class="label" x="600" y="144" text-anchor="middle">Generate</text>
+  <text class="text" x="600" y="170" text-anchor="middle">image + receipt</text>
+
+  <circle class="node" cx="820" cy="520" r="78" fill="#baf3ff"/>
+  <text class="label" x="820" y="514" text-anchor="middle">Score</text>
+  <text class="text" x="820" y="540" text-anchor="middle">council + stamp</text>
+
+  <circle class="node" cx="380" cy="520" r="78" fill="#ffc6f3"/>
+  <text class="label" x="380" y="514" text-anchor="middle">Apply</text>
+  <text class="text" x="380" y="540" text-anchor="middle">changes + goals</text>
+  <text class="text" x="380" y="560" text-anchor="middle">from receipt</text>
+
+  <!-- Center -->
+  <circle class="node" cx="600" cy="360" r="90" fill="#d7f8a3"/>
+  <text class="label" x="600" y="354" text-anchor="middle">Repeat</text>
+  <text class="text" x="600" y="380" text-anchor="middle">up to 3 rounds</text>
+
+  <!-- Curved arrows -->
+  <path class="arrow" d="M 600 228 Q 770 300 820 442"/>
+  <path class="arrow" d="M 742 520 Q 600 620 458 520"/>
+  <path class="arrow" d="M 380 442 Q 430 300 600 228"/>
+
+  <!-- Small callout -->
+  <rect class="node" x="860" y="120" width="300" height="80" rx="12" fill="#ffd3a1"/>
+  <text class="label" x="880" y="150">Receipt analysis</text>
+  <text class="text" x="880" y="172">Council suggests settings</text>
+
+  <line class="arrow" x1="860" y1="160" x2="720" y2="430"/>
+
+  <!-- Sample configs + goals -->
+  <rect class="goals-box" x="260" y="600" width="680" height="90" rx="12"/>
+  <text class="goals-label" x="280" y="632">User goals</text>
+  <text class="goals-code" x="280" y="658">
+    <tspan x="280" dy="0">[ "minimize cost", "minimize time to render" ]</tspan>
+  </text>
+
+  <rect class="node" x="40" y="710" width="520" height="290" rx="12" fill="#e0f7ff"/>
+  <text class="label" x="60" y="742">Baseline config</text>
+  <text class="code" x="60" y="770">
+    <tspan x="60" dy="0">{ "provider": "openai",</tspan>
+    <tspan x="60" dy="22">  "model": "gpt-image-1.5",</tspan>
+    <tspan x="60" dy="22">  "size": "1024x1536",</tspan>
+    <tspan x="60" dy="22">  "n": 1,</tspan>
+    <tspan x="60" dy="22">  "provider_options": {</tspan>
+    <tspan x="60" dy="22">    "quality": "high"</tspan>
+    <tspan x="60" dy="22">  }</tspan>
+    <tspan x="60" dy="22">}</tspan>
+  </text>
+
+  <rect class="node" x="640" y="710" width="520" height="290" rx="12" fill="#fbe0ff"/>
+  <text class="label" x="660" y="742">After round 3</text>
+  <text class="code" x="660" y="770">
+    <tspan x="660" dy="0">{ "provider": "openai",</tspan>
+    <tspan x="660" dy="22">  "model": "gpt-image-1.5",</tspan>
+    <tspan x="660" dy="22">  "size": </tspan>
+    <tspan fill="#d93025">"1024x1024"</tspan>
+    <tspan>,</tspan>
+    <tspan x="660" dy="22">  "n": </tspan>
+    <tspan fill="#d93025">1</tspan>
+    <tspan>,</tspan>
+    <tspan x="660" dy="22">  "provider_options": {</tspan>
+    <tspan x="660" dy="22">    "quality": </tspan>
+    <tspan fill="#d93025">"standard"</tspan>
+    <tspan>,</tspan>
+    <tspan x="660" dy="22">    "output_compression": </tspan>
+    <tspan fill="#d93025">80</tspan>
+    <tspan x="660" dy="22">  }</tspan>
+    <tspan x="660" dy="22">}</tspan>
+  </text>
+
+  <rect class="node" x="980" y="620" width="180" height="50" rx="10" fill="#fff1f1"/>
+  <text class="code" x="1000" y="650">
+    <tspan x="1000" dy="0">red = changed</tspan>
+  </text>
+</svg>

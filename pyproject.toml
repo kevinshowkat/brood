@@ -1,0 +1,32 @@
+[project]
+name = "brood"
+version = "0.1.0"
+description = "Brood creative IDE engine"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "Brood"}]
+dependencies = [
+  "Pillow>=10.0.0",
+]
+
+[project.scripts]
+brood = "brood_engine.cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+]
+
+[build-system]
+requires = ["setuptools>=77.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["brood_engine"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100

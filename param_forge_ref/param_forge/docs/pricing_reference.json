@@ -1,0 +1,40 @@
+{
+  "openai": {
+    "gpt-image-1": {
+      "1024x1024": {"low": 0.011, "medium": 0.042, "high": 0.167},
+      "1024x1536": {"low": 0.016, "medium": 0.063, "high": 0.25},
+      "1536x1024": {"low": 0.016, "medium": 0.063, "high": 0.25}
+    },
+    "gpt-image-1.5": {
+      "1024x1024": {"low": 0.009, "medium": 0.034, "high": 0.133},
+      "1024x1536": {"low": 0.013, "medium": 0.05, "high": 0.2},
+      "1536x1024": {"low": 0.013, "medium": 0.05, "high": 0.2}
+    },
+    "gpt-image-1-mini": {
+      "1024x1024": {"low": 0.005, "medium": 0.011, "high": 0.036},
+      "1024x1536": {"low": 0.006, "medium": 0.015, "high": 0.052},
+      "1536x1024": {"low": 0.006, "medium": 0.015, "high": 0.052}
+    }
+  },
+  "gemini": {
+    "gemini-2.5-flash-image": {"standard": 0.039, "batch": 0.0195},
+    "gemini-3-pro-image-preview": {
+      "standard_1k_2k": 0.134,
+      "standard_4k": 0.24,
+      "batch_1k_2k": 0.067,
+      "batch_4k": 0.12
+    }
+  },
+  "imagen": {
+    "imagen-4": {"fast": 0.02, "standard": 0.04, "ultra": 0.06},
+    "imagen-4.0-ultra": {"standard": 0.06},
+    "imagen-4.0-fast": {"standard": 0.02},
+    "imagen-4.0-standard": {"standard": 0.04},
+    "imagen-3": {"standard": 0.03}
+  },
+  "flux": {
+    "flux-2-pro": {"from": 0.03},
+    "flux-2-flex": {"from": 0.06},
+    "flux-2": {"from": 0.03}
+  }
+}
