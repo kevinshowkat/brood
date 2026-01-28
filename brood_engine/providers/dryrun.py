@@ -25,7 +25,7 @@ class DryRunProvider:
         results: list[GeneratedArtifact] = []
         width, height = _resolve_size(request.size)
         for idx in range(request.n):
-            seed = request.seed or random.randint(1, 10_000_000)
+            seed = request.seed if request.seed is not None else random.randint(1, 10_000_000)
             image_path = _build_image_path(request.out_dir, idx)
             image = Image.new("RGB", (width, height), _color_from_prompt(request.prompt, seed))
             draw = ImageDraw.Draw(image)

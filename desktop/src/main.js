@@ -147,9 +147,17 @@ async function startWatching() {
     await watch(state.eventsPath, () => {
       readEvents().catch(() => {});
     });
-  } else {
-    await loadReceiptsFallback();
+    return;
   }
+  await loadReceiptsFallback();
+  await watch(state.runDir, async () => {
+    const hasEvents = await exists(state.eventsPath);
+    if (!hasEvents) return;
+    await readEvents().catch(() => {});
+    await watch(state.eventsPath, () => {
+      readEvents().catch(() => {});
+    });
+  });
 }
 
 async function readEvents() {
