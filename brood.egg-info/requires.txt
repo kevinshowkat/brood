@@ -1,4 +1,0 @@
-Pillow>=10.0.0
-
-[dev]
-pytest>=7.4
