@@ -8,7 +8,7 @@ import time
 import sys
 
 from .intent_parser import parse_intent
-from .refine import extract_model_directive, detect_edit_model, is_refinement, is_repeat_request
+from .refine import extract_model_directive, detect_edit_model, is_edit_request, is_refinement, is_repeat_request
 from ..engine import BroodEngine
 from ..runs.export import export_html
 from ..utils import now_utc_iso
@@ -239,6 +239,9 @@ class ChatLoop:
                         self.last_artifact_path = str(
                             artifacts[-1].get("image_path") or self.last_artifact_path or ""
                         )
+                        used_prompt = updated_prompt or snapshot["prompt"]
+                        if used_prompt:
+                            self.last_prompt = used_prompt
                     if error:
                         print(f"Generation failed: {error}")
                         break
@@ -262,8 +265,9 @@ class ChatLoop:
                 continue
             if intent.action == "generate":
                 prompt = intent.prompt or ""
+                edit_request = is_edit_request(prompt)
                 prompt, model_directive = extract_model_directive(prompt)
-                is_edit = False
+                is_edit = edit_request
                 if not model_directive:
                     edit_model = detect_edit_model(prompt)
                     if edit_model:

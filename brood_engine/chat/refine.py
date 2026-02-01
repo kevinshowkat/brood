@@ -143,6 +143,13 @@ def detect_edit_model(prompt: str, registry: ModelRegistry | None = None) -> str
     return _resolve_model("gemini-3-pro-image-preview", registry or ModelRegistry())
 
 
+def is_edit_request(prompt: str) -> bool:
+    normalized = prompt.strip().lower()
+    if not normalized:
+        return False
+    return _EDIT_TRIGGER_RE.match(normalized) is not None
+
+
 def _resolve_model(raw_model: str, registry: ModelRegistry) -> str | None:
     if raw_model in _MODEL_ALIASES:
         return _MODEL_ALIASES[raw_model]
