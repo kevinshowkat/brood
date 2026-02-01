@@ -1,2 +1,0 @@
-[console_scripts]
-brood = brood_engine.cli:main
