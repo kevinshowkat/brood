@@ -29,6 +29,10 @@ desktop/src-tauri/gen/
 # Logs
 npm-debug.log*
 
+# Media
+*.mov
+*.mp4
+
 # Editor
 .idea/
 .vscode/
