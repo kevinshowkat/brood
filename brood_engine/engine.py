@@ -426,11 +426,16 @@ class BroodEngine:
                         summary.append(f"prompt={preview}")
                 elif str(name).lower() in {"quality", "quality_preset"}:
                     key = "quality_preset"
-                    if updated.get(key) == value:
-                        skipped.append(f"{key}={value} (unchanged)")
+                    normalized = self._normalize_openai_quality_value(value)
+                    if normalized:
+                        preset_value = _map_quality_value_to_preset(normalized)
                     else:
-                        updated[key] = value
-                        summary.append(f"{key}={value}")
+                        preset_value = str(value).strip().lower()
+                    if updated.get(key) == preset_value:
+                        skipped.append(f"{key}={preset_value} (unchanged)")
+                    else:
+                        updated[key] = preset_value
+                        summary.append(f"{key}={preset_value}")
                 elif str(name).lower() == "size":
                     allowed = self._allowed_sizes_for_current_model()
                     if allowed and value not in allowed:
@@ -509,23 +514,6 @@ class BroodEngine:
         }
         return mapping.get(text)
 
-
-def _coerce_image_inputs(settings: dict[str, Any]) -> ImageInputs:
-    init_image = settings.get("init_image") if isinstance(settings, dict) else None
-    mask = settings.get("mask") if isinstance(settings, dict) else None
-    reference_images = []
-    if isinstance(settings, dict) and settings.get("reference_images"):
-        raw_refs = settings.get("reference_images")
-        if isinstance(raw_refs, (list, tuple)):
-            reference_images = [str(item) for item in raw_refs if item]
-        else:
-            reference_images = [str(raw_refs)]
-    return ImageInputs(
-        init_image=str(init_image) if init_image else None,
-        mask=str(mask) if mask else None,
-        reference_images=reference_images,
-    )
-
     def _allowed_sizes_for_current_model(self) -> list[str] | None:
         model = self.image_model or ""
         provider = ""
@@ -599,3 +587,33 @@ def _coerce_image_inputs(settings: dict[str, Any]) -> ImageInputs:
         )
         write_summary(self.summary_path, summary)
         self.events.emit("run_finished", summary_path=str(self.summary_path))
+
+
+def _coerce_image_inputs(settings: dict[str, Any]) -> ImageInputs:
+    init_image = settings.get("init_image") if isinstance(settings, dict) else None
+    mask = settings.get("mask") if isinstance(settings, dict) else None
+    reference_images = []
+    if isinstance(settings, dict) and settings.get("reference_images"):
+        raw_refs = settings.get("reference_images")
+        if isinstance(raw_refs, (list, tuple)):
+            reference_images = [str(item) for item in raw_refs if item]
+        else:
+            reference_images = [str(raw_refs)]
+    return ImageInputs(
+        init_image=str(init_image) if init_image else None,
+        mask=str(mask) if mask else None,
+        reference_images=reference_images,
+    )
+
+
+def _map_quality_value_to_preset(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized == "low":
+        return "cheaper"
+    if normalized == "medium":
+        return "standard"
+    if normalized == "high":
+        return "quality"
+    if normalized == "auto":
+        return "auto"
+    return normalized

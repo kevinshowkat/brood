@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from .chat.intent_parser import parse_intent
-from .chat.refine import extract_model_directive, detect_edit_model, is_refinement, is_repeat_request
+from .chat.refine import extract_model_directive, detect_edit_model, is_edit_request, is_refinement, is_repeat_request
 from .engine import BroodEngine
 from .runs.export import export_html
 from .utils import (
@@ -270,6 +270,9 @@ def _handle_chat(args: argparse.Namespace) -> int:
                     ticker.stop(done=True)
                 if not error and artifacts:
                     last_artifact_path = str(artifacts[-1].get("image_path") or last_artifact_path or "")
+                    used_prompt = updated_prompt or snapshot["prompt"]
+                    if used_prompt:
+                        last_prompt = used_prompt
                 if error:
                     print(f"Generation failed: {error}")
                     break
@@ -293,8 +296,9 @@ def _handle_chat(args: argparse.Namespace) -> int:
             continue
         if intent.action == "generate":
             prompt = intent.prompt or ""
+            edit_request = is_edit_request(prompt)
             prompt, model_directive = extract_model_directive(prompt)
-            is_edit = False
+            is_edit = edit_request
             if not model_directive:
                 edit_model = detect_edit_model(prompt)
                 if edit_model:

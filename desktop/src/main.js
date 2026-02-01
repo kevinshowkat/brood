@@ -43,6 +43,7 @@ const state = {
   lastError: null,
   goalChipsShown: false,
   goalChipsSuppressed: false,
+  goalChipsAutoHold: false,
   goalSelections: new Set(),
   goalSendTimer: null,
   goalAnalyzeInFlight: false,
@@ -358,9 +359,16 @@ function findLineIndex(buffer, needle) {
 }
 
 function shouldAutoShowGoalChips() {
-  if (state.goalChipsShown || state.goalChipsSuppressed) return false;
+  if (state.goalChipsShown || state.goalChipsSuppressed || state.goalChipsAutoHold) return false;
   if (!state.ptyReady) return false;
   return state.artifacts.size > 0;
+}
+
+function isEditPrompt(command) {
+  if (!command) return false;
+  const normalized = command.trim().toLowerCase();
+  if (!normalized || normalized.startsWith("/")) return false;
+  return /^(?:now|please|just)?\s*(edit|replace)\b/.test(normalized);
 }
 
 function updateGoalChipsSuppression(command) {
@@ -375,7 +383,11 @@ function updateGoalChipsSuppression(command) {
   const isPrompt = !normalized.startsWith("/");
   const isRecreate = normalized.startsWith("/recreate");
   if (isPrompt || isRecreate) {
-    state.goalChipsSuppressed = false;
+    if (isPrompt && isEditPrompt(normalized)) {
+      state.goalChipsSuppressed = true;
+    } else {
+      state.goalChipsSuppressed = false;
+    }
   }
 }
 
@@ -417,6 +429,7 @@ function triggerGoalAnalyze() {
 function sendPtyCommand(command) {
   if (!command) return;
   if (!state.runDir) return;
+  state.goalChipsAutoHold = true;
   updateGoalChipsSuppression(command);
   state.pendingEchoes.push(command);
   invoke("write_pty", { data: `${command}\n` }).catch((err) => {
@@ -446,6 +459,12 @@ async function sendTerminalInput() {
 terminalInput.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
   sendTerminalInput().catch(() => {});
+});
+
+terminalInput.addEventListener("input", () => {
+  if (state.goalChipsShown) {
+    hideGoalChips();
+  }
 });
 
 terminalSend.addEventListener("click", () => {
@@ -770,6 +789,7 @@ async function createRun() {
     state.lastError = null;
     state.goalChipsShown = false;
     state.goalChipsSuppressed = false;
+    state.goalChipsAutoHold = false;
     state.goalSelections.clear();
     state.goalAnalyzeInFlight = false;
     resetOptimizeState();
@@ -819,6 +839,7 @@ async function openRun() {
   state.lastError = null;
   state.goalChipsShown = false;
   state.goalChipsSuppressed = false;
+  state.goalChipsAutoHold = false;
   state.goalSelections.clear();
   state.goalAnalyzeInFlight = false;
   resetOptimizeState();
@@ -891,6 +912,7 @@ function handleEvent(event) {
     if (state.placeholders.length > 0) {
       state.placeholders.pop();
     }
+    state.goalChipsAutoHold = false;
     renderGallery();
     if (shouldAutoShowGoalChips()) {
       showGoalChips();
