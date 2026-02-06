@@ -13,6 +13,8 @@ import {
   copyFile,
 } from "@tauri-apps/api/fs";
 
+const THUMB_PLACEHOLDER_SRC = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+
 const els = {
   runInfo: document.getElementById("run-info"),
   engineStatus: document.getElementById("engine-status"),
@@ -77,6 +79,7 @@ const state = {
   imagesById: new Map(),
   activeId: null,
   imageCache: new Map(), // path -> { url: string|null, urlPromise: Promise<string>|null, imgPromise: Promise<HTMLImageElement>|null }
+  thumbsById: new Map(), // artifactId -> { rootEl, imgEl, labelEl }
   canvasMode: "single", // "single" renders the active image; "multi" renders all images for pair actions (Combine demo).
   multiRects: new Map(), // imageId -> { x, y, w, h } in canvas device pixels (for hit-testing).
   pendingBlend: null, // { sourceIds: [string, string], startedAt: number }
@@ -793,8 +796,14 @@ function ensureCanvasSize() {
 }
 
 function canvasPointFromEvent(event) {
-  const rect = els.overlayCanvas.getBoundingClientRect();
   const dpr = getDpr();
+  // Prefer offsetX/Y to avoid triggering layout (getBoundingClientRect) on hot paths.
+  const ox = event?.offsetX;
+  const oy = event?.offsetY;
+  if (typeof ox === "number" && typeof oy === "number" && Number.isFinite(ox) && Number.isFinite(oy)) {
+    return { x: ox * dpr, y: oy * dpr };
+  }
+  const rect = els.overlayCanvas.getBoundingClientRect();
   const x = (event.clientX - rect.left) * dpr;
   const y = (event.clientY - rect.top) * dpr;
   return { x, y };
@@ -1121,16 +1130,38 @@ function hash32(value) {
 }
 
 let larvaRaf = null;
+let larvaStartedAt = null;
+function stopLarvaAnimator() {
+  if (!larvaRaf) return;
+  try {
+    cancelAnimationFrame(larvaRaf);
+  } catch {
+    // ignore
+  }
+  larvaRaf = null;
+}
+
 function ensureLarvaAnimator() {
   if (larvaRaf) return;
+  if (!state.larvaTargets || state.larvaTargets.length === 0) return;
+  if (document.hidden) return;
   if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  const startedAt = performance.now();
+  if (larvaStartedAt == null) larvaStartedAt = performance.now();
   const TAU = Math.PI * 2;
   const LOOP_MS = 4000; // Perfect loop: all larva motion repeats exactly every 4s.
   const tick = (now) => {
-    const phase = ((now - startedAt) % LOOP_MS) / LOOP_MS; // 0..1
+    if (document.hidden) {
+      larvaRaf = null;
+      return;
+    }
+    const targets = state.larvaTargets || [];
+    if (targets.length === 0) {
+      larvaRaf = null;
+      return;
+    }
+    const phase = ((now - larvaStartedAt) % LOOP_MS) / LOOP_MS; // 0..1
     const w = TAU * phase;
-    for (const target of state.larvaTargets || []) {
+    for (const target of targets) {
       const seed = Number(target?.seed || 0);
       const svg = target?.svgEl;
       const btnEl = target?.btnEl;
@@ -1662,19 +1693,29 @@ async function handleSpawnNode(node) {
 
 function renderFilmstrip() {
   if (!els.filmstrip) return;
-  els.filmstrip.innerHTML = "";
   ensureThumbObserver();
+  // Avoid accumulating observed nodes when we teardown/rebuild the filmstrip.
+  if (thumbObserver) {
+    try {
+      thumbObserver.disconnect();
+    } catch {
+      // ignore
+    }
+  }
+  state.thumbsById.clear();
+  els.filmstrip.innerHTML = "";
   const frag = document.createDocumentFragment();
   for (const item of state.images) {
     const div = document.createElement("div");
     div.className = "thumb" + (item.id === state.activeId ? " selected" : "");
+    div.dataset.id = item.id;
     const img = document.createElement("img");
     img.alt = item.label || basename(item.path) || "Artifact";
     img.loading = "lazy";
     img.decoding = "async";
     img.dataset.path = item.path;
     // Give it something valid to avoid broken-image glyphs before we swap in a blob URL.
-    img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+    img.src = THUMB_PLACEHOLDER_SRC;
     if (thumbObserver) {
       thumbObserver.observe(img);
     } else {
@@ -1689,22 +1730,81 @@ function renderFilmstrip() {
     label.className = "thumb-label";
     label.textContent = item.label || basename(item.path);
     div.appendChild(label);
-    div.addEventListener("click", () => {
-      bumpInteraction();
-      setActiveImage(item.id);
-    });
+    state.thumbsById.set(item.id, { rootEl: div, imgEl: img, labelEl: label });
     frag.appendChild(div);
   }
   els.filmstrip.appendChild(frag);
 }
 
+function appendFilmstripThumb(item) {
+  if (!els.filmstrip || !item?.id || !item?.path) return;
+  if (state.thumbsById.has(item.id)) return;
+  ensureThumbObserver();
+  const div = document.createElement("div");
+  div.className = "thumb" + (item.id === state.activeId ? " selected" : "");
+  div.dataset.id = item.id;
+  const img = document.createElement("img");
+  img.alt = item.label || basename(item.path) || "Artifact";
+  img.loading = "lazy";
+  img.decoding = "async";
+  img.dataset.path = item.path;
+  img.src = THUMB_PLACEHOLDER_SRC;
+  if (thumbObserver) {
+    thumbObserver.observe(img);
+  } else {
+    ensureImageUrl(item.path)
+      .then((url) => {
+        if (url) img.src = url;
+      })
+      .catch(() => {});
+  }
+  div.appendChild(img);
+  const label = document.createElement("div");
+  label.className = "thumb-label";
+  label.textContent = item.label || basename(item.path);
+  div.appendChild(label);
+  state.thumbsById.set(item.id, { rootEl: div, imgEl: img, labelEl: label });
+  els.filmstrip.appendChild(div);
+}
+
+function setFilmstripSelected(prevId, nextId) {
+  if (prevId && prevId !== nextId) {
+    const prev = state.thumbsById.get(prevId);
+    if (prev?.rootEl) prev.rootEl.classList.remove("selected");
+  }
+  const next = state.thumbsById.get(nextId);
+  if (next?.rootEl) next.rootEl.classList.add("selected");
+}
+
+function updateFilmstripThumb(item) {
+  if (!item?.id) return;
+  const rec = state.thumbsById.get(item.id);
+  if (!rec) return;
+  if (rec.labelEl) rec.labelEl.textContent = item.label || basename(item.path);
+  if (rec.imgEl && item.path) {
+    rec.imgEl.alt = item.label || basename(item.path) || "Artifact";
+    rec.imgEl.dataset.path = item.path;
+    rec.imgEl.src = THUMB_PLACEHOLDER_SRC;
+    if (thumbObserver) {
+      thumbObserver.observe(rec.imgEl);
+    } else {
+      ensureImageUrl(item.path)
+        .then((url) => {
+          if (url) rec.imgEl.src = url;
+        })
+        .catch(() => {});
+    }
+  }
+}
+
 async function setActiveImage(id) {
   const item = state.imagesById.get(id);
   if (!item) return;
+  const prevActive = state.activeId;
   state.activeId = id;
+  setFilmstripSelected(prevActive, id);
   clearSelection();
   showDropHint(false);
-  renderFilmstrip();
   renderSelectionMeta();
   chooseSpawnNodes();
   updatePortraitIdle();
@@ -1729,7 +1829,7 @@ function addImage(item, { select = false } = {}) {
   if (state.imagesById.has(item.id)) return;
   state.imagesById.set(item.id, item);
   state.images.push(item);
-  renderFilmstrip();
+  appendFilmstripThumb(item);
   showDropHint(state.images.length === 0);
   if (select || !state.activeId) {
     setActiveImage(item.id).catch(() => {});
@@ -1774,7 +1874,7 @@ async function replaceImageInPlace(
     if (state.describePendingPath === oldPath) state.describePendingPath = null;
   }
 
-  renderFilmstrip();
+  updateFilmstripThumb(item);
   if (state.activeId === targetId) {
     try {
       item.img = await loadImage(item.path);
@@ -2257,6 +2357,7 @@ async function openExistingRun() {
   state.canvasMode = "single";
   state.multiRects.clear();
   state.pendingBlend = null;
+  renderFilmstrip();
   clearImageCache();
   state.selection = null;
   state.lassoDraft = [];
@@ -2609,7 +2710,6 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
 }
 
 function render() {
-  ensureCanvasSize();
   const work = els.workCanvas;
   const overlay = els.overlayCanvas;
   if (!work || !overlay) return;
@@ -2918,6 +3018,17 @@ function installUi() {
   if (els.actionCropSquare) els.actionCropSquare.addEventListener("click", () => cropSquare().catch(() => {}));
   if (els.actionVariations) els.actionVariations.addEventListener("click", () => runVariations().catch(() => {}));
 
+  if (els.filmstrip) {
+    els.filmstrip.addEventListener("click", (event) => {
+      const thumb = event?.target?.closest ? event.target.closest(".thumb") : null;
+      if (!thumb || !els.filmstrip.contains(thumb)) return;
+      const id = thumb.dataset?.id;
+      if (!id) return;
+      bumpInteraction();
+      setActiveImage(id).catch(() => {});
+    });
+  }
+
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       clearSelection();
@@ -2945,6 +3056,15 @@ async function boot() {
   renderSelectionMeta();
   chooseSpawnNodes();
   renderFilmstrip();
+  ensureCanvasSize();
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      stopLarvaAnimator();
+    } else {
+      ensureLarvaAnimator();
+    }
+  });
 
   new ResizeObserver(() => {
     ensureCanvasSize();
