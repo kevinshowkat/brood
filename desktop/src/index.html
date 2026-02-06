@@ -14,153 +14,108 @@
       <header class="topbar">
         <div class="brand">
           <img src="./assets/logo.jpeg" alt="Brood" />
+          <div class="brand-title">Brood</div>
+        </div>
+        <div class="topbar-center">
+          <div id="run-info">No run</div>
+          <div id="engine-status" class="engine-status">Engine: idle</div>
         </div>
         <div class="controls">
-          <label class="toggle">
-            <input id="memory-toggle" type="checkbox" />
-            Memory
-          </label>
-          <select id="text-model">
-            <option value="dryrun-text-1">dryrun-text-1</option>
-            <option value="gpt-4o-mini">gpt-4o-mini</option>
-            <option value="gpt-5.2">gpt-5.2</option>
-            <option value="gpt-5.1-codex-max">gpt-5.1-codex-max</option>
-            <option value="claude-opus-4-5-20251101">claude-opus-4-5-20251101</option>
-            <option value="gemini-3-pro-preview">gemini-3-pro-preview</option>
-          </select>
-          <select id="image-model">
-            <option value="dryrun-image-1">dryrun-image-1</option>
-            <option value="gpt-image-1.5">gpt-image-1.5</option>
-            <option value="gpt-image-1-mini">gpt-image-1-mini</option>
-            <option value="gpt-image-1">gpt-image-1</option>
-            <option value="gemini-2.5-flash-image">gemini-2.5-flash-image</option>
-            <option value="gemini-3-pro-image-preview">gemini-3-pro-image-preview</option>
-            <option value="imagen-4.0-ultra">imagen-4.0-ultra</option>
-            <option value="imagen-4">imagen-4</option>
-            <option value="flux-2-flex">flux-2-flex</option>
-            <option value="flux-2-pro">flux-2-pro</option>
-            <option value="flux-2">flux-2</option>
-            <option value="sdxl">sdxl</option>
-          </select>
           <button id="new-run">New Run</button>
           <button id="open-run">Open Run</button>
-          <button id="upload">Upload</button>
+          <button id="import">Import Photos</button>
           <button id="export">Export</button>
-          <div class="aesthetic-control">
-            <div class="aesthetic-actions">
-              <button id="build-aesthetic">Build aesthetic</button>
-              <button id="clear-aesthetic" class="aesthetic-clear">Clear</button>
-              <div id="aesthetic-count" class="aesthetic-count">Aesthetic: 0 images</div>
-            </div>
-            <div class="aesthetic-help">
-              <span class="aesthetic-helper">Use 10-20 brand reference images.</span>
-              <span id="aesthetic-warning" class="aesthetic-warning hidden"></span>
-            </div>
-          </div>
+          <button id="settings-toggle" class="ghost">Settings</button>
         </div>
       </header>
-      <main class="layout">
-        <section class="pane terminal-pane">
-          <div class="terminal-shell">
-            <div id="terminal"></div>
-            <div id="goal-chips" class="goal-chips hidden" aria-live="polite">
-              <div class="goal-hint">Pick goals to optimize the next iteration.</div>
-              <div class="goal-controls">
-                <label class="goal-label" for="optimize-mode">Mode</label>
-                <select id="optimize-mode">
-                  <option value="auto">Auto</option>
-                  <option value="review">Review</option>
-                </select>
-                <div id="optimize-timing" class="optimize-timing">Analysis — · Generate —</div>
-              </div>
-              <div id="goal-row" class="goal-row" role="group" aria-label="Optimization goals"></div>
+      <main class="workspace">
+        <aside class="toolrail" aria-label="Tools">
+          <button class="tool selected" type="button" data-tool="pan" title="Pan / Zoom">
+            Pan
+          </button>
+          <button class="tool" type="button" data-tool="lasso" title="Lasso selection">
+            Lasso
+          </button>
+          <button class="tool" type="button" data-tool="bg" title="Background replace">
+            BG
+          </button>
+          <button class="tool" type="button" data-tool="variations" title="Zero-prompt variations">
+            Var
+          </button>
+        </aside>
+        <section class="stage" aria-label="Canvas">
+          <div id="canvas-wrap" class="canvas-wrap">
+            <div id="drop-hint" class="drop-hint">
+              Drop images here or click <span class="kbd">Import Photos</span>.
             </div>
+            <canvas id="work-canvas"></canvas>
+            <canvas id="overlay-canvas"></canvas>
+            <div id="larvae" class="larvae" aria-live="polite"></div>
           </div>
-          <div class="terminal-input">
-            <input id="terminal-input" type="text" placeholder="Generate an image of a boat" />
-            <button id="goals-toggle" type="button">Goals</button>
-            <button id="terminal-send" type="button">Send</button>
-          </div>
-          <div id="engine-status" class="engine-status">Engine: idle</div>
+          <div id="filmstrip" class="filmstrip" aria-label="Filmstrip"></div>
         </section>
-        <section class="pane canvas-pane">
-          <div class="canvas-header">
-            <div class="context">
-              <div id="run-info">No run</div>
-              <div id="context-usage">Context: 0%</div>
-            </div>
-            <div class="compare-controls">
-              <button id="compare">Compare</button>
-              <button id="flicker">Flicker</button>
+        <aside class="inspector" aria-label="Inspector">
+          <div class="panel">
+            <div class="panel-title">Selection</div>
+            <div id="selection-meta" class="panel-body muted">No image selected.</div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">Quick Actions</div>
+            <div class="panel-body actions">
+              <button id="action-bg-white" type="button">Background: White</button>
+              <button id="action-bg-sweep" type="button">Background: Sweep</button>
+              <button id="action-crop-square" type="button">Crop: Square</button>
+              <button id="action-variations" type="button">Variations</button>
             </div>
           </div>
-          <div id="optimize-panel" class="optimize-panel hidden">
-            <div class="optimize-header">
-              <div>
-                <div class="optimize-title">Optimization</div>
-                <div id="optimize-meta" class="optimize-meta"></div>
-              </div>
+          <div class="panel">
+            <div class="panel-title">Tips</div>
+            <div class="panel-body muted">
+              Use <span class="kbd">Lasso</span> to circle your product, then run <span class="kbd">Background</span>.
             </div>
-            <div id="optimize-analysis" class="optimize-analysis"></div>
-            <div id="optimize-recs" class="optimize-recs"></div>
           </div>
-          <div id="gallery" class="gallery"></div>
-          <div id="detail" class="detail"></div>
-        </section>
+        </aside>
       </main>
-      <div id="aesthetic-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="aesthetic-title">
-        <div class="modal-backdrop" data-close="true"></div>
-        <div class="modal-card">
-          <div class="modal-header">
-            <div>
-              <div id="aesthetic-title" class="modal-title">Build aesthetic</div>
-              <div class="modal-subtitle">Use 10-20 brand reference images.</div>
-            </div>
-            <button id="aesthetic-close" class="modal-close" type="button">Close</button>
-          </div>
-          <div class="modal-body">
-            <div id="aesthetic-step-select" class="aesthetic-step">
-              <div class="aesthetic-picker">
-                <button id="aesthetic-pick-folder" type="button">Select folder</button>
-                <button id="aesthetic-pick-files" type="button">Select files</button>
-                <div class="aesthetic-format-hint">PNG/JPG/JPEG/WEBP/HEIC. Folder scan is non-recursive.</div>
-              </div>
-              <div id="aesthetic-selection" class="aesthetic-selection hidden">
-                <div id="aesthetic-selection-title" class="aesthetic-selection-title"></div>
-                <div id="aesthetic-selection-warning" class="aesthetic-warning hidden"></div>
-                <div id="aesthetic-selection-list" class="aesthetic-selection-list"></div>
-              </div>
-            </div>
-            <div id="aesthetic-step-summary" class="aesthetic-step hidden">
-              <div class="aesthetic-progress">
-                <div class="aesthetic-progress-row">
-                  <div class="aesthetic-progress-label">Copy images into run/aesthetic</div>
-                  <div id="aesthetic-progress-images" class="aesthetic-progress-status">Pending</div>
-                </div>
-                <div class="aesthetic-progress-row">
-                  <div class="aesthetic-progress-label">Create annotations placeholders</div>
-                  <div id="aesthetic-progress-annotations" class="aesthetic-progress-status">Pending</div>
-                </div>
-                <div class="aesthetic-progress-row">
-                  <div class="aesthetic-progress-label">Update run.json metadata</div>
-                  <div id="aesthetic-progress-meta" class="aesthetic-progress-status">Pending</div>
-                </div>
-              </div>
-              <div id="aesthetic-summary" class="aesthetic-summary"></div>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <div id="aesthetic-replace-note" class="aesthetic-replace-note hidden"></div>
-            <div class="wizard-steps" aria-hidden="true">
-              <span class="wizard-dot" data-step="1"></span>
-              <span class="wizard-dot" data-step="2"></span>
-            </div>
-            <div class="modal-footer-actions">
-              <button id="aesthetic-back" class="modal-secondary hidden" type="button">Back</button>
-              <button id="aesthetic-cancel" class="modal-secondary" type="button">Cancel</button>
-              <button id="aesthetic-import" class="modal-primary" type="button" disabled>Import</button>
-              <button id="aesthetic-done" class="modal-primary hidden" type="button">Done</button>
-            </div>
+      <div id="settings-drawer" class="drawer hidden" aria-label="Settings">
+        <div class="drawer-header">
+          <div class="drawer-title">Settings</div>
+          <button id="settings-close" class="ghost" type="button">Close</button>
+        </div>
+        <div class="drawer-body">
+          <label class="field">
+            <div class="field-label">Memory</div>
+            <input id="memory-toggle" type="checkbox" />
+          </label>
+          <label class="field">
+            <div class="field-label">Text Model</div>
+            <select id="text-model">
+              <option value="dryrun-text-1">dryrun-text-1</option>
+              <option value="gpt-4o-mini">gpt-4o-mini</option>
+              <option value="gpt-5.2">gpt-5.2</option>
+              <option value="gpt-5.1-codex-max">gpt-5.1-codex-max</option>
+              <option value="claude-opus-4-5-20251101">claude-opus-4-5-20251101</option>
+              <option value="gemini-3-pro-preview">gemini-3-pro-preview</option>
+            </select>
+          </label>
+          <label class="field">
+            <div class="field-label">Image Model</div>
+            <select id="image-model">
+              <option value="dryrun-image-1">dryrun-image-1</option>
+              <option value="gemini-2.5-flash-image">gemini-2.5-flash-image</option>
+              <option value="gemini-3-pro-image-preview">gemini-3-pro-image-preview</option>
+              <option value="imagen-4.0-ultra">imagen-4.0-ultra</option>
+              <option value="imagen-4">imagen-4</option>
+              <option value="flux-2-flex">flux-2-flex</option>
+              <option value="flux-2-pro">flux-2-pro</option>
+              <option value="flux-2">flux-2</option>
+              <option value="sdxl">sdxl</option>
+              <option value="gpt-image-1.5">gpt-image-1.5</option>
+              <option value="gpt-image-1-mini">gpt-image-1-mini</option>
+              <option value="gpt-image-1">gpt-image-1</option>
+            </select>
+          </label>
+          <div class="drawer-footnote muted">
+            For image-to-image edits and recreate, prefer a model that accepts image inputs (Gemini).
           </div>
         </div>
       </div>
@@ -168,7 +123,7 @@
     <script type="module">
       window.__brood_booted = false;
       const bootEl = document.getElementById("boot-error");
-      import("./main.js")
+      import("./canvas_app.js")
         .then(() => {
           window.__brood_booted = true;
           if (bootEl) bootEl.classList.add("hidden");

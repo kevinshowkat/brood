@@ -2,7 +2,7 @@
 
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Manager, State};
@@ -203,6 +203,29 @@ fn export_run(run_dir: String, out_path: String) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn read_file_since(path: String, offset: u64, max_bytes: Option<u64>) -> Result<serde_json::Value, String> {
+    let limit = max_bytes.unwrap_or(1024 * 1024); // 1MB safety cap per poll
+    let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+    let metadata = file.metadata().map_err(|e| e.to_string())?;
+    let file_len = metadata.len();
+    let safe_offset = offset.min(file_len);
+    file.seek(SeekFrom::Start(safe_offset))
+        .map_err(|e| e.to_string())?;
+
+    let mut buffer = Vec::new();
+    // Read up to `limit` bytes to avoid giant allocations if the offset gets reset incorrectly.
+    file.take(limit).read_to_end(&mut buffer).map_err(|e| e.to_string())?;
+    let new_offset = safe_offset + buffer.len() as u64;
+    let chunk = String::from_utf8_lossy(&buffer).to_string();
+    Ok(serde_json::json!({
+        "chunk": chunk,
+        "new_offset": new_offset,
+        "file_len": file_len,
+        "clamped_offset": safe_offset,
+    }))
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(Mutex::new(PtyState::new()))
@@ -211,7 +234,8 @@ fn main() {
             write_pty,
             resize_pty,
             create_run_dir,
-            export_run
+            export_run,
+            read_file_since
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
