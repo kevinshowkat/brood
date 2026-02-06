@@ -222,11 +222,11 @@ def _describe_with_openai(reference_path: Path, *, max_chars: int) -> Descriptio
     api_key = _openai_api_key()
     if not api_key:
         return None
-    model = os.getenv("BROOD_DESCRIBE_MODEL") or os.getenv("OPENAI_DESCRIBE_MODEL") or "gpt-4o-mini"
+    model = os.getenv("BROOD_DESCRIBE_MODEL") or os.getenv("OPENAI_DESCRIBE_MODEL") or "gpt-5-nano"
     image_bytes, mime = _prepare_vision_image(reference_path)
     data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode('ascii')}"
 
-    payload: dict[str, Any] = {
+    base_payload: dict[str, Any] = {
         "model": model,
         "input": [
             {
@@ -241,9 +241,16 @@ def _describe_with_openai(reference_path: Path, *, max_chars: int) -> Descriptio
     }
     endpoint = f"{_openai_api_base()}/responses"
     try:
+        # Prefer fast/short responses; if the API doesn't accept these fields, fall back to a minimal payload.
+        payload = dict(base_payload)
+        payload["text"] = {"format": {"type": "text"}, "verbosity": "low"}
+        payload["reasoning"] = {"effort": "low", "summary": "auto"}
         _, response = _post_openai_json(endpoint, payload, api_key, timeout_s=22.0)
     except Exception:
-        return None
+        try:
+            _, response = _post_openai_json(endpoint, base_payload, api_key, timeout_s=22.0)
+        except Exception:
+            return None
     text = _extract_openai_output_text(response)
     cleaned = _clean_description(text, max_chars=max_chars)
     if not cleaned:
