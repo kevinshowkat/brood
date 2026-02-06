@@ -119,7 +119,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
         if intent.action == "help":
             print(
                 "Commands: /profile /text_model /image_model /fast /quality /cheaper "
-                "/better /optimize /recreate /export"
+                "/better /optimize /recreate /use /blend /export"
             )
             continue
         if intent.action == "set_profile":
@@ -142,6 +142,70 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 continue
             last_artifact_path = str(path)
             print(f"Active image set to {last_artifact_path}")
+            continue
+        if intent.action == "blend":
+            paths = intent.command_args.get("paths") or []
+            if not isinstance(paths, list) or len(paths) < 2:
+                print("Usage: /blend <image_a> <image_b>")
+                continue
+            path_a = Path(str(paths[0]))
+            path_b = Path(str(paths[1]))
+            if not path_a.exists():
+                print(f"Blend failed: file not found ({path_a})")
+                continue
+            if not path_b.exists():
+                print(f"Blend failed: file not found ({path_b})")
+                continue
+
+            prompt = (
+                "Combine the two provided photos into a single coherent blended photo. "
+                "Do not make a split-screen or side-by-side collage; integrate them into one scene. "
+                "Keep it photorealistic and preserve key details from both images."
+            )
+            progress_once("Planning blend")
+            settings = _settings_from_state(state)
+            settings["init_image"] = str(path_a)
+            settings["reference_images"] = [str(path_b)]
+            plan = engine.preview_plan(prompt, settings)
+            print(
+                f"Plan: {plan['images']} images via {plan['provider']}:{plan['model']} "
+                f"size={plan['size']} cached={plan['cached']}"
+            )
+            ticker = ProgressTicker("Blending images")
+            ticker.start_ticking()
+            start_reasoning_summary(prompt, engine.text_model, ticker)
+            error: Exception | None = None
+            artifacts: list[dict[str, object]] = []
+            try:
+                artifacts = engine.generate(
+                    prompt,
+                    settings,
+                    {"action": "blend", "source_images": [str(path_a), str(path_b)]},
+                )
+            except Exception as exc:
+                error = exc
+            finally:
+                ticker.stop(done=True)
+
+            if not error and artifacts:
+                last_artifact_path = str(artifacts[-1].get("image_path") or last_artifact_path or "")
+
+            if engine.last_fallback_reason:
+                print(f"Model fallback: {engine.last_fallback_reason}")
+            cost_raw = engine.last_cost_latency.get("cost_total_usd") if engine.last_cost_latency else None
+            latency_raw = (
+                engine.last_cost_latency.get("latency_per_image_s") if engine.last_cost_latency else None
+            )
+            cost = format_cost_generation_cents(cost_raw) or "N/A"
+            latency = format_latency_seconds(latency_raw) or "N/A"
+            print(
+                f"Cost of generation: {ansi_highlight(cost)} | Latency per image: {ansi_highlight(latency)}"
+            )
+
+            if error:
+                print(f"Blend failed: {error}")
+            else:
+                print("Blend complete.")
             continue
         if intent.action == "set_quality":
             state["quality_preset"] = intent.settings_update.get("quality_preset")

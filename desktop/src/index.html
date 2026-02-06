@@ -16,7 +16,6 @@
           <img src="./assets/logo.jpeg" alt="Brood" />
         </div>
         <div class="topbar-center">
-          <div id="run-info">No run</div>
           <div id="engine-status" class="engine-status">Engine: idle</div>
         </div>
         <div class="controls">
@@ -28,117 +27,6 @@
         </div>
       </header>
       <main class="workspace">
-        <aside class="toolrail" aria-label="Tools">
-          <button class="tool selected" type="button" data-tool="pan" title="Pan / Zoom" aria-label="Pan / Zoom">
-            <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M12 3v6M12 21v-6M3 12h6M21 12h-6"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="square"
-              />
-              <path
-                d="M12 3l-2 2M12 3l2 2M12 21l-2-2M12 21l2-2M3 12l2-2M3 12l2 2M21 12l-2-2M21 12l-2 2"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="square"
-              />
-            </svg>
-            <span class="sr-only">Pan</span>
-          </button>
-          <button class="tool" type="button" data-tool="lasso" title="Lasso selection" aria-label="Lasso selection">
-            <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <ellipse cx="12" cy="9.5" rx="6.5" ry="4.5" fill="none" stroke="currentColor" stroke-width="2" />
-              <path
-                d="M15 13.5c0.9 1.2 1.9 2.6 3.5 4"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-              />
-              <path
-                d="M19.5 18l1.8 1.8"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-              />
-            </svg>
-            <span class="sr-only">Lasso</span>
-          </button>
-          <button class="tool" type="button" data-tool="bg" title="Background replace" aria-label="Background replace">
-            <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M6 7h10v4H6z"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linejoin="round"
-              />
-              <path
-                d="M16 9h2a2 2 0 0 1 2 2v1"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-              />
-              <path
-                d="M8 11v7h4v-4h3"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
-            <span class="sr-only">Background</span>
-          </button>
-          <button
-            class="tool"
-            type="button"
-            data-tool="variations"
-            title="Zero-prompt variations"
-            aria-label="Zero-prompt variations"
-          >
-            <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M4 7h4l8 10h4"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-              <path
-                d="M20 17l-2-2 2-2"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-              <path
-                d="M4 17h4l2.5-3"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-              <path
-                d="M20 7l-2 2 2 2"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
-            <span class="sr-only">Variations</span>
-          </button>
-        </aside>
         <section class="stage" aria-label="Canvas">
           <div id="canvas-wrap" class="canvas-wrap">
             <div id="drop-hint" class="drop-hint">
@@ -183,10 +71,6 @@
         <aside class="inspector" aria-label="Inspector">
           <div class="inspector-scroll">
             <div class="panel">
-              <div class="panel-title">Selection</div>
-              <div id="selection-meta" class="panel-body muted panel-readout">No image selected.</div>
-            </div>
-            <div class="panel">
               <div class="panel-title">Quick Actions</div>
               <div class="panel-body actions">
                 <button id="action-bg-white" type="button">Background: White</button>
@@ -201,26 +85,160 @@
                 Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
               </div>
             </div>
-            <div class="panel">
-              <div class="panel-title">Portrait</div>
+            <div class="panel agent-panel">
+              <div class="panel-title">Agent</div>
               <div id="portrait-dock" class="panel-body portrait-dock hidden">
-                <div class="portrait-readout">
-                  <div id="portrait-title" class="portrait-title">Model</div>
-                  <div id="portrait-sub" class="portrait-sub muted">Idle</div>
-                </div>
-                <div class="portrait-frame">
-                  <div id="portrait-avatar" class="portrait-avatar" aria-hidden="true">
-                    <video
-                      id="portrait-video"
-                      class="portrait-video hidden"
-                      muted
-                      loop
-                      autoplay
-                      playsinline
-                      preload="auto"
-                    ></video>
+                <div class="agent-portraits">
+                  <div id="agent-slot-primary" class="agent-slot">
+                    <div class="portrait-readout">
+                      <div id="portrait-title" class="portrait-title">Model</div>
+                    </div>
+                    <div class="portrait-frame">
+                      <div id="portrait-avatar" class="portrait-avatar" aria-hidden="true">
+                        <video
+                          id="portrait-video"
+                          class="portrait-video hidden"
+                          muted
+                          loop
+                          autoplay
+                          playsinline
+                          preload="auto"
+                        ></video>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="agent-slot-secondary" class="agent-slot">
+                    <div class="portrait-readout">
+                      <div id="portrait-title-2" class="portrait-title">Model</div>
+                    </div>
+                    <div class="portrait-frame">
+                      <div id="portrait-avatar-2" class="portrait-avatar" aria-hidden="true">
+                        <video
+                          id="portrait-video-2"
+                          class="portrait-video hidden"
+                          muted
+                          loop
+                          autoplay
+                          playsinline
+                          preload="auto"
+                        ></video>
+                      </div>
+                    </div>
                   </div>
                 </div>
+              </div>
+            </div>
+            <div class="panel command-panel">
+              <div class="panel-body command-card" aria-label="Agent Commands">
+                <button class="tool selected" type="button" data-tool="pan" title="Pan / Zoom" aria-label="Pan / Zoom">
+                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M12 3v6M12 21v-6M3 12h6M21 12h-6"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="square"
+                    />
+                    <path
+                      d="M12 3l-2 2M12 3l2 2M12 21l-2-2M12 21l2-2M3 12l2-2M3 12l2 2M21 12l-2-2M21 12l-2 2"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="square"
+                    />
+                  </svg>
+                  <span class="sr-only">Pan</span>
+                </button>
+                <button class="tool" type="button" data-tool="lasso" title="Lasso selection" aria-label="Lasso selection">
+                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <ellipse cx="12" cy="9.5" rx="6.5" ry="4.5" fill="none" stroke="currentColor" stroke-width="2" />
+                    <path
+                      d="M15 13.5c0.9 1.2 1.9 2.6 3.5 4"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                    />
+                    <path
+                      d="M19.5 18l1.8 1.8"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                  <span class="sr-only">Lasso</span>
+                </button>
+                <button class="tool" type="button" data-tool="bg" title="Background replace" aria-label="Background replace">
+                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M6 7h10v4H6z"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linejoin="round"
+                    />
+                    <path
+                      d="M16 9h2a2 2 0 0 1 2 2v1"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                    />
+                    <path
+                      d="M8 11v7h4v-4h3"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                  <span class="sr-only">Background</span>
+                </button>
+                <button
+                  class="tool"
+                  type="button"
+                  data-tool="variations"
+                  title="Zero-prompt variations"
+                  aria-label="Zero-prompt variations"
+                >
+                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M4 7h4l8 10h4"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                    <path
+                      d="M20 17l-2-2 2-2"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                    <path
+                      d="M4 17h4l2.5-3"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                    <path
+                      d="M20 7l-2 2 2 2"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                  <span class="sr-only">Variations</span>
+                </button>
               </div>
             </div>
           </div>
@@ -264,6 +282,10 @@
               <option value="gpt-image-1">gpt-image-1</option>
             </select>
           </label>
+          <div class="key-status-card">
+            <div class="key-status-title">Run Directory</div>
+            <div id="run-info" class="run-info-text muted">No run</div>
+          </div>
           <div class="key-status-card">
             <div class="key-status-title">API Keys</div>
             <div id="key-status" class="key-status-list muted">Detecting local keys…</div>

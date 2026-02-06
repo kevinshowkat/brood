@@ -1,0 +1,45 @@
+{
+  "agent": "stability",
+  "create_response": {
+    "completed_at": null,
+    "created_at": 1770362852,
+    "error": null,
+    "expires_at": null,
+    "id": "video_698597e49368819182d5a92bea28c2c30c740e718d1ac9b4",
+    "model": "sora-2",
+    "object": "video",
+    "progress": 0,
+    "prompt": "Late-90s RTS unit-portrait aesthetic, low-res pre-rendered 3D, chunky pixels, dithering, CRT scanlines, subtle VHS noise, slight chromatic aberration, 15 fps feel. Head-and-shoulders portrait centered with generous safe margins, keep all important motion in the center 60% so a square crop still works. Exaggerated character design with clearly pseudo-human proportions: larger-than-life facial features, strong silhouettes, heroic jawlines, slightly uncanny 90s CGI vibe, gritty armor and gear. Single continuous shot, no cuts. Seamless loop (end pose matches start). Cockpit/console background with blinking lights and abstract HUD shapes, but no readable text. No logos, no watermarks, no subtitles. Original character design only; do not mimic any specific movie/game character. No recognizable StarCraft characters/factions. No spoken words; optional faint radio static only. Mood: stunningly awe-inspiring and tearfully joyous. IDLE state: subtle breathing, blinking, tiny eye saccades, micro head movement. Console lights flicker but no big hologram transformations; nothing dramatic changes in the scene. A Hispanic reactor engineer (adult) with a chunky helmet, red-blue stabilizer diodes, and grease-stained armor. Coolly smokes a cigarette clamped at the corner of the mouth; ember glow and a thin smoke curl. A noise meter sits steady at center. The unit rests one hand on a dial, makes a tiny corrective nudge, then returns to the exact starting pose; diode lights gently breathe.",
+    "remixed_from_video_id": null,
+    "seconds": "12",
+    "size": "720x1280",
+    "status": "queued"
+  },
+  "final_response": {
+    "completed_at": 1770363010,
+    "created_at": 1770362852,
+    "error": null,
+    "expires_at": 1770366610,
+    "id": "video_698597e49368819182d5a92bea28c2c30c740e718d1ac9b4",
+    "model": "sora-2",
+    "object": "video",
+    "progress": 100,
+    "prompt": "Late-90s RTS unit-portrait aesthetic, low-res pre-rendered 3D, chunky pixels, dithering, CRT scanlines, subtle VHS noise, slight chromatic aberration, 15 fps feel. Head-and-shoulders portrait centered with generous safe margins, keep all important motion in the center 60% so a square crop still works. Exaggerated character design with clearly pseudo-human proportions: larger-than-life facial features, strong silhouettes, heroic jawlines, slightly uncanny 90s CGI vibe, gritty armor and gear. Single continuous shot, no cuts. Seamless loop (end pose matches start). Cockpit/console background with blinking lights and abstract HUD shapes, but no readable text. No logos, no watermarks, no subtitles. Original character design only; do not mimic any specific movie/game character. No recognizable StarCraft characters/factions. No spoken words; optional faint radio static only. Mood: stunningly awe-inspiring and tearfully joyous. IDLE state: subtle breathing, blinking, tiny eye saccades, micro head movement. Console lights flicker but no big hologram transformations; nothing dramatic changes in the scene. A Hispanic reactor engineer (adult) with a chunky helmet, red-blue stabilizer diodes, and grease-stained armor. Coolly smokes a cigarette clamped at the corner of the mouth; ember glow and a thin smoke curl. A noise meter sits steady at center. The unit rests one hand on a dial, makes a tiny corrective nudge, then returns to the exact starting pose; diode lights gently breathe.",
+    "remixed_from_video_id": null,
+    "seconds": "12",
+    "size": "720x1280",
+    "status": "completed"
+  },
+  "output_mp4": "outputs/sora_portraits/stability_idle_sora-2_720x1280_12s_20260205_231943.sq.mute.mp4",
+  "prompt": "Late-90s RTS unit-portrait aesthetic, low-res pre-rendered 3D, chunky pixels, dithering, CRT scanlines, subtle VHS noise, slight chromatic aberration, 15 fps feel. Head-and-shoulders portrait centered with generous safe margins, keep all important motion in the center 60% so a square crop still works. Exaggerated character design with clearly pseudo-human proportions: larger-than-life facial features, strong silhouettes, heroic jawlines, slightly uncanny 90s CGI vibe, gritty armor and gear. Single continuous shot, no cuts. Seamless loop (end pose matches start). Cockpit/console background with blinking lights and abstract HUD shapes, but no readable text. No logos, no watermarks, no subtitles. Original character design only; do not mimic any specific movie/game character. No recognizable StarCraft characters/factions. No spoken words; optional faint radio static only. Mood: stunningly awe-inspiring and tearfully joyous. IDLE state: subtle breathing, blinking, tiny eye saccades, micro head movement. Console lights flicker but no big hologram transformations; nothing dramatic changes in the scene. A Hispanic reactor engineer (adult) with a chunky helmet, red-blue stabilizer diodes, and grease-stained armor. Coolly smokes a cigarette clamped at the corner of the mouth; ember glow and a thin smoke curl. A noise meter sits steady at center. The unit rests one hand on a dial, makes a tiny corrective nudge, then returns to the exact starting pose; diode lights gently breathe.",
+  "requested": {
+    "crop_square": true,
+    "model": "sora-2",
+    "mute": true,
+    "seconds": 12,
+    "size": "720x1280",
+    "target_seconds": null,
+    "variant": null
+  },
+  "state": "idle"
+}

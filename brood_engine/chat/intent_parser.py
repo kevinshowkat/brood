@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 from .intent_schema import Intent
 
 _SLASH_PATTERN = re.compile(r"^/(\w+)(?:\s+(.*))?$")
@@ -63,6 +64,21 @@ def _parse_optimize_args(arg: str) -> tuple[list[str], str | None]:
     return _parse_goals(goals_arg), mode
 
 
+def _parse_path_args(arg: str) -> list[str]:
+    """Parse one or more path args from a slash command.
+
+    Supports quoted paths so spaces work:
+      /blend "/path/with spaces/a.png" "/path/b.png"
+    """
+    if not arg:
+        return []
+    try:
+        parts = shlex.split(arg)
+    except ValueError:
+        parts = arg.split()
+    return [part for part in parts if part]
+
+
 def parse_intent(text: str) -> Intent:
     raw = text.strip()
     if not raw:
@@ -88,6 +104,8 @@ def parse_intent(text: str) -> Intent:
             return Intent(action="describe", raw=text, command_args={"path": arg})
         if command == "use":
             return Intent(action="set_active_image", raw=text, command_args={"path": arg})
+        if command == "blend":
+            return Intent(action="blend", raw=text, command_args={"paths": _parse_path_args(arg)})
         if command == "export":
             return Intent(action="export", raw=text, command_args={"format": arg or "html"})
         if command == "help":

@@ -42,17 +42,21 @@ const els = {
   spawnbar: document.getElementById("spawnbar"),
   toast: document.getElementById("toast"),
   portraitDock: document.getElementById("portrait-dock"),
+  agentSlotPrimary: document.getElementById("agent-slot-primary"),
+  agentSlotSecondary: document.getElementById("agent-slot-secondary"),
   portraitTitle: document.getElementById("portrait-title"),
-  portraitSub: document.getElementById("portrait-sub"),
   portraitAvatar: document.getElementById("portrait-avatar"),
   portraitVideo: document.getElementById("portrait-video"),
+  portraitTitle2: document.getElementById("portrait-title-2"),
+  portraitAvatar2: document.getElementById("portrait-avatar-2"),
+  portraitVideo2: document.getElementById("portrait-video-2"),
   selectionMeta: document.getElementById("selection-meta"),
   tipsText: document.getElementById("tips-text"),
   actionBgWhite: document.getElementById("action-bg-white"),
   actionBgSweep: document.getElementById("action-bg-sweep"),
   actionCropSquare: document.getElementById("action-crop-square"),
   actionVariations: document.getElementById("action-variations"),
-  toolButtons: Array.from(document.querySelectorAll(".toolrail .tool")),
+  toolButtons: Array.from(document.querySelectorAll(".tool[data-tool]")),
 };
 
 const settings = {
@@ -73,6 +77,10 @@ const state = {
   imagesById: new Map(),
   activeId: null,
   imageCache: new Map(), // path -> { url: string|null, urlPromise: Promise<string>|null, imgPromise: Promise<HTMLImageElement>|null }
+  canvasMode: "single", // "single" renders the active image; "multi" renders all images for pair actions (Combine demo).
+  multiRects: new Map(), // imageId -> { x, y, w, h } in canvas device pixels (for hit-testing).
+  pendingBlend: null, // { sourceIds: [string, string], startedAt: number }
+  pendingGeneration: null, // { remaining: number, provider: string|null, model: string|null }
   view: {
     scale: 1,
     offsetX: 0,
@@ -112,7 +120,11 @@ const state = {
   portrait: {
     provider: null,
     title: "",
-    sub: "",
+    busy: false,
+  },
+  portrait2: {
+    provider: null,
+    title: "",
     busy: false,
   },
   portraitMedia: {
@@ -122,7 +134,8 @@ const state = {
     index: null, // { [agent: string]: { idle: string|null, working: string|null } }|null
     indexChecked: false,
     indexPromise: null, // Promise<object>|null
-    activeKey: null,
+    activeKey1: null,
+    activeKey2: null,
   },
 };
 
@@ -286,6 +299,38 @@ function providerFromModel(model) {
   return "unknown";
 }
 
+function pickGeminiImageModel() {
+  // Prefer the stronger multi-image model, but fall back to any Gemini option in the UI.
+  const preferred = ["gemini-3-pro-image-preview", "gemini-2.5-flash-image"];
+  for (const candidate of preferred) {
+    if (providerFromModel(candidate) !== "gemini") continue;
+    if (!els.imageModel) return candidate;
+    if (Array.from(els.imageModel.options || []).some((opt) => opt?.value === candidate)) return candidate;
+  }
+  if (els.imageModel) {
+    const opt = Array.from(els.imageModel.options || []).find(
+      (o) => providerFromModel(o?.value) === "gemini"
+    );
+    if (opt?.value) return opt.value;
+  }
+  return "gemini-3-pro-image-preview";
+}
+
+async function ensureGeminiForBlend() {
+  const provider = providerFromModel(settings.imageModel);
+  if (provider === "gemini") return true;
+  const nextModel = pickGeminiImageModel();
+  settings.imageModel = nextModel;
+  localStorage.setItem("brood.imageModel", settings.imageModel);
+  if (els.imageModel) els.imageModel.value = settings.imageModel;
+  updatePortraitIdle();
+  if (state.ptySpawned) {
+    await invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
+  }
+  showToast(`Combine requires Gemini. Switched image model to ${settings.imageModel}.`, "tip", 3200);
+  return providerFromModel(settings.imageModel) === "gemini";
+}
+
 function providerDisplay(provider) {
   if (!provider) return "Unknown";
   if (provider === "openai") return "OpenAI";
@@ -302,12 +347,12 @@ const PORTRAITS_DIR_LS_KEY = "brood.portraitsDir";
 
 function portraitAgentFromProvider(provider) {
   const p = String(provider || "").toLowerCase();
-  if (p === "sdxl") return "stability";
-  if (p === "openai") return "openai";
+  // Requested swap: OpenAI uses Stability clips; Stability (SDXL) uses OpenAI clips.
+  if (p === "openai") return "stability";
+  if (p === "sdxl" || p === "stability") return "openai";
   if (p === "gemini") return "gemini";
   if (p === "imagen") return "imagen";
   if (p === "flux") return "flux";
-  if (p === "stability") return "stability";
   if (p === "dryrun") return "dryrun";
   return "dryrun";
 }
@@ -434,19 +479,46 @@ async function ensurePortraitIndex() {
 }
 
 async function refreshPortraitVideo() {
-  if (!els.portraitVideo) return;
+  // Back-compat shim: older callers still invoke refreshPortraitVideo(). Keep it
+  // delegating to the new multi-slot portrait implementation.
+  await refreshAgentPortraitVideos();
+}
+
+function secondaryProviderFor(primaryProvider, index = null) {
+  // For now: always show Flux as the secondary portrait when possible.
+  // If primary is already Flux or Flux clips are missing, fall back to any
+  // other available provider so the second portrait is never empty.
+  const primary = String(primaryProvider || "").toLowerCase();
+  const candidates = ["flux", "gemini", "openai", "imagen", "sdxl", "dryrun"];
+  const ordered = ["flux", ...candidates.filter((p) => p !== "flux")];
+
+  function hasIdle(provider) {
+    if (!index) return true; // optimistic until the index loads
+    const agent = portraitAgentFromProvider(provider);
+    return Boolean(index?.[agent]?.idle || index?.[agent]?.working);
+  }
+
+  for (const provider of ordered) {
+    if (provider === primary) continue;
+    if (hasIdle(provider)) return provider;
+  }
+  return primary || "dryrun";
+}
+
+async function refreshPortraitVideoSlot({ videoEl, provider, busy, activeKeyField }) {
+  if (!videoEl) return;
   const visible = Boolean(state.activeId) && els.portraitDock && !els.portraitDock.classList.contains("hidden");
   if (!visible) {
     try {
-      els.portraitVideo.pause();
+      videoEl.pause();
     } catch (_) {}
-    els.portraitVideo.classList.add("hidden");
-    state.portraitMedia.activeKey = null;
+    videoEl.classList.add("hidden");
+    state.portraitMedia[activeKeyField] = null;
     return;
   }
 
-  const agent = portraitAgentFromProvider(state.portrait.provider);
-  const clipState = state.portrait.busy ? "working" : "idle";
+  const agent = portraitAgentFromProvider(provider);
+  const clipState = busy ? "working" : "idle";
   const index = (await ensurePortraitIndex()) || {};
 
   let clipPath = index?.[agent]?.[clipState] || null;
@@ -457,10 +529,10 @@ async function refreshPortraitVideo() {
 
   if (!clipPath) {
     try {
-      els.portraitVideo.pause();
+      videoEl.pause();
     } catch (_) {}
-    els.portraitVideo.classList.add("hidden");
-    state.portraitMedia.activeKey = null;
+    videoEl.classList.add("hidden");
+    state.portraitMedia[activeKeyField] = null;
     return;
   }
 
@@ -471,37 +543,54 @@ async function refreshPortraitVideo() {
     url = null;
   }
   if (!url) {
-    els.portraitVideo.classList.add("hidden");
-    state.portraitMedia.activeKey = null;
+    videoEl.classList.add("hidden");
+    state.portraitMedia[activeKeyField] = null;
     return;
   }
 
   const key = `${clipPath}:${clipState}`;
-  if (state.portraitMedia.activeKey !== key) {
-    state.portraitMedia.activeKey = key;
-    els.portraitVideo.classList.remove("hidden");
-    els.portraitVideo.src = url;
+  if (state.portraitMedia[activeKeyField] !== key) {
+    state.portraitMedia[activeKeyField] = key;
+    videoEl.classList.remove("hidden");
+    videoEl.src = url;
     try {
-      els.portraitVideo.currentTime = 0;
+      videoEl.currentTime = 0;
     } catch (_) {}
     try {
-      els.portraitVideo.load();
+      videoEl.load();
     } catch (_) {}
   }
 
   try {
-    const p = els.portraitVideo.play();
+    const p = videoEl.play();
     if (p && typeof p.catch === "function") p.catch(() => {});
   } catch (_) {}
 }
 
-function setPortrait({ title, sub, provider, busy, visible } = {}) {
+async function refreshAgentPortraitVideos() {
+  await Promise.all([
+    refreshPortraitVideoSlot({
+      videoEl: els.portraitVideo,
+      provider: state.portrait.provider,
+      busy: state.portrait.busy,
+      activeKeyField: "activeKey1",
+    }),
+    refreshPortraitVideoSlot({
+      videoEl: els.portraitVideo2,
+      provider: state.portrait2.provider,
+      busy: state.portrait2.busy,
+      activeKeyField: "activeKey2",
+    }),
+  ]);
+}
+
+function setPortrait({ title, provider, busy, visible } = {}) {
   if (typeof visible === "boolean") {
     if (els.portraitDock) els.portraitDock.classList.toggle("hidden", !visible);
   }
   if (typeof busy === "boolean") {
     state.portrait.busy = busy;
-    if (els.portraitDock) els.portraitDock.classList.toggle("busy", busy);
+    if (els.agentSlotPrimary) els.agentSlotPrimary.classList.toggle("busy", busy);
   }
   if (provider !== undefined) {
     state.portrait.provider = provider;
@@ -513,36 +602,75 @@ function setPortrait({ title, sub, provider, busy, visible } = {}) {
     state.portrait.title = title;
     if (els.portraitTitle) els.portraitTitle.textContent = title || "";
   }
-  if (sub !== undefined) {
-    state.portrait.sub = sub;
-    if (els.portraitSub) els.portraitSub.textContent = sub || "";
+  renderHudReadout();
+  refreshAgentPortraitVideos().catch(() => {});
+}
+
+function setPortrait2({ title, provider, busy, visible } = {}) {
+  if (typeof visible === "boolean") {
+    if (els.portraitDock) els.portraitDock.classList.toggle("hidden", !visible);
+  }
+  if (typeof busy === "boolean") {
+    state.portrait2.busy = busy;
+    if (els.agentSlotSecondary) els.agentSlotSecondary.classList.toggle("busy", busy);
+  }
+  if (provider !== undefined) {
+    state.portrait2.provider = provider;
+    if (els.portraitAvatar2) {
+      els.portraitAvatar2.dataset.provider = provider || "";
+    }
+  }
+  if (title !== undefined) {
+    state.portrait2.title = title;
+    if (els.portraitTitle2) els.portraitTitle2.textContent = title || "";
   }
   renderHudReadout();
-  refreshPortraitVideo().catch(() => {});
+  refreshAgentPortraitVideos().catch(() => {});
 }
 
 function updatePortraitIdle() {
   const provider = providerFromModel(settings.imageModel);
   const hasImage = Boolean(state.activeId);
+  const index = state.portraitMedia.index;
+  const provider2 = secondaryProviderFor(provider, index);
   setPortrait({
     visible: hasImage,
     busy: false,
     provider,
     title: providerDisplay(provider),
-    sub: "Idle",
+  });
+  setPortrait2({
+    visible: hasImage,
+    busy: false,
+    provider: provider2,
+    title: providerDisplay(provider2),
   });
   renderHudReadout();
 }
 
-function portraitWorking(actionLabel) {
-  const provider = providerFromModel(settings.imageModel);
+function portraitWorking(_actionLabel, { providerOverride = null } = {}) {
+  const provider = providerOverride || providerFromModel(settings.imageModel);
   setPortrait({
     visible: Boolean(state.activeId),
     busy: true,
     provider,
     title: providerDisplay(provider),
-    sub: actionLabel || "Working…",
   });
+  // Secondary portrait is display-only for now (idle loop).
+  if (!state.portrait2.provider) {
+    const provider2 = secondaryProviderFor(provider, state.portraitMedia.index);
+    setPortrait2({
+      visible: Boolean(state.activeId),
+      busy: false,
+      provider: provider2,
+      title: providerDisplay(provider2),
+    });
+  } else {
+    setPortrait2({
+      visible: Boolean(state.activeId),
+      busy: false,
+    });
+  }
   renderHudReadout();
 }
 
@@ -733,7 +861,109 @@ function getActiveImage() {
   return state.imagesById.get(state.activeId) || null;
 }
 
+function setCanvasMode(mode) {
+  const next = mode === "multi" ? "multi" : "single";
+  if (state.canvasMode === next) return;
+  state.canvasMode = next;
+  state.multiRects.clear();
+  state.pointer.active = false;
+  state.selection = null;
+  state.lassoDraft = [];
+  // Multi-view is a tile layout; lasso doesn't have well-defined coordinates.
+  if (next === "multi" && state.tool === "lasso") {
+    setTool("pan");
+  }
+  chooseSpawnNodes();
+  renderSelectionMeta();
+  requestRender();
+}
+
+function ensureCanvasImageLoaded(item) {
+  if (!item || !item.path) return;
+  if (item.img) return;
+  if (item.imgLoading) return;
+  item.imgLoading = true;
+  loadImage(item.path)
+    .then((img) => {
+      item.img = img;
+      item.width = img?.naturalWidth || null;
+      item.height = img?.naturalHeight || null;
+    })
+    .catch((err) => {
+      console.warn("Failed to load image for canvas:", err);
+    })
+    .finally(() => {
+      item.imgLoading = false;
+      requestRender();
+    });
+}
+
+function computeMultiRects(items, canvasW, canvasH) {
+  const n = Array.isArray(items) ? items.length : 0;
+  if (!n) return new Map();
+  const dpr = getDpr();
+  const isMobile =
+    window.matchMedia && typeof window.matchMedia === "function"
+      ? window.matchMedia("(max-width: 980px)").matches
+      : false;
+  const padX = Math.round(26 * dpr);
+  const padTop = Math.round((isMobile ? 18 : 26) * dpr);
+  // Keep the bottom "control surface" clear (spawnbar + HUD).
+  const padBottom = Math.round((isMobile ? 210 : 250) * dpr);
+  const gap = Math.round(18 * dpr);
+
+  let cols = 1;
+  if (n === 2) cols = 2;
+  else if (n <= 4) cols = 2;
+  else cols = 3;
+  const rows = Math.ceil(n / cols);
+
+  const usableW = Math.max(1, canvasW - padX * 2);
+  const usableH = Math.max(1, canvasH - padTop - padBottom);
+  const cellW = Math.max(1, (usableW - gap * (cols - 1)) / cols);
+  const cellH = Math.max(1, (usableH - gap * (rows - 1)) / rows);
+
+  const rects = new Map();
+  for (let i = 0; i < n; i += 1) {
+    const item = items[i];
+    if (!item?.id) continue;
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const cellX = padX + col * (cellW + gap);
+    const cellY = padTop + row * (cellH + gap);
+    const iw = item?.img?.naturalWidth || item?.width || null;
+    const ih = item?.img?.naturalHeight || item?.height || null;
+    let x = Math.round(cellX);
+    let y = Math.round(cellY);
+    let w = Math.max(1, Math.round(cellW));
+    let h = Math.max(1, Math.round(cellH));
+    if (iw && ih) {
+      const scale = Math.min(cellW / iw, cellH / ih);
+      w = Math.max(1, Math.round(iw * scale));
+      h = Math.max(1, Math.round(ih * scale));
+      x = Math.round(cellX + (cellW - w) / 2);
+      y = Math.round(cellY + (cellH - h) / 2);
+    }
+    rects.set(item.id, { x, y, w, h, cellX, cellY, cellW, cellH });
+  }
+  return rects;
+}
+
+function hitTestMulti(pt) {
+  if (!pt) return null;
+  const entries = Array.from(state.multiRects.entries());
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const [id, rect] = entries[i];
+    if (!rect) continue;
+    if (pt.x < rect.x || pt.x > rect.x + rect.w) continue;
+    if (pt.y < rect.y || pt.y > rect.y + rect.h) continue;
+    return id;
+  }
+  return null;
+}
+
 function resetViewToFit() {
+  if (state.canvasMode !== "single") return;
   const img = getActiveImage();
   if (!img || !img.img) return;
   const canvas = els.workCanvas;
@@ -764,10 +994,21 @@ function resetViewToFit() {
 }
 
 function getActiveImageRectCss() {
+  const dpr = getDpr();
+  if (state.canvasMode === "multi") {
+    const rect = state.activeId ? state.multiRects.get(state.activeId) : null;
+    if (!rect) return null;
+    return {
+      left: rect.x / dpr,
+      top: rect.y / dpr,
+      width: rect.w / dpr,
+      height: rect.h / dpr,
+    };
+  }
+  if (state.canvasMode !== "single") return null;
   const item = getActiveImage();
   const img = item?.img;
   if (!item || !img) return null;
-  const dpr = getDpr();
   const iw = img.naturalWidth || item.width || 1;
   const ih = img.naturalHeight || item.height || 1;
   return {
@@ -795,6 +1036,7 @@ function setImageFxActive(active, label = null) {
   if (!els.imageFx) return;
   els.imageFx.classList.toggle("hidden", !state.imageFx.active);
   if (state.imageFx.active) updateImageFxRect();
+  requestRender();
 }
 
 function beginPendingReplace(targetId, label) {
@@ -818,6 +1060,10 @@ function clearSelection() {
 function setTool(tool) {
   const allowed = new Set(["pan", "lasso"]);
   if (!allowed.has(tool)) return;
+  if (tool === "lasso" && state.canvasMode === "multi") {
+    showToast("Lasso is disabled in multi-view. Combine or click an image to focus it first.", "tip", 2600);
+    return;
+  }
   state.tool = tool;
   for (const btn of els.toolButtons) {
     const t = btn.dataset.tool;
@@ -839,15 +1085,14 @@ function showDropHint(show) {
 
 function renderSelectionMeta() {
   const img = getActiveImage();
-  if (!els.selectionMeta) return;
   if (!img) {
-    els.selectionMeta.textContent = "No image selected.";
+    if (els.selectionMeta) els.selectionMeta.textContent = "No image selected.";
     renderHudReadout();
     return;
   }
   const name = basename(img.path);
   const sel = state.selection ? `${state.selection.points.length} pts` : "none";
-  els.selectionMeta.textContent = `${name}\nSelection: ${sel}`;
+  if (els.selectionMeta) els.selectionMeta.textContent = `${name}\nSelection: ${sel}`;
   renderHudReadout();
 }
 
@@ -1356,6 +1601,14 @@ function renderSpawnbar() {
 }
 
 function chooseSpawnNodes() {
+  if (state.canvasMode === "multi") {
+    const canBlend = state.images.length === 2 && !state.pendingBlend;
+    state.spawnNodes = canBlend
+      ? [{ id: "blend_pair", title: "Combine", action: "blend_pair" }]
+      : [];
+    renderSpawnbar();
+    return;
+  }
   if (!state.activeId) {
     state.spawnNodes = [];
     renderSpawnbar();
@@ -1385,6 +1638,10 @@ function chooseSpawnNodes() {
 
 async function handleSpawnNode(node) {
   if (!node) return;
+  if (node.action === "blend_pair") {
+    await runBlendPair();
+    return;
+  }
   if (node.action === "bg_white") {
     await applyBackground("white");
     return;
@@ -1646,6 +1903,13 @@ async function importPhotos() {
   if (ok > 0) {
     const suffix = failed ? ` (${failed} failed)` : "";
     setStatus(`Engine: imported ${ok} photo${ok === 1 ? "" : "s"}${suffix}`, failed > 0);
+    const importedOnly =
+      state.images.length === 2 && state.images.every((item) => item?.kind === "import");
+    if (importedOnly) {
+      setCanvasMode("multi");
+      setTip("Suggested: Combine the two photos into a single image.");
+      showToast("Suggested action: Combine", "tip", 2600);
+    }
   } else {
     const msg = lastErr?.message || String(lastErr || "unknown error");
     setStatus(`Engine: import failed (${msg})`, true);
@@ -1876,6 +2140,64 @@ async function runVariations() {
   }
 }
 
+function quoteForPtyArg(value) {
+  const raw = String(value || "");
+  const escaped = raw.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `"${escaped}"`;
+}
+
+async function runBlendPair() {
+  bumpInteraction();
+  if (state.pendingBlend) {
+    showToast("Combine already running.", "tip", 2600);
+    return;
+  }
+  if (!state.runDir) {
+    await ensureRun();
+  }
+  if (state.images.length !== 2) {
+    showToast("Combine needs exactly 2 photos in the run.", "error", 3200);
+    return;
+  }
+  const okProvider = await ensureGeminiForBlend();
+  if (!okProvider) {
+    showToast("Combine requires a Gemini image model (multi-image).", "error", 3600);
+    return;
+  }
+  const a = state.images[0];
+  const b = state.images[1];
+  if (!a?.path || !b?.path) {
+    showToast("Combine failed: missing image paths.", "error", 3200);
+    return;
+  }
+
+  if (!state.ptySpawned) {
+    await spawnEngine();
+  }
+  setImageFxActive(true, "Combine");
+  state.expectingArtifacts = true;
+  state.pendingBlend = { sourceIds: [a.id, b.id], startedAt: Date.now() };
+  state.lastAction = "Combine";
+  setStatus("Engine: combine…");
+  portraitWorking("Combine");
+  showToast("Combining photos…", "info", 2200);
+  requestRender();
+
+  try {
+    await invoke("write_pty", {
+      data: `/blend ${quoteForPtyArg(a.path)} ${quoteForPtyArg(b.path)}\n`,
+    });
+  } catch (err) {
+    console.error(err);
+    state.expectingArtifacts = false;
+    state.pendingBlend = null;
+    setStatus(`Engine: combine failed (${err?.message || err})`, true);
+    showToast("Combine failed to start.", "error", 3200);
+    setImageFxActive(false);
+    updatePortraitIdle();
+  }
+}
+
 async function exportRun() {
   bumpInteraction();
   if (!state.runDir) return;
@@ -1901,6 +2223,9 @@ async function createRun() {
   state.images = [];
   state.imagesById.clear();
   state.activeId = null;
+  state.canvasMode = "single";
+  state.multiRects.clear();
+  state.pendingBlend = null;
   clearImageCache();
   state.selection = null;
   state.lassoDraft = [];
@@ -1929,6 +2254,9 @@ async function openExistingRun() {
   state.images = [];
   state.imagesById.clear();
   state.activeId = null;
+  state.canvasMode = "single";
+  state.multiRects.clear();
+  state.pendingBlend = null;
   clearImageCache();
   state.selection = null;
   state.lassoDraft = [];
@@ -2064,6 +2392,14 @@ function handleEvent(event) {
     const id = event.artifact_id;
     const path = event.image_path;
     if (!id || !path) return;
+    const wasBlend = Boolean(state.pendingBlend);
+    if (wasBlend) {
+      state.pendingBlend = null;
+      state.canvasMode = "single";
+      state.multiRects.clear();
+      setTip(DEFAULT_TIP);
+      showToast("Combine complete.", "tip", 2400);
+    }
     const pending = state.pendingReplace;
     if (pending?.targetId) {
       const targetId = pending.targetId;
@@ -2095,10 +2431,13 @@ function handleEvent(event) {
     setStatus(`Engine: ${msg}`, true);
     showToast(msg, "error", 3200);
     state.expectingArtifacts = false;
+    state.pendingBlend = null;
     clearPendingReplace();
     updatePortraitIdle();
     setImageFxActive(false);
     renderHudReadout();
+    chooseSpawnNodes();
+    requestRender();
   } else if (event.type === "cost_latency_update") {
     state.lastCostLatency = {
       provider: event.provider,
@@ -2156,6 +2495,119 @@ function handleEvent(event) {
   }
 }
 
+function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
+  const items = state.images || [];
+  for (const item of items) {
+    ensureCanvasImageLoaded(item);
+  }
+
+  state.multiRects = computeMultiRects(items, canvasW, canvasH);
+
+  const dpr = getDpr();
+  wctx.save();
+  wctx.imageSmoothingEnabled = true;
+  wctx.imageSmoothingQuality = "high";
+
+  for (const item of items) {
+    const rect = item?.id ? state.multiRects.get(item.id) : null;
+    if (!rect) continue;
+    const x = rect.x;
+    const y = rect.y;
+    const w = rect.w;
+    const h = rect.h;
+    if (item?.img) {
+      wctx.drawImage(item.img, x, y, w, h);
+    } else {
+      const g = wctx.createLinearGradient(x, y, x, y + h);
+      g.addColorStop(0, "rgba(18, 26, 37, 0.90)");
+      g.addColorStop(1, "rgba(6, 8, 12, 0.96)");
+      wctx.fillStyle = g;
+      wctx.fillRect(x, y, w, h);
+      wctx.fillStyle = "rgba(230, 237, 243, 0.65)";
+      wctx.font = `${Math.max(11, Math.round(12 * dpr))}px IBM Plex Mono`;
+      wctx.fillText("LOADING…", x + Math.round(12 * dpr), y + Math.round(22 * dpr));
+    }
+
+    // Tile frame.
+    wctx.save();
+    wctx.lineWidth = Math.max(1, Math.round(1.5 * dpr));
+    wctx.strokeStyle = "rgba(54, 76, 106, 0.58)";
+    wctx.shadowColor = "rgba(0, 0, 0, 0.6)";
+    wctx.shadowBlur = Math.round(10 * dpr);
+    wctx.strokeRect(x - 1, y - 1, w + 2, h + 2);
+    wctx.restore();
+  }
+  wctx.restore();
+
+  // Active highlight.
+  const activeRect = state.activeId ? state.multiRects.get(state.activeId) : null;
+  if (activeRect) {
+    octx.save();
+    octx.lineWidth = Math.max(1, Math.round(2.0 * dpr));
+    octx.strokeStyle = "rgba(255, 212, 0, 0.88)";
+    octx.shadowColor = "rgba(255, 212, 0, 0.20)";
+    octx.shadowBlur = Math.round(22 * dpr);
+    octx.strokeRect(activeRect.x - 2, activeRect.y - 2, activeRect.w + 4, activeRect.h + 4);
+    octx.restore();
+  }
+
+  const canSuggestBlend = items.length === 2 && !state.pendingBlend;
+  if (!canSuggestBlend) return;
+  const aRect = items[0]?.id ? state.multiRects.get(items[0].id) : null;
+  const bRect = items[1]?.id ? state.multiRects.get(items[1].id) : null;
+  if (!aRect || !bRect) return;
+
+  const ax = aRect.x + aRect.w;
+  const ay = aRect.y + aRect.h * 0.5;
+  const bx = bRect.x;
+  const by = bRect.y + bRect.h * 0.5;
+  const mx = (ax + bx) * 0.5;
+  const my = (ay + by) * 0.5;
+
+  octx.save();
+  octx.lineWidth = Math.max(1, Math.round(2 * dpr));
+  octx.setLineDash([Math.round(10 * dpr), Math.round(8 * dpr)]);
+  octx.strokeStyle = "rgba(255, 212, 0, 0.28)";
+  octx.shadowColor = "rgba(255, 212, 0, 0.12)";
+  octx.shadowBlur = Math.round(14 * dpr);
+  octx.beginPath();
+  octx.moveTo(ax + Math.round(8 * dpr), ay);
+  octx.lineTo(bx - Math.round(8 * dpr), by);
+  octx.stroke();
+  octx.setLineDash([]);
+
+  // Small tag that reads like a "system suggestion" connecting the two tiles.
+  const label = "SUGGESTED: COMBINE";
+  octx.font = `${Math.max(10, Math.round(11.5 * dpr))}px IBM Plex Mono`;
+  const textW = octx.measureText(label).width;
+  const padX = Math.round(10 * dpr);
+  const padY = Math.round(6 * dpr);
+  const tagW = Math.round(textW + padX * 2);
+  const tagH = Math.round(22 * dpr);
+  const tagX = Math.round(mx - tagW / 2);
+  const tagY = Math.round(my - tagH / 2);
+  const r = Math.round(9 * dpr);
+  const roundRect = (ctx, x, y, w, h, radius) => {
+    const rr = Math.max(0, Math.min(radius, Math.min(w, h) / 2));
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  };
+  roundRect(octx, tagX, tagY, tagW, tagH, r);
+  octx.fillStyle = "rgba(8, 10, 14, 0.76)";
+  octx.fill();
+  octx.lineWidth = Math.max(1, Math.round(1 * dpr));
+  octx.strokeStyle = "rgba(255, 212, 0, 0.32)";
+  octx.stroke();
+  octx.fillStyle = "rgba(255, 212, 0, 0.86)";
+  octx.fillText(label, tagX + padX, tagY + tagH - padY);
+  octx.restore();
+}
+
 function render() {
   ensureCanvasSize();
   const work = els.workCanvas;
@@ -2167,6 +2619,12 @@ function render() {
 
   wctx.clearRect(0, 0, work.width, work.height);
   octx.clearRect(0, 0, overlay.width, overlay.height);
+
+  if (state.canvasMode === "multi") {
+    renderMultiCanvas(wctx, octx, work.width, work.height);
+    updateImageFxRect();
+    return;
+  }
 
   const item = getActiveImage();
   const img = item?.img;
@@ -2218,6 +2676,15 @@ function installCanvasHandlers() {
 
   els.overlayCanvas.addEventListener("pointerdown", (event) => {
     bumpInteraction();
+    if (state.canvasMode === "multi") {
+      const p = canvasPointFromEvent(event);
+      const hit = hitTestMulti(p);
+      if (hit) {
+        setCanvasMode("single");
+        setActiveImage(hit).catch(() => {});
+      }
+      return;
+    }
     const img = getActiveImage();
     if (!img) return;
     els.overlayCanvas.setPointerCapture(event.pointerId);
@@ -2293,6 +2760,10 @@ function installCanvasHandlers() {
     (event) => {
       bumpInteraction();
       if (!getActiveImage()) return;
+      if (state.canvasMode === "multi") {
+        event.preventDefault();
+        return;
+      }
       event.preventDefault();
       const p = canvasPointFromEvent(event);
       const before = canvasToImage(p);
@@ -2353,6 +2824,13 @@ function installDnD() {
       );
     }
     setStatus(`Engine: imported ${paths.length} dropped file${paths.length === 1 ? "" : "s"}`);
+    const importedOnly =
+      state.images.length === 2 && state.images.every((item) => item?.kind === "import");
+    if (importedOnly) {
+      setCanvasMode("multi");
+      setTip("Suggested: Combine the two photos into a single image.");
+      showToast("Suggested action: Combine", "tip", 2600);
+    }
   });
 }
 
@@ -2482,6 +2960,7 @@ async function boot() {
     setStatus("Engine: exited", true);
     state.ptySpawned = false;
     state.expectingArtifacts = false;
+    state.pendingBlend = null;
     clearPendingReplace();
     setImageFxActive(false);
     updatePortraitIdle();
