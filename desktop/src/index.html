@@ -55,10 +55,10 @@
                       <span class="hud-k">SEL</span>
                       <span id="hud-unit-sel" class="hud-v"></span>
                     </div>
-                    <div class="hud-line">
-                      <span class="hud-k">STAT</span>
-                      <span id="hud-unit-stat" class="hud-v"></span>
-                    </div>
+	                    <div class="hud-line">
+	                      <span class="hud-k">GEN</span>
+	                      <span id="hud-unit-stat" class="hud-v"></span>
+	                    </div>
                   </div>
                 </div>
               </div>
@@ -79,16 +79,31 @@
                 <button id="action-variations" type="button">Variations</button>
               </div>
             </div>
-            <div class="panel">
-              <div class="panel-title">Tips</div>
-              <div id="tips-text" class="panel-body muted panel-readout">
-                Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
-              </div>
-            </div>
-            <div class="panel agent-panel">
-              <div class="panel-title">Agent</div>
-              <div id="portrait-dock" class="panel-body portrait-dock hidden">
-                <div class="agent-portraits">
+	            <div class="panel">
+	              <div class="panel-title">Tips</div>
+	              <div id="tips-text" class="panel-body muted panel-readout">
+	                Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
+	              </div>
+	            </div>
+	            <div class="panel">
+	              <div class="panel-title">Designate</div>
+	              <div class="panel-body">
+	                <div id="designate-status" class="muted panel-readout">
+	                  Select the Designate tool, click the image, then choose a label.
+	                </div>
+	                <div class="designate-actions">
+	                  <button id="designate-subject" type="button">Subject</button>
+	                  <button id="designate-reference" type="button">Reference</button>
+	                  <button id="designate-object" type="button">Object</button>
+	                  <button id="designate-clear" class="ghost" type="button">Clear</button>
+	                </div>
+	                <div id="designate-list" class="designate-list muted"></div>
+	              </div>
+	            </div>
+	            <div class="panel agent-panel">
+	              <div class="panel-title">Agent</div>
+	              <div id="portrait-dock" class="panel-body portrait-dock hidden">
+	                <div class="agent-portraits">
                   <div id="agent-slot-primary" class="agent-slot">
                     <div class="portrait-readout">
                       <div id="portrait-title" class="portrait-title">Model</div>
@@ -149,29 +164,48 @@
                   </svg>
                   <span class="sr-only">Pan</span>
                 </button>
-                <button class="tool" type="button" data-tool="lasso" title="Lasso selection" aria-label="Lasso selection">
-                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <ellipse cx="12" cy="9.5" rx="6.5" ry="4.5" fill="none" stroke="currentColor" stroke-width="2" />
-                    <path
-                      d="M15 13.5c0.9 1.2 1.9 2.6 3.5 4"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                    />
-                    <path
-                      d="M19.5 18l1.8 1.8"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                    />
-                  </svg>
-                  <span class="sr-only">Lasso</span>
-                </button>
-                <button class="tool" type="button" data-tool="bg" title="Background replace" aria-label="Background replace">
-                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <path
+	                <button class="tool" type="button" data-tool="lasso" title="Lasso selection" aria-label="Lasso selection">
+	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+	                    <ellipse cx="12" cy="9.5" rx="6.5" ry="4.5" fill="none" stroke="currentColor" stroke-width="2" />
+	                    <path
+	                      d="M15 13.5c0.9 1.2 1.9 2.6 3.5 4"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                    />
+	                    <path
+	                      d="M19.5 18l1.8 1.8"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                    />
+	                  </svg>
+	                  <span class="sr-only">Lasso</span>
+	                </button>
+	                <button
+	                  class="tool"
+	                  type="button"
+	                  data-tool="designate"
+	                  title="Designate subject/reference/object"
+	                  aria-label="Designate"
+	                >
+	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+	                    <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2" />
+	                    <path
+	                      d="M12 4v3M12 17v3M4 12h3M17 12h3"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                    />
+	                  </svg>
+	                  <span class="sr-only">Designate</span>
+	                </button>
+	                <button class="tool" type="button" data-tool="bg" title="Background replace" aria-label="Background replace">
+	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+	                    <path
                       d="M6 7h10v4H6z"
                       fill="none"
                       stroke="currentColor"

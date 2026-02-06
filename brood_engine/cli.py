@@ -9,8 +9,15 @@ from pathlib import Path
 
 from .chat.intent_parser import parse_intent
 from .chat.refine import extract_model_directive, detect_edit_model, is_edit_request, is_refinement, is_repeat_request
+from .cli_progress import progress_once, ProgressTicker, elapsed_line
 from .engine import BroodEngine
+from .recreate.caption import infer_description
 from .runs.export import export_html
+from .reasoning import (
+    start_reasoning_summary,
+    reasoning_summary,
+    build_optimize_reasoning_prompt,
+)
 from .utils import (
     now_utc_iso,
     load_dotenv,
@@ -33,12 +40,6 @@ def _maybe_warn_missing_flux_key(model: str | None) -> None:
 def _print_progress_safe(message: str) -> None:
     prefix = "\r\n" if getattr(sys.stdout, "isatty", lambda: False)() else ""
     print(f"{prefix}{message}")
-from .cli_progress import progress_once, ProgressTicker, elapsed_line
-from .reasoning import (
-    start_reasoning_summary,
-    reasoning_summary,
-    build_optimize_reasoning_prompt,
-)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -119,7 +120,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
         if intent.action == "help":
             print(
                 "Commands: /profile /text_model /image_model /fast /quality /cheaper "
-                "/better /optimize /recreate /use /blend /export"
+                "/better /optimize /recreate /describe /use /blend /export"
             )
             continue
         if intent.action == "set_profile":
@@ -142,6 +143,40 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 continue
             last_artifact_path = str(path)
             print(f"Active image set to {last_artifact_path}")
+            continue
+        if intent.action == "describe":
+            raw_path = intent.command_args.get("path") or last_artifact_path
+            if not raw_path:
+                print("/describe requires a path (or set an active image with /use)")
+                continue
+            path = Path(str(raw_path))
+            if not path.exists():
+                print(f"Describe failed: file not found ({path})")
+                continue
+            max_chars = 32
+            inference = None
+            try:
+                inference = infer_description(path, max_chars=max_chars)
+            except Exception:
+                inference = None
+            if inference is None or not inference.description:
+                print("Describe unavailable (missing keys or vision client).")
+                continue
+            engine.events.emit(
+                "image_description",
+                image_path=str(path),
+                description=inference.description,
+                source=inference.source,
+                model=inference.model,
+                max_chars=max_chars,
+            )
+            meta = []
+            if inference.source:
+                meta.append(str(inference.source))
+            if inference.model:
+                meta.append(str(inference.model))
+            suffix = f" ({', '.join(meta)})" if meta else ""
+            print(f"Description{suffix}: {inference.description}")
             continue
         if intent.action == "blend":
             paths = intent.command_args.get("paths") or []
