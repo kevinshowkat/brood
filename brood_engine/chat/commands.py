@@ -12,6 +12,9 @@ COMMANDS = {
     "/better": "Higher quality preset",
     "/optimize": "Analyze last receipt with goals (optional review mode)",
     "/recreate": "Recreate from reference image",
+    "/describe": "Describe an image (vision) for the HUD",
+    "/use": "Set active image path for edits",
+    "/blend": "Combine two images into one (multi-image prompt)",
     "/export": "Export report",
     "/help": "Show help",
 }
