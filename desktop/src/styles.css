@@ -209,6 +209,22 @@ button.ghost:hover {
   background: rgba(255, 179, 0, 0.1);
 }
 
+.tool.pulse {
+  animation: toolPulse 0.8s ease-out 1;
+}
+
+@keyframes toolPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 179, 0, 0.0);
+  }
+  30% {
+    box-shadow: 0 0 0 10px rgba(255, 179, 0, 0.16);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 179, 0, 0.0);
+  }
+}
+
 .stage {
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -270,7 +286,77 @@ button.ghost:hover {
   letter-spacing: 0.01em;
   text-align: center;
   padding: 24px;
+  pointer-events: auto;
+}
+
+.drop-hint-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  border: 1px solid rgba(36, 48, 65, 0.8);
+  background: rgba(13, 18, 25, 0.82);
+  box-shadow: 0 24px 44px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(6px);
+}
+
+.drop-hint-title {
+  font-size: 14px;
+  letter-spacing: 0.01em;
+}
+
+.drop-hint-sub {
+  font-size: 11px;
+  color: rgba(142, 162, 181, 0.92);
+}
+
+.drop-hint-button {
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid rgba(255, 179, 0, 0.75);
+  background: rgba(255, 179, 0, 0.14);
+  color: rgba(230, 237, 243, 0.95);
+}
+
+.drop-hint-button:hover {
+  border-color: rgba(255, 179, 0, 0.95);
+  background: rgba(255, 179, 0, 0.22);
+}
+
+.drop-hint-button:active {
+  transform: translateY(1px);
+}
+
+.toast {
+  position: absolute;
+  left: 50%;
+  top: 18px;
+  transform: translateX(-50%);
+  z-index: 6;
+  max-width: min(680px, 92vw);
+  padding: 10px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(100, 210, 255, 0.45);
+  background: rgba(13, 18, 25, 0.92);
+  color: rgba(230, 237, 243, 0.95);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  box-shadow: 0 24px 44px rgba(0, 0, 0, 0.5);
   pointer-events: none;
+  opacity: 1;
+}
+
+.toast[data-kind="error"] {
+  border-color: rgba(255, 143, 143, 0.6);
+}
+
+.toast[data-kind="tip"] {
+  border-color: rgba(255, 179, 0, 0.55);
 }
 
 .filmstrip {
@@ -356,6 +442,105 @@ button.ghost:hover {
   line-height: 1.35;
 }
 
+.portrait-dock {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.portrait-frame {
+  width: 90px;
+  height: 90px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 179, 0, 0.55);
+  background: rgba(10, 14, 20, 0.7);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  position: relative;
+  overflow: hidden;
+}
+
+.portrait-dock.busy .portrait-frame {
+  animation: portraitGlow 1.1s ease-in-out infinite;
+}
+
+@keyframes portraitGlow {
+  0% {
+    border-color: rgba(255, 179, 0, 0.35);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  }
+  50% {
+    border-color: rgba(255, 179, 0, 0.85);
+    box-shadow:
+      0 0 0 1px rgba(255, 179, 0, 0.25),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  }
+  100% {
+    border-color: rgba(255, 179, 0, 0.35);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  }
+}
+
+.portrait-avatar {
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(80px 80px at 30% 25%, rgba(255, 255, 255, 0.18), transparent 60%),
+    radial-gradient(120px 120px at 70% 75%, rgba(100, 210, 255, 0.18), transparent 55%),
+    linear-gradient(135deg, rgba(18, 26, 37, 0.95), rgba(9, 12, 16, 0.9));
+}
+
+.portrait-avatar[data-provider="gemini"] {
+  background:
+    radial-gradient(80px 80px at 30% 25%, rgba(255, 255, 255, 0.2), transparent 60%),
+    radial-gradient(120px 120px at 70% 75%, rgba(100, 210, 255, 0.22), transparent 55%),
+    linear-gradient(135deg, rgba(10, 22, 36, 0.96), rgba(6, 9, 14, 0.9));
+}
+
+.portrait-avatar[data-provider="openai"] {
+  background:
+    radial-gradient(80px 80px at 30% 25%, rgba(255, 255, 255, 0.2), transparent 60%),
+    radial-gradient(120px 120px at 70% 75%, rgba(255, 179, 0, 0.22), transparent 55%),
+    linear-gradient(135deg, rgba(22, 18, 10, 0.96), rgba(9, 7, 6, 0.92));
+}
+
+.portrait-avatar[data-provider="flux"] {
+  background:
+    radial-gradient(80px 80px at 30% 25%, rgba(255, 255, 255, 0.2), transparent 60%),
+    radial-gradient(120px 120px at 70% 75%, rgba(255, 84, 126, 0.18), transparent 55%),
+    linear-gradient(135deg, rgba(26, 16, 22, 0.96), rgba(10, 7, 10, 0.92));
+}
+
+.portrait-avatar[data-provider="imagen"] {
+  background:
+    radial-gradient(80px 80px at 30% 25%, rgba(255, 255, 255, 0.2), transparent 60%),
+    radial-gradient(120px 120px at 70% 75%, rgba(88, 214, 141, 0.18), transparent 55%),
+    linear-gradient(135deg, rgba(15, 24, 18, 0.96), rgba(7, 10, 9, 0.92));
+}
+
+.portrait-readout {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.portrait-title {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(230, 237, 243, 0.92);
+}
+
+.portrait-sub {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 #selection-meta {
   white-space: pre-line;
   font-family: "IBM Plex Mono", monospace;
@@ -384,7 +569,7 @@ button.ghost:hover {
   border-color: rgba(100, 210, 255, 0.7);
 }
 
-.larvae {
+.spawnbar {
   position: absolute;
   left: 0;
   right: 0;
@@ -396,7 +581,7 @@ button.ghost:hover {
   pointer-events: none;
 }
 
-.larva {
+.spawn-node {
   pointer-events: auto;
   display: inline-flex;
   align-items: center;
@@ -413,7 +598,7 @@ button.ghost:hover {
   transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
 }
 
-.larva::before {
+.spawn-node::before {
   content: "";
   width: 10px;
   height: 10px;
@@ -422,10 +607,34 @@ button.ghost:hover {
   box-shadow: 0 0 0 3px rgba(255, 179, 0, 0.12);
 }
 
-.larva:hover {
+.spawn-node:hover {
   transform: translateY(-2px);
   border-color: rgba(255, 179, 0, 0.78);
   background: rgba(18, 26, 37, 0.92);
+}
+
+.key-status-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(18, 26, 37, 0.55);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.key-status-title {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(230, 237, 243, 0.75);
+}
+
+.key-status-list {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  white-space: pre-line;
 }
 
 .drawer {
