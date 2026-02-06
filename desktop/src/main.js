@@ -3,7 +3,16 @@ import "xterm/css/xterm.css";
 import { FitAddon } from "xterm-addon-fit";
 import { invoke, convertFileSrc } from "@tauri-apps/api/tauri";
 import { listen } from "@tauri-apps/api/event";
-import { readTextFile, readDir, exists, readBinaryFile } from "@tauri-apps/api/fs";
+import {
+  readTextFile,
+  readDir,
+  exists,
+  readBinaryFile,
+  writeTextFile,
+  createDir,
+  copyFile,
+  removeDir,
+} from "@tauri-apps/api/fs";
 import { open } from "@tauri-apps/api/dialog";
 import { writeText } from "@tauri-apps/api/clipboard";
 
@@ -25,6 +34,28 @@ const optimizePanel = document.getElementById("optimize-panel");
 const optimizeMetaEl = document.getElementById("optimize-meta");
 const optimizeAnalysisEl = document.getElementById("optimize-analysis");
 const optimizeRecsEl = document.getElementById("optimize-recs");
+const aestheticCountEl = document.getElementById("aesthetic-count");
+const aestheticWarningEl = document.getElementById("aesthetic-warning");
+const aestheticModalEl = document.getElementById("aesthetic-modal");
+const aestheticPickFolderBtn = document.getElementById("aesthetic-pick-folder");
+const aestheticPickFilesBtn = document.getElementById("aesthetic-pick-files");
+const aestheticSelectionEl = document.getElementById("aesthetic-selection");
+const aestheticSelectionTitleEl = document.getElementById("aesthetic-selection-title");
+const aestheticSelectionListEl = document.getElementById("aesthetic-selection-list");
+const aestheticSelectionWarningEl = document.getElementById("aesthetic-selection-warning");
+const aestheticStepSelectEl = document.getElementById("aesthetic-step-select");
+const aestheticStepSummaryEl = document.getElementById("aesthetic-step-summary");
+const aestheticProgressImagesEl = document.getElementById("aesthetic-progress-images");
+const aestheticProgressAnnotationsEl = document.getElementById("aesthetic-progress-annotations");
+const aestheticProgressMetaEl = document.getElementById("aesthetic-progress-meta");
+const aestheticSummaryEl = document.getElementById("aesthetic-summary");
+const aestheticImportBtn = document.getElementById("aesthetic-import");
+const aestheticCancelBtn = document.getElementById("aesthetic-cancel");
+const aestheticCloseBtn = document.getElementById("aesthetic-close");
+const aestheticReplaceNoteEl = document.getElementById("aesthetic-replace-note");
+const aestheticBackBtn = document.getElementById("aesthetic-back");
+const aestheticDoneBtn = document.getElementById("aesthetic-done");
+const aestheticStepDots = document.querySelectorAll(".wizard-dot");
 
 const state = {
   runDir: null,
@@ -58,6 +89,11 @@ const state = {
     roundTotal: null,
     mode: "auto",
     error: null,
+  },
+  aesthetic: {
+    images: [],
+    count: 0,
+    importedAt: null,
   },
 };
 
@@ -154,6 +190,26 @@ const GOAL_OPTIONS = [
   },
 ];
 
+const AESTHETIC_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".heic"]);
+const AESTHETIC_RECOMMENDED_MIN = 10;
+const AESTHETIC_WARNING_MAX = 50;
+
+let aestheticDraft = {
+  sourceKind: null,
+  sourceDir: null,
+  sourcePaths: [],
+  scanRecursive: false,
+  error: "",
+};
+
+let aestheticWizardStep = 1;
+let aestheticWizardProgress = {
+  images: "Pending",
+  annotations: "Pending",
+  meta: "Pending",
+  summary: "",
+};
+
 function formatDuration(seconds) {
   if (!Number.isFinite(seconds)) return "—";
   const total = Math.max(0, Math.round(seconds));
@@ -163,6 +219,87 @@ function formatDuration(seconds) {
   if (hours) return `${hours}h ${minutes}m ${String(secs).padStart(2, "0")}s`;
   if (minutes) return `${minutes}m ${String(secs).padStart(2, "0")}s`;
   return `${secs}s`;
+}
+
+function basename(path) {
+  if (!path) return "";
+  const parts = String(path).split(/[\\/]/);
+  return parts[parts.length - 1] || "";
+}
+
+function normalizePath(path) {
+  return String(path || "").replace(/\\/g, "/");
+}
+
+function getExtension(path) {
+  const name = basename(path);
+  const dot = name.lastIndexOf(".");
+  if (dot === -1) return "";
+  return name.slice(dot).toLowerCase();
+}
+
+function isAestheticImage(path) {
+  return AESTHETIC_EXTENSIONS.has(getExtension(path));
+}
+
+function uniqueAestheticNames(paths) {
+  const seen = new Set();
+  return paths.map((path, idx) => {
+    const original = basename(path) || `aesthetic-${idx + 1}${getExtension(path) || ""}`;
+    const dot = original.lastIndexOf(".");
+    const stem = dot === -1 ? original : original.slice(0, dot);
+    const ext = dot === -1 ? "" : original.slice(dot);
+    let candidate = original;
+    let counter = 1;
+    while (seen.has(candidate)) {
+      candidate = `${stem}-${counter}${ext}`;
+      counter += 1;
+    }
+    seen.add(candidate);
+    return { source: path, filename: candidate };
+  });
+}
+
+function relativeToRun(path) {
+  if (!state.runDir) return path;
+  const runRoot = normalizePath(state.runDir);
+  const target = normalizePath(path);
+  const prefix = `${runRoot}/`;
+  if (target.startsWith(prefix)) {
+    return target.slice(prefix.length);
+  }
+  return path;
+}
+
+function aestheticWarning(count) {
+  if (!Number.isFinite(count) || count === 0) return "";
+  if (count < AESTHETIC_RECOMMENDED_MIN) {
+    return `Only ${count} image${count === 1 ? "" : "s"}; 10-20 recommended.`;
+  }
+  if (count > AESTHETIC_WARNING_MAX) {
+    return `${count} images selected; >50 may dilute consistency.`;
+  }
+  return "";
+}
+
+function renderAestheticStatus() {
+  const count = Number.isFinite(state.aesthetic.count) ? state.aesthetic.count : 0;
+  if (aestheticCountEl) {
+    aestheticCountEl.textContent = `Aesthetic: ${count} image${count === 1 ? "" : "s"}`;
+  }
+  if (aestheticWarningEl) {
+    const warning = aestheticWarning(count);
+    if (warning) {
+      aestheticWarningEl.textContent = warning;
+      aestheticWarningEl.classList.remove("hidden");
+    } else {
+      aestheticWarningEl.textContent = "";
+      aestheticWarningEl.classList.add("hidden");
+    }
+  }
+  if (clearAestheticBtn) {
+    clearAestheticBtn.disabled = count === 0;
+  }
 }
 
 function updateOptimizeTiming() {
@@ -388,6 +525,429 @@ function updateGoalChipsSuppression(command) {
     } else {
       state.goalChipsSuppressed = false;
     }
+  }
+}
+
+async function readRunMetadata() {
+  if (!state.runDir) return {};
+  const runPath = `${state.runDir}/run.json`;
+  const has = await exists(runPath);
+  if (!has) return {};
+  try {
+    const raw = await readTextFile(runPath);
+    const payload = JSON.parse(raw);
+    if (payload && typeof payload === "object") {
+      return payload;
+    }
+  } catch {
+    // ignore malformed run metadata
+  }
+  return {};
+}
+
+async function writeRunMetadata(payload) {
+  if (!state.runDir) return;
+  const runPath = `${state.runDir}/run.json`;
+  await writeTextFile(runPath, JSON.stringify(payload, null, 2));
+}
+
+async function loadAestheticMetadata() {
+  state.aesthetic.images = [];
+  state.aesthetic.count = 0;
+  state.aesthetic.importedAt = null;
+  if (!state.runDir) {
+    renderAestheticStatus();
+    return;
+  }
+  const meta = await readRunMetadata();
+  const stored = meta?.aesthetic;
+  if (stored && typeof stored === "object") {
+    const images = Array.isArray(stored.images) ? stored.images : [];
+    const count =
+      typeof stored.count === "number" && Number.isFinite(stored.count)
+        ? stored.count
+        : images.length;
+    state.aesthetic.images = images;
+    state.aesthetic.count = count;
+    state.aesthetic.importedAt = stored.imported_at || null;
+    renderAestheticStatus();
+    return;
+  }
+  const aestheticDir = `${state.runDir}/aesthetic`;
+  if (await exists(aestheticDir)) {
+    try {
+      const entries = await readDir(aestheticDir, { recursive: false });
+      const images = entries
+        .map((entry) => entry.path)
+        .filter((path) => path && isAestheticImage(path));
+      state.aesthetic.images = images.map((path) => relativeToRun(path));
+      state.aesthetic.count = images.length;
+    } catch {
+      state.aesthetic.images = [];
+      state.aesthetic.count = 0;
+    }
+  }
+  renderAestheticStatus();
+}
+
+async function setupAestheticScaffold() {
+  if (!state.runDir) return;
+  const aestheticDir = `${state.runDir}/aesthetic`;
+  const annotationsDir = `${aestheticDir}/annotations`;
+  await createDir(aestheticDir, { recursive: true });
+  await createDir(annotationsDir, { recursive: true });
+  await writeTextFile(
+    `${annotationsDir}/aesthetic_pairs_seed.csv`,
+    "image_a,image_b\n"
+  );
+  await writeTextFile(`${annotationsDir}/aesthetic_votes.jsonl`, "");
+  // Oscillo arousal training used BT scores -> Ridge on CLIP embeddings + image metrics; we'll mirror this for brand aesthetic.
+  await writeTextFile(
+    `${aestheticDir}/aesthetic_scores.json`,
+    JSON.stringify(
+      {
+        schema_version: 1,
+        scores: {},
+        updated_at: null,
+      },
+      null,
+      2
+    )
+  );
+}
+
+async function clearAestheticData() {
+  if (!state.runDir) return;
+  const aestheticDir = `${state.runDir}/aesthetic`;
+  if (await exists(aestheticDir)) {
+    await removeDir(aestheticDir, { recursive: true });
+  }
+  const meta = await readRunMetadata();
+  meta.aesthetic = {
+    images: [],
+    imported_at: null,
+    source_paths: [],
+    count: 0,
+    cleared_at: new Date().toISOString(),
+  };
+  await writeRunMetadata(meta);
+  state.aesthetic.images = [];
+  state.aesthetic.count = 0;
+  state.aesthetic.importedAt = null;
+  renderAestheticStatus();
+  renderAestheticWizard();
+  setStatus("Engine: aesthetic references cleared");
+}
+
+function resetAestheticDraft() {
+  aestheticDraft = {
+    sourceKind: null,
+    sourceDir: null,
+    sourcePaths: [],
+    scanRecursive: false,
+    error: "",
+  };
+  renderAestheticWizard();
+}
+
+function resetAestheticProgress() {
+  aestheticWizardProgress = {
+    images: "Pending",
+    annotations: "Pending",
+    meta: "Pending",
+    summary: "",
+  };
+}
+
+function setProgressStatus(el, status) {
+  if (!el) return;
+  el.textContent = status;
+  el.dataset.status = status.toLowerCase();
+}
+
+function renderAestheticProgress() {
+  setProgressStatus(aestheticProgressImagesEl, aestheticWizardProgress.images);
+  setProgressStatus(aestheticProgressAnnotationsEl, aestheticWizardProgress.annotations);
+  setProgressStatus(aestheticProgressMetaEl, aestheticWizardProgress.meta);
+  if (aestheticSummaryEl) {
+    aestheticSummaryEl.textContent = aestheticWizardProgress.summary || "";
+  }
+}
+
+function renderAestheticSelectionList(paths) {
+  if (!aestheticSelectionListEl) return;
+  aestheticSelectionListEl.innerHTML = "";
+  const limit = 8;
+  const list = paths.slice(0, limit);
+  for (const path of list) {
+    const row = document.createElement("div");
+    row.className = "aesthetic-selection-item";
+    row.textContent = basename(path);
+    aestheticSelectionListEl.appendChild(row);
+  }
+  if (paths.length > limit) {
+    const row = document.createElement("div");
+    row.className = "aesthetic-selection-item";
+    row.textContent = `+${paths.length - limit} more...`;
+    aestheticSelectionListEl.appendChild(row);
+  }
+}
+
+function renderAestheticWizard() {
+  if (!aestheticModalEl) return;
+  const hasSelection = Boolean(aestheticDraft.sourceKind);
+  const count = Array.isArray(aestheticDraft.sourcePaths) ? aestheticDraft.sourcePaths.length : 0;
+  const isStepOne = aestheticWizardStep === 1;
+  if (aestheticStepSelectEl) {
+    aestheticStepSelectEl.classList.toggle("hidden", !isStepOne);
+  }
+  if (aestheticStepSummaryEl) {
+    aestheticStepSummaryEl.classList.toggle("hidden", isStepOne);
+  }
+  if (aestheticStepDots && aestheticStepDots.length) {
+    aestheticStepDots.forEach((dot) => {
+      const step = Number(dot.dataset.step || "0");
+      dot.classList.toggle("active", step === aestheticWizardStep);
+    });
+  }
+  if (aestheticBackBtn) {
+    aestheticBackBtn.classList.toggle("hidden", isStepOne);
+    const working =
+      aestheticWizardProgress.images === "Working" ||
+      aestheticWizardProgress.annotations === "Working" ||
+      aestheticWizardProgress.meta === "Working";
+    aestheticBackBtn.disabled = !isStepOne && working;
+  }
+  if (aestheticDoneBtn) {
+    aestheticDoneBtn.classList.toggle("hidden", isStepOne);
+    const working =
+      aestheticWizardProgress.images === "Working" ||
+      aestheticWizardProgress.annotations === "Working" ||
+      aestheticWizardProgress.meta === "Working";
+    aestheticDoneBtn.disabled = !isStepOne && working;
+  }
+  if (aestheticCancelBtn) {
+    aestheticCancelBtn.classList.toggle("hidden", !isStepOne);
+  }
+  if (aestheticImportBtn) {
+    aestheticImportBtn.classList.toggle("hidden", !isStepOne);
+  }
+  if (aestheticReplaceNoteEl) {
+    if (isStepOne && state.aesthetic.count > 0) {
+      aestheticReplaceNoteEl.textContent = `Importing will replace the current set (${state.aesthetic.count} image${state.aesthetic.count === 1 ? "" : "s"}).`;
+      aestheticReplaceNoteEl.classList.remove("hidden");
+    } else {
+      aestheticReplaceNoteEl.textContent = "";
+      aestheticReplaceNoteEl.classList.add("hidden");
+    }
+  }
+  if (isStepOne) {
+    if (aestheticSelectionEl) {
+      aestheticSelectionEl.classList.toggle("hidden", !hasSelection);
+    }
+    if (aestheticSelectionTitleEl) {
+      if (!hasSelection) {
+        aestheticSelectionTitleEl.textContent = "";
+      } else if (count === 0) {
+        aestheticSelectionTitleEl.textContent =
+          aestheticDraft.sourceKind === "folder"
+            ? "No supported images found in the selected folder."
+            : "No supported images selected.";
+      } else if (aestheticDraft.sourceKind === "folder") {
+        aestheticSelectionTitleEl.textContent = `Folder: ${aestheticDraft.sourceDir} (${count} image${count === 1 ? "" : "s"})`;
+      } else {
+        aestheticSelectionTitleEl.textContent = `${count} file${count === 1 ? "" : "s"} selected`;
+      }
+    }
+    if (aestheticSelectionListEl) {
+      if (count > 0) {
+        renderAestheticSelectionList(aestheticDraft.sourcePaths);
+      } else {
+        aestheticSelectionListEl.innerHTML = "";
+      }
+    }
+    if (aestheticSelectionWarningEl) {
+      const warning = aestheticDraft.error || aestheticWarning(count);
+      if (warning) {
+        aestheticSelectionWarningEl.textContent = warning;
+        aestheticSelectionWarningEl.classList.remove("hidden");
+      } else {
+        aestheticSelectionWarningEl.textContent = "";
+        aestheticSelectionWarningEl.classList.add("hidden");
+      }
+    }
+    if (aestheticImportBtn) {
+      aestheticImportBtn.disabled = count === 0;
+      aestheticImportBtn.textContent =
+        count > 0 ? `Import ${count} image${count === 1 ? "" : "s"}` : "Import";
+    }
+  } else {
+    renderAestheticProgress();
+  }
+}
+
+function openAestheticWizard() {
+  if (!state.runDir) {
+    setStatus("Engine: open or create a run first", true);
+    return;
+  }
+  if (!aestheticModalEl) return;
+  aestheticWizardStep = 1;
+  resetAestheticProgress();
+  aestheticModalEl.classList.remove("hidden");
+  aestheticModalEl.style.display = "flex";
+  resetAestheticDraft();
+}
+
+function closeAestheticWizard() {
+  if (!aestheticModalEl) return;
+  aestheticModalEl.classList.add("hidden");
+  aestheticModalEl.style.display = "none";
+}
+
+async function selectAestheticFolder() {
+  const folder = await open({ directory: true, multiple: false });
+  if (!folder) return;
+  let images = [];
+  aestheticDraft.error = "";
+  try {
+    const entries = await readDir(folder, { recursive: false });
+    images = entries.map((entry) => entry.path).filter((path) => path && isAestheticImage(path));
+  } catch (err) {
+    setStatus(`Engine: failed to read folder (${err})`, true);
+    aestheticDraft.error = `Failed to read folder: ${err}`;
+  }
+  aestheticDraft = {
+    sourceKind: "folder",
+    sourceDir: folder,
+    sourcePaths: Array.from(new Set(images)),
+    scanRecursive: false,
+    error: aestheticDraft.error || "",
+  };
+  renderAestheticWizard();
+}
+
+async function selectAestheticFiles() {
+  const files = await open({
+    multiple: true,
+    filters: [
+      {
+        name: "Images",
+        extensions: ["png", "jpg", "jpeg", "webp", "heic"],
+      },
+    ],
+  });
+  if (!files) return;
+  const list = Array.isArray(files) ? files : [files];
+  const images = list.filter((path) => path && isAestheticImage(path));
+  aestheticDraft = {
+    sourceKind: "files",
+    sourceDir: null,
+    sourcePaths: Array.from(new Set(images)),
+    scanRecursive: false,
+    error: "",
+  };
+  renderAestheticWizard();
+}
+
+async function persistAestheticSelection(selection) {
+  if (!state.runDir) {
+    setStatus("Engine: open or create a run first", true);
+    return false;
+  }
+  const sourcePaths = Array.from(new Set(selection.sourcePaths || []));
+  if (sourcePaths.length === 0) {
+    setStatus("Engine: no supported images found", true);
+    return false;
+  }
+  const aestheticDir = `${state.runDir}/aesthetic`;
+  if (await exists(aestheticDir)) {
+    await removeDir(aestheticDir, { recursive: true });
+  }
+  await setupAestheticScaffold();
+  const unique = uniqueAestheticNames(sourcePaths);
+  const copied = [];
+  const copyErrors = [];
+  for (const item of unique) {
+    const destPath = `${aestheticDir}/${item.filename}`;
+    try {
+      await copyFile(item.source, destPath);
+      copied.push(destPath);
+    } catch (err) {
+      copyErrors.push(err?.message || String(err));
+      term.writeln(
+        formatBroodLine(`\r\n[brood] failed to copy ${item.source}: ${err}`)
+      );
+    }
+  }
+  if (copied.length === 0) {
+    const hint = copyErrors.length
+      ? `No images imported. ${copyErrors[0]}`
+      : "No images imported.";
+    throw new Error(hint);
+  }
+  const meta = await readRunMetadata();
+  const importedAt = new Date().toISOString();
+  meta.aesthetic = {
+    images: copied.map((path) => relativeToRun(path)),
+    imported_at: importedAt,
+    source_paths: sourcePaths,
+    count: copied.length,
+    source_kind: selection.sourceKind,
+    source_dir: selection.sourceDir,
+    scan_recursive: selection.scanRecursive,
+  };
+  await writeRunMetadata(meta);
+  state.aesthetic.images = meta.aesthetic.images;
+  state.aesthetic.count = meta.aesthetic.count;
+  state.aesthetic.importedAt = meta.aesthetic.imported_at;
+  renderAestheticStatus();
+  const warning = aestheticWarning(state.aesthetic.count);
+  setStatus(
+    warning
+      ? `Engine: aesthetic imported (${state.aesthetic.count} images, outside 10-20)`
+      : `Engine: aesthetic imported (${state.aesthetic.count} images)`
+  );
+  return {
+    count: copied.length,
+    aestheticDir,
+    importedAt,
+  };
+}
+
+async function importAestheticSelection() {
+  const count = Array.isArray(aestheticDraft.sourcePaths) ? aestheticDraft.sourcePaths.length : 0;
+  aestheticDraft.error = "";
+  aestheticWizardStep = 2;
+  aestheticWizardProgress = {
+    images: "Working",
+    annotations: "Working",
+    meta: "Working",
+    summary: "Importing reference images...",
+  };
+  renderAestheticWizard();
+  setStatus("Engine: importing aesthetic...");
+  try {
+    const result = await persistAestheticSelection(aestheticDraft);
+    if (result) {
+      aestheticWizardProgress = {
+        images: "Done",
+        annotations: "Done",
+        meta: "Done",
+        summary: `Imported ${result.count} image${result.count === 1 ? "" : "s"}.\nSaved to ${result.aestheticDir}.\nMetadata written to run.json.\nAnnotations scaffolding ready for pairwise scoring.`,
+      };
+      renderAestheticWizard();
+      return;
+    }
+  } catch (err) {
+    aestheticWizardProgress = {
+      images: "Error",
+      annotations: "Error",
+      meta: "Error",
+      summary: `Import failed: ${err?.message || err}`,
+    };
+    setStatus(`Engine: aesthetic import failed (${err?.message || err})`, true);
+    renderAestheticWizard();
   }
 }
 
@@ -799,6 +1359,7 @@ async function createRun() {
       detailEl.classList.add("hidden");
     }
     runInfoEl.textContent = `Run: ${state.runDir}`;
+    await loadAestheticMetadata();
     await spawnEngine();
     await startWatching();
   } catch (err) {
@@ -849,6 +1410,7 @@ async function openRun() {
     detailEl.classList.add("hidden");
   }
   runInfoEl.textContent = `Run: ${state.runDir}`;
+  await loadAestheticMetadata();
   await startWatching();
 }
 
@@ -1163,6 +1725,8 @@ const newRunBtn = document.getElementById("new-run");
 const openRunBtn = document.getElementById("open-run");
 const uploadBtn = document.getElementById("upload");
 const exportBtn = document.getElementById("export");
+const buildAestheticBtn = document.getElementById("build-aesthetic");
+const clearAestheticBtn = document.getElementById("clear-aesthetic");
 const compareBtn = document.getElementById("compare");
 const flickerBtn = document.getElementById("flicker");
 
@@ -1193,6 +1757,56 @@ if (uploadBtn) {
 if (exportBtn) {
   exportBtn.addEventListener("click", () => exportReport().catch((err) => reportError(err)));
 }
+if (buildAestheticBtn) {
+  buildAestheticBtn.addEventListener("click", () => openAestheticWizard());
+}
+if (clearAestheticBtn) {
+  clearAestheticBtn.addEventListener("click", () =>
+    clearAestheticData().catch((err) => reportError(err))
+  );
+}
+if (aestheticPickFolderBtn) {
+  aestheticPickFolderBtn.addEventListener("click", () =>
+    selectAestheticFolder().catch((err) => reportError(err))
+  );
+}
+if (aestheticPickFilesBtn) {
+  aestheticPickFilesBtn.addEventListener("click", () =>
+    selectAestheticFiles().catch((err) => reportError(err))
+  );
+}
+if (aestheticImportBtn) {
+  aestheticImportBtn.addEventListener("click", () =>
+    importAestheticSelection().catch((err) => reportError(err))
+  );
+}
+if (aestheticCancelBtn) {
+  aestheticCancelBtn.addEventListener("click", () => closeAestheticWizard());
+}
+if (aestheticBackBtn) {
+  aestheticBackBtn.addEventListener("click", () => {
+    aestheticWizardStep = 1;
+    renderAestheticWizard();
+  });
+}
+if (aestheticDoneBtn) {
+  aestheticDoneBtn.addEventListener("click", () => closeAestheticWizard());
+}
+if (aestheticCloseBtn) {
+  aestheticCloseBtn.addEventListener("click", () => closeAestheticWizard());
+}
+if (aestheticModalEl) {
+  aestheticModalEl.addEventListener("click", (event) => {
+    if (event.target?.dataset?.close === "true") {
+      closeAestheticWizard();
+    }
+  });
+}
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && aestheticModalEl && !aestheticModalEl.classList.contains("hidden")) {
+    closeAestheticWizard();
+  }
+});
 if (compareBtn) {
   compareBtn.addEventListener("click", () => renderDetail());
 }

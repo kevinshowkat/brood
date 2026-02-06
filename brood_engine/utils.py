@@ -9,7 +9,10 @@ import time
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-import tomllib
+try:  # py>=3.11
+    import tomllib  # type: ignore
+except Exception:  # pragma: no cover
+    tomllib = None  # type: ignore
 from typing import Any, Mapping
 
 
@@ -138,12 +141,22 @@ def _find_repo_root(start: Path) -> Path | None:
             return current
         pyproject = current / "pyproject.toml"
         if pyproject.exists():
+            text = ""
             try:
-                data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+                text = pyproject.read_text(encoding="utf-8")
             except Exception:
                 continue
-            if data.get("project", {}).get("name") == "brood":
-                return current
+            if tomllib is not None:
+                try:
+                    data = tomllib.loads(text)
+                except Exception:
+                    continue
+                if data.get("project", {}).get("name") == "brood":
+                    return current
+            else:
+                # Lightweight fallback for environments still on Python < 3.11.
+                if 'name = "brood"' in text or "name = 'brood'" in text:
+                    return current
     return None
 
 

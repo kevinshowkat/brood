@@ -39,6 +39,7 @@ npm run tauri build
 - Type commands in the **input field at the bottom of the left pane** and press **Enter** or **Send**.
 - Example: `Generate an image of a boat`
 - Use the “Try” chips for common prompts and `/help` for slash commands.
+- Use **Build aesthetic** in the top bar to import 10-20 brand reference images (see `docs/aesthetic.md`).
 
 ## Memory
 
@@ -64,6 +65,8 @@ Edit `~/.brood/pricing_overrides.json` to override pricing or latency values.
   Ensure Tauri v1 APIs are used. This repo expects `@tauri-apps/api` v1 and the v1 CLI.
 - **Images not rendering**  
   Tauri must allow file access under `$HOME/**` (see `desktop/src-tauri/tauri.conf.json`).
+- **Aesthetic import fails or does nothing**  
+  The selected files must be within the allowed FS scope (default: `$HOME/**`). Adjust the scope in `desktop/src-tauri/tauri.conf.json` if needed.
 
 ## Project layout
 
@@ -71,3 +74,4 @@ Edit `~/.brood/pricing_overrides.json` to override pricing or latency values.
 - `desktop/` Tauri desktop app
 - `tests/` pytest suite
 - `docs/param_forge_reference.md` Param Forge reference notes
+- `docs/aesthetic.md` Build aesthetic wizard notes

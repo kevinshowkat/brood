@@ -29,13 +29,37 @@ class RecreateLoop:
         iterations: int = 3,
         target_similarity: float = 0.8,
     ) -> dict[str, Any]:
-        prompt = infer_prompt(reference_path)
+        inference = infer_prompt(reference_path)
+        prompt = inference.prompt
+        base_prompt = inference.prompt
+        prompt_source = inference.source
+        caption_model = inference.model
+
+        run_settings = dict(settings or {})
+        # Provide the reference as context for providers that can accept images as input.
+        if "reference_images" not in run_settings:
+            run_settings["reference_images"] = [str(reference_path)]
+
+        self.event_writer.emit(
+            "recreate_prompt_inferred",
+            reference=str(reference_path),
+            prompt=base_prompt,
+            source=prompt_source,
+            model=caption_model,
+        )
         best: dict[str, Any] | None = None
         best_score = 0.0
 
         for iteration in range(1, iterations + 1):
-            intent = {"action": "recreate", "reference": str(reference_path), "iteration": iteration}
-            artifacts = self.engine_generate(prompt, settings, intent)
+            intent = {
+                "action": "recreate",
+                "reference": str(reference_path),
+                "iteration": iteration,
+                "base_prompt": base_prompt,
+                "prompt_source": prompt_source,
+                "caption_model": caption_model,
+            }
+            artifacts = self.engine_generate(prompt, run_settings, intent)
             for artifact in artifacts:
                 image_path = Path(artifact["image_path"])
                 receipt_path = Path(artifact["receipt_path"])
@@ -64,4 +88,10 @@ class RecreateLoop:
                 break
             prompt = f"{prompt} Refine to better match the reference image.".strip()
 
-        return {"best": best, "best_score": best_score}
+        return {
+            "best": best,
+            "best_score": best_score,
+            "inferred_prompt": base_prompt,
+            "prompt_source": prompt_source,
+            "caption_model": caption_model,
+        }
