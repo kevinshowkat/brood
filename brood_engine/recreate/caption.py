@@ -222,40 +222,68 @@ def _describe_with_openai(reference_path: Path, *, max_chars: int) -> Descriptio
     api_key = _openai_api_key()
     if not api_key:
         return None
-    model = os.getenv("BROOD_DESCRIBE_MODEL") or os.getenv("OPENAI_DESCRIBE_MODEL") or "gpt-5-nano"
+    requested_model = os.getenv("BROOD_DESCRIBE_MODEL") or os.getenv("OPENAI_DESCRIBE_MODEL") or "gpt-5-nano"
     image_bytes, mime = _prepare_vision_image(reference_path)
     data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode('ascii')}"
 
-    base_payload: dict[str, Any] = {
-        "model": model,
-        "input": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": _description_instruction(max_chars)},
-                    {"type": "input_image", "image_url": data_url},
-                ],
-            }
-        ],
-        "max_output_tokens": 60,
-    }
     endpoint = f"{_openai_api_base()}/responses"
-    try:
+
+    models_to_try = [requested_model]
+    # Robustness: if the requested model is unavailable/unsupported, fall back to a known vision-capable model.
+    if requested_model != "gpt-4o-mini":
+        models_to_try.append("gpt-4o-mini")
+
+    for model in models_to_try:
+        base_payload: dict[str, Any] = {
+            "model": model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": _description_instruction(max_chars)},
+                        {"type": "input_image", "image_url": data_url},
+                    ],
+                }
+            ],
+            # Note: some reasoning-capable models spend tokens on hidden reasoning. Keep this
+            # relatively high so we still get a short visible label.
+            "max_output_tokens": 120,
+        }
+
         # Prefer fast/short responses; if the API doesn't accept these fields, fall back to a minimal payload.
+        payload_variants: list[dict[str, Any]] = []
         payload = dict(base_payload)
         payload["text"] = {"format": {"type": "text"}, "verbosity": "low"}
-        payload["reasoning"] = {"effort": "low", "summary": "auto"}
-        _, response = _post_openai_json(endpoint, payload, api_key, timeout_s=22.0)
-    except Exception:
-        try:
-            _, response = _post_openai_json(endpoint, base_payload, api_key, timeout_s=22.0)
-        except Exception:
-            return None
-    text = _extract_openai_output_text(response)
-    cleaned = _clean_description(text, max_chars=max_chars)
-    if not cleaned:
-        return None
-    return DescriptionInference(description=cleaned, source="openai_vision", model=model)
+        # gpt-5-nano tends to consume output tokens on reasoning; "minimal" helps avoid truncation.
+        payload["reasoning"] = {"effort": "minimal", "summary": "auto"}
+        payload_variants.append(payload)
+        payload_variants.append(base_payload)
+
+        for candidate in payload_variants:
+            try:
+                _, response = _post_openai_json(endpoint, candidate, api_key, timeout_s=22.0)
+            except Exception:
+                continue
+            text = _extract_openai_output_text(response)
+            cleaned = _clean_description(text, max_chars=max_chars)
+            if cleaned:
+                return DescriptionInference(description=cleaned, source="openai_vision", model=model)
+
+            incomplete = response.get("incomplete_details")
+            if isinstance(incomplete, dict) and incomplete.get("reason") == "max_output_tokens":
+                # Retry once with a larger token budget; if it still can't produce a label, fall back.
+                try:
+                    retry = dict(candidate)
+                    retry["max_output_tokens"] = max(int(candidate.get("max_output_tokens", 0)) * 2, 240)
+                    _, retry_resp = _post_openai_json(endpoint, retry, api_key, timeout_s=22.0)
+                    text = _extract_openai_output_text(retry_resp)
+                    cleaned = _clean_description(text, max_chars=max_chars)
+                    if cleaned:
+                        return DescriptionInference(description=cleaned, source="openai_vision", model=model)
+                except Exception:
+                    pass
+
+    return None
 
 
 def _post_openai_json(

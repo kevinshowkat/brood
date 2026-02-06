@@ -77,6 +77,7 @@ const state = {
   runDir: null,
   eventsPath: null,
   ptySpawned: false,
+  ptySpawning: false,
   poller: null,
   pollInFlight: false,
   eventsByteOffset: 0,
@@ -2580,14 +2581,54 @@ async function loadExistingArtifacts() {
 
 async function spawnEngine() {
   if (!state.runDir || !state.eventsPath) return;
+  if (state.ptySpawning) return;
+  state.ptySpawning = true;
   setStatus("Engine: starting…");
+  state.ptySpawned = false;
+  const env = { BROOD_MEMORY: settings.memory ? "1" : "0" };
+  const broodArgs = ["chat", "--out", state.runDir, "--events", state.eventsPath];
   try {
-    await invoke("spawn_pty", {
-      command: "brood",
-      args: ["chat", "--out", state.runDir, "--events", state.eventsPath],
-      cwd: state.runDir,
-      env: { BROOD_MEMORY: settings.memory ? "1" : "0" },
-    });
+    let spawned = false;
+    let lastErr = null;
+
+    // In dev, prefer running the engine directly from the repo so the desktop always
+    // matches local engine changes (no need for `pip install -e .`).
+    let repoRoot = null;
+    try {
+      repoRoot = await invoke("get_repo_root");
+    } catch (_) {
+      repoRoot = null;
+    }
+
+    if (repoRoot) {
+      for (const py of ["python", "python3"]) {
+        try {
+          await invoke("spawn_pty", {
+            command: py,
+            args: ["-m", "brood_engine.cli", ...broodArgs],
+            cwd: repoRoot,
+            env,
+          });
+          spawned = true;
+          break;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+    }
+
+    // Fallback: use the installed CLI entrypoint.
+    if (!spawned) {
+      try {
+        await invoke("spawn_pty", { command: "brood", args: broodArgs, cwd: state.runDir, env });
+        spawned = true;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+
+    if (!spawned) throw lastErr;
+
     state.ptySpawned = true;
     await invoke("write_pty", { data: `/text_model ${settings.textModel}\n` }).catch(() => {});
     await invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
@@ -2600,6 +2641,8 @@ async function spawnEngine() {
   } catch (err) {
     console.error(err);
     setStatus(`Engine: failed (${err?.message || err})`, true);
+  } finally {
+    state.ptySpawning = false;
   }
 }
 
