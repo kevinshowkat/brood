@@ -112,9 +112,10 @@ def _caption_instruction() -> str:
 def _description_instruction(max_chars: int) -> str:
     # The output should be HUD-short, not a paragraph.
     return (
-        f"Write a short HUD label describing the attached image in 3-6 words (<= {max_chars} characters). "
-        "Focus on the main subject and one key attribute (material, color, category, or action). "
+        f"Write a short label for the attached image in 3-6 words (<= {max_chars} characters). "
+        "Name the main thing and one key attribute (material, color, category, or action). "
         "No punctuation. No quotes. No branding. Do not copy text that appears in the image. "
+        "Avoid generic filler words like image, photo, screenshot, label, subject. "
         "Output ONLY the label."
     )
 
@@ -160,6 +161,27 @@ def _clean_caption(text: str) -> str:
     return cleaned
 
 
+def _strip_generic_description_words(text: str) -> str:
+    """Remove generic filler words that tend to make HUD labels noisy."""
+    stop = {
+        "image",
+        "photo",
+        "screenshot",
+        "label",
+        "subject",
+        "hud",
+        # Repo/app name; the instruction explicitly says "No branding".
+        "brood",
+    }
+    words = [w for w in str(text or "").split() if w]
+    kept: list[str] = []
+    for w in words:
+        if w.lower() in stop:
+            continue
+        kept.append(w)
+    return " ".join(kept).strip()
+
+
 def _clean_description(text: str, *, max_chars: int) -> str:
     cleaned = " ".join(str(text or "").split()).strip()
     if cleaned.lower().startswith(("description:", "label:", "caption:")) and ":" in cleaned:
@@ -169,6 +191,9 @@ def _clean_description(text: str, *, max_chars: int) -> str:
     # Keep it HUD-short (and model-proof against punctuation-y answers).
     cleaned = cleaned.replace(".", " ").replace(",", " ").replace(":", " ").replace(";", " ")
     cleaned = " ".join(cleaned.split()).strip()
+    stripped = _strip_generic_description_words(cleaned)
+    if stripped:
+        cleaned = stripped
     if len(cleaned) > max_chars:
         clipped = cleaned[: max_chars + 1].strip()
         if " " in clipped:
