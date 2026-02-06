@@ -28,6 +28,13 @@ class PromptInference:
     model: str | None = None
 
 
+@dataclass(frozen=True)
+class DescriptionInference:
+    description: str
+    source: str
+    model: str | None = None
+
+
 def infer_prompt(reference_path: Path) -> PromptInference:
     try:
         with Image.open(reference_path) as image:
@@ -47,6 +54,20 @@ def infer_prompt(reference_path: Path) -> PromptInference:
         source="fallback",
         model=None,
     )
+
+
+def infer_description(reference_path: Path, *, max_chars: int = 48) -> DescriptionInference | None:
+    """Return a short vision description for HUD readouts (not a generation prompt)."""
+    max_chars = int(max(12, min(max_chars, 120)))
+    # Prefer OpenAI when available (no extra deps).
+    openai = _describe_with_openai(reference_path, max_chars=max_chars)
+    if openai is not None:
+        return openai
+    # Fall back to Gemini if the optional dependency is installed.
+    gemini = _describe_with_gemini(reference_path, max_chars=max_chars)
+    if gemini is not None:
+        return gemini
+    return None
 
 
 def _extract_prompt_from_metadata(raw: str) -> str:
@@ -85,6 +106,16 @@ def _caption_instruction() -> str:
         "Include subject, environment, composition, perspective/camera, lighting, color palette, and style/medium. "
         "Do not mention that you are looking at an image or screenshot. Do not include commentary or formatting. "
         "Output only the prompt."
+    )
+
+
+def _description_instruction(max_chars: int) -> str:
+    # The output should be HUD-short, not a paragraph.
+    return (
+        f"Write a short HUD label describing the attached image in 3-6 words (<= {max_chars} characters). "
+        "Focus on the main subject and one key attribute (material, color, category, or action). "
+        "No punctuation. No quotes. No branding. Do not copy text that appears in the image. "
+        "Output ONLY the label."
     )
 
 
@@ -129,6 +160,23 @@ def _clean_caption(text: str) -> str:
     return cleaned
 
 
+def _clean_description(text: str, *, max_chars: int) -> str:
+    cleaned = " ".join(str(text or "").split()).strip()
+    if cleaned.lower().startswith(("description:", "label:", "caption:")) and ":" in cleaned:
+        cleaned = cleaned.split(":", 1)[1].strip()
+    if cleaned.startswith(("\"", "'")) and cleaned.endswith(("\"", "'")) and len(cleaned) >= 2:
+        cleaned = cleaned[1:-1].strip()
+    # Keep it HUD-short (and model-proof against punctuation-y answers).
+    cleaned = cleaned.replace(".", " ").replace(",", " ").replace(":", " ").replace(";", " ")
+    cleaned = " ".join(cleaned.split()).strip()
+    if len(cleaned) > max_chars:
+        clipped = cleaned[: max_chars + 1].strip()
+        if " " in clipped:
+            clipped = clipped.rsplit(" ", 1)[0].strip()
+        cleaned = clipped[:max_chars].strip()
+    return cleaned
+
+
 def _openai_api_key() -> str | None:
     return os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY_BACKUP")
 
@@ -168,6 +216,39 @@ def _caption_with_openai(reference_path: Path) -> PromptInference | None:
     if not cleaned:
         return None
     return PromptInference(prompt=cleaned, source="openai_vision", model=model)
+
+
+def _describe_with_openai(reference_path: Path, *, max_chars: int) -> DescriptionInference | None:
+    api_key = _openai_api_key()
+    if not api_key:
+        return None
+    model = os.getenv("BROOD_DESCRIBE_MODEL") or os.getenv("OPENAI_DESCRIBE_MODEL") or "gpt-4o-mini"
+    image_bytes, mime = _prepare_vision_image(reference_path)
+    data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": _description_instruction(max_chars)},
+                    {"type": "input_image", "image_url": data_url},
+                ],
+            }
+        ],
+        "max_output_tokens": 60,
+    }
+    endpoint = f"{_openai_api_base()}/responses"
+    try:
+        _, response = _post_openai_json(endpoint, payload, api_key, timeout_s=22.0)
+    except Exception:
+        return None
+    text = _extract_openai_output_text(response)
+    cleaned = _clean_description(text, max_chars=max_chars)
+    if not cleaned:
+        return None
+    return DescriptionInference(description=cleaned, source="openai_vision", model=model)
 
 
 def _post_openai_json(
@@ -276,5 +357,50 @@ def _caption_with_gemini(reference_path: Path) -> PromptInference | None:
                 cleaned = _clean_caption(chunk)
                 if cleaned:
                     return PromptInference(prompt=cleaned, source="gemini_vision", model=model)
+
+    return None
+
+
+def _describe_with_gemini(reference_path: Path, *, max_chars: int) -> DescriptionInference | None:
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return None
+    try:
+        from google import genai  # type: ignore
+        from google.genai import types  # type: ignore
+    except Exception:
+        return None
+
+    model = os.getenv("BROOD_GEMINI_DESCRIBE_MODEL") or os.getenv("BROOD_GEMINI_CAPTION_MODEL") or "gemini-3-pro-preview"
+    image_bytes, mime = _prepare_vision_image(reference_path)
+    instruction = _description_instruction(max_chars)
+
+    try:
+        client = genai.Client(api_key=api_key)
+        chat = client.chats.create(model=model)
+        parts = [
+            types.Part(inline_data=types.Blob(data=image_bytes, mime_type=mime)),
+            types.Part(text=instruction),
+        ]
+        response = chat.send_message(parts)
+    except Exception:
+        return None
+
+    text = getattr(response, "text", None)
+    if isinstance(text, str) and text.strip():
+        cleaned = _clean_description(text, max_chars=max_chars)
+        if cleaned:
+            return DescriptionInference(description=cleaned, source="gemini_vision", model=model)
+
+    candidates = getattr(response, "candidates", []) or []
+    for candidate in candidates:
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) or getattr(candidate, "parts", None) or []
+        for part in parts:
+            chunk = getattr(part, "text", None)
+            if isinstance(chunk, str) and chunk.strip():
+                cleaned = _clean_description(chunk, max_chars=max_chars)
+                if cleaned:
+                    return DescriptionInference(description=cleaned, source="gemini_vision", model=model)
 
     return None

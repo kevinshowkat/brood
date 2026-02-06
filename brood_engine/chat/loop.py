@@ -25,6 +25,7 @@ from ..utils import (
     has_flux_key,
     is_flux_model,
 )
+from ..recreate.caption import infer_description
 
 
 def _maybe_warn_missing_flux_key(model: str | None) -> None:
@@ -67,7 +68,7 @@ class ChatLoop:
                 if intent.action == "help":
                     print(
                         "Commands: /profile /text_model /image_model /fast /quality /cheaper "
-                        "/better /optimize /recreate /export"
+                        "/better /optimize /recreate /describe /use /export"
                     )
                 continue
             if intent.action == "set_profile":
@@ -90,6 +91,41 @@ class ChatLoop:
                     continue
                 self.last_artifact_path = str(path)
                 print(f"Active image set to {self.last_artifact_path}")
+                continue
+            if intent.action == "describe":
+                raw_path = intent.command_args.get("path") or self.last_artifact_path
+                if not raw_path:
+                    print("/describe requires a path (or set an active image with /use)")
+                    continue
+                path = Path(str(raw_path))
+                if not path.exists():
+                    print(f"Describe failed: file not found ({path})")
+                    continue
+                # Keep it short for the HUD.
+                max_chars = 32
+                inference = None
+                try:
+                    inference = infer_description(path, max_chars=max_chars)
+                except Exception:
+                    inference = None
+                if inference is None or not inference.description:
+                    print("Describe unavailable (missing keys or vision client).")
+                    continue
+                self.engine.events.emit(
+                    "image_description",
+                    image_path=str(path),
+                    description=inference.description,
+                    source=inference.source,
+                    model=inference.model,
+                    max_chars=max_chars,
+                )
+                meta = []
+                if inference.source:
+                    meta.append(str(inference.source))
+                if inference.model:
+                    meta.append(str(inference.model))
+                suffix = f" ({', '.join(meta)})" if meta else ""
+                print(f"Description{suffix}: {inference.description}")
                 continue
             if intent.action == "set_quality":
                 self.state.quality_preset = intent.settings_update.get("quality_preset")
