@@ -192,7 +192,7 @@ button.ghost:hover {
 .workspace {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 520px;
+  grid-template-columns: 1fr 420px;
   gap: 12px;
   padding: 12px;
   overflow: hidden;
@@ -224,7 +224,7 @@ button.ghost:hover {
 .command-card {
   width: 100%;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -1113,6 +1113,37 @@ button.ghost:hover {
   white-space: pre-line;
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
+}
+
+.designate-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.designate-actions button {
+  width: 100%;
+  background: rgba(18, 26, 37, 0.85);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.designate-actions button:hover {
+  border-color: rgba(255, 179, 0, 0.8);
+}
+
+.designate-list {
+  margin-top: 10px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-line;
 }
 
 .panel-body.actions {
