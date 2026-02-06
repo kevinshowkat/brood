@@ -181,44 +181,46 @@
           <div id="filmstrip" class="filmstrip" aria-label="Filmstrip"></div>
         </section>
         <aside class="inspector" aria-label="Inspector">
-          <div class="panel">
-            <div class="panel-title">Selection</div>
-            <div id="selection-meta" class="panel-body muted">No image selected.</div>
-          </div>
-          <div class="panel">
-            <div class="panel-title">Quick Actions</div>
-            <div class="panel-body actions">
-              <button id="action-bg-white" type="button">Background: White</button>
-              <button id="action-bg-sweep" type="button">Background: Sweep</button>
-              <button id="action-crop-square" type="button">Crop: Square</button>
-              <button id="action-variations" type="button">Variations</button>
+          <div class="inspector-scroll">
+            <div class="panel">
+              <div class="panel-title">Selection</div>
+              <div id="selection-meta" class="panel-body muted panel-readout">No image selected.</div>
             </div>
-          </div>
-          <div class="panel">
-            <div class="panel-title">Tips</div>
-            <div id="tips-text" class="panel-body muted">
-              Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
-            </div>
-          </div>
-          <div class="panel">
-            <div class="panel-title">Portrait</div>
-            <div id="portrait-dock" class="panel-body portrait-dock hidden">
-              <div class="portrait-frame">
-                <div id="portrait-avatar" class="portrait-avatar" aria-hidden="true">
-                  <video
-                    id="portrait-video"
-                    class="portrait-video hidden"
-                    muted
-                    loop
-                    autoplay
-                    playsinline
-                    preload="auto"
-                  ></video>
-                </div>
+            <div class="panel">
+              <div class="panel-title">Quick Actions</div>
+              <div class="panel-body actions">
+                <button id="action-bg-white" type="button">Background: White</button>
+                <button id="action-bg-sweep" type="button">Background: Sweep</button>
+                <button id="action-crop-square" type="button">Crop: Square</button>
+                <button id="action-variations" type="button">Variations</button>
               </div>
-              <div class="portrait-readout">
-                <div id="portrait-title" class="portrait-title">Model</div>
-                <div id="portrait-sub" class="portrait-sub muted">Idle</div>
+            </div>
+            <div class="panel">
+              <div class="panel-title">Tips</div>
+              <div id="tips-text" class="panel-body muted panel-readout">
+                Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-title">Portrait</div>
+              <div id="portrait-dock" class="panel-body portrait-dock hidden">
+                <div class="portrait-readout">
+                  <div id="portrait-title" class="portrait-title">Model</div>
+                  <div id="portrait-sub" class="portrait-sub muted">Idle</div>
+                </div>
+                <div class="portrait-frame">
+                  <div id="portrait-avatar" class="portrait-avatar" aria-hidden="true">
+                    <video
+                      id="portrait-video"
+                      class="portrait-video hidden"
+                      muted
+                      loop
+                      autoplay
+                      playsinline
+                      preload="auto"
+                    ></video>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
