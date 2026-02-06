@@ -8,6 +8,8 @@
   --panel-3: #182232;
   --accent: #ffb300;
   --accent-2: #64d2ff;
+  --sc-yellow: #ffd400;
+  --sc-yellow-dim: rgba(255, 212, 0, 0.74);
   --larva-pink: rgba(255, 94, 190, 1);
   --larva-pink-2: rgba(255, 132, 214, 1);
   --larva-magenta: rgba(197, 107, 255, 1);
@@ -39,6 +41,18 @@ body {
 
 .hidden {
   display: none !important;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .muted {
@@ -200,19 +214,43 @@ button.ghost:hover {
 .tool {
   width: 100%;
   border: 1px solid var(--border);
-  background: rgba(18, 26, 37, 0.9);
-  color: var(--muted);
+  background:
+    linear-gradient(180deg, rgba(10, 14, 20, 0.92), rgba(6, 8, 12, 0.92));
+  color: var(--sc-yellow-dim);
   border-radius: 12px;
-  padding: 10px 8px;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 12px;
+  padding: 0;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 10px 22px rgba(0, 0, 0, 0.35);
+}
+
+.tool:hover {
+  border-color: rgba(255, 212, 0, 0.65);
+  color: var(--sc-yellow);
 }
 
 .tool.selected {
-  border-color: rgba(255, 179, 0, 0.85);
-  color: var(--text);
-  background: rgba(255, 179, 0, 0.1);
+  border-color: rgba(255, 212, 0, 0.92);
+  color: var(--sc-yellow);
+  background:
+    radial-gradient(40px 40px at 35% 30%, rgba(255, 212, 0, 0.16), transparent 60%),
+    linear-gradient(180deg, rgba(10, 14, 20, 0.92), rgba(6, 8, 12, 0.92));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 212, 0, 0.12),
+    0 10px 22px rgba(0, 0, 0, 0.35),
+    0 0 0 2px rgba(255, 212, 0, 0.08);
+}
+
+.tool-icon {
+  width: 28px;
+  height: 28px;
+  display: block;
+  filter: drop-shadow(0 0 10px rgba(255, 212, 0, 0.12));
 }
 
 .tool.pulse {
@@ -726,10 +764,50 @@ button.ghost:hover {
 .portrait-avatar {
   width: 100%;
   height: 100%;
+  position: relative;
   background:
     radial-gradient(80px 80px at 30% 25%, rgba(255, 255, 255, 0.18), transparent 60%),
     radial-gradient(120px 120px at 70% 75%, rgba(100, 210, 255, 0.18), transparent 55%),
     linear-gradient(135deg, rgba(18, 26, 37, 0.95), rgba(9, 12, 16, 0.9));
+}
+
+.portrait-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 1;
+  transform: scale(1.02);
+  filter: saturate(1.06) contrast(1.04);
+}
+
+.portrait-avatar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 60%, transparent 0%, rgba(0, 0, 0, 0.38) 72%, rgba(0, 0, 0, 0.62) 100%);
+  opacity: 0.55;
+}
+
+.portrait-avatar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.0) 0px,
+      rgba(255, 255, 255, 0.0) 2px,
+      rgba(255, 255, 255, 0.05) 3px
+    );
+  opacity: 0.18;
+  mix-blend-mode: overlay;
 }
 
 .portrait-avatar[data-provider="gemini"] {
