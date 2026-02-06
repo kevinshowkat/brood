@@ -2462,6 +2462,7 @@ async function boot() {
   setStatus("Engine: booting…");
   setRunInfo("No run");
   refreshKeyStatus().catch(() => {});
+  ensurePortraitIndex().catch(() => {});
   showDropHint(true);
   renderSelectionMeta();
   chooseSpawnNodes();
