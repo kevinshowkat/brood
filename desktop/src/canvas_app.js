@@ -428,37 +428,64 @@ async function writeLocalReceipt({ artifactId, imagePath, operation, meta = {} }
 
 async function importPhotos() {
   bumpInteraction();
-  const picked = await open({ multiple: true });
-  if (!picked || picked.length === 0) return;
+  setStatus("Engine: pick photos…");
+  const picked = await open({
+    multiple: true,
+    filters: [
+      { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "heic"] },
+    ],
+  });
+  const pickedPaths = Array.isArray(picked) ? picked : picked ? [picked] : [];
+  if (pickedPaths.length === 0) {
+    setStatus("Engine: ready");
+    return;
+  }
   await ensureRun();
   const inputsDir = `${state.runDir}/inputs`;
   await createDir(inputsDir, { recursive: true }).catch(() => {});
   const stamp = Date.now();
-  for (let idx = 0; idx < picked.length; idx += 1) {
-    const src = picked[idx];
-    const ext = extname(src);
-    const safeExt = ext && ext.length <= 8 ? ext : ".png";
-    const artifactId = `input-${stamp}-${String(idx).padStart(2, "0")}`;
-    const dest = `${inputsDir}/${artifactId}${safeExt}`;
-    await copyFile(src, dest);
-    const receiptPath = await writeLocalReceipt({
-      artifactId,
-      imagePath: dest,
-      operation: "import",
-      meta: { source_path: src },
-    });
-    addImage(
-      {
-        id: artifactId,
-        kind: "import",
-        path: dest,
-        receiptPath,
-        label: basename(src),
-      },
-      { select: idx === 0 && !state.activeId }
-    );
+  let ok = 0;
+  let failed = 0;
+  let lastErr = null;
+  for (let idx = 0; idx < pickedPaths.length; idx += 1) {
+    const src = pickedPaths[idx];
+    if (typeof src !== "string" || !src) continue;
+    try {
+      const ext = extname(src);
+      const safeExt = ext && ext.length <= 8 ? ext : ".png";
+      const artifactId = `input-${stamp}-${String(idx).padStart(2, "0")}`;
+      const dest = `${inputsDir}/${artifactId}${safeExt}`;
+      await copyFile(src, dest);
+      const receiptPath = await writeLocalReceipt({
+        artifactId,
+        imagePath: dest,
+        operation: "import",
+        meta: { source_path: src },
+      });
+      addImage(
+        {
+          id: artifactId,
+          kind: "import",
+          path: dest,
+          receiptPath,
+          label: basename(src),
+        },
+        { select: ok === 0 && !state.activeId }
+      );
+      ok += 1;
+    } catch (err) {
+      failed += 1;
+      lastErr = err;
+      console.error("Import failed:", src, err);
+    }
   }
-  setStatus(`Engine: imported ${picked.length} photo${picked.length === 1 ? "" : "s"}`);
+  if (ok > 0) {
+    const suffix = failed ? ` (${failed} failed)` : "";
+    setStatus(`Engine: imported ${ok} photo${ok === 1 ? "" : "s"}${suffix}`, failed > 0);
+  } else {
+    const msg = lastErr?.message || String(lastErr || "unknown error");
+    setStatus(`Engine: import failed (${msg})`, true);
+  }
 }
 
 async function cropSquare() {
