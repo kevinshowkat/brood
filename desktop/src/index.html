@@ -14,7 +14,6 @@
       <header class="topbar">
         <div class="brand">
           <img src="./assets/logo.jpeg" alt="Brood" />
-          <div class="brand-title">Brood</div>
         </div>
         <div class="topbar-center">
           <div id="run-info">No run</div>
@@ -46,11 +45,16 @@
         <section class="stage" aria-label="Canvas">
           <div id="canvas-wrap" class="canvas-wrap">
             <div id="drop-hint" class="drop-hint">
-              Drop images here or click <span class="kbd">Import Photos</span>.
+              <div class="drop-hint-inner">
+                <div class="drop-hint-title">Drop images here</div>
+                <div class="drop-hint-sub">or</div>
+                <button id="canvas-import" class="drop-hint-button" type="button">Import Photos</button>
+              </div>
             </div>
             <canvas id="work-canvas"></canvas>
             <canvas id="overlay-canvas"></canvas>
-            <div id="larvae" class="larvae" aria-live="polite"></div>
+            <div id="spawnbar" class="spawnbar" aria-live="polite"></div>
+            <div id="toast" class="toast hidden" aria-live="polite"></div>
           </div>
           <div id="filmstrip" class="filmstrip" aria-label="Filmstrip"></div>
         </section>
@@ -70,8 +74,20 @@
           </div>
           <div class="panel">
             <div class="panel-title">Tips</div>
-            <div class="panel-body muted">
-              Use <span class="kbd">Lasso</span> to circle your product, then run <span class="kbd">Background</span>.
+            <div id="tips-text" class="panel-body muted">
+              Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">Portrait</div>
+            <div id="portrait-dock" class="panel-body portrait-dock hidden">
+              <div class="portrait-frame">
+                <div id="portrait-avatar" class="portrait-avatar" aria-hidden="true"></div>
+              </div>
+              <div class="portrait-readout">
+                <div id="portrait-title" class="portrait-title">Model</div>
+                <div id="portrait-sub" class="portrait-sub muted">Idle</div>
+              </div>
             </div>
           </div>
         </aside>
@@ -114,6 +130,10 @@
               <option value="gpt-image-1">gpt-image-1</option>
             </select>
           </label>
+          <div class="key-status-card">
+            <div class="key-status-title">API Keys</div>
+            <div id="key-status" class="key-status-list muted">Detecting local keys…</div>
+          </div>
           <div class="drawer-footnote muted">
             For image-to-image edits and recreate, prefer a model that accepts image inputs (Gemini).
           </div>

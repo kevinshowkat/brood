@@ -135,6 +135,14 @@ def _handle_chat(args: argparse.Namespace) -> int:
             print(f"Image model set to {engine.image_model}")
             _maybe_warn_missing_flux_key(engine.image_model)
             continue
+        if intent.action == "set_active_image":
+            path = intent.command_args.get("path")
+            if not path:
+                print("/use requires a path")
+                continue
+            last_artifact_path = str(path)
+            print(f"Active image set to {last_artifact_path}")
+            continue
         if intent.action == "set_quality":
             state["quality_preset"] = intent.settings_update.get("quality_preset")
             print(f"Quality preset: {state['quality_preset']}")
