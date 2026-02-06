@@ -36,6 +36,10 @@ body {
   display: none;
 }
 
+.hidden {
+  display: none;
+}
+
 #app {
   display: flex;
   flex-direction: column;
@@ -73,6 +77,12 @@ body {
   cursor: pointer;
 }
 
+.controls {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
 .controls select {
   margin-left: 8px;
   background: var(--panel-2);
@@ -94,6 +104,296 @@ body {
 
 .controls button:hover {
   border-color: var(--accent);
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 9, 13, 0.7);
+  backdrop-filter: blur(2px);
+  z-index: 0;
+}
+
+.modal-card {
+  position: relative;
+  width: min(640px, 92vw);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 24px 50px rgba(0, 0, 0, 0.45);
+  z-index: 1;
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.modal-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.modal-close {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-family: "IBM Plex Mono", monospace;
+  cursor: pointer;
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal-footer {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+}
+
+.modal-footer-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-self: end;
+}
+
+.modal-primary,
+.modal-secondary {
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-family: "IBM Plex Mono", monospace;
+  cursor: pointer;
+}
+
+.modal-primary {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #101319;
+}
+
+.modal-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.modal-secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.aesthetic-picker {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.aesthetic-picker button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-family: "IBM Plex Mono", monospace;
+  cursor: pointer;
+}
+
+.aesthetic-format-hint {
+  width: 100%;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.aesthetic-selection {
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: rgba(18, 26, 37, 0.6);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aesthetic-selection-title {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.aesthetic-selection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.aesthetic-selection-item {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aesthetic-replace-note {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.aesthetic-step {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.aesthetic-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(18, 26, 37, 0.5);
+}
+
+.aesthetic-progress-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.aesthetic-progress-status {
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--text);
+}
+
+.aesthetic-progress-status[data-status="working"] {
+  color: var(--accent-2);
+}
+
+.aesthetic-progress-status[data-status="done"] {
+  color: var(--accent);
+}
+
+.aesthetic-progress-status[data-status="error"] {
+  color: #ff8f8f;
+}
+
+.aesthetic-summary {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+.wizard-steps {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+}
+
+.wizard-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.wizard-dot.active {
+  background: var(--accent);
+}
+
+.aesthetic-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-left: 8px;
+  gap: 2px;
+}
+
+.aesthetic-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.aesthetic-actions button {
+  margin-left: 0;
+}
+
+.aesthetic-count {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.aesthetic-help {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.aesthetic-warning {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.aesthetic-warning.hidden {
+  display: none;
+}
+
+.aesthetic-clear {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+.aesthetic-clear:hover {
+  border-color: var(--accent-2);
+  color: var(--text);
 }
 
 .layout {

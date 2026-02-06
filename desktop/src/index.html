@@ -46,6 +46,17 @@
           <button id="open-run">Open Run</button>
           <button id="upload">Upload</button>
           <button id="export">Export</button>
+          <div class="aesthetic-control">
+            <div class="aesthetic-actions">
+              <button id="build-aesthetic">Build aesthetic</button>
+              <button id="clear-aesthetic" class="aesthetic-clear">Clear</button>
+              <div id="aesthetic-count" class="aesthetic-count">Aesthetic: 0 images</div>
+            </div>
+            <div class="aesthetic-help">
+              <span class="aesthetic-helper">Use 10-20 brand reference images.</span>
+              <span id="aesthetic-warning" class="aesthetic-warning hidden"></span>
+            </div>
+          </div>
         </div>
       </header>
       <main class="layout">
@@ -97,6 +108,62 @@
           <div id="detail" class="detail"></div>
         </section>
       </main>
+      <div id="aesthetic-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="aesthetic-title">
+        <div class="modal-backdrop" data-close="true"></div>
+        <div class="modal-card">
+          <div class="modal-header">
+            <div>
+              <div id="aesthetic-title" class="modal-title">Build aesthetic</div>
+              <div class="modal-subtitle">Use 10-20 brand reference images.</div>
+            </div>
+            <button id="aesthetic-close" class="modal-close" type="button">Close</button>
+          </div>
+          <div class="modal-body">
+            <div id="aesthetic-step-select" class="aesthetic-step">
+              <div class="aesthetic-picker">
+                <button id="aesthetic-pick-folder" type="button">Select folder</button>
+                <button id="aesthetic-pick-files" type="button">Select files</button>
+                <div class="aesthetic-format-hint">PNG/JPG/JPEG/WEBP/HEIC. Folder scan is non-recursive.</div>
+              </div>
+              <div id="aesthetic-selection" class="aesthetic-selection hidden">
+                <div id="aesthetic-selection-title" class="aesthetic-selection-title"></div>
+                <div id="aesthetic-selection-warning" class="aesthetic-warning hidden"></div>
+                <div id="aesthetic-selection-list" class="aesthetic-selection-list"></div>
+              </div>
+            </div>
+            <div id="aesthetic-step-summary" class="aesthetic-step hidden">
+              <div class="aesthetic-progress">
+                <div class="aesthetic-progress-row">
+                  <div class="aesthetic-progress-label">Copy images into run/aesthetic</div>
+                  <div id="aesthetic-progress-images" class="aesthetic-progress-status">Pending</div>
+                </div>
+                <div class="aesthetic-progress-row">
+                  <div class="aesthetic-progress-label">Create annotations placeholders</div>
+                  <div id="aesthetic-progress-annotations" class="aesthetic-progress-status">Pending</div>
+                </div>
+                <div class="aesthetic-progress-row">
+                  <div class="aesthetic-progress-label">Update run.json metadata</div>
+                  <div id="aesthetic-progress-meta" class="aesthetic-progress-status">Pending</div>
+                </div>
+              </div>
+              <div id="aesthetic-summary" class="aesthetic-summary"></div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <div id="aesthetic-replace-note" class="aesthetic-replace-note hidden"></div>
+            <div class="wizard-steps" aria-hidden="true">
+              <span class="wizard-dot" data-step="1"></span>
+              <span class="wizard-dot" data-step="2"></span>
+            </div>
+            <div class="modal-footer-actions">
+              <button id="aesthetic-back" class="modal-secondary hidden" type="button">Back</button>
+              <button id="aesthetic-cancel" class="modal-secondary" type="button">Cancel</button>
+              <button id="aesthetic-import" class="modal-primary" type="button" disabled>Import</button>
+              <button id="aesthetic-done" class="modal-primary hidden" type="button">Done</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
     <script type="module">
       window.__brood_booted = false;

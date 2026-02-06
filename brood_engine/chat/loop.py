@@ -257,7 +257,18 @@ class ChatLoop:
                 if not path:
                     print("/recreate requires a path")
                     continue
-                self.engine.recreate(Path(path), self._settings())
+                result = self.engine.recreate(Path(path), self._settings())
+                inferred = result.get("inferred_prompt") if isinstance(result, dict) else None
+                if isinstance(inferred, str) and inferred.strip():
+                    source = result.get("prompt_source") if isinstance(result, dict) else None
+                    model = result.get("caption_model") if isinstance(result, dict) else None
+                    suffix = []
+                    if source:
+                        suffix.append(str(source))
+                    if model:
+                        suffix.append(str(model))
+                    meta = f" ({', '.join(suffix)})" if suffix else ""
+                    print(f"Inferred prompt{meta}: {inferred.strip()}")
                 print("Recreate loop completed.")
                 continue
             if intent.action == "unknown":
