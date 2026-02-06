@@ -29,17 +29,114 @@
       </header>
       <main class="workspace">
         <aside class="toolrail" aria-label="Tools">
-          <button class="tool selected" type="button" data-tool="pan" title="Pan / Zoom">
-            Pan
+          <button class="tool selected" type="button" data-tool="pan" title="Pan / Zoom" aria-label="Pan / Zoom">
+            <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 3v6M12 21v-6M3 12h6M21 12h-6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="square"
+              />
+              <path
+                d="M12 3l-2 2M12 3l2 2M12 21l-2-2M12 21l2-2M3 12l2-2M3 12l2 2M21 12l-2-2M21 12l-2 2"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="square"
+              />
+            </svg>
+            <span class="sr-only">Pan</span>
           </button>
-          <button class="tool" type="button" data-tool="lasso" title="Lasso selection">
-            Lasso
+          <button class="tool" type="button" data-tool="lasso" title="Lasso selection" aria-label="Lasso selection">
+            <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <ellipse cx="12" cy="9.5" rx="6.5" ry="4.5" fill="none" stroke="currentColor" stroke-width="2" />
+              <path
+                d="M15 13.5c0.9 1.2 1.9 2.6 3.5 4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+              <path
+                d="M19.5 18l1.8 1.8"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+            <span class="sr-only">Lasso</span>
           </button>
-          <button class="tool" type="button" data-tool="bg" title="Background replace">
-            BG
+          <button class="tool" type="button" data-tool="bg" title="Background replace" aria-label="Background replace">
+            <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M6 7h10v4H6z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M16 9h2a2 2 0 0 1 2 2v1"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+              <path
+                d="M8 11v7h4v-4h3"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span class="sr-only">Background</span>
           </button>
-          <button class="tool" type="button" data-tool="variations" title="Zero-prompt variations">
-            Var
+          <button
+            class="tool"
+            type="button"
+            data-tool="variations"
+            title="Zero-prompt variations"
+            aria-label="Zero-prompt variations"
+          >
+            <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M4 7h4l8 10h4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M20 17l-2-2 2-2"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M4 17h4l2.5-3"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M20 7l-2 2 2 2"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span class="sr-only">Variations</span>
           </button>
         </aside>
         <section class="stage" aria-label="Canvas">
@@ -52,7 +149,32 @@
               </div>
             </div>
             <canvas id="work-canvas"></canvas>
+            <div id="image-fx" class="image-fx hidden" aria-hidden="true"></div>
             <canvas id="overlay-canvas"></canvas>
+            <div id="hud" class="hud hidden" aria-label="Selected Unit">
+              <div class="hud-shell">
+                <div class="hud-screen" aria-hidden="true">
+                  <div class="hud-readout">
+                    <div class="hud-line">
+                      <span class="hud-k">UNIT</span>
+                      <span id="hud-unit-name" class="hud-v"></span>
+                    </div>
+                    <div class="hud-line">
+                      <span class="hud-k">DESC</span>
+                      <span id="hud-unit-desc" class="hud-v hud-desc"></span>
+                    </div>
+                    <div class="hud-line">
+                      <span class="hud-k">SEL</span>
+                      <span id="hud-unit-sel" class="hud-v"></span>
+                    </div>
+                    <div class="hud-line">
+                      <span class="hud-k">STAT</span>
+                      <span id="hud-unit-stat" class="hud-v"></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
             <div id="spawnbar" class="spawnbar" aria-live="polite"></div>
             <div id="toast" class="toast hidden" aria-live="polite"></div>
           </div>
@@ -82,7 +204,17 @@
             <div class="panel-title">Portrait</div>
             <div id="portrait-dock" class="panel-body portrait-dock hidden">
               <div class="portrait-frame">
-                <div id="portrait-avatar" class="portrait-avatar" aria-hidden="true"></div>
+                <div id="portrait-avatar" class="portrait-avatar" aria-hidden="true">
+                  <video
+                    id="portrait-video"
+                    class="portrait-video hidden"
+                    muted
+                    loop
+                    autoplay
+                    playsinline
+                    preload="auto"
+                  ></video>
+                </div>
               </div>
               <div class="portrait-readout">
                 <div id="portrait-title" class="portrait-title">Model</div>
