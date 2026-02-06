@@ -215,6 +215,16 @@ fn create_run_dir() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+fn get_repo_root() -> Result<String, String> {
+    let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
+    if let Some(repo_root) = find_repo_root(&current_dir) {
+        Ok(repo_root.to_string_lossy().to_string())
+    } else {
+        Err("repo root not found".to_string())
+    }
+}
+
+#[tauri::command]
 fn export_run(run_dir: String, out_path: String) -> Result<(), String> {
     let status = std::process::Command::new("brood")
         .arg("export")
@@ -282,6 +292,7 @@ fn main() {
             write_pty,
             resize_pty,
             create_run_dir,
+            get_repo_root,
             export_run,
             get_key_status,
             read_file_since
