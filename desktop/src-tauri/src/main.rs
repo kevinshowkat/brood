@@ -48,6 +48,34 @@ fn parse_dotenv(path: &Path) -> HashMap<String, String> {
     vars
 }
 
+fn merge_dotenv_vars(target: &mut HashMap<String, String>, path: &Path) {
+    if !path.exists() {
+        return;
+    }
+    let vars = parse_dotenv(path);
+    for (key, value) in vars {
+        target.entry(key).or_insert(value);
+    }
+}
+
+fn collect_brood_env_snapshot() -> HashMap<String, String> {
+    let mut vars: HashMap<String, String> = std::env::vars().collect();
+
+    // Preferred location for persisted desktop keys/config.
+    if let Some(home) = tauri::api::path::home_dir() {
+        merge_dotenv_vars(&mut vars, &home.join(".brood").join(".env"));
+    }
+
+    // Repo-local .env is useful in development.
+    if let Ok(current_dir) = std::env::current_dir() {
+        if let Some(repo_root) = find_repo_root(&current_dir) {
+            merge_dotenv_vars(&mut vars, &repo_root.join(".env"));
+        }
+    }
+
+    vars
+}
+
 struct PtyState {
     writer: Option<Box<dyn Write + Send>>,
     child: Option<Box<dyn portable_pty::Child + Send>>,
@@ -96,14 +124,14 @@ fn spawn_pty(
         cmd.cwd(PathBuf::from(dir));
     }
     let mut merged_env = env.unwrap_or_default();
+    if let Some(home) = tauri::api::path::home_dir() {
+        merge_dotenv_vars(&mut merged_env, &home.join(".brood").join(".env"));
+    }
     if let Ok(current_dir) = std::env::current_dir() {
         if let Some(repo_root) = find_repo_root(&current_dir) {
             let env_path = repo_root.join(".env");
             if env_path.exists() {
-                let dotenv_vars = parse_dotenv(&env_path);
-                for (key, value) in dotenv_vars {
-                    merged_env.entry(key).or_insert(value);
-                }
+                merge_dotenv_vars(&mut merged_env, &env_path);
             }
         }
     }
@@ -204,6 +232,26 @@ fn export_run(run_dir: String, out_path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_key_status() -> Result<serde_json::Value, String> {
+    let vars = collect_brood_env_snapshot();
+    let openai = vars.contains_key("OPENAI_API_KEY") || vars.contains_key("OPENAI_API_KEY_BACKUP");
+    let gemini = vars.contains_key("GEMINI_API_KEY") || vars.contains_key("GOOGLE_API_KEY");
+    let flux = vars.contains_key("BFL_API_KEY") || vars.contains_key("FLUX_API_KEY");
+    let imagen = vars.contains_key("IMAGEN_API_KEY")
+        || vars.contains_key("GOOGLE_API_KEY")
+        || vars.contains_key("IMAGEN_VERTEX_PROJECT")
+        || vars.contains_key("GOOGLE_APPLICATION_CREDENTIALS");
+    let anthropic = vars.contains_key("ANTHROPIC_API_KEY");
+    Ok(serde_json::json!({
+        "openai": openai,
+        "gemini": gemini,
+        "imagen": imagen,
+        "flux": flux,
+        "anthropic": anthropic,
+    }))
+}
+
+#[tauri::command]
 fn read_file_since(path: String, offset: u64, max_bytes: Option<u64>) -> Result<serde_json::Value, String> {
     let limit = max_bytes.unwrap_or(1024 * 1024); // 1MB safety cap per poll
     let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
@@ -235,6 +283,7 @@ fn main() {
             resize_pty,
             create_run_dir,
             export_run,
+            get_key_status,
             read_file_since
         ])
         .run(tauri::generate_context!())

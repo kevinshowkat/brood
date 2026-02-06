@@ -1,4 +1,4 @@
-import { invoke, convertFileSrc } from "@tauri-apps/api/tauri";
+import { invoke } from "@tauri-apps/api/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/api/dialog";
 import {
@@ -18,6 +18,7 @@ const els = {
   newRun: document.getElementById("new-run"),
   openRun: document.getElementById("open-run"),
   import: document.getElementById("import"),
+  canvasImport: document.getElementById("canvas-import"),
   export: document.getElementById("export"),
   settingsToggle: document.getElementById("settings-toggle"),
   settingsDrawer: document.getElementById("settings-drawer"),
@@ -25,13 +26,20 @@ const els = {
   memoryToggle: document.getElementById("memory-toggle"),
   textModel: document.getElementById("text-model"),
   imageModel: document.getElementById("image-model"),
+  keyStatus: document.getElementById("key-status"),
   canvasWrap: document.getElementById("canvas-wrap"),
   dropHint: document.getElementById("drop-hint"),
   workCanvas: document.getElementById("work-canvas"),
   overlayCanvas: document.getElementById("overlay-canvas"),
   filmstrip: document.getElementById("filmstrip"),
-  larvae: document.getElementById("larvae"),
+  spawnbar: document.getElementById("spawnbar"),
+  toast: document.getElementById("toast"),
+  portraitDock: document.getElementById("portrait-dock"),
+  portraitTitle: document.getElementById("portrait-title"),
+  portraitSub: document.getElementById("portrait-sub"),
+  portraitAvatar: document.getElementById("portrait-avatar"),
   selectionMeta: document.getElementById("selection-meta"),
+  tipsText: document.getElementById("tips-text"),
   actionBgWhite: document.getElementById("action-bg-white"),
   actionBgSweep: document.getElementById("action-bg-sweep"),
   actionCropSquare: document.getElementById("action-crop-square"),
@@ -56,7 +64,7 @@ const state = {
   images: [],
   imagesById: new Map(),
   activeId: null,
-  imageCache: new Map(), // path -> Promise<HTMLImageElement>
+  imageCache: new Map(), // path -> { url: string|null, urlPromise: Promise<string>|null, imgPromise: Promise<HTMLImageElement>|null }
   view: {
     scale: 1,
     offsetX: 0,
@@ -76,17 +84,208 @@ const state = {
   lassoDraft: [],
   needsRender: false,
   lastInteractionAt: Date.now(),
-  larvae: [],
-  larvaeTimer: null,
+  spawnNodes: [],
+  spawnTimer: null,
   expectingArtifacts: false,
   lastRecreatePrompt: null,
   fallbackToFullRead: false,
+  keyStatus: null, // { openai, gemini, imagen, flux, anthropic }
+  portrait: {
+    provider: null,
+    title: "",
+    sub: "",
+    busy: false,
+  },
 };
+
+const DEFAULT_TIP = "Click Studio White to replace the background. Use L to lasso if you want a manual mask.";
+
+let thumbObserver = null;
+function ensureThumbObserver() {
+  if (thumbObserver) return;
+  if (!("IntersectionObserver" in window)) return;
+  thumbObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const imgEl = entry.target;
+        const path = imgEl?.dataset?.path;
+        if (!path) continue;
+        thumbObserver.unobserve(imgEl);
+        ensureImageUrl(path)
+          .then((url) => {
+            if (url) imgEl.src = url;
+          })
+          .catch(() => {});
+      }
+    },
+    { root: els.filmstrip || null, rootMargin: "220px" }
+  );
+}
+
+function getOrCreateImageCacheRecord(path) {
+  const existing = state.imageCache.get(path);
+  if (existing) return existing;
+  const rec = { url: null, urlPromise: null, imgPromise: null };
+  state.imageCache.set(path, rec);
+  return rec;
+}
+
+async function ensureImageUrl(path) {
+  if (!path) return null;
+  const rec = getOrCreateImageCacheRecord(path);
+  if (rec.url) return rec.url;
+  if (rec.urlPromise) return await rec.urlPromise;
+  rec.urlPromise = (async () => {
+    const data = await readBinaryFile(path);
+    const blob = new Blob([data], { type: mimeFromPath(path) });
+    const url = URL.createObjectURL(blob);
+    rec.url = url;
+    return url;
+  })();
+  try {
+    return await rec.urlPromise;
+  } catch (err) {
+    rec.urlPromise = null;
+    throw err;
+  }
+}
+
+function providerFromModel(model) {
+  const name = String(model || "").toLowerCase();
+  if (!name) return null;
+  if (name.startsWith("gemini")) return "gemini";
+  if (name.startsWith("imagen") || name.includes("imagen")) return "imagen";
+  if (name.startsWith("gpt-image") || name.startsWith("gptimage") || name.startsWith("openai")) return "openai";
+  if (name.startsWith("flux")) return "flux";
+  if (name.startsWith("sdxl")) return "sdxl";
+  if (name.startsWith("dryrun")) return "dryrun";
+  if (name.includes("claude")) return "anthropic";
+  if (name.includes("gpt-") || name.includes("o1")) return "openai";
+  return "unknown";
+}
+
+function providerDisplay(provider) {
+  if (!provider) return "Unknown";
+  if (provider === "openai") return "OpenAI";
+  if (provider === "gemini") return "Gemini";
+  if (provider === "imagen") return "Imagen";
+  if (provider === "flux") return "Flux";
+  if (provider === "anthropic") return "Anthropic";
+  if (provider === "sdxl") return "SDXL";
+  if (provider === "dryrun") return "Dryrun";
+  return String(provider);
+}
+
+function setPortrait({ title, sub, provider, busy, visible } = {}) {
+  if (!els.portraitDock) return;
+  if (typeof visible === "boolean") {
+    els.portraitDock.classList.toggle("hidden", !visible);
+  }
+  if (typeof busy === "boolean") {
+    state.portrait.busy = busy;
+    els.portraitDock.classList.toggle("busy", busy);
+  }
+  if (provider !== undefined) {
+    state.portrait.provider = provider;
+    if (els.portraitAvatar) {
+      els.portraitAvatar.dataset.provider = provider || "";
+    }
+  }
+  if (title !== undefined) {
+    state.portrait.title = title;
+    if (els.portraitTitle) els.portraitTitle.textContent = title || "";
+  }
+  if (sub !== undefined) {
+    state.portrait.sub = sub;
+    if (els.portraitSub) els.portraitSub.textContent = sub || "";
+  }
+}
+
+function updatePortraitIdle() {
+  const provider = providerFromModel(settings.imageModel);
+  const hasImage = Boolean(state.activeId);
+  setPortrait({
+    visible: hasImage,
+    busy: false,
+    provider,
+    title: providerDisplay(provider),
+    sub: "Idle",
+  });
+}
+
+function portraitWorking(actionLabel) {
+  const provider = providerFromModel(settings.imageModel);
+  setPortrait({
+    visible: Boolean(state.activeId),
+    busy: true,
+    provider,
+    title: providerDisplay(provider),
+    sub: actionLabel || "Working…",
+  });
+}
+
+function renderKeyStatus(status) {
+  if (!els.keyStatus) return;
+  if (!status || typeof status !== "object") {
+    els.keyStatus.textContent = "Key detection unavailable.";
+    return;
+  }
+  const lines = [];
+  lines.push(`OpenAI: ${status.openai ? "ok" : "missing"}`);
+  lines.push(`Gemini: ${status.gemini ? "ok" : "missing"}`);
+  lines.push(`Imagen: ${status.imagen ? "ok" : "missing"}`);
+  lines.push(`Flux: ${status.flux ? "ok" : "missing"}`);
+  lines.push(`Anthropic: ${status.anthropic ? "ok" : "missing"}`);
+  els.keyStatus.textContent = lines.join("\n");
+}
+
+async function refreshKeyStatus() {
+  try {
+    const status = await invoke("get_key_status");
+    state.keyStatus = status;
+    renderKeyStatus(status);
+  } catch (err) {
+    console.warn("Key detection failed:", err);
+    state.keyStatus = null;
+    renderKeyStatus(null);
+  }
+}
 
 function setStatus(message, isError = false) {
   if (!els.engineStatus) return;
   els.engineStatus.textContent = message;
   els.engineStatus.classList.toggle("error", isError);
+}
+
+let toastTimer = null;
+function showToast(message, kind = "info", timeoutMs = 2400) {
+  if (!els.toast) return;
+  els.toast.textContent = String(message || "");
+  els.toast.dataset.kind = kind;
+  els.toast.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  if (timeoutMs > 0) {
+    toastTimer = setTimeout(() => {
+      if (!els.toast) return;
+      els.toast.classList.add("hidden");
+    }, timeoutMs);
+  }
+}
+
+function setTip(message) {
+  if (!els.tipsText) return;
+  els.tipsText.textContent = String(message || "");
+}
+
+function pulseTool(tool) {
+  const btn = els.toolButtons.find((b) => b?.dataset?.tool === tool);
+  if (!btn) return;
+  btn.classList.remove("pulse");
+  // Trigger reflow so the animation restarts.
+  void btn.offsetWidth; // eslint-disable-line no-unused-expressions
+  btn.classList.add("pulse");
+  setTimeout(() => btn.classList.remove("pulse"), 900);
 }
 
 function setRunInfo(message) {
@@ -109,6 +308,15 @@ function extname(path) {
   const dot = name.lastIndexOf(".");
   if (dot === -1) return "";
   return name.slice(dot).toLowerCase();
+}
+
+function mimeFromPath(path) {
+  const ext = extname(path);
+  if (ext === ".png") return "image/png";
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".webp") return "image/webp";
+  if (ext === ".heic") return "image/heic";
+  return "application/octet-stream";
 }
 
 function clamp(value, min, max) {
@@ -169,32 +377,33 @@ function requestRender() {
 
 async function loadImage(path) {
   if (!path) return null;
-  if (state.imageCache.has(path)) return state.imageCache.get(path);
-  const promise = new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = (err) => reject(err);
-    img.src = convertFileSrc(path);
-  }).catch(async () => {
-    // Fallback if asset protocol fails: load via file bytes -> blob URL.
-    const data = await readBinaryFile(path);
-    const mime =
-      path.endsWith(".jpg") || path.endsWith(".jpeg")
-        ? "image/jpeg"
-        : path.endsWith(".webp")
-          ? "image/webp"
-          : "image/png";
-    const blob = new Blob([data], { type: mime });
-    const url = URL.createObjectURL(blob);
+  const rec = getOrCreateImageCacheRecord(path);
+  if (rec.imgPromise) return await rec.imgPromise;
+  rec.imgPromise = (async () => {
+    // Always use a blob URL to keep the canvas untainted for local edits (toBlob, etc).
+    const url = await ensureImageUrl(path);
     return await new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => resolve(img);
       img.onerror = (err) => reject(err);
       img.src = url;
     });
-  });
-  state.imageCache.set(path, promise);
-  return promise;
+  })();
+  return await rec.imgPromise;
+}
+
+function clearImageCache() {
+  for (const value of state.imageCache.values()) {
+    const url = value?.url;
+    if (url) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        // ignore
+      }
+    }
+  }
+  state.imageCache.clear();
 }
 
 function getActiveImage() {
@@ -222,6 +431,7 @@ function resetViewToFit() {
 function clearSelection() {
   state.selection = null;
   state.lassoDraft = [];
+  setTip(DEFAULT_TIP);
   requestRender();
   renderSelectionMeta();
 }
@@ -235,6 +445,11 @@ function setTool(tool) {
     btn.classList.toggle("selected", t === tool);
   }
   renderSelectionMeta();
+  if (tool === "lasso") {
+    setTip("Lasso your product, then click Studio White. Or skip lasso and let the model infer the subject.");
+  } else {
+    setTip(DEFAULT_TIP);
+  }
 }
 
 function showDropHint(show) {
@@ -254,69 +469,69 @@ function renderSelectionMeta() {
   els.selectionMeta.textContent = `${name}\nSelection: ${sel}`;
 }
 
-function renderLarvae() {
-  if (!els.larvae) return;
-  els.larvae.innerHTML = "";
+function renderSpawnbar() {
+  if (!els.spawnbar) return;
+  els.spawnbar.innerHTML = "";
   if (!state.activeId) return;
   const frag = document.createDocumentFragment();
-  for (const larva of state.larvae) {
+  for (const node of state.spawnNodes) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "larva";
-    btn.textContent = larva.title;
+    btn.className = "spawn-node";
+    btn.textContent = node.title;
     btn.addEventListener("click", () => {
       bumpInteraction();
-      handleLarva(larva).catch((err) => {
+      handleSpawnNode(node).catch((err) => {
         console.error(err);
-        setStatus(`Engine: ${err?.message || err}`, true);
+        showToast(err?.message || String(err), "error");
       });
     });
     frag.appendChild(btn);
   }
-  els.larvae.appendChild(frag);
+  els.spawnbar.appendChild(frag);
 }
 
-function chooseLarvae() {
+function chooseSpawnNodes() {
   if (!state.activeId) {
-    state.larvae = [];
-    renderLarvae();
+    state.spawnNodes = [];
+    renderSpawnbar();
     return;
   }
   const img = getActiveImage();
   const items = [];
-  items.push({ id: "bg_white", title: "Larva: Studio White", action: "bg_white" });
-  items.push({ id: "variations", title: "Larva: Variations", action: "variations" });
+  items.push({ id: "bg_white", title: "Studio White", action: "bg_white" });
+  items.push({ id: "variations", title: "Variations", action: "variations" });
   if (img?.img) {
     const w = img.img.naturalWidth;
     const h = img.img.naturalHeight;
     if (w && h && Math.abs(w - h) > 8) {
-      items.push({ id: "crop_square", title: "Larva: Square Crop", action: "crop_square" });
+      items.push({ id: "crop_square", title: "Square Crop", action: "crop_square" });
     } else {
-      items.push({ id: "bg_sweep", title: "Larva: Soft Sweep", action: "bg_sweep" });
+      items.push({ id: "bg_sweep", title: "Soft Sweep", action: "bg_sweep" });
     }
   } else {
-    items.push({ id: "bg_sweep", title: "Larva: Soft Sweep", action: "bg_sweep" });
+    items.push({ id: "bg_sweep", title: "Soft Sweep", action: "bg_sweep" });
   }
   // Keep it to 3 kernels.
-  state.larvae = items.slice(0, 3);
-  renderLarvae();
+  state.spawnNodes = items.slice(0, 3);
+  renderSpawnbar();
 }
 
-async function handleLarva(larva) {
-  if (!larva) return;
-  if (larva.action === "bg_white") {
+async function handleSpawnNode(node) {
+  if (!node) return;
+  if (node.action === "bg_white") {
     await applyBackground("white");
     return;
   }
-  if (larva.action === "bg_sweep") {
+  if (node.action === "bg_sweep") {
     await applyBackground("sweep");
     return;
   }
-  if (larva.action === "crop_square") {
+  if (node.action === "crop_square") {
     await cropSquare();
     return;
   }
-  if (larva.action === "variations") {
+  if (node.action === "variations") {
     await runVariations();
     return;
   }
@@ -325,14 +540,27 @@ async function handleLarva(larva) {
 function renderFilmstrip() {
   if (!els.filmstrip) return;
   els.filmstrip.innerHTML = "";
+  ensureThumbObserver();
   const frag = document.createDocumentFragment();
   for (const item of state.images) {
     const div = document.createElement("div");
     div.className = "thumb" + (item.id === state.activeId ? " selected" : "");
     const img = document.createElement("img");
-    img.src = convertFileSrc(item.path);
+    img.alt = item.label || basename(item.path) || "Artifact";
     img.loading = "lazy";
     img.decoding = "async";
+    img.dataset.path = item.path;
+    // Give it something valid to avoid broken-image glyphs before we swap in a blob URL.
+    img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+    if (thumbObserver) {
+      thumbObserver.observe(img);
+    } else {
+      ensureImageUrl(item.path)
+        .then((url) => {
+          if (url) img.src = url;
+        })
+        .catch(() => {});
+    }
     div.appendChild(img);
     const label = document.createElement("div");
     label.className = "thumb-label";
@@ -355,7 +583,9 @@ async function setActiveImage(id) {
   showDropHint(false);
   renderFilmstrip();
   renderSelectionMeta();
-  chooseLarvae();
+  chooseSpawnNodes();
+  updatePortraitIdle();
+  await setEngineActiveImage(item.path);
   try {
     item.img = await loadImage(item.path);
     item.width = item.img?.naturalWidth || null;
@@ -377,6 +607,12 @@ function addImage(item, { select = false } = {}) {
   if (select || !state.activeId) {
     setActiveImage(item.id).catch(() => {});
   }
+}
+
+async function setEngineActiveImage(path) {
+  if (!state.ptySpawned) return;
+  if (!path) return;
+  await invoke("write_pty", { data: `/use ${path}\n` }).catch(() => {});
 }
 
 async function writeLocalReceipt({ artifactId, imagePath, operation, meta = {} }) {
@@ -510,14 +746,52 @@ async function cropSquare() {
   });
 }
 
+async function aiReplaceBackground(style) {
+  const imgItem = getActiveImage();
+  if (!imgItem) {
+    showToast("No image selected.", "error");
+    return;
+  }
+  await ensureRun();
+  if (!state.ptySpawned) {
+    await spawnEngine();
+  }
+  await setEngineActiveImage(imgItem.path);
+  state.expectingArtifacts = true;
+  const label = style === "sweep" ? "Soft Sweep" : "Studio White";
+  setStatus(`Engine: ${label}…`);
+  showToast(`Morphing: ${label}`, "info", 2200);
+  portraitWorking(label);
+
+  // Must start with "replace" for Brood's edit detection.
+  const prompt =
+    style === "sweep"
+      ? "replace the background with a soft studio sweep background. keep the subject exactly the same. preserve logos and text. do not crop."
+      : "replace the background with a seamless studio white background. keep the subject exactly the same. preserve logos and text. do not crop.";
+  await invoke("write_pty", { data: `${prompt}\n` });
+}
+
 async function applyBackground(style) {
   bumpInteraction();
   const imgItem = getActiveImage();
-  if (!imgItem || !imgItem.img) return;
+  if (!imgItem) {
+    showToast("No image selected.", "error");
+    return;
+  }
+  if (!imgItem.img) {
+    setStatus("Engine: loading image…");
+    try {
+      imgItem.img = await loadImage(imgItem.path);
+    } catch (err) {
+      showToast("Failed to load image.", "error");
+      setStatus("Engine: ready");
+      return;
+    }
+    setStatus("Engine: ready");
+  }
+  // If the user hasn't lassoed, fall back to model-powered background replacement.
   if (!state.selection || !state.selection.points || state.selection.points.length < 3) {
-    setTool("lasso");
-    setStatus("Tip: lasso around your product, then run Background again.");
-    chooseLarvae();
+    await aiReplaceBackground(style);
     return;
   }
   await ensureRun();
@@ -572,7 +846,7 @@ async function applyBackground(style) {
     meta: { style, selection_points: pts.length },
   });
   clearSelection();
-  chooseLarvae();
+  chooseSpawnNodes();
 }
 
 async function saveCanvasAsArtifact(canvas, { operation, label, meta = {} }) {
@@ -614,6 +888,7 @@ async function runVariations() {
   }
   state.expectingArtifacts = true;
   setStatus("Engine: variations…");
+  portraitWorking("Variations");
   await invoke("write_pty", { data: `/recreate ${imgItem.path}\n` });
 }
 
@@ -642,15 +917,16 @@ async function createRun() {
   state.images = [];
   state.imagesById.clear();
   state.activeId = null;
-  state.imageCache.clear();
+  clearImageCache();
   state.selection = null;
   state.lassoDraft = [];
   state.expectingArtifacts = false;
   state.lastRecreatePrompt = null;
   setRunInfo(`Run: ${state.runDir}`);
+  setTip(DEFAULT_TIP);
   showDropHint(true);
   renderFilmstrip();
-  chooseLarvae();
+  chooseSpawnNodes();
   await spawnEngine();
   await startEventsPolling();
   setStatus("Engine: ready");
@@ -669,12 +945,13 @@ async function openExistingRun() {
   state.images = [];
   state.imagesById.clear();
   state.activeId = null;
-  state.imageCache.clear();
+  clearImageCache();
   state.selection = null;
   state.lassoDraft = [];
   state.expectingArtifacts = false;
   state.lastRecreatePrompt = null;
   setRunInfo(`Run: ${state.runDir}`);
+  setTip(DEFAULT_TIP);
   showDropHint(true);
   await loadExistingArtifacts();
   await spawnEngine();
@@ -815,10 +1092,13 @@ function handleEvent(event) {
     );
     state.expectingArtifacts = false;
     setStatus("Engine: ready");
+    updatePortraitIdle();
   } else if (event.type === "generation_failed") {
     const msg = event.error ? `Generation failed: ${event.error}` : "Generation failed.";
     setStatus(`Engine: ${msg}`, true);
+    showToast(msg, "error", 3200);
     state.expectingArtifacts = false;
+    updatePortraitIdle();
   } else if (event.type === "recreate_prompt_inferred") {
     const prompt = event.prompt;
     if (typeof prompt === "string") {
@@ -880,14 +1160,14 @@ function render() {
   }
 }
 
-function startLarvaeTimer() {
-  clearInterval(state.larvaeTimer);
-  state.larvaeTimer = setInterval(() => {
+function startSpawnTimer() {
+  clearInterval(state.spawnTimer);
+  state.spawnTimer = setInterval(() => {
     const idleForMs = Date.now() - state.lastInteractionAt;
     if (idleForMs < 18000) return;
     if (!state.activeId) return;
     if (state.tool === "lasso" && state.lassoDraft.length > 0) return;
-    chooseLarvae();
+    chooseSpawnNodes();
   }, 5000);
 }
 
@@ -953,7 +1233,7 @@ function installCanvasHandlers() {
       }
       state.lassoDraft = [];
       renderSelectionMeta();
-      chooseLarvae();
+      chooseSpawnNodes();
       requestRender();
     }
     try {
@@ -1037,12 +1317,20 @@ function installUi() {
   if (els.newRun) els.newRun.addEventListener("click", () => createRun().catch((e) => console.error(e)));
   if (els.openRun) els.openRun.addEventListener("click", () => openExistingRun().catch((e) => console.error(e)));
   if (els.import) els.import.addEventListener("click", () => importPhotos().catch((e) => console.error(e)));
+  if (els.canvasImport) {
+    els.canvasImport.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      importPhotos().catch((e) => console.error(e));
+    });
+  }
   if (els.export) els.export.addEventListener("click", () => exportRun().catch((e) => console.error(e)));
 
   if (els.settingsToggle && els.settingsDrawer) {
     els.settingsToggle.addEventListener("click", () => {
       bumpInteraction();
       els.settingsDrawer.classList.remove("hidden");
+      refreshKeyStatus().catch(() => {});
     });
   }
   if (els.settingsClose && els.settingsDrawer) {
@@ -1131,7 +1419,7 @@ async function boot() {
   setRunInfo("No run");
   showDropHint(true);
   renderSelectionMeta();
-  chooseLarvae();
+  chooseSpawnNodes();
   renderFilmstrip();
 
   new ResizeObserver(() => {
@@ -1142,7 +1430,7 @@ async function boot() {
   installCanvasHandlers();
   installDnD();
   installUi();
-  startLarvaeTimer();
+  startSpawnTimer();
 
   await listen("pty-exit", () => {
     setStatus("Engine: exited", true);
