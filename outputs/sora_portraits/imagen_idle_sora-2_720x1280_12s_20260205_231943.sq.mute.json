@@ -1,0 +1,45 @@
+{
+  "agent": "imagen",
+  "create_response": {
+    "completed_at": null,
+    "created_at": 1770362694,
+    "error": null,
+    "expires_at": null,
+    "id": "video_6985974657c08190b8fd2b532d2a8d45002b70cbd547d1e7",
+    "model": "sora-2",
+    "object": "video",
+    "progress": 0,
+    "prompt": "Late-90s RTS unit-portrait aesthetic, low-res pre-rendered 3D, chunky pixels, dithering, CRT scanlines, subtle VHS noise, slight chromatic aberration, 15 fps feel. Head-and-shoulders portrait centered with generous safe margins, keep all important motion in the center 60% so a square crop still works. Exaggerated character design with clearly pseudo-human proportions: larger-than-life facial features, strong silhouettes, heroic jawlines, slightly uncanny 90s CGI vibe, gritty armor and gear. Single continuous shot, no cuts. Seamless loop (end pose matches start). Cockpit/console background with blinking lights and abstract HUD shapes, but no readable text. No logos, no watermarks, no subtitles. Original character design only; do not mimic any specific movie/game character. No recognizable StarCraft characters/factions. No spoken words; optional faint radio static only. Mood: stunningly awe-inspiring and tearfully joyous. IDLE state: subtle breathing, blinking, tiny eye saccades, micro head movement. Console lights flicker but no big hologram transformations; nothing dramatic changes in the scene. A white field photographer-mechanic (adult) wearing a camera-rig helmet with green accent LEDs and a rugged utility vest. Coolly smokes a cigarette: ember glow reflected on the visor, a slow exhale, then a gentle ash tap. A lens spanner tool rests on the console. The unit lightly turns a focus ring a few millimeters, then returns to the starting position; warm practical lights and drifting dust motes.",
+    "remixed_from_video_id": null,
+    "seconds": "12",
+    "size": "720x1280",
+    "status": "queued"
+  },
+  "final_response": {
+    "completed_at": 1770362840,
+    "created_at": 1770362694,
+    "error": null,
+    "expires_at": 1770366440,
+    "id": "video_6985974657c08190b8fd2b532d2a8d45002b70cbd547d1e7",
+    "model": "sora-2",
+    "object": "video",
+    "progress": 100,
+    "prompt": "Late-90s RTS unit-portrait aesthetic, low-res pre-rendered 3D, chunky pixels, dithering, CRT scanlines, subtle VHS noise, slight chromatic aberration, 15 fps feel. Head-and-shoulders portrait centered with generous safe margins, keep all important motion in the center 60% so a square crop still works. Exaggerated character design with clearly pseudo-human proportions: larger-than-life facial features, strong silhouettes, heroic jawlines, slightly uncanny 90s CGI vibe, gritty armor and gear. Single continuous shot, no cuts. Seamless loop (end pose matches start). Cockpit/console background with blinking lights and abstract HUD shapes, but no readable text. No logos, no watermarks, no subtitles. Original character design only; do not mimic any specific movie/game character. No recognizable StarCraft characters/factions. No spoken words; optional faint radio static only. Mood: stunningly awe-inspiring and tearfully joyous. IDLE state: subtle breathing, blinking, tiny eye saccades, micro head movement. Console lights flicker but no big hologram transformations; nothing dramatic changes in the scene. A white field photographer-mechanic (adult) wearing a camera-rig helmet with green accent LEDs and a rugged utility vest. Coolly smokes a cigarette: ember glow reflected on the visor, a slow exhale, then a gentle ash tap. A lens spanner tool rests on the console. The unit lightly turns a focus ring a few millimeters, then returns to the starting position; warm practical lights and drifting dust motes.",
+    "remixed_from_video_id": null,
+    "seconds": "12",
+    "size": "720x1280",
+    "status": "completed"
+  },
+  "output_mp4": "outputs/sora_portraits/imagen_idle_sora-2_720x1280_12s_20260205_231943.sq.mute.mp4",
+  "prompt": "Late-90s RTS unit-portrait aesthetic, low-res pre-rendered 3D, chunky pixels, dithering, CRT scanlines, subtle VHS noise, slight chromatic aberration, 15 fps feel. Head-and-shoulders portrait centered with generous safe margins, keep all important motion in the center 60% so a square crop still works. Exaggerated character design with clearly pseudo-human proportions: larger-than-life facial features, strong silhouettes, heroic jawlines, slightly uncanny 90s CGI vibe, gritty armor and gear. Single continuous shot, no cuts. Seamless loop (end pose matches start). Cockpit/console background with blinking lights and abstract HUD shapes, but no readable text. No logos, no watermarks, no subtitles. Original character design only; do not mimic any specific movie/game character. No recognizable StarCraft characters/factions. No spoken words; optional faint radio static only. Mood: stunningly awe-inspiring and tearfully joyous. IDLE state: subtle breathing, blinking, tiny eye saccades, micro head movement. Console lights flicker but no big hologram transformations; nothing dramatic changes in the scene. A white field photographer-mechanic (adult) wearing a camera-rig helmet with green accent LEDs and a rugged utility vest. Coolly smokes a cigarette: ember glow reflected on the visor, a slow exhale, then a gentle ash tap. A lens spanner tool rests on the console. The unit lightly turns a focus ring a few millimeters, then returns to the starting position; warm practical lights and drifting dust motes.",
+  "requested": {
+    "crop_square": true,
+    "model": "sora-2",
+    "mute": true,
+    "seconds": 12,
+    "size": "720x1280",
+    "target_seconds": null,
+    "variant": null
+  },
+  "state": "idle"
+}

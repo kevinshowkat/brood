@@ -68,7 +68,7 @@ class ChatLoop:
                 if intent.action == "help":
                     print(
                         "Commands: /profile /text_model /image_model /fast /quality /cheaper "
-                        "/better /optimize /recreate /describe /use /export"
+                        "/better /optimize /recreate /describe /use /blend /export"
                     )
                 continue
             if intent.action == "set_profile":
@@ -126,6 +126,51 @@ class ChatLoop:
                     meta.append(str(inference.model))
                 suffix = f" ({', '.join(meta)})" if meta else ""
                 print(f"Description{suffix}: {inference.description}")
+                continue
+            if intent.action == "blend":
+                paths = intent.command_args.get("paths") or []
+                if not isinstance(paths, list) or len(paths) < 2:
+                    print("Usage: /blend <image_a> <image_b>")
+                    continue
+                path_a = Path(str(paths[0]))
+                path_b = Path(str(paths[1]))
+                if not path_a.exists():
+                    print(f"Blend failed: file not found ({path_a})")
+                    continue
+                if not path_b.exists():
+                    print(f"Blend failed: file not found ({path_b})")
+                    continue
+                prompt = (
+                    "Combine the two provided photos into a single coherent blended photo. "
+                    "Do not make a split-screen or side-by-side collage; integrate them into one scene. "
+                    "Keep it photorealistic and preserve key details from both images."
+                )
+                settings = self._settings()
+                settings["init_image"] = str(path_a)
+                settings["reference_images"] = [str(path_b)]
+                ticker = ProgressTicker("Blending images")
+                ticker.start_ticking()
+                start_reasoning_summary(prompt, self.engine.text_model, ticker)
+                error: Exception | None = None
+                artifacts: list[dict[str, object]] = []
+                try:
+                    artifacts = self.engine.generate(
+                        prompt,
+                        settings,
+                        {"action": "blend", "source_images": [str(path_a), str(path_b)]},
+                    )
+                except Exception as exc:
+                    error = exc
+                finally:
+                    ticker.stop(done=True)
+                if error:
+                    print(f"Blend failed: {error}")
+                    continue
+                if artifacts:
+                    self.last_artifact_path = str(
+                        artifacts[-1].get("image_path") or self.last_artifact_path or ""
+                    )
+                print("Blend complete.")
                 continue
             if intent.action == "set_quality":
                 self.state.quality_preset = intent.settings_update.get("quality_preset")
