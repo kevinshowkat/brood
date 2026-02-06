@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 from pathlib import Path
 
 from PIL import Image
@@ -10,7 +11,10 @@ from brood_engine.runs.events import EventWriter
 from brood_engine.utils import write_json
 
 
-def test_recreate_loop_updates_receipt(tmp_path: Path) -> None:
+def test_recreate_loop_updates_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Ensure tests never attempt network captioning.
+    for key in ("OPENAI_API_KEY", "OPENAI_API_KEY_BACKUP", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
     reference = tmp_path / "ref.png"
     Image.new("RGB", (64, 64), (0, 255, 0)).save(reference)
 

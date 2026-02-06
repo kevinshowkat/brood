@@ -15,6 +15,10 @@
       "fs": {
         "all": true,
         "scope": ["$HOME/**"]
+      },
+      "protocol": {
+        "asset": true,
+        "assetScope": ["$HOME/brood_runs/**"]
       }
     },
     "windows": [
