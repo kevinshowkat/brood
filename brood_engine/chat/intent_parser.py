@@ -84,6 +84,8 @@ def parse_intent(text: str) -> Intent:
             return Intent(action="optimize", raw=text, command_args={"goals": goals, "mode": mode})
         if command == "recreate":
             return Intent(action="recreate", raw=text, command_args={"path": arg})
+        if command == "describe":
+            return Intent(action="describe", raw=text, command_args={"path": arg})
         if command == "use":
             return Intent(action="set_active_image", raw=text, command_args={"path": arg})
         if command == "export":
