@@ -795,6 +795,37 @@ function ensureCanvasSize() {
   }
 }
 
+let dprWatchMql = null;
+let dprWatchListener = null;
+function installDprWatcher() {
+  if (!("matchMedia" in window)) return;
+
+  if (dprWatchMql && dprWatchListener) {
+    try {
+      if (typeof dprWatchMql.removeEventListener === "function") dprWatchMql.removeEventListener("change", dprWatchListener);
+      else if (typeof dprWatchMql.removeListener === "function") dprWatchMql.removeListener(dprWatchListener);
+    } catch {
+      // ignore
+    }
+  }
+
+  // Watch DPR changes even when layout size doesn't change (multi-monitor scaling / backing scale changes).
+  const dpr = window.devicePixelRatio || 1;
+  dprWatchMql = window.matchMedia(`(resolution: ${dpr}dppx)`);
+  dprWatchListener = () => {
+    ensureCanvasSize();
+    requestRender();
+    // Re-arm the watcher for the new DPR value.
+    installDprWatcher();
+  };
+  try {
+    if (typeof dprWatchMql.addEventListener === "function") dprWatchMql.addEventListener("change", dprWatchListener);
+    else if (typeof dprWatchMql.addListener === "function") dprWatchMql.addListener(dprWatchListener);
+  } catch {
+    // ignore
+  }
+}
+
 function canvasPointFromEvent(event) {
   const dpr = getDpr();
   // Prefer offsetX/Y to avoid triggering layout (getBoundingClientRect) on hot paths.
@@ -3057,6 +3088,7 @@ async function boot() {
   chooseSpawnNodes();
   renderFilmstrip();
   ensureCanvasSize();
+  installDprWatcher();
 
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
