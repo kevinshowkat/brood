@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/api/dialog";
+import { homeDir, join } from "@tauri-apps/api/path";
 import {
   readDir,
   exists,
@@ -44,6 +45,7 @@ const els = {
   portraitTitle: document.getElementById("portrait-title"),
   portraitSub: document.getElementById("portrait-sub"),
   portraitAvatar: document.getElementById("portrait-avatar"),
+  portraitVideo: document.getElementById("portrait-video"),
   selectionMeta: document.getElementById("selection-meta"),
   tipsText: document.getElementById("tips-text"),
   actionBgWhite: document.getElementById("action-bg-white"),
@@ -112,6 +114,15 @@ const state = {
     title: "",
     sub: "",
     busy: false,
+  },
+  portraitMedia: {
+    dir: null, // string|null
+    dirChecked: false,
+    dirPromise: null, // Promise<string|null>|null
+    index: null, // { [agent: string]: { idle: string|null, working: string|null } }|null
+    indexChecked: false,
+    indexPromise: null, // Promise<object>|null
+    activeKey: null,
   },
 };
 
@@ -287,6 +298,203 @@ function providerDisplay(provider) {
   return String(provider);
 }
 
+const PORTRAITS_DIR_LS_KEY = "brood.portraitsDir";
+
+function portraitAgentFromProvider(provider) {
+  const p = String(provider || "").toLowerCase();
+  if (p === "sdxl") return "stability";
+  if (p === "openai") return "openai";
+  if (p === "gemini") return "gemini";
+  if (p === "imagen") return "imagen";
+  if (p === "flux") return "flux";
+  if (p === "stability") return "stability";
+  if (p === "dryrun") return "dryrun";
+  return "dryrun";
+}
+
+async function resolvePortraitsDir() {
+  if (state.portraitMedia.dirChecked) return state.portraitMedia.dir;
+  if (state.portraitMedia.dirPromise) return await state.portraitMedia.dirPromise;
+  state.portraitMedia.dirPromise = (async () => {
+    const candidates = [];
+    const fromLs = localStorage.getItem(PORTRAITS_DIR_LS_KEY);
+    if (fromLs) candidates.push(String(fromLs));
+
+    // Dev convenience: use repo-local outputs if we can locate the repo root.
+    try {
+      const repoRoot = await invoke("get_repo_root");
+      if (repoRoot) candidates.push(await join(repoRoot, "outputs", "sora_portraits"));
+    } catch (_) {}
+
+    // Default persisted location (recommended for packaged builds).
+    try {
+      const home = await homeDir();
+      if (home) {
+        candidates.push(await join(home, ".brood", "portraits"));
+        candidates.push(await join(home, "brood_runs", "portraits"));
+      }
+    } catch (_) {}
+
+    for (const dir of candidates) {
+      try {
+        if (await exists(dir)) return dir;
+      } catch (_) {}
+    }
+    return null;
+  })();
+  try {
+    state.portraitMedia.dir = await state.portraitMedia.dirPromise;
+    state.portraitMedia.dirChecked = true;
+    return state.portraitMedia.dir;
+  } finally {
+    state.portraitMedia.dirPromise = null;
+  }
+}
+
+function extractPortraitStamp(name) {
+  const matches = String(name || "").match(/\d{8}_\d{6}/g);
+  if (!matches || matches.length === 0) return "";
+  return matches[matches.length - 1] || "";
+}
+
+function isStablePortraitName(name, agent, clipState) {
+  const target = `${agent}_${clipState}.mp4`;
+  return String(name || "").toLowerCase() === target;
+}
+
+async function buildPortraitIndex(dir) {
+  const index = {
+    dryrun: { idle: null, working: null },
+    openai: { idle: null, working: null },
+    gemini: { idle: null, working: null },
+    imagen: { idle: null, working: null },
+    flux: { idle: null, working: null },
+    stability: { idle: null, working: null },
+  };
+
+  let entries = [];
+  try {
+    entries = await readDir(dir, { recursive: false });
+  } catch (_) {
+    return index;
+  }
+
+  const candidates = entries
+    .map((e) => ({ path: e?.path, name: e?.name || basename(e?.path) }))
+    .filter((e) => e.path && extname(e.path) === ".mp4");
+
+  for (const item of candidates) {
+    const name = String(item.name || "").toLowerCase();
+    const match = name.match(/^(dryrun|openai|gemini|imagen|flux|stability)_(idle|working)(?:_|\\.)/);
+    if (!match) continue;
+    const agent = match[1];
+    const clipState = match[2];
+    const stamp = extractPortraitStamp(name);
+    const priority = isStablePortraitName(name, agent, clipState) ? 2 : 1;
+    const slot = index[agent]?.[clipState];
+    if (!slot) {
+      // First one wins until a higher-priority / newer candidate arrives.
+      index[agent][clipState] = { path: item.path, priority, stamp };
+      continue;
+    }
+    const slotPrio = slot.priority || 0;
+    const slotStamp = slot.stamp || "";
+    const isBetter =
+      priority > slotPrio || (priority === slotPrio && stamp && (!slotStamp || stamp > slotStamp));
+    if (isBetter) {
+      index[agent][clipState] = { path: item.path, priority, stamp };
+    }
+  }
+
+  // Strip metadata: callers only care about a path or null.
+  for (const agent of Object.keys(index)) {
+    for (const clipState of ["idle", "working"]) {
+      const v = index[agent][clipState];
+      index[agent][clipState] = v && v.path ? v.path : null;
+    }
+  }
+  return index;
+}
+
+async function ensurePortraitIndex() {
+  if (state.portraitMedia.indexChecked) return state.portraitMedia.index;
+  if (state.portraitMedia.indexPromise) return await state.portraitMedia.indexPromise;
+  state.portraitMedia.indexPromise = (async () => {
+    const dir = await resolvePortraitsDir();
+    if (!dir) return null;
+    return await buildPortraitIndex(dir);
+  })();
+  try {
+    state.portraitMedia.index = await state.portraitMedia.indexPromise;
+    state.portraitMedia.indexChecked = true;
+    return state.portraitMedia.index;
+  } finally {
+    state.portraitMedia.indexPromise = null;
+  }
+}
+
+async function refreshPortraitVideo() {
+  if (!els.portraitVideo) return;
+  const visible = Boolean(state.activeId) && els.portraitDock && !els.portraitDock.classList.contains("hidden");
+  if (!visible) {
+    try {
+      els.portraitVideo.pause();
+    } catch (_) {}
+    els.portraitVideo.classList.add("hidden");
+    state.portraitMedia.activeKey = null;
+    return;
+  }
+
+  const agent = portraitAgentFromProvider(state.portrait.provider);
+  const clipState = state.portrait.busy ? "working" : "idle";
+  const index = (await ensurePortraitIndex()) || {};
+
+  let clipPath = index?.[agent]?.[clipState] || null;
+  if (!clipPath && clipState === "working") clipPath = index?.[agent]?.idle || null;
+  if (!clipPath && agent !== "dryrun") {
+    clipPath = index?.dryrun?.[clipState] || index?.dryrun?.idle || null;
+  }
+
+  if (!clipPath) {
+    try {
+      els.portraitVideo.pause();
+    } catch (_) {}
+    els.portraitVideo.classList.add("hidden");
+    state.portraitMedia.activeKey = null;
+    return;
+  }
+
+  let url = null;
+  try {
+    url = await ensureImageUrl(clipPath);
+  } catch (_) {
+    url = null;
+  }
+  if (!url) {
+    els.portraitVideo.classList.add("hidden");
+    state.portraitMedia.activeKey = null;
+    return;
+  }
+
+  const key = `${clipPath}:${clipState}`;
+  if (state.portraitMedia.activeKey !== key) {
+    state.portraitMedia.activeKey = key;
+    els.portraitVideo.classList.remove("hidden");
+    els.portraitVideo.src = url;
+    try {
+      els.portraitVideo.currentTime = 0;
+    } catch (_) {}
+    try {
+      els.portraitVideo.load();
+    } catch (_) {}
+  }
+
+  try {
+    const p = els.portraitVideo.play();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  } catch (_) {}
+}
+
 function setPortrait({ title, sub, provider, busy, visible } = {}) {
   if (typeof visible === "boolean") {
     if (els.portraitDock) els.portraitDock.classList.toggle("hidden", !visible);
@@ -310,6 +518,7 @@ function setPortrait({ title, sub, provider, busy, visible } = {}) {
     if (els.portraitSub) els.portraitSub.textContent = sub || "";
   }
   renderHudReadout();
+  refreshPortraitVideo().catch(() => {});
 }
 
 function updatePortraitIdle() {
@@ -428,6 +637,7 @@ function mimeFromPath(path) {
   if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
   if (ext === ".webp") return "image/webp";
   if (ext === ".heic") return "image/heic";
+  if (ext === ".mp4") return "video/mp4";
   return "application/octet-stream";
 }
 
@@ -2199,6 +2409,7 @@ function installUi() {
       bumpInteraction();
       settings.imageModel = els.imageModel.value;
       localStorage.setItem("brood.imageModel", settings.imageModel);
+      updatePortraitIdle();
       if (state.ptySpawned) {
         invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
       }
