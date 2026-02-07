@@ -187,10 +187,11 @@ fn spawn_pty(
 #[tauri::command]
 fn write_pty(state: State<'_, Mutex<PtyState>>, data: String) -> Result<(), String> {
     let mut state = state.lock().map_err(|_| "Lock poisoned")?;
-    if let Some(writer) = state.writer.as_mut() {
-        writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
-        writer.flush().map_err(|e| e.to_string())?;
-    }
+    let Some(writer) = state.writer.as_mut() else {
+        return Err("PTY not running".to_string());
+    };
+    writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+    writer.flush().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -279,6 +280,42 @@ fn get_key_status() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+fn get_pty_status(state: State<'_, Mutex<PtyState>>) -> Result<serde_json::Value, String> {
+    let mut state = state.lock().map_err(|_| "Lock poisoned")?;
+    let has_writer = state.writer.is_some();
+    let mut has_child = state.child.is_some();
+    let mut pid: Option<u32> = None;
+    let mut child_running = false;
+
+    if let Some(child) = state.child.as_mut() {
+        pid = child.process_id();
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                // Child has exited. Drop handles so frontend can re-spawn cleanly.
+                has_child = false;
+                state.child = None;
+                state.writer = None;
+                state.master = None;
+            }
+            Ok(None) => {
+                child_running = true;
+            }
+            Err(_) => {
+                // If we can't poll, assume it's running; the PTY will error on write if not.
+                child_running = true;
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "running": child_running && has_writer,
+        "has_child": has_child,
+        "has_writer": has_writer,
+        "pid": pid,
+    }))
+}
+
+#[tauri::command]
 fn read_file_since(path: String, offset: u64, max_bytes: Option<u64>) -> Result<serde_json::Value, String> {
     let limit = max_bytes.unwrap_or(1024 * 1024); // 1MB safety cap per poll
     let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
@@ -312,6 +349,7 @@ fn main() {
             get_repo_root,
             export_run,
             get_key_status,
+            get_pty_status,
             read_file_since
         ])
         .run(tauri::generate_context!())
