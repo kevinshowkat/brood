@@ -11,7 +11,7 @@ from .chat.intent_parser import parse_intent
 from .chat.refine import extract_model_directive, detect_edit_model, is_edit_request, is_refinement, is_repeat_request
 from .cli_progress import progress_once, ProgressTicker, elapsed_line
 from .engine import BroodEngine
-from .recreate.caption import infer_description
+from .recreate.caption import infer_description, infer_diagnosis, infer_argument
 from .runs.export import export_html
 from .reasoning import (
     start_reasoning_summary,
@@ -120,7 +120,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
         if intent.action == "help":
             print(
                 "Commands: /profile /text_model /image_model /fast /quality /cheaper "
-                "/better /optimize /recreate /describe /use /blend /swap_dna /export"
+                "/better /optimize /recreate /describe /diagnose /recast /use "
+                "/blend /swap_dna /argue /bridge /export"
             )
             continue
         if intent.action == "set_profile":
@@ -177,6 +178,87 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 meta.append(str(inference.model))
             suffix = f" ({', '.join(meta)})" if meta else ""
             print(f"Description{suffix}: {inference.description}")
+            continue
+        if intent.action == "diagnose":
+            raw_path = intent.command_args.get("path") or last_artifact_path
+            if not raw_path:
+                print("/diagnose requires a path (or set an active image with /use)")
+                continue
+            path = Path(str(raw_path))
+            if not path.exists():
+                print(f"Diagnose failed: file not found ({path})")
+                continue
+            inference = None
+            try:
+                inference = infer_diagnosis(path)
+            except Exception:
+                inference = None
+            if inference is None or not inference.text:
+                msg = "Diagnose unavailable (missing keys or vision client)."
+                engine.events.emit("image_diagnosis_failed", image_path=str(path), error=msg)
+                print(msg)
+                continue
+            engine.events.emit(
+                "image_diagnosis",
+                image_path=str(path),
+                text=inference.text,
+                source=inference.source,
+                model=inference.model,
+            )
+            print(inference.text)
+            continue
+        if intent.action == "recast":
+            raw_path = intent.command_args.get("path") or last_artifact_path
+            if not raw_path:
+                print("/recast requires a path (or set an active image with /use)")
+                continue
+            path = Path(str(raw_path))
+            if not path.exists():
+                print(f"Recast failed: file not found ({path})")
+                continue
+            prompt = (
+                "Recast the provided image into a completely different medium and context. "
+                "This is a lateral creative leap (not a minor style tweak). "
+                "Preserve the core idea/subject identity, but change the form factor, materials, and world. "
+                "Output ONE coherent image. No split-screen or collage. No text overlays."
+            )
+            progress_once("Planning recast")
+            settings = _settings_from_state(state)
+            settings["init_image"] = str(path)
+            plan = engine.preview_plan(prompt, settings)
+            print(
+                f"Plan: {plan['images']} images via {plan['provider']}:{plan['model']} "
+                f"size={plan['size']} cached={plan['cached']}"
+            )
+            ticker = ProgressTicker("Recasting image")
+            ticker.start_ticking()
+            start_reasoning_summary(prompt, engine.text_model, ticker)
+            error: Exception | None = None
+            artifacts: list[dict[str, object]] = []
+            try:
+                artifacts = engine.generate(prompt, settings, {"action": "recast", "source_images": [str(path)]})
+            except Exception as exc:
+                error = exc
+            finally:
+                ticker.stop(done=True)
+
+            if not error and artifacts:
+                last_artifact_path = str(artifacts[-1].get("image_path") or last_artifact_path or "")
+
+            if engine.last_fallback_reason:
+                print(f"Model fallback: {engine.last_fallback_reason}")
+            cost_raw = engine.last_cost_latency.get("cost_total_usd") if engine.last_cost_latency else None
+            latency_raw = (
+                engine.last_cost_latency.get("latency_per_image_s") if engine.last_cost_latency else None
+            )
+            cost = format_cost_generation_cents(cost_raw) or "N/A"
+            latency = format_latency_seconds(latency_raw) or "N/A"
+            print(f"Cost of generation: {ansi_highlight(cost)} | Latency per image: {ansi_highlight(latency)}")
+
+            if error:
+                print(f"Recast failed: {error}")
+            else:
+                print("Recast complete.")
             continue
         if intent.action == "blend":
             paths = intent.command_args.get("paths") or []
@@ -241,6 +323,105 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 print(f"Blend failed: {error}")
             else:
                 print("Blend complete.")
+            continue
+        if intent.action == "argue":
+            paths = intent.command_args.get("paths") or []
+            if not isinstance(paths, list) or len(paths) < 2:
+                print("Usage: /argue <image_a> <image_b>")
+                continue
+            path_a = Path(str(paths[0]))
+            path_b = Path(str(paths[1]))
+            if not path_a.exists():
+                print(f"Argue failed: file not found ({path_a})")
+                continue
+            if not path_b.exists():
+                print(f"Argue failed: file not found ({path_b})")
+                continue
+            inference = None
+            try:
+                inference = infer_argument(path_a, path_b)
+            except Exception:
+                inference = None
+            if inference is None or not inference.text:
+                msg = "Argue unavailable (missing keys or vision client)."
+                engine.events.emit(
+                    "image_argument_failed",
+                    image_paths=[str(path_a), str(path_b)],
+                    error=msg,
+                )
+                print(msg)
+                continue
+            engine.events.emit(
+                "image_argument",
+                image_paths=[str(path_a), str(path_b)],
+                text=inference.text,
+                source=inference.source,
+                model=inference.model,
+            )
+            print(inference.text)
+            continue
+        if intent.action == "bridge":
+            paths = intent.command_args.get("paths") or []
+            if not isinstance(paths, list) or len(paths) < 2:
+                print("Usage: /bridge <image_a> <image_b>")
+                continue
+            path_a = Path(str(paths[0]))
+            path_b = Path(str(paths[1]))
+            if not path_a.exists():
+                print(f"Bridge failed: file not found ({path_a})")
+                continue
+            if not path_b.exists():
+                print(f"Bridge failed: file not found ({path_b})")
+                continue
+
+            prompt = (
+                "Bridge the two provided images by generating a single new image that lives in the aesthetic midpoint. "
+                "This is NOT a collage and NOT a literal mash-up. "
+                "Find the shared design language: composition, lighting logic, color story, material palette, and mood. "
+                "Output one coherent image that could plausibly sit between both references."
+            )
+            progress_once("Planning bridge")
+            settings = _settings_from_state(state)
+            settings["init_image"] = str(path_a)
+            settings["reference_images"] = [str(path_b)]
+            plan = engine.preview_plan(prompt, settings)
+            print(
+                f"Plan: {plan['images']} images via {plan['provider']}:{plan['model']} "
+                f"size={plan['size']} cached={plan['cached']}"
+            )
+            ticker = ProgressTicker("Bridging images")
+            ticker.start_ticking()
+            start_reasoning_summary(prompt, engine.text_model, ticker)
+            error: Exception | None = None
+            artifacts: list[dict[str, object]] = []
+            try:
+                artifacts = engine.generate(
+                    prompt,
+                    settings,
+                    {"action": "bridge", "source_images": [str(path_a), str(path_b)]},
+                )
+            except Exception as exc:
+                error = exc
+            finally:
+                ticker.stop(done=True)
+
+            if not error and artifacts:
+                last_artifact_path = str(artifacts[-1].get("image_path") or last_artifact_path or "")
+
+            if engine.last_fallback_reason:
+                print(f"Model fallback: {engine.last_fallback_reason}")
+            cost_raw = engine.last_cost_latency.get("cost_total_usd") if engine.last_cost_latency else None
+            latency_raw = (
+                engine.last_cost_latency.get("latency_per_image_s") if engine.last_cost_latency else None
+            )
+            cost = format_cost_generation_cents(cost_raw) or "N/A"
+            latency = format_latency_seconds(latency_raw) or "N/A"
+            print(f"Cost of generation: {ansi_highlight(cost)} | Latency per image: {ansi_highlight(latency)}")
+
+            if error:
+                print(f"Bridge failed: {error}")
+            else:
+                print("Bridge complete.")
             continue
         if intent.action == "swap_dna":
             paths = intent.command_args.get("paths") or []

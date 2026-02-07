@@ -25,7 +25,7 @@ from ..utils import (
     has_flux_key,
     is_flux_model,
 )
-from ..recreate.caption import infer_description
+from ..recreate.caption import infer_description, infer_diagnosis, infer_argument
 
 
 def _maybe_warn_missing_flux_key(model: str | None) -> None:
@@ -68,7 +68,8 @@ class ChatLoop:
                 if intent.action == "help":
                     print(
                         "Commands: /profile /text_model /image_model /fast /quality /cheaper "
-                        "/better /optimize /recreate /describe /use /blend /swap_dna /export"
+                        "/better /optimize /recreate /describe /diagnose /recast /use "
+                        "/blend /swap_dna /argue /bridge /export"
                     )
                 continue
             if intent.action == "set_profile":
@@ -127,6 +128,75 @@ class ChatLoop:
                 suffix = f" ({', '.join(meta)})" if meta else ""
                 print(f"Description{suffix}: {inference.description}")
                 continue
+            if intent.action == "diagnose":
+                raw_path = intent.command_args.get("path") or self.last_artifact_path
+                if not raw_path:
+                    print("/diagnose requires a path (or set an active image with /use)")
+                    continue
+                path = Path(str(raw_path))
+                if not path.exists():
+                    print(f"Diagnose failed: file not found ({path})")
+                    continue
+                inference = None
+                try:
+                    inference = infer_diagnosis(path)
+                except Exception:
+                    inference = None
+                if inference is None or not inference.text:
+                    msg = "Diagnose unavailable (missing keys or vision client)."
+                    self.engine.events.emit("image_diagnosis_failed", image_path=str(path), error=msg)
+                    print(msg)
+                    continue
+                self.engine.events.emit(
+                    "image_diagnosis",
+                    image_path=str(path),
+                    text=inference.text,
+                    source=inference.source,
+                    model=inference.model,
+                )
+                print(inference.text)
+                continue
+            if intent.action == "recast":
+                raw_path = intent.command_args.get("path") or self.last_artifact_path
+                if not raw_path:
+                    print("/recast requires a path (or set an active image with /use)")
+                    continue
+                path = Path(str(raw_path))
+                if not path.exists():
+                    print(f"Recast failed: file not found ({path})")
+                    continue
+                prompt = (
+                    "Recast the provided image into a completely different medium and context. "
+                    "This is a lateral creative leap (not a minor style tweak). "
+                    "Preserve the core idea/subject identity, but change the form factor, materials, and world. "
+                    "Output ONE coherent image. No split-screen or collage. No text overlays."
+                )
+                settings = self._settings()
+                settings["init_image"] = str(path)
+                ticker = ProgressTicker("Recasting image")
+                ticker.start_ticking()
+                start_reasoning_summary(prompt, self.engine.text_model, ticker)
+                error: Exception | None = None
+                artifacts: list[dict[str, object]] = []
+                try:
+                    artifacts = self.engine.generate(
+                        prompt,
+                        settings,
+                        {"action": "recast", "source_images": [str(path)]},
+                    )
+                except Exception as exc:
+                    error = exc
+                finally:
+                    ticker.stop(done=True)
+                if error:
+                    print(f"Recast failed: {error}")
+                    continue
+                if artifacts:
+                    self.last_artifact_path = str(
+                        artifacts[-1].get("image_path") or self.last_artifact_path or ""
+                    )
+                print("Recast complete.")
+                continue
             if intent.action == "blend":
                 paths = intent.command_args.get("paths") or []
                 if not isinstance(paths, list) or len(paths) < 2:
@@ -171,6 +241,88 @@ class ChatLoop:
                         artifacts[-1].get("image_path") or self.last_artifact_path or ""
                     )
                 print("Blend complete.")
+                continue
+            if intent.action == "argue":
+                paths = intent.command_args.get("paths") or []
+                if not isinstance(paths, list) or len(paths) < 2:
+                    print("Usage: /argue <image_a> <image_b>")
+                    continue
+                path_a = Path(str(paths[0]))
+                path_b = Path(str(paths[1]))
+                if not path_a.exists():
+                    print(f"Argue failed: file not found ({path_a})")
+                    continue
+                if not path_b.exists():
+                    print(f"Argue failed: file not found ({path_b})")
+                    continue
+                inference = None
+                try:
+                    inference = infer_argument(path_a, path_b)
+                except Exception:
+                    inference = None
+                if inference is None or not inference.text:
+                    msg = "Argue unavailable (missing keys or vision client)."
+                    self.engine.events.emit(
+                        "image_argument_failed",
+                        image_paths=[str(path_a), str(path_b)],
+                        error=msg,
+                    )
+                    print(msg)
+                    continue
+                self.engine.events.emit(
+                    "image_argument",
+                    image_paths=[str(path_a), str(path_b)],
+                    text=inference.text,
+                    source=inference.source,
+                    model=inference.model,
+                )
+                print(inference.text)
+                continue
+            if intent.action == "bridge":
+                paths = intent.command_args.get("paths") or []
+                if not isinstance(paths, list) or len(paths) < 2:
+                    print("Usage: /bridge <image_a> <image_b>")
+                    continue
+                path_a = Path(str(paths[0]))
+                path_b = Path(str(paths[1]))
+                if not path_a.exists():
+                    print(f"Bridge failed: file not found ({path_a})")
+                    continue
+                if not path_b.exists():
+                    print(f"Bridge failed: file not found ({path_b})")
+                    continue
+                prompt = (
+                    "Bridge the two provided images by generating a single new image that lives in the aesthetic midpoint. "
+                    "This is NOT a collage and NOT a literal mash-up. "
+                    "Find the shared design language: composition, lighting logic, color story, material palette, and mood. "
+                    "Output one coherent image that could plausibly sit between both references."
+                )
+                settings = self._settings()
+                settings["init_image"] = str(path_a)
+                settings["reference_images"] = [str(path_b)]
+                ticker = ProgressTicker("Bridging images")
+                ticker.start_ticking()
+                start_reasoning_summary(prompt, self.engine.text_model, ticker)
+                error: Exception | None = None
+                artifacts: list[dict[str, object]] = []
+                try:
+                    artifacts = self.engine.generate(
+                        prompt,
+                        settings,
+                        {"action": "bridge", "source_images": [str(path_a), str(path_b)]},
+                    )
+                except Exception as exc:
+                    error = exc
+                finally:
+                    ticker.stop(done=True)
+                if error:
+                    print(f"Bridge failed: {error}")
+                    continue
+                if artifacts:
+                    self.last_artifact_path = str(
+                        artifacts[-1].get("image_path") or self.last_artifact_path or ""
+                    )
+                print("Bridge complete.")
                 continue
             if intent.action == "swap_dna":
                 paths = intent.command_args.get("paths") or []
