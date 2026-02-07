@@ -1027,11 +1027,17 @@ function setPortrait2({ title, provider, busy } = {}) {
   refreshAgentPortraitVideos().catch(() => {});
 }
 
-function updatePortraitIdle() {
-  const provider = providerFromModel(settings.imageModel);
+function updatePortraitIdle({ fromSettings = false } = {}) {
+  // Persist the last provider we showed during an action until another action
+  // replaces it (visual only; does not affect provider routing).
+  //
+  // When invoked from a settings change, prefer the selected model's provider.
+  const providerDefault = providerFromModel(settings.imageModel);
+  const provider = fromSettings ? providerDefault : state.portrait.provider || providerDefault;
   const hasImage = Boolean(state.activeId);
   const index = state.portraitMedia.index;
-  const provider2 = secondaryProviderFor(provider, index);
+  const provider2Default = secondaryProviderFor(provider, index);
+  const provider2 = fromSettings ? provider2Default : state.portrait2.provider || provider2Default;
   setPortrait({
     visible: hasImage,
     busy: false,
@@ -1047,7 +1053,11 @@ function updatePortraitIdle() {
   renderHudReadout();
 }
 
-function portraitWorking(_actionLabel, { providerOverride = null } = {}) {
+function portraitWorking(_actionLabel, { providerOverride = null, clearDirector = true } = {}) {
+  if (clearDirector && (state.lastDirectorText || state.lastDirectorMeta)) {
+    state.lastDirectorText = null;
+    state.lastDirectorMeta = null;
+  }
   const provider = providerOverride || providerFromModel(settings.imageModel);
   setPortrait({
     visible: Boolean(state.activeId),
@@ -2603,6 +2613,13 @@ function computeQuickActions() {
   // When the canvas itself is multi-image, prefer multi-image actions and hide
   // single-image actions to reduce ambiguity.
   if (state.canvasMode === "multi") {
+    actions.push({
+      id: "single_view",
+      label: "Single view",
+      title: "Show one image at a time (restores single-image actions)",
+      disabled: false,
+      onClick: () => setCanvasMode("single"),
+    });
     if (state.images.length === 2) {
       const runningMulti = isMultiActionRunning();
       actions.push({
@@ -2636,12 +2653,13 @@ function computeQuickActions() {
       });
       return actions;
     }
-    actions.push({
-      id: "multi_tbd",
-      label: "Multi-canvas actions TBD",
-      disabled: true,
-    });
-    return actions;
+    const n = state.images.length || 0;
+    const hint =
+      n <= 1
+        ? "Multi-image actions need 2 photos in the run."
+        : `Multi-image actions need exactly 2 photos (you have ${n}).`;
+    actions.push({ id: "multi_hint", label: hint, disabled: true });
+    // Fall through to single-image actions for the active image.
   }
 
   const iw = active?.img?.naturalWidth || active?.width || null;
@@ -3882,7 +3900,7 @@ async function runArguePair() {
   state.lastAction = "Argue";
   setStatus("Director: argue…");
   setDirectorText("Arguing…", { kind: "argue", at: Date.now(), paths: [first.path, second.path] });
-  portraitWorking("Argue", { providerOverride: "gemini" });
+  portraitWorking("Argue", { providerOverride: "gemini", clearDirector: false });
   const aLabel = first.label || basename(first.path) || "Image A";
   const bLabel = second.label || basename(second.path) || "Image B";
   showToast(`Arguing: ${aLabel} vs ${bLabel}`, "info", 3200);
@@ -3921,7 +3939,7 @@ async function runDiagnose() {
   state.lastAction = "Diagnose";
   setStatus("Director: diagnose…");
   setDirectorText("Diagnosing…", { kind: "diagnose", at: Date.now(), paths: [imgItem.path] });
-  portraitWorking("Diagnose", { providerOverride: "openai" });
+  portraitWorking("Diagnose", { providerOverride: "openai", clearDirector: false });
   showToast("Diagnosing…", "info", 2200);
   renderQuickActions();
 
@@ -5230,7 +5248,7 @@ function installUi() {
       bumpInteraction();
       settings.imageModel = els.imageModel.value;
       localStorage.setItem("brood.imageModel", settings.imageModel);
-      updatePortraitIdle();
+      updatePortraitIdle({ fromSettings: true });
       if (state.ptySpawned) {
         invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
       }
