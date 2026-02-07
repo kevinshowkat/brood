@@ -79,6 +79,20 @@ def _parse_path_args(arg: str) -> list[str]:
     return [part for part in parts if part]
 
 
+def _parse_single_path_arg(arg: str) -> str:
+    """Parse a single path argument (best-effort).
+
+    Accepts quoted paths for spaces. If the user forgets to quote a path that
+    contains spaces, join tokens back together as a last-resort.
+    """
+    parts = _parse_path_args(arg)
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return " ".join(parts)
+
+
 def parse_intent(text: str) -> Intent:
     raw = text.strip()
     if not raw:
@@ -99,15 +113,15 @@ def parse_intent(text: str) -> Intent:
             goals, mode = _parse_optimize_args(arg)
             return Intent(action="optimize", raw=text, command_args={"goals": goals, "mode": mode})
         if command == "recreate":
-            return Intent(action="recreate", raw=text, command_args={"path": arg})
+            return Intent(action="recreate", raw=text, command_args={"path": _parse_single_path_arg(arg)})
         if command == "describe":
-            return Intent(action="describe", raw=text, command_args={"path": arg})
+            return Intent(action="describe", raw=text, command_args={"path": _parse_single_path_arg(arg)})
         if command == "diagnose":
-            return Intent(action="diagnose", raw=text, command_args={"path": arg})
+            return Intent(action="diagnose", raw=text, command_args={"path": _parse_single_path_arg(arg)})
         if command == "recast":
-            return Intent(action="recast", raw=text, command_args={"path": arg})
+            return Intent(action="recast", raw=text, command_args={"path": _parse_single_path_arg(arg)})
         if command == "use":
-            return Intent(action="set_active_image", raw=text, command_args={"path": arg})
+            return Intent(action="set_active_image", raw=text, command_args={"path": _parse_single_path_arg(arg)})
         if command == "blend":
             return Intent(action="blend", raw=text, command_args={"paths": _parse_path_args(arg)})
         if command == "swap_dna":
