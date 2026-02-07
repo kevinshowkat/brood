@@ -180,6 +180,9 @@ const VISUAL_GRAMMAR_VERSION = "v0";
 // Larva spawn buttons were a fun experiment, but we're turning them off for now.
 // Keep the implementation in place so we can re-enable later.
 const ENABLE_LARVA_SPAWN = false;
+// Spawnbar actions (Studio White, Variations, etc) sit on the canvas "control surface".
+// Disable by default; the inspector still contains Quick Actions.
+const ENABLE_SPAWN_ACTIONS = false;
 
 let visualPromptWriteTimer = null;
 function scheduleVisualPromptWrite({ immediate = false } = {}) {
@@ -2319,6 +2322,14 @@ function explodeSpawnNode(btnEl, nodeId, imageId) {
 
 function renderSpawnbar() {
   if (!els.spawnbar) return;
+  if (!ENABLE_SPAWN_ACTIONS) {
+    els.spawnbar.innerHTML = "";
+    els.spawnbar.classList.add("hidden");
+    stopLarvaAnimator();
+    state.larvaTargets = [];
+    return;
+  }
+  els.spawnbar.classList.remove("hidden");
   els.spawnbar.innerHTML = "";
   stopLarvaAnimator();
   state.larvaTargets = [];
@@ -2418,6 +2429,11 @@ function renderSpawnbar() {
 }
 
 function chooseSpawnNodes() {
+  if (!ENABLE_SPAWN_ACTIONS) {
+    state.spawnNodes = [];
+    renderSpawnbar();
+    return;
+  }
   if (!state.activeId) {
     state.spawnNodes = [];
     renderSpawnbar();
@@ -2451,6 +2467,10 @@ function chooseSpawnNodes() {
 
 function respawnActions() {
   bumpInteraction();
+  if (!ENABLE_SPAWN_ACTIONS) {
+    showToast("Canvas actions are hidden.", "tip", 2000);
+    return;
+  }
   const imgId = getActiveImage()?.id || state.activeId || null;
   if (!imgId) {
     showToast("No image selected.", "tip", 2200);
@@ -4194,13 +4214,15 @@ function installCanvasHandlers() {
 	        return;
 	      }
 
-	      if (state.tool === "designate") {
-	        const imgPt = canvasToImage(p);
-	        state.pendingDesignation = { imageId: img.id, x: imgPt.x, y: imgPt.y, at: Date.now() };
-	        showDesignateMenuAt(canvasCssPointFromEvent(event));
-	        requestRender();
-	        return;
-	      }
+		      if (state.tool === "designate") {
+		        const imgPt = canvasToImage(p);
+		        state.pendingDesignation = { imageId: img.id, x: imgPt.x, y: imgPt.y, at: Date.now() };
+		        showDesignateMenuAt(canvasCssPointFromEvent(event));
+            // Prevent the global "click outside" handler from immediately closing the menu.
+            event.stopPropagation();
+		        requestRender();
+		        return;
+		      }
 
 		      if (state.tool === "annotate") {
 		        const imgPt = canvasToImage(p);
@@ -4280,6 +4302,8 @@ function installCanvasHandlers() {
 		      const imgPt = canvasToImage(p);
 		      state.pendingDesignation = { imageId: img.id, x: imgPt.x, y: imgPt.y, at: Date.now() };
 		      showDesignateMenuAt(canvasCssPointFromEvent(event));
+          // Prevent the global "click outside" handler from immediately closing the menu.
+          event.stopPropagation();
 		      requestRender();
 		      return;
 		    }
