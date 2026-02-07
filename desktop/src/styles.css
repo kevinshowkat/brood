@@ -267,59 +267,66 @@ button.ghost:hover {
 }
 
 .tool {
-  width: 100%;
-  border: 1px solid var(--border);
-  background:
-    linear-gradient(180deg, rgba(10, 14, 20, 0.92), rgba(6, 8, 12, 0.92));
-  color: var(--sc-yellow-dim);
-  border-radius: 12px;
-  padding: 8px 0 6px;
+  width: 62px;
   height: 62px;
+  border-radius: 10px;
+  border: 1px solid rgba(8, 10, 14, 0.86);
+  border-top-color: rgba(255, 255, 255, 0.62);
+  border-left-color: rgba(255, 255, 255, 0.28);
+  background: linear-gradient(180deg, rgba(224, 231, 239, 0.98), rgba(172, 182, 195, 0.98));
+  color: rgba(18, 24, 32, 0.92);
+  padding: 10px 8px 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-direction: column;
-  gap: 4px;
   cursor: pointer;
+  position: relative;
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
-    0 10px 22px rgba(0, 0, 0, 0.35);
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.18),
+    0 10px 16px rgba(0, 0, 0, 0.48);
+  transition:
+    transform 0.08s ease,
+    border-color 0.08s ease,
+    filter 0.08s ease,
+    box-shadow 0.08s ease;
 }
 
 .tool:hover {
-  border-color: rgba(255, 212, 0, 0.65);
-  color: var(--sc-yellow);
+  filter: brightness(1.03);
 }
 
 .tool.selected {
-  border-color: rgba(255, 212, 0, 0.92);
-  color: var(--sc-yellow);
-  background:
-    radial-gradient(40px 40px at 35% 30%, rgba(255, 212, 0, 0.16), transparent 60%),
-    linear-gradient(180deg, rgba(10, 14, 20, 0.92), rgba(6, 8, 12, 0.92));
+  border-color: rgba(255, 197, 0, 0.78);
+  background: linear-gradient(180deg, rgba(214, 222, 231, 0.98), rgba(160, 171, 186, 0.98));
   box-shadow:
-    inset 0 0 0 1px rgba(255, 212, 0, 0.12),
-    0 10px 22px rgba(0, 0, 0, 0.35),
-    0 0 0 2px rgba(255, 212, 0, 0.08);
+    inset 0 1px 0 rgba(255, 255, 255, 0.78),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.18),
+    0 10px 16px rgba(0, 0, 0, 0.48),
+    0 0 0 2px rgba(255, 197, 0, 0.18);
 }
 
 .tool-icon {
   width: 28px;
   height: 28px;
   display: block;
-  filter: drop-shadow(0 0 10px rgba(255, 212, 0, 0.12));
+  filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.22));
 }
 
 .tool-hint {
   font-family: "IBM Plex Mono", monospace;
   font-size: 10px;
   line-height: 1;
-  letter-spacing: 0.12em;
-  color: rgba(255, 212, 0, 0.58);
+  letter-spacing: 0.10em;
+  color: rgba(18, 24, 32, 0.62);
+  position: absolute;
+  right: 8px;
+  bottom: 7px;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 
 .tool.selected .tool-hint {
-  color: rgba(255, 212, 0, 0.92);
+  color: rgba(18, 24, 32, 0.88);
 }
 
 .tool.pulse {
@@ -454,8 +461,42 @@ button.ghost:hover {
   pointer-events: none;
 }
 
+.hud-keybar {
+  position: absolute;
+  right: 18px;
+  top: -34px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(54, 76, 106, 0.62);
+  border-bottom-color: rgba(0, 0, 0, 0.72);
+  background: rgba(8, 10, 14, 0.58);
+  box-shadow:
+    0 20px 34px rgba(0, 0, 0, 0.52),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  pointer-events: auto;
+  max-width: calc(100% - 36px);
+}
+
+.hud-keybar .tool {
+  pointer-events: auto;
+}
+
+.hud-keybar .tool:active {
+  transform: translateY(1px);
+  box-shadow:
+    inset 0 2px 0 rgba(0, 0, 0, 0.12),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.16),
+    0 7px 12px rgba(0, 0, 0, 0.52);
+}
+
 .hud-shell {
   position: relative;
+  z-index: 1;
   min-height: 124px;
   padding: 26px 18px 18px;
   border-radius: 14px;
@@ -625,7 +666,7 @@ button.ghost:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 10;
+  z-index: 5;
   color: rgba(230, 237, 243, 0.82);
   font-family: "IBM Plex Mono", monospace;
   font-size: 13px;

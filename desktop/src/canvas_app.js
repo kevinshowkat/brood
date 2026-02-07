@@ -215,8 +215,16 @@ function renderHudReadout() {
   if (!els.hud) return;
   const img = getActiveImage();
   const hasImage = Boolean(img);
-  els.hud.classList.toggle("hidden", !hasImage);
-  if (!hasImage) return;
+  // HUD is always visible; show placeholders when no image is loaded.
+  if (!hasImage) {
+    const sel = state.selection?.points?.length >= 3 ? `${state.selection.points.length} pts` : "none";
+    const zoomPct = Math.round((state.view.scale || 1) * 100);
+    if (els.hudUnitName) els.hudUnitName.textContent = "NO IMAGE";
+    if (els.hudUnitDesc) els.hudUnitDesc.textContent = "Tap or drag to add photos";
+    if (els.hudUnitSel) els.hudUnitSel.textContent = `${sel} · ${state.tool} · ${zoomPct}%`;
+    if (els.hudUnitStat) els.hudUnitStat.textContent = state.ptySpawned ? "ready" : "engine offline";
+    return;
+  }
 
   // Best-effort per-image receipt metadata (provider/model/cost) for the HUD.
   if (img && img.receiptPath && !img.receiptMetaChecked && !img.receiptMetaLoading) {
@@ -862,10 +870,9 @@ async function refreshAgentPortraitVideos() {
   ]);
 }
 
-function setPortrait({ title, provider, busy, visible } = {}) {
-  if (typeof visible === "boolean") {
-    if (els.portraitDock) els.portraitDock.classList.toggle("hidden", !visible);
-  }
+function setPortrait({ title, provider, busy } = {}) {
+  // Always show the portrait dock (blank placeholders when clips aren't available).
+  if (els.portraitDock) els.portraitDock.classList.remove("hidden");
   if (typeof busy === "boolean") {
     state.portrait.busy = busy;
     if (els.agentSlotPrimary) els.agentSlotPrimary.classList.toggle("busy", busy);
@@ -884,10 +891,9 @@ function setPortrait({ title, provider, busy, visible } = {}) {
   refreshAgentPortraitVideos().catch(() => {});
 }
 
-function setPortrait2({ title, provider, busy, visible } = {}) {
-  if (typeof visible === "boolean") {
-    if (els.portraitDock) els.portraitDock.classList.toggle("hidden", !visible);
-  }
+function setPortrait2({ title, provider, busy } = {}) {
+  // Always show the portrait dock (blank placeholders when clips aren't available).
+  if (els.portraitDock) els.portraitDock.classList.remove("hidden");
   if (typeof busy === "boolean") {
     state.portrait2.busy = busy;
     if (els.agentSlotSecondary) els.agentSlotSecondary.classList.toggle("busy", busy);
