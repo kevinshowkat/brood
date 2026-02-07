@@ -2732,6 +2732,16 @@ function computeQuickActions() {
     state.pendingDiagnose || state.pendingRecast || state.expectingArtifacts || state.pendingReplace
   );
 
+  if (state.canvasMode !== "multi" && state.images.length > 1) {
+    actions.push({
+      id: "multi_view",
+      label: "Multi view",
+      title: "Show all loaded photos (enables 2-photo actions when exactly 2 photos are loaded)",
+      disabled: false,
+      onClick: () => setCanvasMode("multi"),
+    });
+  }
+
   actions.push({
     id: "diagnose",
     label: state.pendingDiagnose ? "Diagnose (running…)" : "Diagnose",
@@ -4353,21 +4363,19 @@ function handleEvent(event) {
     const wasSwapDna = Boolean(state.pendingSwapDna);
     const wasBridge = Boolean(state.pendingBridge);
     const wasRecast = Boolean(state.pendingRecast);
+    const wasPairAction = wasBlend || wasSwapDna || wasBridge;
     if (wasBlend) {
       state.pendingBlend = null;
-      setCanvasMode("multi");
       setTip("Combine complete. Output selected.");
       showToast("Combine complete.", "tip", 2400);
     }
     if (wasSwapDna) {
       state.pendingSwapDna = null;
-      setCanvasMode("multi");
       setTip("Swap DNA complete. Output selected.");
       showToast("Swap DNA complete.", "tip", 2400);
     }
     if (wasBridge) {
       state.pendingBridge = null;
-      setCanvasMode("multi");
       setTip("Bridge complete. Output selected.");
       showToast("Bridge complete.", "tip", 2400);
     }
@@ -4396,6 +4404,12 @@ function handleEvent(event) {
         },
         { select: state.expectingArtifacts || !state.activeId }
       );
+    }
+
+    // After 2-photo quick actions (Combine / Swap DNA / Bridge), show only the output
+    // image on the canvas. The filmstrip retains sources for now (lineage TBD).
+    if (wasPairAction) {
+      setCanvasMode("single");
     }
     state.expectingArtifacts = false;
     restoreEngineImageModelIfNeeded();
