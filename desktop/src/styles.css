@@ -412,6 +412,11 @@ button.ghost:hover {
   min-height: 260px;
   min-width: 0;
   order: 1;
+  /* Bottom reserved space for multi-canvas layout (keep in sync with computeMultiRects padBottom). */
+  --control-surface-h: 250px;
+  /* HUD height is measured in JS; used to size decorative canvas bumpers. */
+  --hud-h: var(--control-surface-h);
+  --bumper-w: clamp(160px, 18vw, 260px);
   background:
     radial-gradient(circle at 18% 26%, rgba(100, 210, 255, 0.12), transparent 52%),
     radial-gradient(circle at 72% 18%, rgba(255, 179, 0, 0.10), transparent 50%),
@@ -446,6 +451,95 @@ button.ghost:hover {
 #overlay-canvas {
   pointer-events: auto;
   z-index: 3;
+}
+
+.canvas-bumper {
+  position: absolute;
+  bottom: 0;
+  height: var(--hud-h);
+  width: var(--bumper-w);
+  z-index: 5;
+  pointer-events: none;
+  border: 3px solid rgba(8, 10, 14, 0.92);
+  background:
+    radial-gradient(circle at 18px 18px, rgba(255, 255, 255, 0.11) 0 2px, rgba(0, 0, 0, 0.68) 3px 6px, transparent 7px),
+    radial-gradient(circle at calc(100% - 18px) 18px, rgba(255, 255, 255, 0.11) 0 2px, rgba(0, 0, 0, 0.68) 3px 6px, transparent 7px),
+    radial-gradient(circle at 18px calc(100% - 18px), rgba(255, 255, 255, 0.10) 0 2px, rgba(0, 0, 0, 0.65) 3px 6px, transparent 7px),
+    radial-gradient(circle at calc(100% - 18px) calc(100% - 18px), rgba(255, 255, 255, 0.10) 0 2px, rgba(0, 0, 0, 0.65) 3px 6px, transparent 7px),
+    repeating-linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.07) 0px,
+      rgba(255, 255, 255, 0.07) 1px,
+      rgba(0, 0, 0, 0.0) 2px,
+      rgba(0, 0, 0, 0.0) 12px
+    ),
+    radial-gradient(620px 220px at 18% 0%, rgba(100, 210, 255, 0.12), transparent 64%),
+    radial-gradient(520px 200px at 92% 18%, rgba(255, 179, 0, 0.10), transparent 66%),
+    linear-gradient(180deg, rgba(40, 52, 72, 0.92), rgba(6, 8, 12, 0.985));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -18px 26px rgba(0, 0, 0, 0.72),
+    0 28px 70px rgba(0, 0, 0, 0.58);
+  opacity: 0.97;
+}
+
+.canvas-bumper::before {
+  content: "";
+  position: absolute;
+  inset: 14px 16px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(54, 76, 106, 0.62);
+  border-bottom-color: rgba(0, 0, 0, 0.78);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.68)),
+    radial-gradient(480px 160px at 20% 10%, rgba(100, 210, 255, 0.10), transparent 64%),
+    rgba(8, 10, 14, 0.62);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -14px 18px rgba(0, 0, 0, 0.66);
+  opacity: 0.92;
+}
+
+.canvas-bumper::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.08) 0px,
+      rgba(255, 255, 255, 0.08) 1px,
+      transparent 2px,
+      transparent 9px
+    );
+  mix-blend-mode: overlay;
+  opacity: 0.10;
+}
+
+.canvas-bumper--left {
+  left: 0;
+  clip-path: polygon(
+    0 34px,
+    26px 0,
+    100% 0,
+    100% calc(100% - 18px),
+    calc(100% - 22px) 100%,
+    0 100%
+  );
+  border-right: 0;
+}
+
+.canvas-bumper--right {
+  right: 0;
+  clip-path: polygon(
+    0 0,
+    calc(100% - 26px) 0,
+    100% 34px,
+    100% 100%,
+    22px 100%,
+    0 calc(100% - 18px)
+  );
+  border-left: 0;
 }
 
 .image-fx {
@@ -2102,6 +2196,8 @@ button.ghost:hover {
   }
   .canvas-wrap {
     order: 0;
+    --control-surface-h: 210px;
+    --bumper-w: clamp(120px, 22vw, 200px);
   }
   .filmstrip {
     order: 1;
