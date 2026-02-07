@@ -68,6 +68,7 @@ const els = {
   portraitVideo2: document.getElementById("portrait-video-2"),
   selectionMeta: document.getElementById("selection-meta"),
   tipsText: document.getElementById("tips-text"),
+  directorText: document.getElementById("director-text"),
   designateMenu: document.getElementById("designate-menu"),
   quickActions: document.getElementById("quick-actions"),
   toolButtons: Array.from(document.querySelectorAll(".tool[data-tool]")),
@@ -99,6 +100,10 @@ const state = {
   multiRects: new Map(), // imageId -> { x, y, w, h } in canvas device pixels (for hit-testing).
   pendingBlend: null, // { sourceIds: [string, string], startedAt: number }
   pendingSwapDna: null, // { structureId: string, surfaceId: string, startedAt: number }
+  pendingBridge: null, // { sourceIds: [string, string], startedAt: number }
+  pendingArgue: null, // { sourceIds: [string, string], startedAt: number }
+  pendingRecast: null, // { sourceId: string, startedAt: number }
+  pendingDiagnose: null, // { sourceId: string, startedAt: number }
   pendingGeneration: null, // { remaining: number, provider: string|null, model: string|null }
   view: {
     scale: 1,
@@ -141,6 +146,8 @@ const state = {
   pendingReplace: null, // { targetId, startedAt, label }
   lastRecreatePrompt: null,
   lastAction: null,
+  lastDirectorText: null,
+  lastDirectorMeta: null, // { kind, source, model, at, paths }
   lastCostLatency: null, // { provider, model, cost_total_usd, cost_per_1k_images_usd, latency_per_image_s, at }
   fallbackToFullRead: false,
   keyStatus: null, // { openai, gemini, imagen, flux, anthropic }
@@ -658,7 +665,7 @@ async function ensureGeminiForBlend() {
   return providerFromModel(settings.imageModel) === "gemini";
 }
 
-async function ensureGeminiProImagePreviewForSwapDna() {
+async function ensureGeminiProImagePreviewForAction(actionLabel = "This action") {
   const desired = "gemini-3-pro-image-preview";
   const provider = providerFromModel(settings.imageModel);
   if (provider === "gemini" && settings.imageModel === desired) return true;
@@ -680,13 +687,17 @@ async function ensureGeminiProImagePreviewForSwapDna() {
 
   if (changed) {
     if (nextModel === desired) {
-      showToast(`Swap DNA uses Gemini Pro. Switched image model to ${settings.imageModel}.`, "tip", 3200);
+      showToast(`${actionLabel} uses Gemini Pro. Switched image model to ${settings.imageModel}.`, "tip", 3200);
     } else {
-      showToast(`Swap DNA prefers ${desired}. Using ${settings.imageModel}.`, "tip", 3400);
+      showToast(`${actionLabel} prefers ${desired}. Using ${settings.imageModel}.`, "tip", 3400);
     }
   }
 
   return providerFromModel(settings.imageModel) === "gemini";
+}
+
+async function ensureGeminiProImagePreviewForSwapDna() {
+  return await ensureGeminiProImagePreviewForAction("Swap DNA");
 }
 
 function providerDisplay(provider) {
@@ -1081,6 +1092,14 @@ function showToast(message, kind = "info", timeoutMs = 2400) {
 function setTip(message) {
   if (!els.tipsText) return;
   els.tipsText.textContent = String(message || "");
+}
+
+function setDirectorText(text, meta = null) {
+  state.lastDirectorText = text ? String(text) : null;
+  state.lastDirectorMeta = meta && typeof meta === "object" ? meta : null;
+  if (!els.directorText) return;
+  const value = state.lastDirectorText || "Run Diagnose or Argue to see notes here.";
+  els.directorText.textContent = value;
 }
 
 function pulseTool(tool) {
@@ -2535,7 +2554,9 @@ function computeQuickActions() {
   // single-image actions to reduce ambiguity.
   if (state.canvasMode === "multi") {
     if (state.images.length === 2) {
-      const runningMulti = Boolean(state.pendingBlend || state.pendingSwapDna);
+      const runningMulti = Boolean(
+        state.pendingBlend || state.pendingSwapDna || state.pendingBridge || state.pendingArgue
+      );
       actions.push({
         id: "combine",
         label: state.pendingBlend ? "Combine (running…)" : "Combine",
@@ -2544,12 +2565,26 @@ function computeQuickActions() {
         onClick: () => runBlendPair().catch((err) => console.error(err)),
       });
       actions.push({
+        id: "bridge",
+        label: state.pendingBridge ? "Bridge (running…)" : "Bridge",
+        title: "Find the aesthetic midpoint between the two images (not a collage)",
+        disabled: runningMulti,
+        onClick: () => runBridgePair().catch((err) => console.error(err)),
+      });
+      actions.push({
         id: "swap_dna",
         label: state.pendingSwapDna ? "Swap DNA (running…)" : "Swap DNA",
         title: "Use structure from the selected image and surface qualities from the other (Shift-click to invert)",
         disabled: runningMulti,
         onClick: (ev) =>
           runSwapDnaPair({ invert: Boolean(ev?.shiftKey) }).catch((err) => console.error(err)),
+      });
+      actions.push({
+        id: "argue",
+        label: state.pendingArgue ? "Argue (running…)" : "Argue",
+        title: "Debate the two directions (why each is stronger, with visual evidence)",
+        disabled: runningMulti,
+        onClick: () => runArguePair().catch((err) => console.error(err)),
       });
       return actions;
     }
@@ -2564,6 +2599,24 @@ function computeQuickActions() {
   const iw = active?.img?.naturalWidth || active?.width || null;
   const ih = active?.img?.naturalHeight || active?.height || null;
   const canCropSquare = Boolean(iw && ih && Math.abs(iw - ih) > 8);
+  const runningSingle = Boolean(
+    state.pendingDiagnose || state.pendingRecast || state.expectingArtifacts || state.pendingReplace
+  );
+
+  actions.push({
+    id: "diagnose",
+    label: state.pendingDiagnose ? "Diagnose (running…)" : "Diagnose",
+    title: "Creative-director diagnosis: what's working, what isn't, and what to fix next",
+    disabled: runningSingle,
+    onClick: () => runDiagnose().catch((err) => console.error(err)),
+  });
+  actions.push({
+    id: "recast",
+    label: state.pendingRecast ? "Recast (running…)" : "Recast",
+    title: "Reimagine the image in a totally different medium/context (lateral leap)",
+    disabled: runningSingle,
+    onClick: () => runRecast().catch((err) => console.error(err)),
+  });
 
   actions.push({
     id: "bg_white",
@@ -3696,6 +3749,192 @@ async function runSwapDnaPair({ invert = false } = {}) {
   }
 }
 
+async function runBridgePair() {
+  bumpInteraction();
+  if (state.pendingBlend || state.pendingSwapDna || state.pendingBridge || state.pendingArgue) {
+    showToast("A multi-image action is already running.", "tip", 2600);
+    return;
+  }
+  if (!state.runDir) {
+    await ensureRun();
+  }
+  if (state.images.length !== 2) {
+    showToast("Bridge needs exactly 2 photos in the run.", "error", 3200);
+    return;
+  }
+  const okProvider = await ensureGeminiProImagePreviewForAction("Bridge");
+  if (!okProvider) {
+    showToast("Bridge requires a Gemini image model (multi-image).", "error", 3600);
+    return;
+  }
+
+  const active = getActiveImage();
+  const first = active || state.images[0];
+  const second = state.images.find((item) => item?.id && item.id !== first?.id) || state.images[1];
+  if (!first?.path || !second?.path) {
+    showToast("Bridge failed: missing image paths.", "error", 3200);
+    return;
+  }
+
+  const okEngine = await ensureEngineSpawned({ reason: "bridge" });
+  if (!okEngine) return;
+  setImageFxActive(true, "Bridge");
+  state.expectingArtifacts = true;
+  state.pendingBridge = { sourceIds: [first.id, second.id], startedAt: Date.now() };
+  state.lastAction = "Bridge";
+  setStatus("Engine: bridge…");
+  portraitWorking("Bridge");
+  const aLabel = first.label || basename(first.path) || "Image A";
+  const bLabel = second.label || basename(second.path) || "Image B";
+  showToast(`Bridging: ${aLabel} ↔ ${bLabel}`, "info", 3200);
+  renderQuickActions();
+  requestRender();
+
+  try {
+    await invoke("write_pty", {
+      data: `/bridge ${quoteForPtyArg(first.path)} ${quoteForPtyArg(second.path)}\n`,
+    });
+  } catch (err) {
+    console.error(err);
+    state.expectingArtifacts = false;
+    state.pendingBridge = null;
+    setStatus(`Engine: bridge failed (${err?.message || err})`, true);
+    showToast("Bridge failed to start.", "error", 3200);
+    setImageFxActive(false);
+    updatePortraitIdle();
+    renderQuickActions();
+  }
+}
+
+async function runArguePair() {
+  bumpInteraction();
+  if (state.pendingBlend || state.pendingSwapDna || state.pendingBridge || state.pendingArgue) {
+    showToast("A multi-image action is already running.", "tip", 2600);
+    return;
+  }
+  if (!state.runDir) {
+    await ensureRun();
+  }
+  if (state.images.length !== 2) {
+    showToast("Argue needs exactly 2 photos in the run.", "error", 3200);
+    return;
+  }
+
+  const active = getActiveImage();
+  const first = active || state.images[0];
+  const second = state.images.find((item) => item?.id && item.id !== first?.id) || state.images[1];
+  if (!first?.path || !second?.path) {
+    showToast("Argue failed: missing image paths.", "error", 3200);
+    return;
+  }
+
+  const okEngine = await ensureEngineSpawned({ reason: "argue" });
+  if (!okEngine) return;
+  state.pendingArgue = { sourceIds: [first.id, second.id], startedAt: Date.now() };
+  state.lastAction = "Argue";
+  setStatus("Director: argue…");
+  setDirectorText("Arguing…", { kind: "argue", at: Date.now(), paths: [first.path, second.path] });
+  portraitWorking("Argue", { providerOverride: "gemini" });
+  const aLabel = first.label || basename(first.path) || "Image A";
+  const bLabel = second.label || basename(second.path) || "Image B";
+  showToast(`Arguing: ${aLabel} vs ${bLabel}`, "info", 3200);
+  renderQuickActions();
+  requestRender();
+
+  try {
+    await invoke("write_pty", {
+      data: `/argue ${quoteForPtyArg(first.path)} ${quoteForPtyArg(second.path)}\n`,
+    });
+  } catch (err) {
+    console.error(err);
+    state.pendingArgue = null;
+    setStatus(`Director: argue failed (${err?.message || err})`, true);
+    showToast("Argue failed to start.", "error", 3200);
+    updatePortraitIdle();
+    renderQuickActions();
+  }
+}
+
+async function runDiagnose() {
+  bumpInteraction();
+  if (state.pendingDiagnose || state.pendingRecast || state.expectingArtifacts || state.pendingReplace) {
+    showToast("An action is already running.", "tip", 2400);
+    return;
+  }
+  const imgItem = getActiveImage();
+  if (!imgItem?.path) {
+    showToast("No image selected.", "error", 2400);
+    return;
+  }
+  await ensureRun();
+  const okEngine = await ensureEngineSpawned({ reason: "diagnose" });
+  if (!okEngine) return;
+  state.pendingDiagnose = { sourceId: imgItem.id, startedAt: Date.now() };
+  state.lastAction = "Diagnose";
+  setStatus("Director: diagnose…");
+  setDirectorText("Diagnosing…", { kind: "diagnose", at: Date.now(), paths: [imgItem.path] });
+  portraitWorking("Diagnose", { providerOverride: "gemini" });
+  showToast("Diagnosing…", "info", 2200);
+  renderQuickActions();
+
+  try {
+    await invoke("write_pty", { data: `/diagnose ${quoteForPtyArg(imgItem.path)}\n` });
+  } catch (err) {
+    console.error(err);
+    state.pendingDiagnose = null;
+    setStatus(`Director: diagnose failed (${err?.message || err})`, true);
+    showToast("Diagnose failed to start.", "error", 3200);
+    updatePortraitIdle();
+    renderQuickActions();
+  }
+}
+
+async function runRecast() {
+  bumpInteraction();
+  if (state.pendingDiagnose || state.pendingRecast || state.expectingArtifacts || state.pendingReplace) {
+    showToast("An action is already running.", "tip", 2400);
+    return;
+  }
+  const imgItem = getActiveImage();
+  if (!imgItem?.path) {
+    showToast("No image selected.", "error", 2400);
+    return;
+  }
+
+  const label = "Recast";
+  await ensureRun();
+  const okEngine = await ensureEngineSpawned({ reason: label });
+  if (!okEngine) return;
+  setImageFxActive(true, label);
+  portraitWorking(label, { providerOverride: "gemini" });
+  state.expectingArtifacts = true;
+  state.pendingRecast = { sourceId: imgItem.id, startedAt: Date.now() };
+  state.lastAction = label;
+  setStatus(`Engine: ${label.toLowerCase()}…`);
+  showToast("Recasting…", "info", 2200);
+  renderQuickActions();
+  requestRender();
+
+  try {
+    const desired = "gemini-3-pro-image-preview";
+    if (state.ptySpawned && desired && desired !== settings.imageModel) {
+      state.engineImageModelRestore = settings.imageModel;
+      await invoke("write_pty", { data: `/image_model ${desired}\n` }).catch(() => {});
+    }
+    await invoke("write_pty", { data: `/recast ${quoteForPtyArg(imgItem.path)}\n` });
+  } catch (err) {
+    console.error(err);
+    state.expectingArtifacts = false;
+    state.pendingRecast = null;
+    state.engineImageModelRestore = null;
+    setStatus(`Engine: recast failed (${err?.message || err})`, true);
+    showToast("Recast failed to start.", "error", 3200);
+    setImageFxActive(false);
+    updatePortraitIdle();
+    renderQuickActions();
+  }
+}
+
 async function exportRun() {
   bumpInteraction();
   if (!state.runDir) return;
@@ -3728,6 +3967,10 @@ async function createRun() {
   state.multiRects.clear();
   state.pendingBlend = null;
   state.pendingSwapDna = null;
+  state.pendingBridge = null;
+  state.pendingArgue = null;
+  state.pendingRecast = null;
+  state.pendingDiagnose = null;
   clearImageCache();
   state.selection = null;
   state.lassoDraft = [];
@@ -3739,8 +3982,11 @@ async function createRun() {
   hideMarkPanel();
   state.expectingArtifacts = false;
   state.lastRecreatePrompt = null;
+  state.lastDirectorText = null;
+  state.lastDirectorMeta = null;
   setRunInfo(`Run: ${state.runDir}`);
   setTip(DEFAULT_TIP);
+  setDirectorText(null, null);
   showDropHint(true);
   renderFilmstrip();
   chooseSpawnNodes();
@@ -3770,6 +4016,10 @@ async function openExistingRun() {
   state.multiRects.clear();
   state.pendingBlend = null;
   state.pendingSwapDna = null;
+  state.pendingBridge = null;
+  state.pendingArgue = null;
+  state.pendingRecast = null;
+  state.pendingDiagnose = null;
   renderFilmstrip();
   clearImageCache();
   state.selection = null;
@@ -3782,8 +4032,11 @@ async function openExistingRun() {
   hideMarkPanel();
   state.expectingArtifacts = false;
   state.lastRecreatePrompt = null;
+  state.lastDirectorText = null;
+  state.lastDirectorMeta = null;
   setRunInfo(`Run: ${state.runDir}`);
   setTip(DEFAULT_TIP);
+  setDirectorText(null, null);
   showDropHint(true);
   await loadExistingArtifacts();
   await spawnEngine();
@@ -3969,6 +4222,8 @@ function handleEvent(event) {
     if (!id || !path) return;
     const wasBlend = Boolean(state.pendingBlend);
     const wasSwapDna = Boolean(state.pendingSwapDna);
+    const wasBridge = Boolean(state.pendingBridge);
+    const wasRecast = Boolean(state.pendingRecast);
     if (wasBlend) {
       state.pendingBlend = null;
       setCanvasMode("multi");
@@ -3980,6 +4235,17 @@ function handleEvent(event) {
       setCanvasMode("multi");
       setTip("Swap DNA complete. Output selected.");
       showToast("Swap DNA complete.", "tip", 2400);
+    }
+    if (wasBridge) {
+      state.pendingBridge = null;
+      setCanvasMode("multi");
+      setTip("Bridge complete. Output selected.");
+      showToast("Bridge complete.", "tip", 2400);
+    }
+    if (wasRecast) {
+      state.pendingRecast = null;
+      setTip("Recast complete. Output selected.");
+      showToast("Recast complete.", "tip", 2400);
     }
     const pending = state.pendingReplace;
     if (pending?.targetId) {
@@ -4007,6 +4273,7 @@ function handleEvent(event) {
     setStatus("Engine: ready");
     updatePortraitIdle();
     setImageFxActive(false);
+    renderQuickActions();
     renderHudReadout();
   } else if (event.type === "generation_failed") {
     const msg = event.error ? `Generation failed: ${event.error}` : "Generation failed.";
@@ -4015,10 +4282,15 @@ function handleEvent(event) {
     state.expectingArtifacts = false;
     state.pendingBlend = null;
     state.pendingSwapDna = null;
+    state.pendingBridge = null;
+    state.pendingRecast = null;
+    state.pendingDiagnose = null;
+    state.pendingArgue = null;
     clearPendingReplace();
     restoreEngineImageModelIfNeeded();
     updatePortraitIdle();
     setImageFxActive(false);
+    renderQuickActions();
     renderHudReadout();
     chooseSpawnNodes();
     requestRender();
@@ -4059,6 +4331,52 @@ function handleEvent(event) {
       }
       if (getActiveImage()?.path === path) renderHudReadout();
     }
+  } else if (event.type === "image_diagnosis") {
+    const text = event.text;
+    if (typeof text === "string" && text.trim()) {
+      state.pendingDiagnose = null;
+      setDirectorText(text.trim(), {
+        kind: "diagnose",
+        source: event.source || null,
+        model: event.model || null,
+        at: Date.now(),
+        paths: event.image_path ? [event.image_path] : [],
+      });
+      setStatus("Director: diagnose ready");
+      showToast("Diagnose ready.", "tip", 2400);
+      updatePortraitIdle();
+      renderQuickActions();
+    }
+  } else if (event.type === "image_diagnosis_failed") {
+    state.pendingDiagnose = null;
+    const msg = event.error ? `Diagnose failed: ${event.error}` : "Diagnose failed.";
+    setStatus(`Director: ${msg}`, true);
+    showToast(msg, "error", 3200);
+    updatePortraitIdle();
+    renderQuickActions();
+  } else if (event.type === "image_argument") {
+    const text = event.text;
+    if (typeof text === "string" && text.trim()) {
+      state.pendingArgue = null;
+      setDirectorText(text.trim(), {
+        kind: "argue",
+        source: event.source || null,
+        model: event.model || null,
+        at: Date.now(),
+        paths: Array.isArray(event.image_paths) ? event.image_paths : [],
+      });
+      setStatus("Director: argue ready");
+      showToast("Argue ready.", "tip", 2400);
+      updatePortraitIdle();
+      renderQuickActions();
+    }
+  } else if (event.type === "image_argument_failed") {
+    state.pendingArgue = null;
+    const msg = event.error ? `Argue failed: ${event.error}` : "Argue failed.";
+    setStatus(`Director: ${msg}`, true);
+    showToast(msg, "error", 3200);
+    updatePortraitIdle();
+    renderQuickActions();
   } else if (event.type === "recreate_prompt_inferred") {
     const prompt = event.prompt;
     if (typeof prompt === "string") {
@@ -5153,10 +5471,15 @@ async function boot() {
     state.expectingArtifacts = false;
     state.pendingBlend = null;
     state.pendingSwapDna = null;
+    state.pendingBridge = null;
+    state.pendingRecast = null;
+    state.pendingDiagnose = null;
+    state.pendingArgue = null;
     clearPendingReplace();
     state.engineImageModelRestore = null;
     setImageFxActive(false);
     updatePortraitIdle();
+    setDirectorText(null, null);
     renderQuickActions();
   });
 

@@ -33,6 +33,9 @@ npm-debug.log*
 *.mov
 *.mp4
 
+# Generated artifacts
+outputs/first_light/
+
 # Editor
 .idea/
 .vscode/
