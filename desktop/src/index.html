@@ -39,11 +39,146 @@
               <button type="button" data-kind="object">Object</button>
               <button class="ghost" type="button" data-kind="clear">Clear</button>
             </div>
-            <div id="hud" class="hud hidden" aria-label="Selected Unit">
-              <div class="hud-shell">
-                <div class="hud-screen" aria-hidden="true">
-                  <div class="hud-readout">
-                    <div class="hud-line">
+	            <div id="hud" class="hud" aria-label="Selected Unit">
+	              <div class="hud-keybar" role="toolbar" aria-label="Tools">
+	                <button class="tool selected" type="button" data-tool="pan" title="Pan / Zoom" aria-label="Pan / Zoom">
+	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+	                    <path
+	                      d="M12 3v6M12 21v-6M3 12h6M21 12h-6"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="square"
+	                    />
+	                    <path
+	                      d="M12 3l-2 2M12 3l2 2M12 21l-2-2M12 21l2-2M3 12l2-2M3 12l2 2M21 12l-2-2M21 12l-2 2"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="square"
+	                    />
+	                  </svg>
+	                  <span class="tool-hint" aria-hidden="true">V</span>
+	                  <span class="sr-only">Pan</span>
+	                </button>
+	                <button class="tool" type="button" data-tool="lasso" title="Lasso selection" aria-label="Lasso selection">
+	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+	                    <ellipse cx="12" cy="9.5" rx="6.5" ry="4.5" fill="none" stroke="currentColor" stroke-width="2" />
+	                    <path
+	                      d="M15 13.5c0.9 1.2 1.9 2.6 3.5 4"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                    />
+	                    <path
+	                      d="M19.5 18l1.8 1.8"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                    />
+	                  </svg>
+	                  <span class="tool-hint" aria-hidden="true">L</span>
+	                  <span class="sr-only">Lasso</span>
+	                </button>
+	                <button
+	                  class="tool"
+	                  type="button"
+	                  data-tool="designate"
+	                  title="Designate subject/reference/object"
+	                  aria-label="Designate"
+	                >
+	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+	                    <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2" />
+	                    <path
+	                      d="M12 4v3M12 17v3M4 12h3M17 12h3"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                    />
+	                  </svg>
+	                  <span class="tool-hint" aria-hidden="true">D</span>
+	                  <span class="sr-only">Designate</span>
+	                </button>
+	                <button class="tool" type="button" data-tool="bg" title="Background replace" aria-label="Background replace">
+	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+	                    <path
+	                      d="M6 7h10v4H6z"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linejoin="round"
+	                    />
+	                    <path
+	                      d="M16 9h2a2 2 0 0 1 2 2v1"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                    />
+	                    <path
+	                      d="M8 11v7h4v-4h3"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                      stroke-linejoin="round"
+	                    />
+	                  </svg>
+	                  <span class="tool-hint" aria-hidden="true">B</span>
+	                  <span class="sr-only">Background</span>
+	                </button>
+	                <button
+	                  class="tool"
+	                  type="button"
+	                  data-tool="variations"
+	                  title="Zero-prompt variations"
+	                  aria-label="Zero-prompt variations"
+	                >
+	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+	                    <path
+	                      d="M4 7h4l8 10h4"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                      stroke-linejoin="round"
+	                    />
+	                    <path
+	                      d="M20 17l-2-2 2-2"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                      stroke-linejoin="round"
+	                    />
+	                    <path
+	                      d="M4 17h4l2.5-3"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                      stroke-linejoin="round"
+	                    />
+	                    <path
+	                      d="M20 7l-2 2 2 2"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                      stroke-linejoin="round"
+	                    />
+	                  </svg>
+	                  <span class="tool-hint" aria-hidden="true">R</span>
+	                  <span class="sr-only">Variations</span>
+	                </button>
+	              </div>
+	              <div class="hud-shell">
+	                <div class="hud-screen" aria-hidden="true">
+	                  <div class="hud-readout">
+	                    <div class="hud-line">
                       <span class="hud-k">UNIT</span>
                       <span id="hud-unit-name" class="hud-v"></span>
                     </div>
@@ -81,11 +216,11 @@
             </div>
 	            <div class="panel agent-panel">
 	              <div class="panel-title">Agents</div>
-	              <div id="portrait-dock" class="panel-body portrait-dock hidden">
-	                <div class="agent-portraits">
-                  <div id="agent-slot-primary" class="agent-slot">
-                    <div class="portrait-readout">
-                      <div id="portrait-title" class="portrait-title">Model</div>
+		              <div id="portrait-dock" class="panel-body portrait-dock">
+		                <div class="agent-portraits">
+	                  <div id="agent-slot-primary" class="agent-slot">
+	                    <div class="portrait-readout">
+	                      <div id="portrait-title" class="portrait-title">Model</div>
                     </div>
                     <div class="portrait-frame">
                       <div id="portrait-avatar" class="portrait-avatar" aria-hidden="true">
@@ -128,149 +263,12 @@
 	                Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
 	              </div>
 	            </div>
-          </div>
-          <div class="inspector-footer" aria-label="Tools">
-            <div class="panel command-panel">
-              <div class="panel-body command-card" aria-label="Agent Commands">
-                <button class="tool selected" type="button" data-tool="pan" title="Pan / Zoom" aria-label="Pan / Zoom">
-                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <path
-                      d="M12 3v6M12 21v-6M3 12h6M21 12h-6"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="square"
-                    />
-                    <path
-                      d="M12 3l-2 2M12 3l2 2M12 21l-2-2M12 21l2-2M3 12l2-2M3 12l2 2M21 12l-2-2M21 12l-2 2"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="square"
-                    />
-                  </svg>
-                  <span class="tool-hint" aria-hidden="true">V</span>
-                  <span class="sr-only">Pan</span>
-                </button>
-                <button class="tool" type="button" data-tool="lasso" title="Lasso selection" aria-label="Lasso selection">
-                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <ellipse cx="12" cy="9.5" rx="6.5" ry="4.5" fill="none" stroke="currentColor" stroke-width="2" />
-                    <path
-                      d="M15 13.5c0.9 1.2 1.9 2.6 3.5 4"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                    />
-                    <path
-                      d="M19.5 18l1.8 1.8"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                    />
-                  </svg>
-                  <span class="tool-hint" aria-hidden="true">L</span>
-                  <span class="sr-only">Lasso</span>
-                </button>
-                <button
-                  class="tool"
-                  type="button"
-                  data-tool="designate"
-                  title="Designate subject/reference/object"
-                  aria-label="Designate"
-                >
-                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2" />
-                    <path
-                      d="M12 4v3M12 17v3M4 12h3M17 12h3"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                    />
-                  </svg>
-                  <span class="tool-hint" aria-hidden="true">D</span>
-                  <span class="sr-only">Designate</span>
-                </button>
-                <button class="tool" type="button" data-tool="bg" title="Background replace" aria-label="Background replace">
-                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <path
-                      d="M6 7h10v4H6z"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linejoin="round"
-                    />
-                    <path
-                      d="M16 9h2a2 2 0 0 1 2 2v1"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                    />
-                    <path
-                      d="M8 11v7h4v-4h3"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                  <span class="tool-hint" aria-hidden="true">B</span>
-                  <span class="sr-only">Background</span>
-                </button>
-                <button
-                  class="tool"
-                  type="button"
-                  data-tool="variations"
-                  title="Zero-prompt variations"
-                  aria-label="Zero-prompt variations"
-                >
-                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <path
-                      d="M4 7h4l8 10h4"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                    <path
-                      d="M20 17l-2-2 2-2"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                    <path
-                      d="M4 17h4l2.5-3"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                    <path
-                      d="M20 7l-2 2 2 2"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                  <span class="tool-hint" aria-hidden="true">R</span>
-                  <span class="sr-only">Variations</span>
-                </button>
-              </div>
-            </div>
-            <div class="panel session-panel">
-              <div class="panel-body session-card" aria-label="Session Controls">
-                <div class="session-controls">
-                  <button id="new-run">New Run</button>
+	          </div>
+	          <div class="inspector-footer" aria-label="Tools">
+	            <div class="panel session-panel">
+	              <div class="panel-body session-card" aria-label="Session Controls">
+	                <div class="session-controls">
+	                  <button id="new-run">New Run</button>
                   <button id="open-run">Open Run</button>
                   <button id="import">Import Photos</button>
                   <button id="export">Export</button>
