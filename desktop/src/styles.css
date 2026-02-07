@@ -730,6 +730,41 @@ button.ghost:hover {
   font-weight: 700;
 }
 
+.hud-director-line {
+  align-items: flex-start;
+}
+
+.hud-v.hud-director {
+  font-size: 12.5px;
+  line-height: 1.25;
+  white-space: pre-wrap;
+  overflow-y: auto;
+  max-height: 96px;
+  padding-right: 6px;
+  pointer-events: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: rgba(82, 255, 148, 0.22) rgba(6, 8, 12, 0.18);
+  scrollbar-width: thin;
+}
+
+.hud-v.hud-director::-webkit-scrollbar {
+  width: 10px;
+}
+
+.hud-v.hud-director::-webkit-scrollbar-track {
+  background: rgba(6, 8, 12, 0.12);
+}
+
+.hud-v.hud-director::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(82, 255, 148, 0.10), rgba(82, 255, 148, 0.22));
+  border: 1px solid rgba(0, 0, 0, 0.6);
+  border-radius: 999px;
+}
+
+.hud-v.hud-director::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(82, 255, 148, 0.16), rgba(82, 255, 148, 0.30));
+}
+
 .drop-hint {
   position: absolute;
   inset: 0;
@@ -1390,35 +1425,6 @@ button.ghost:hover {
 }
 
 #tips-text::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(82, 255, 148, 0.16), rgba(82, 255, 148, 0.30));
-}
-
-.director-readout {
-  white-space: pre-wrap;
-  min-height: 120px;
-  max-height: 220px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-right: 6px;
-  scrollbar-color: rgba(82, 255, 148, 0.22) rgba(6, 8, 12, 0.18);
-  scrollbar-width: thin;
-}
-
-.director-readout::-webkit-scrollbar {
-  width: 10px;
-}
-
-.director-readout::-webkit-scrollbar-track {
-  background: rgba(6, 8, 12, 0.12);
-}
-
-.director-readout::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(82, 255, 148, 0.10), rgba(82, 255, 148, 0.22));
-  border: 1px solid rgba(0, 0, 0, 0.6);
-  border-radius: 999px;
-}
-
-.director-readout::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(180deg, rgba(82, 255, 148, 0.16), rgba(82, 255, 148, 0.30));
 }
 
