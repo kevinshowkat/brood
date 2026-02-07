@@ -68,7 +68,7 @@ class ChatLoop:
                 if intent.action == "help":
                     print(
                         "Commands: /profile /text_model /image_model /fast /quality /cheaper "
-                        "/better /optimize /recreate /describe /use /blend /export"
+                        "/better /optimize /recreate /describe /use /blend /swap_dna /export"
                     )
                 continue
             if intent.action == "set_profile":
@@ -171,6 +171,53 @@ class ChatLoop:
                         artifacts[-1].get("image_path") or self.last_artifact_path or ""
                     )
                 print("Blend complete.")
+                continue
+            if intent.action == "swap_dna":
+                paths = intent.command_args.get("paths") or []
+                if not isinstance(paths, list) or len(paths) < 2:
+                    print("Usage: /swap_dna <image_a> <image_b>")
+                    continue
+                path_a = Path(str(paths[0]))
+                path_b = Path(str(paths[1]))
+                if not path_a.exists():
+                    print(f"Swap DNA failed: file not found ({path_a})")
+                    continue
+                if not path_b.exists():
+                    print(f"Swap DNA failed: file not found ({path_b})")
+                    continue
+                prompt = (
+                    "Swap DNA between the two provided photos. "
+                    "Image A provides the STRUCTURE: crop/framing, composition, hierarchy, layout, and spatial logic. "
+                    "Image B provides the SURFACE: color palette, textures/materials, lighting, mood, and finish. "
+                    "This is decision transfer, not a split-screen or collage. "
+                    "Output a single coherent image that preserves A's structural decisions while applying B's surface qualities."
+                )
+                settings = self._settings()
+                settings["init_image"] = str(path_a)
+                settings["reference_images"] = [str(path_b)]
+                ticker = ProgressTicker("Swapping DNA")
+                ticker.start_ticking()
+                start_reasoning_summary(prompt, self.engine.text_model, ticker)
+                error: Exception | None = None
+                artifacts: list[dict[str, object]] = []
+                try:
+                    artifacts = self.engine.generate(
+                        prompt,
+                        settings,
+                        {"action": "swap_dna", "source_images": [str(path_a), str(path_b)]},
+                    )
+                except Exception as exc:
+                    error = exc
+                finally:
+                    ticker.stop(done=True)
+                if error:
+                    print(f"Swap DNA failed: {error}")
+                    continue
+                if artifacts:
+                    self.last_artifact_path = str(
+                        artifacts[-1].get("image_path") or self.last_artifact_path or ""
+                    )
+                print("Swap DNA complete.")
                 continue
             if intent.action == "set_quality":
                 self.state.quality_preset = intent.settings_update.get("quality_preset")

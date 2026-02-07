@@ -15,6 +15,7 @@ COMMANDS = {
     "/describe": "Describe an image (vision) for the HUD",
     "/use": "Set active image path for edits",
     "/blend": "Combine two images into one (multi-image prompt)",
+    "/swap_dna": "Apply structure of image A with surface qualities of image B (multi-image prompt)",
     "/export": "Export report",
     "/help": "Show help",
 }
