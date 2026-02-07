@@ -106,6 +106,8 @@ def parse_intent(text: str) -> Intent:
             return Intent(action="set_active_image", raw=text, command_args={"path": arg})
         if command == "blend":
             return Intent(action="blend", raw=text, command_args={"paths": _parse_path_args(arg)})
+        if command == "swap_dna":
+            return Intent(action="swap_dna", raw=text, command_args={"paths": _parse_path_args(arg)})
         if command == "export":
             return Intent(action="export", raw=text, command_args={"format": arg or "html"})
         if command == "help":
