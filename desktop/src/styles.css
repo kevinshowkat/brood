@@ -416,8 +416,8 @@ button.ghost:hover {
   --control-surface-h: 250px;
   /* HUD height is measured in JS; used to size decorative canvas bumpers. */
   --hud-h: var(--control-surface-h);
-  /* Side "bumpers" are meant to read as end-caps, not large panels. */
-  --bumper-w: clamp(72px, 9vw, 128px);
+  /* Keep bumper width aligned to the HUD gutter so it never overlaps the HUD or action grid. */
+  --hud-w: 80%;
   background:
     radial-gradient(circle at 18% 26%, rgba(100, 210, 255, 0.12), transparent 52%),
     radial-gradient(circle at 72% 18%, rgba(255, 179, 0, 0.10), transparent 50%),
@@ -458,9 +458,8 @@ button.ghost:hover {
   position: absolute;
   bottom: 0;
   height: var(--hud-h);
-  width: var(--bumper-w);
-  /* Above HUD shadows, below interactive panels/menus. */
-  z-index: 7;
+  width: calc((100% - var(--hud-w)) / 2);
+  z-index: 5;
   pointer-events: none;
   border: 3px solid rgba(8, 10, 14, 0.92);
   background:
@@ -603,7 +602,7 @@ button.ghost:hover {
   transform: translateX(-50%);
   bottom: 0;
   z-index: 6;
-  width: 80%;
+  width: var(--hud-w);
   pointer-events: none;
   display: flex;
   flex-direction: row-reverse;
@@ -2199,7 +2198,6 @@ button.ghost:hover {
   .canvas-wrap {
     order: 0;
     --control-surface-h: 210px;
-    --bumper-w: clamp(56px, 16vw, 104px);
   }
   .filmstrip {
     order: 1;
