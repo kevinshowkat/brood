@@ -3905,7 +3905,7 @@ async function runDiagnose() {
   state.lastAction = "Diagnose";
   setStatus("Director: diagnose…");
   setDirectorText("Diagnosing…", { kind: "diagnose", at: Date.now(), paths: [imgItem.path] });
-  portraitWorking("Diagnose", { providerOverride: "gemini" });
+  portraitWorking("Diagnose", { providerOverride: "openai" });
   showToast("Diagnosing…", "info", 2200);
   renderQuickActions();
 
