@@ -69,10 +69,7 @@ const els = {
   selectionMeta: document.getElementById("selection-meta"),
   tipsText: document.getElementById("tips-text"),
   designateMenu: document.getElementById("designate-menu"),
-  actionBgWhite: document.getElementById("action-bg-white"),
-  actionBgSweep: document.getElementById("action-bg-sweep"),
-  actionCropSquare: document.getElementById("action-crop-square"),
-  actionVariations: document.getElementById("action-variations"),
+  quickActions: document.getElementById("quick-actions"),
   toolButtons: Array.from(document.querySelectorAll(".tool[data-tool]")),
 };
 
@@ -2432,11 +2429,13 @@ function chooseSpawnNodes() {
   if (!ENABLE_SPAWN_ACTIONS) {
     state.spawnNodes = [];
     renderSpawnbar();
+    renderQuickActions();
     return;
   }
   if (!state.activeId) {
     state.spawnNodes = [];
     renderSpawnbar();
+    renderQuickActions();
     return;
   }
   const img = getActiveImage();
@@ -2463,6 +2462,7 @@ function chooseSpawnNodes() {
   const available = items.filter((item) => !isSpawnNodeOnCooldown(item.id, imageId));
   state.spawnNodes = available.slice(0, 3);
   renderSpawnbar();
+  renderQuickActions();
 }
 
 function respawnActions() {
@@ -2482,6 +2482,104 @@ function respawnActions() {
   }
   chooseSpawnNodes();
   showToast("Actions respawned.", "tip", 1600);
+}
+
+function computeQuickActions() {
+  // Scaffolding: keep this as a pure function of current canvas state so we can
+  // grow rules over time without entangling UI code.
+  const actions = [];
+  const active = getActiveImage();
+
+  if (!active) {
+    actions.push({
+      id: "no_image",
+      label: "Import photos to unlock actions",
+      disabled: true,
+    });
+    return actions;
+  }
+
+  // When the canvas itself is multi-image, prefer multi-image actions and hide
+  // single-image actions to reduce ambiguity.
+  if (state.canvasMode === "multi") {
+    if (state.images.length === 2) {
+      actions.push({
+        id: "combine",
+        label: state.pendingBlend ? "Combine (running…)" : "Combine",
+        title: "Blend the two loaded photos into one",
+        disabled: Boolean(state.pendingBlend),
+        onClick: () => runBlendPair().catch((err) => console.error(err)),
+      });
+      return actions;
+    }
+    actions.push({
+      id: "multi_tbd",
+      label: "Multi-canvas actions TBD",
+      disabled: true,
+    });
+    return actions;
+  }
+
+  const iw = active?.img?.naturalWidth || active?.width || null;
+  const ih = active?.img?.naturalHeight || active?.height || null;
+  const canCropSquare = Boolean(iw && ih && Math.abs(iw - ih) > 8);
+
+  actions.push({
+    id: "bg_white",
+    label: "Background: White",
+    title: "Replace background with a clean studio white",
+    disabled: false,
+    onClick: () => applyBackground("white").catch((err) => console.error(err)),
+  });
+  actions.push({
+    id: "bg_sweep",
+    label: "Background: Sweep",
+    title: "Replace background with a soft sweep gradient",
+    disabled: false,
+    onClick: () => applyBackground("sweep").catch((err) => console.error(err)),
+  });
+  actions.push({
+    id: "crop_square",
+    label: "Crop: Square",
+    title: canCropSquare ? "Crop the active image to a centered square" : "Already square (or image size unknown)",
+    disabled: !canCropSquare,
+    onClick: canCropSquare ? () => cropSquare().catch((err) => console.error(err)) : null,
+  });
+  actions.push({
+    id: "variations",
+    label: "Variations",
+    title: "Zero-prompt variations of the active image",
+    disabled: false,
+    onClick: () => runVariations().catch((err) => console.error(err)),
+  });
+
+  return actions;
+}
+
+function renderQuickActions() {
+  const root = els.quickActions;
+  if (!root) return;
+  const actions = computeQuickActions();
+  root.innerHTML = "";
+  const frag = document.createDocumentFragment();
+
+  for (const action of actions) {
+    if (!action?.id || !action?.label) continue;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = String(action.label);
+    if (action.title) btn.title = String(action.title);
+    if (action.disabled) btn.setAttribute("disabled", "disabled");
+    if (!action.disabled && typeof action.onClick === "function") {
+      btn.addEventListener("click", () => {
+        bumpInteraction();
+        action.onClick();
+      });
+    }
+    frag.appendChild(btn);
+  }
+
+  root.appendChild(frag);
 }
 
 async function handleSpawnNode(node) {
@@ -4759,11 +4857,6 @@ function installUi() {
       }
     });
   }
-
-  if (els.actionBgWhite) els.actionBgWhite.addEventListener("click", () => applyBackground("white").catch(() => {}));
-  if (els.actionBgSweep) els.actionBgSweep.addEventListener("click", () => applyBackground("sweep").catch(() => {}));
-  if (els.actionCropSquare) els.actionCropSquare.addEventListener("click", () => cropSquare().catch(() => {}));
-  if (els.actionVariations) els.actionVariations.addEventListener("click", () => runVariations().catch(() => {}));
 
   if (els.designateMenu) {
     els.designateMenu.addEventListener("click", (event) => {
