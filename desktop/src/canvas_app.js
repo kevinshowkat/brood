@@ -276,6 +276,37 @@ let describeInFlightPath = null;
 let describeInFlightTimer = null;
 let ptyLineBuffer = "";
 
+let ptyStatusPromise = null;
+async function ensureEngineSpawned({ reason = "engine" } = {}) {
+  if (state.ptySpawned) return true;
+  if (state.ptySpawning) return false;
+  if (!state.runDir || !state.eventsPath) return false;
+
+  // Try to re-sync with the Rust backend in dev/HMR scenarios where the PTY
+  // may still be alive but the frontend state was reset.
+  try {
+    if (!ptyStatusPromise) {
+      ptyStatusPromise = invoke("get_pty_status").finally(() => {
+        ptyStatusPromise = null;
+      });
+    }
+    const status = await ptyStatusPromise;
+    if (status && typeof status === "object" && status.running) {
+      state.ptySpawned = true;
+      setStatus("Engine: connected");
+      return true;
+    }
+  } catch (_) {
+    // Ignore and fall back to spawning.
+  }
+
+  await spawnEngine();
+  if (!state.ptySpawned) {
+    showToast(`Engine failed to start for ${reason}.`, "error", 3200);
+  }
+  return Boolean(state.ptySpawned);
+}
+
 function allowVisionDescribe() {
   return state.keyStatus ? Boolean(state.keyStatus.openai || state.keyStatus.gemini) : true;
 }
@@ -300,10 +331,12 @@ function resetDescribeQueue({ clearPending = false } = {}) {
 function processDescribeQueue() {
   if (describeInFlightPath) return;
   if (!state.ptySpawned) {
-    // If something queued a vision request before the engine came up (or after it exited),
-    // attempt to bring the engine back automatically.
-    if (!state.ptySpawning && state.runDir && state.eventsPath && describeQueue.length > 0) {
-      spawnEngine().catch(() => {});
+    if (describeQueue.length > 0) {
+      ensureEngineSpawned({ reason: "vision" })
+        .then(() => {
+          processDescribeQueue();
+        })
+        .catch(() => {});
     }
     return;
   }
@@ -334,7 +367,15 @@ function processDescribeQueue() {
 
     // NOTE: do not quote paths here. `/describe` uses a raw arg string (not shlex-split),
     // so adding quotes would become part of the path and fail to resolve.
-    invoke("write_pty", { data: `/describe ${path}\n` }).catch(() => {});
+    invoke("write_pty", { data: `/describe ${path}\n` }).catch(() => {
+      // Backend PTY might have exited; re-spawn and continue.
+      state.ptySpawned = false;
+      _completeDescribeInFlight({
+        description: null,
+        errorMessage: "Engine disconnected. Restarting…",
+      });
+      ensureEngineSpawned({ reason: "vision" }).catch(() => {});
+    });
 
     clearTimeout(describeInFlightTimer);
     describeInFlightTimer = setTimeout(() => {
@@ -2303,9 +2344,14 @@ async function replaceImageInPlace(
 }
 
 async function setEngineActiveImage(path) {
-  if (!state.ptySpawned) return;
   if (!path) return;
-  await invoke("write_pty", { data: `/use ${path}\n` }).catch(() => {});
+  if (!state.ptySpawned) {
+    // Active image tracking is best-effort; don't block UI if engine isn't ready yet.
+    return;
+  }
+  await invoke("write_pty", { data: `/use ${path}\n` }).catch(() => {
+    state.ptySpawned = false;
+  });
 }
 
 async function writeLocalReceipt({ artifactId, imagePath, operation, meta = {} }) {
@@ -2470,9 +2516,8 @@ async function aiReplaceBackground(style) {
   portraitWorking(label);
   beginPendingReplace(imgItem.id, label);
   try {
-    if (!state.ptySpawned) {
-      await spawnEngine();
-    }
+    const ok = await ensureEngineSpawned({ reason: label });
+    if (!ok) throw new Error("Engine unavailable");
     await setEngineActiveImage(imgItem.path);
     state.expectingArtifacts = true;
     state.lastAction = label;
@@ -2637,9 +2682,8 @@ async function runVariations() {
   setImageFxActive(true, "Variations");
   portraitWorking("Variations");
   try {
-    if (!state.ptySpawned) {
-      await spawnEngine();
-    }
+    const ok = await ensureEngineSpawned({ reason: "variations" });
+    if (!ok) throw new Error("Engine unavailable");
     state.expectingArtifacts = true;
     setStatus("Engine: variations…");
     await invoke("write_pty", { data: `/recreate ${imgItem.path}\n` });
@@ -2681,9 +2725,8 @@ async function runBlendPair() {
     return;
   }
 
-  if (!state.ptySpawned) {
-    await spawnEngine();
-  }
+  const okEngine = await ensureEngineSpawned({ reason: "combine" });
+  if (!okEngine) return;
   setImageFxActive(true, "Combine");
   state.expectingArtifacts = true;
   state.pendingBlend = { sourceIds: [a.id, b.id], startedAt: Date.now() };
