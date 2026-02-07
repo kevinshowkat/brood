@@ -50,6 +50,13 @@ const els = {
   markDelete: document.getElementById("mark-delete"),
   markSave: document.getElementById("mark-save"),
   hud: document.getElementById("hud"),
+  hudLineUnit: document.getElementById("hud-line-unit"),
+  hudLineDirector: document.getElementById("hud-line-director"),
+  hudDirectorKey: document.getElementById("hud-director-k"),
+  hudDirectorVal: document.getElementById("hud-director-v"),
+  hudLineDesc: document.getElementById("hud-line-desc"),
+  hudLineSel: document.getElementById("hud-line-sel"),
+  hudLineGen: document.getElementById("hud-line-gen"),
   hudUnitName: document.getElementById("hud-unit-name"),
   hudUnitDesc: document.getElementById("hud-unit-desc"),
   hudUnitSel: document.getElementById("hud-unit-sel"),
@@ -68,7 +75,6 @@ const els = {
   portraitVideo2: document.getElementById("portrait-video-2"),
   selectionMeta: document.getElementById("selection-meta"),
   tipsText: document.getElementById("tips-text"),
-  directorText: document.getElementById("director-text"),
   designateMenu: document.getElementById("designate-menu"),
   quickActions: document.getElementById("quick-actions"),
   toolButtons: Array.from(document.querySelectorAll(".tool[data-tool]")),
@@ -271,6 +277,12 @@ function renderHudReadout() {
     if (els.hudUnitDesc) els.hudUnitDesc.textContent = "Tap or drag to add photos";
     if (els.hudUnitSel) els.hudUnitSel.textContent = `${sel} · ${state.tool} · ${zoomPct}%`;
     if (els.hudUnitStat) els.hudUnitStat.textContent = state.ptySpawned ? "ready" : "engine offline";
+    if (els.hudLineDirector) els.hudLineDirector.classList.add("hidden");
+    if (els.hudDirectorVal) els.hudDirectorVal.textContent = "";
+    if (els.hudDirectorKey) els.hudDirectorKey.textContent = "DIR";
+    if (els.hudLineDesc) els.hudLineDesc.classList.remove("hidden");
+    if (els.hudLineSel) els.hudLineSel.classList.remove("hidden");
+    if (els.hudLineGen) els.hudLineGen.classList.remove("hidden");
     return;
   }
 
@@ -321,6 +333,26 @@ function renderHudReadout() {
     pieces.push(`vision:${src}${mdl ? `:${mdl}` : ""}`);
   }
   if (els.hudUnitStat) els.hudUnitStat.textContent = pieces.length ? pieces.join(" · ") : "—";
+
+  const directorRaw = state.lastDirectorText ? String(state.lastDirectorText) : "";
+  const directorMeta = state.lastDirectorMeta && typeof state.lastDirectorMeta === "object" ? state.lastDirectorMeta : null;
+  const directorKind = directorMeta?.kind ? String(directorMeta.kind) : "";
+  let directorText = directorRaw.trim();
+  if (directorText.length > 8000) directorText = `${directorText.slice(0, 7999).trimEnd()}\n…`;
+  const hasDirector = Boolean(directorText);
+
+  if (els.hudDirectorKey) {
+    let key = "DIR";
+    if (directorKind === "diagnose") key = "DIAG";
+    if (directorKind === "argue") key = "ARG";
+    els.hudDirectorKey.textContent = key;
+  }
+  if (els.hudDirectorVal) els.hudDirectorVal.textContent = directorText || "";
+  if (els.hudLineDirector) els.hudLineDirector.classList.toggle("hidden", !hasDirector);
+  // Keep the HUD focused when CD output is present.
+  if (els.hudLineDesc) els.hudLineDesc.classList.toggle("hidden", hasDirector);
+  if (els.hudLineSel) els.hudLineSel.classList.toggle("hidden", hasDirector);
+  if (els.hudLineGen) els.hudLineGen.classList.toggle("hidden", hasDirector);
 }
 
 // Give vision requests enough time to complete under normal network conditions.
@@ -1097,9 +1129,7 @@ function setTip(message) {
 function setDirectorText(text, meta = null) {
   state.lastDirectorText = text ? String(text) : null;
   state.lastDirectorMeta = meta && typeof meta === "object" ? meta : null;
-  if (!els.directorText) return;
-  const value = state.lastDirectorText || "Run Diagnose or Argue to see notes here.";
-  els.directorText.textContent = value;
+  renderHudReadout();
 }
 
 function pulseTool(tool) {
