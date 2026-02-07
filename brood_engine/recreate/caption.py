@@ -87,14 +87,13 @@ def infer_diagnosis(reference_path: Path) -> TextInference | None:
     This is intentionally NOT a neutral description; it's meant to call out what's
     working, what's not, and what to change next.
     """
-    # Prefer Gemini for this workflow (matches Brood's default image stack), but
-    # fall back to OpenAI when Gemini isn't configured.
-    gemini = _diagnose_with_gemini(reference_path)
-    if gemini is not None:
-        return gemini
     openai = _diagnose_with_openai(reference_path)
     if openai is not None:
         return openai
+    # Fall back to Gemini if OpenAI isn't configured/available.
+    gemini = _diagnose_with_gemini(reference_path)
+    if gemini is not None:
+        return gemini
     return None
 
 
