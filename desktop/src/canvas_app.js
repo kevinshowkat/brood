@@ -42,6 +42,13 @@ const els = {
   annotateText: document.getElementById("annotate-text"),
   annotateCancel: document.getElementById("annotate-cancel"),
   annotateSend: document.getElementById("annotate-send"),
+  markPanel: document.getElementById("mark-panel"),
+  markTitle: document.getElementById("mark-title"),
+  markClose: document.getElementById("mark-close"),
+  markMeta: document.getElementById("mark-meta"),
+  markText: document.getElementById("mark-text"),
+  markDelete: document.getElementById("mark-delete"),
+  markSave: document.getElementById("mark-save"),
   hud: document.getElementById("hud"),
   hudUnitName: document.getElementById("hud-unit-name"),
   hudUnitDesc: document.getElementById("hud-unit-desc"),
@@ -119,6 +126,9 @@ const state = {
   lassoDraft: [],
   annotateDraft: null, // { imageId, x0, y0, x1, y1, at } | null (image pixel space)
   annotateBox: null, // { imageId, x0, y0, x1, y1, at } | null (final box until dismissed)
+  circleDraft: null, // { imageId, cx, cy, r, color, at } | null (image pixel space)
+  circlesByImageId: new Map(), // imageId -> [{ id, cx, cy, r, color, label, at }]
+  activeCircle: null, // { imageId, id } | null
   needsEngineModelResync: false, // restore `/image_model` to settings after one-off overrides.
   engineImageModelRestore: null, // string|null
   needsRender: false,
@@ -163,10 +173,25 @@ const state = {
 };
 
 const DEFAULT_TIP = "Click Studio White to replace the background. Use 4 (Lasso) if you want a manual mask.";
+const VISUAL_PROMPT_FILENAME = "visual_prompt.json";
+const VISUAL_PROMPT_SCHEMA_VERSION = 1;
+const VISUAL_GRAMMAR_VERSION = "v0";
 
 // Larva spawn buttons were a fun experiment, but we're turning them off for now.
 // Keep the implementation in place so we can re-enable later.
 const ENABLE_LARVA_SPAWN = false;
+
+let visualPromptWriteTimer = null;
+function scheduleVisualPromptWrite({ immediate = false } = {}) {
+  if (!state.runDir) return;
+  const delay = immediate ? 0 : 350;
+  clearTimeout(visualPromptWriteTimer);
+  visualPromptWriteTimer = setTimeout(() => {
+    writeVisualPrompt().catch((err) => {
+      console.warn("Failed to write visual prompt:", err);
+    });
+  }, delay);
+}
 
 function formatUsd(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
@@ -1218,6 +1243,32 @@ function imageToCanvas(pt) {
   };
 }
 
+function circleImageToCanvasGeom(circle) {
+  if (!circle) return { cx: 0, cy: 0, r: 0 };
+  const cxImg = Number(circle.cx) || 0;
+  const cyImg = Number(circle.cy) || 0;
+  const rImg = Math.max(0, Number(circle.r) || 0);
+  const c = imageToCanvas({ x: cxImg, y: cyImg });
+  const edge = imageToCanvas({ x: cxImg + rImg, y: cyImg });
+  const rPx = Math.max(0, Math.hypot(edge.x - c.x, edge.y - c.y));
+  return { cx: c.x, cy: c.y, r: rPx };
+}
+
+function hitTestCircleMarks(ptCanvas, circles) {
+  if (!ptCanvas || !Array.isArray(circles) || circles.length === 0) return null;
+  const tol = Math.max(8, Math.round(10 * getDpr()));
+  for (let i = circles.length - 1; i >= 0; i -= 1) {
+    const circle = circles[i];
+    if (!circle) continue;
+    const geom = circleImageToCanvasGeom(circle);
+    if (!geom.r) continue;
+    const dist = Math.hypot(ptCanvas.x - geom.cx, ptCanvas.y - geom.cy);
+    if (Math.abs(dist - geom.r) <= tol) return circle;
+    if (geom.r < tol && dist <= geom.r + tol) return circle;
+  }
+  return null;
+}
+
 function requestRender() {
   if (state.needsRender) return;
   state.needsRender = true;
@@ -1278,6 +1329,8 @@ function setCanvasMode(mode) {
   state.annotateDraft = null;
   state.annotateBox = null;
   hideAnnotatePanel();
+  state.circleDraft = null;
+  hideMarkPanel();
   state.pendingDesignation = null;
   hideDesignateMenu();
   chooseSpawnNodes();
@@ -1286,6 +1339,7 @@ function setCanvasMode(mode) {
     scheduleVisionDescribeAll();
   }
   renderSelectionMeta();
+  scheduleVisualPromptWrite();
   requestRender();
 }
 
@@ -1405,6 +1459,7 @@ function resetViewToFit() {
   const desiredTop = Math.round(ch * (isMobile ? 0.04 : 0.06));
   state.view.offsetY = slackY <= desiredTop ? slackY / 2 : desiredTop;
   renderHudReadout();
+  scheduleVisualPromptWrite();
   requestRender();
 }
 
@@ -1471,9 +1526,12 @@ function clearSelection() {
   state.pendingDesignation = null;
   state.annotateDraft = null;
   state.annotateBox = null;
+  state.circleDraft = null;
+  hideMarkPanel();
   hideDesignateMenu();
   hideAnnotatePanel();
   setTip(DEFAULT_TIP);
+  scheduleVisualPromptWrite();
   requestRender();
   renderSelectionMeta();
   renderHudReadout();
@@ -1486,6 +1544,8 @@ function setTool(tool) {
     state.annotateDraft = null;
     state.annotateBox = null;
     hideAnnotatePanel();
+    state.circleDraft = null;
+    hideMarkPanel();
   }
   if (tool !== "designate") state.pendingDesignation = null;
   hideDesignateMenu();
@@ -1499,12 +1559,13 @@ function setTool(tool) {
   if (tool === "lasso") {
     setTip("Lasso your product, then click Studio White. Or skip lasso and let the model infer the subject.");
   } else if (tool === "annotate") {
-    setTip("Annotate: drag a box, then type an instruction to edit that region.");
+    setTip("Annotate: drag a box to edit. Hold Shift to draw a red circle label.");
   } else if (tool === "designate") {
     setTip("Designate: click the image to place a point, then pick Subject/Reference/Object.");
   } else {
     setTip(DEFAULT_TIP);
   }
+  scheduleVisualPromptWrite();
 }
 
 function showDropHint(show) {
@@ -1687,6 +1748,115 @@ function showAnnotatePanelForBox() {
   }, 0);
 }
 
+function _getCircles(imageId) {
+  const key = String(imageId || "");
+  if (!key) return [];
+  const existing = state.circlesByImageId.get(key);
+  return Array.isArray(existing) ? existing : [];
+}
+
+function hideMarkPanel() {
+  if (!els.markPanel) return;
+  els.markPanel.classList.add("hidden");
+  state.activeCircle = null;
+}
+
+function showMarkPanelForCircle(circle) {
+  const panel = els.markPanel;
+  const wrap = els.canvasWrap;
+  const img = getActiveImage();
+  if (!panel || !wrap || !img || !circle || circle.imageId !== img.id) return;
+
+  panel.classList.remove("hidden");
+  state.activeCircle = { imageId: circle.imageId, id: circle.id };
+
+  if (els.markTitle) {
+    els.markTitle.textContent = "Circle";
+  }
+
+  const iw = img?.img?.naturalWidth || img?.width || null;
+  const ih = img?.img?.naturalHeight || img?.height || null;
+  if (els.markMeta) {
+    if (iw && ih) {
+      const xPct = (Number(circle.cx) / iw) * 100;
+      const yPct = (Number(circle.cy) / ih) * 100;
+      const rPct = (Number(circle.r) / Math.max(1, Math.min(iw, ih))) * 100;
+      els.markMeta.textContent = `Circle: x ${xPct.toFixed(1)}% y ${yPct.toFixed(1)}% r ${rPct.toFixed(1)}%`;
+    } else {
+      els.markMeta.textContent = `Circle: x ${Math.round(Number(circle.cx) || 0)} y ${Math.round(Number(circle.cy) || 0)} r ${Math.round(
+        Number(circle.r) || 0
+      )} (px)`;
+    }
+  }
+
+  if (els.markText) {
+    els.markText.value = String(circle.label || "");
+  }
+
+  // Position near the circle (prefer right side), clamped within canvas.
+  const dpr = getDpr();
+  const c = imageToCanvas({ x: Number(circle.cx) || 0, y: Number(circle.cy) || 0 });
+  const edge = imageToCanvas({ x: (Number(circle.cx) || 0) + (Number(circle.r) || 0), y: Number(circle.cy) || 0 });
+  const rPx = Math.max(0, Math.hypot(edge.x - c.x, edge.y - c.y));
+  const baseX = (c.x + rPx) / dpr + 12;
+  const baseY = c.y / dpr - 10;
+  panel.style.left = `${baseX}px`;
+  panel.style.top = `${baseY}px`;
+
+  requestAnimationFrame(() => {
+    const pw = panel.offsetWidth || 0;
+    const ph = panel.offsetHeight || 0;
+    const maxX = Math.max(8, wrap.clientWidth - pw - 8);
+    const maxY = Math.max(8, wrap.clientHeight - ph - 8);
+    const x = clamp(baseX, 8, maxX);
+    const y = clamp(baseY, 8, maxY);
+    panel.style.left = `${x}px`;
+    panel.style.top = `${y}px`;
+  });
+
+  // Focus input for speed.
+  setTimeout(() => {
+    try {
+      if (els.markText) els.markText.focus();
+    } catch {
+      // ignore
+    }
+  }, 0);
+}
+
+function getActiveCircle() {
+  const sel = state.activeCircle;
+  if (!sel?.imageId || !sel?.id) return null;
+  const list = _getCircles(sel.imageId);
+  return list.find((c) => c && c.id === sel.id) || null;
+}
+
+function updateActiveCircleLabel(label) {
+  const sel = state.activeCircle;
+  if (!sel?.imageId || !sel?.id) return false;
+  const nextLabel = String(label || "").trim();
+  const list = _getCircles(sel.imageId).slice();
+  const idx = list.findIndex((c) => c && c.id === sel.id);
+  if (idx < 0) return false;
+  list[idx] = { ...list[idx], label: nextLabel };
+  state.circlesByImageId.set(sel.imageId, list);
+  scheduleVisualPromptWrite();
+  requestRender();
+  return true;
+}
+
+function deleteActiveCircle() {
+  const sel = state.activeCircle;
+  if (!sel?.imageId || !sel?.id) return false;
+  const list = _getCircles(sel.imageId).slice();
+  const next = list.filter((c) => c && c.id !== sel.id);
+  state.circlesByImageId.set(sel.imageId, next);
+  hideMarkPanel();
+  scheduleVisualPromptWrite();
+  requestRender();
+  return true;
+}
+
 function _commitDesignation(kind) {
   const pending = state.pendingDesignation;
   const img = getActiveImage();
@@ -1702,6 +1872,7 @@ function _commitDesignation(kind) {
   list.push(entry);
   state.designationsByImageId.set(img.id, list);
   state.pendingDesignation = null;
+  scheduleVisualPromptWrite();
   requestRender();
   return true;
 }
@@ -1711,6 +1882,7 @@ function _clearDesignations() {
   if (!img) return;
   state.designationsByImageId.delete(img.id);
   if (state.pendingDesignation?.imageId === img.id) state.pendingDesignation = null;
+  scheduleVisualPromptWrite();
   requestRender();
 }
 
@@ -2479,6 +2651,7 @@ function addImage(item, { select = false } = {}) {
     ensureReceiptMeta(item).catch(() => {});
   }
   showDropHint(state.images.length === 0);
+  scheduleVisualPromptWrite();
   if (select || !state.activeId) {
     setActiveImage(item.id).catch(() => {});
   }
@@ -2527,9 +2700,9 @@ async function replaceImageInPlace(
 
   updateFilmstripThumb(item);
   if (item.receiptPath) ensureReceiptMeta(item).catch(() => {});
-  if (state.activeId === targetId) {
-    try {
-      item.img = await loadImage(item.path);
+	  if (state.activeId === targetId) {
+	    try {
+	      item.img = await loadImage(item.path);
       item.width = item.img?.naturalWidth || null;
       item.height = item.img?.naturalHeight || null;
     } catch (err) {
@@ -2540,11 +2713,12 @@ async function replaceImageInPlace(
     renderSelectionMeta();
     chooseSpawnNodes();
     renderHudReadout();
-    resetViewToFit();
-    requestRender();
-  }
-  return true;
-}
+	    resetViewToFit();
+	    requestRender();
+	  }
+    scheduleVisualPromptWrite();
+	  return true;
+	}
 
 async function setEngineActiveImage(path) {
   if (!path) return;
@@ -2610,6 +2784,164 @@ async function writeLocalReceipt({ artifactId, imagePath, operation, meta = {} }
   };
   await writeTextFile(receiptPath, JSON.stringify(payload, null, 2));
   return receiptPath;
+}
+
+function isoFromMs(ms) {
+  const t = typeof ms === "number" && Number.isFinite(ms) ? ms : Date.now();
+  try {
+    return new Date(t).toISOString();
+  } catch {
+    return new Date().toISOString();
+  }
+}
+
+function buildVisualPrompt() {
+  const nowIso = new Date().toISOString();
+  const canvas = els.workCanvas;
+  const dpr = getDpr();
+  const active = getActiveImage();
+
+  let multiRects = null;
+  if (state.canvasMode === "multi" && canvas) {
+    const rectMap =
+      state.multiRects && state.multiRects.size ? state.multiRects : computeMultiRects(state.images, canvas.width, canvas.height);
+    multiRects = Array.from(rectMap.entries()).map(([imageId, rect]) => ({
+      image_id: String(imageId),
+      x: Number(rect?.x) || 0,
+      y: Number(rect?.y) || 0,
+      w: Number(rect?.w) || 0,
+      h: Number(rect?.h) || 0,
+      cell_x: Number(rect?.cellX) || 0,
+      cell_y: Number(rect?.cellY) || 0,
+      cell_w: Number(rect?.cellW) || 0,
+      cell_h: Number(rect?.cellH) || 0,
+    }));
+  }
+
+  const images = state.images.map((item) => ({
+    id: String(item?.id || ""),
+    kind: item?.kind ? String(item.kind) : null,
+    path: item?.path ? String(item.path) : null,
+    label: item?.label ? String(item.label) : null,
+    width: Number(item?.img?.naturalWidth || item?.width) || null,
+    height: Number(item?.img?.naturalHeight || item?.height) || null,
+  }));
+
+  const marks = [];
+
+  // Lasso polygon (active image only).
+  if (active?.id && state.selection?.points?.length >= 3) {
+    const atMs = Number(state.selection?.at) || Date.now();
+    marks.push({
+      id: `lasso-${atMs}`,
+      type: "lasso_polygon",
+      color: "rgba(255, 179, 0, 0.95)",
+      label: null,
+      target_image_id: String(active.id),
+      image_space: {
+        points: state.selection.points.map((pt) => ({
+          x: Number(pt?.x) || 0,
+          y: Number(pt?.y) || 0,
+        })),
+      },
+      created_at: isoFromMs(atMs),
+    });
+  }
+
+  // Designate points.
+  for (const [imageId, list] of Array.from(state.designationsByImageId.entries())) {
+    const imageKey = String(imageId || "");
+    if (!imageKey || !Array.isArray(list)) continue;
+    for (const mark of list) {
+      const atMs = Number(mark?.at) || Date.now();
+      marks.push({
+        id: String(mark?.id || `d-${atMs}`),
+        type: "designate_point",
+        color: "rgba(100, 210, 255, 0.82)",
+        label: mark?.kind ? String(mark.kind) : null,
+        target_image_id: imageKey,
+        image_space: { x: Number(mark?.x) || 0, y: Number(mark?.y) || 0 },
+        created_at: isoFromMs(atMs),
+      });
+    }
+  }
+
+  // Annotate box (draft/final, active image only).
+  if (active?.id && state.annotateBox && state.annotateBox.imageId === active.id) {
+    const atMs = Number(state.annotateBox?.at) || Date.now();
+    const label = String(els.annotateText?.value || "").trim() || null;
+    marks.push({
+      id: `box-${atMs}`,
+      type: "box",
+      color: "rgba(82, 255, 148, 0.92)",
+      label,
+      target_image_id: String(active.id),
+      image_space: {
+        x0: Number(state.annotateBox?.x0) || 0,
+        y0: Number(state.annotateBox?.y0) || 0,
+        x1: Number(state.annotateBox?.x1) || 0,
+        y1: Number(state.annotateBox?.y1) || 0,
+      },
+      created_at: isoFromMs(atMs),
+    });
+  }
+
+  // Circles.
+  for (const [imageId, list] of Array.from(state.circlesByImageId.entries())) {
+    const imageKey = String(imageId || "");
+    if (!imageKey || !Array.isArray(list)) continue;
+    for (const circle of list) {
+      const atMs = Number(circle?.at) || Date.now();
+      marks.push({
+        id: String(circle?.id || `c-${atMs}`),
+        type: "circle",
+        color: circle?.color ? String(circle.color) : "rgba(255, 95, 95, 0.92)",
+        label: circle?.label ? String(circle.label) : null,
+        target_image_id: imageKey,
+        image_space: {
+          cx: Number(circle?.cx) || 0,
+          cy: Number(circle?.cy) || 0,
+          r: Number(circle?.r) || 0,
+        },
+        created_at: isoFromMs(atMs),
+      });
+    }
+  }
+
+  return {
+    schema: "brood.visual_prompt",
+    schema_version: VISUAL_PROMPT_SCHEMA_VERSION,
+    visual_grammar_version: VISUAL_GRAMMAR_VERSION,
+    updated_at: nowIso,
+    run_dir: state.runDir ? String(state.runDir) : null,
+    canvas: {
+      mode: state.canvasMode,
+      dpr,
+      size_px: canvas ? { w: canvas.width || 0, h: canvas.height || 0 } : null,
+      tool: state.tool,
+      active_image_id: state.activeId ? String(state.activeId) : null,
+      view: {
+        scale: Number(state.view?.scale) || 1,
+        offset_x: Number(state.view?.offsetX) || 0,
+        offset_y: Number(state.view?.offsetY) || 0,
+      },
+      multi_view: {
+        offset_x: Number(state.multiView?.offsetX) || 0,
+        offset_y: Number(state.multiView?.offsetY) || 0,
+      },
+      multi_rects_px: multiRects,
+    },
+    images,
+    marks,
+  };
+}
+
+async function writeVisualPrompt() {
+  if (!state.runDir) return false;
+  const outPath = `${state.runDir}/${VISUAL_PROMPT_FILENAME}`;
+  const payload = buildVisualPrompt();
+  await writeTextFile(outPath, JSON.stringify(payload, null, 2));
+  return true;
 }
 
 async function importPhotos() {
@@ -2910,12 +3242,13 @@ async function aiAnnotateEdit() {
     await invoke("write_pty", { data: `${prompt}\n` });
 
     // Clear UI selection now that the instruction is sent.
-    if (els.annotateText) els.annotateText.value = "";
-    state.annotateBox = null;
-    state.annotateDraft = null;
-    hideAnnotatePanel();
-    requestRender();
-  } catch (err) {
+	    if (els.annotateText) els.annotateText.value = "";
+	    state.annotateBox = null;
+	    state.annotateDraft = null;
+	    hideAnnotatePanel();
+      scheduleVisualPromptWrite();
+	    requestRender();
+	  } catch (err) {
     state.expectingArtifacts = false;
     state.engineImageModelRestore = null;
     clearPendingReplace();
@@ -3175,6 +3508,9 @@ async function createRun() {
   state.annotateDraft = null;
   state.annotateBox = null;
   hideAnnotatePanel();
+  state.circleDraft = null;
+  state.circlesByImageId.clear();
+  hideMarkPanel();
   state.expectingArtifacts = false;
   state.lastRecreatePrompt = null;
   setRunInfo(`Run: ${state.runDir}`);
@@ -3182,6 +3518,7 @@ async function createRun() {
   showDropHint(true);
   renderFilmstrip();
   chooseSpawnNodes();
+  scheduleVisualPromptWrite({ immediate: true });
   await spawnEngine();
   await startEventsPolling();
   if (state.ptySpawned) setStatus("Engine: ready");
@@ -3213,6 +3550,9 @@ async function openExistingRun() {
   state.annotateDraft = null;
   state.annotateBox = null;
   hideAnnotatePanel();
+  state.circleDraft = null;
+  state.circlesByImageId.clear();
+  hideMarkPanel();
   state.expectingArtifacts = false;
   state.lastRecreatePrompt = null;
   setRunInfo(`Run: ${state.runDir}`);
@@ -3221,6 +3561,7 @@ async function openExistingRun() {
   await loadExistingArtifacts();
   await spawnEngine();
   await startEventsPolling();
+  scheduleVisualPromptWrite({ immediate: true });
   if (state.ptySpawned) setStatus("Engine: ready");
 }
 
@@ -3703,6 +4044,64 @@ function render() {
 
   if (item?.id) {
     const dpr = getDpr();
+    const circles = _getCircles(item.id);
+    const draft = state.circleDraft && state.circleDraft.imageId === item.id ? state.circleDraft : null;
+    const activeCircleId = state.activeCircle?.imageId === item.id ? state.activeCircle.id : null;
+
+    const drawCircle = (circle, { isDraft = false } = {}) => {
+      if (!circle) return;
+      const geom = circleImageToCanvasGeom(circle);
+      if (!geom.r || geom.r < 1) return;
+      const color = circle.color || "rgba(255, 95, 95, 0.92)";
+      const fill = "rgba(255, 95, 95, 0.08)";
+      const isActive = !isDraft && activeCircleId && circle.id === activeCircleId;
+
+      octx.save();
+      octx.lineWidth = Math.max(1, Math.round((isActive ? 2.8 : 2) * dpr));
+      octx.strokeStyle = color;
+      octx.fillStyle = fill;
+      if (isActive) {
+        octx.shadowColor = "rgba(255, 95, 95, 0.22)";
+        octx.shadowBlur = Math.round(16 * dpr);
+      }
+      if (isDraft) {
+        octx.setLineDash([Math.round(10 * dpr), Math.round(8 * dpr)]);
+      }
+      octx.beginPath();
+      octx.arc(geom.cx, geom.cy, geom.r, 0, Math.PI * 2);
+      octx.stroke();
+      if (!isDraft) octx.fill();
+      octx.setLineDash([]);
+
+      const label = String(circle.label || "").trim();
+	      if (label) {
+	        octx.shadowBlur = 0;
+	        octx.font = `${Math.max(10, Math.round(11 * dpr))}px IBM Plex Mono`;
+	        octx.textBaseline = "middle";
+	        octx.fillStyle = color;
+	        const x = geom.cx + geom.r + Math.round(10 * dpr);
+	        const y = geom.cy;
+	        // Tiny dark underlay for legibility against bright pixels.
+	        octx.globalAlpha = 0.85;
+        octx.fillStyle = "rgba(0, 0, 0, 0.62)";
+        octx.fillText(label, x + Math.round(1 * dpr), y + Math.round(1 * dpr));
+	        octx.globalAlpha = 1;
+	        octx.fillStyle = color;
+	        octx.fillText(label, x, y);
+	      }
+      octx.restore();
+    };
+
+    for (const circle of circles.slice(-24)) {
+      drawCircle(circle, { isDraft: false });
+    }
+    if (draft) {
+      drawCircle(draft, { isDraft: true });
+    }
+  }
+
+  if (item?.id) {
+    const dpr = getDpr();
     const marks = _getDesignations(item.id);
     const pending = state.pendingDesignation?.imageId === item.id ? state.pendingDesignation : null;
     if ((marks && marks.length) || pending) {
@@ -3803,27 +4202,60 @@ function installCanvasHandlers() {
 	        return;
 	      }
 
-	      if (state.tool === "annotate") {
-	        const imgPt = canvasToImage(p);
-	        els.overlayCanvas.setPointerCapture(event.pointerId);
-	        state.pointer.active = true;
-	        state.pointer.startX = p.x;
-	        state.pointer.startY = p.y;
-	        state.pointer.lastX = p.x;
-	        state.pointer.lastY = p.y;
-	        state.annotateBox = null;
-	        hideAnnotatePanel();
-	        state.annotateDraft = {
-	          imageId: img.id,
-	          x0: imgPt.x,
-	          y0: imgPt.y,
-	          x1: imgPt.x,
-	          y1: imgPt.y,
-	          at: Date.now(),
-	        };
-	        requestRender();
-	        return;
-	      }
+		      if (state.tool === "annotate") {
+		        const imgPt = canvasToImage(p);
+		        if (event.shiftKey) {
+		          hideAnnotatePanel();
+		          hideMarkPanel();
+		          state.annotateBox = null;
+		          state.annotateDraft = null;
+		          els.overlayCanvas.setPointerCapture(event.pointerId);
+		          state.pointer.active = true;
+		          state.pointer.startX = p.x;
+		          state.pointer.startY = p.y;
+		          state.pointer.lastX = p.x;
+		          state.pointer.lastY = p.y;
+		          state.circleDraft = {
+		            imageId: img.id,
+		            cx: imgPt.x,
+		            cy: imgPt.y,
+		            r: 0,
+		            color: "rgba(255, 95, 95, 0.92)",
+		            at: Date.now(),
+		          };
+		          requestRender();
+		          return;
+		        }
+
+		        const circles = _getCircles(img.id);
+		        const hitCircle = hitTestCircleMarks(p, circles);
+		        if (hitCircle) {
+		          hideAnnotatePanel();
+		          showMarkPanelForCircle(hitCircle);
+		          requestRender();
+		          return;
+		        }
+
+		        hideMarkPanel();
+		        els.overlayCanvas.setPointerCapture(event.pointerId);
+		        state.pointer.active = true;
+		        state.pointer.startX = p.x;
+		        state.pointer.startY = p.y;
+		        state.pointer.lastX = p.x;
+		        state.pointer.lastY = p.y;
+		        state.annotateBox = null;
+		        hideAnnotatePanel();
+		        state.annotateDraft = {
+		          imageId: img.id,
+		          x0: imgPt.x,
+		          y0: imgPt.y,
+		          x1: imgPt.x,
+		          y1: imgPt.y,
+		          at: Date.now(),
+		        };
+		        requestRender();
+		        return;
+		      }
 
 	      if (state.tool === "lasso") {
 	        els.overlayCanvas.setPointerCapture(event.pointerId);
@@ -3840,42 +4272,72 @@ function installCanvasHandlers() {
 	        return;
 	      }
 	      return;
-	    }
-	    const img = getActiveImage();
-	    if (!img) return;
-	    if (state.tool === "designate") {
-	      const p = canvasPointFromEvent(event);
-	      const imgPt = canvasToImage(p);
-	      state.pendingDesignation = { imageId: img.id, x: imgPt.x, y: imgPt.y, at: Date.now() };
-	      showDesignateMenuAt(canvasCssPointFromEvent(event));
-	      requestRender();
-	      return;
-	    }
-	    els.overlayCanvas.setPointerCapture(event.pointerId);
-	    const p = canvasPointFromEvent(event);
-	    state.pointer.active = true;
-    state.pointer.startX = p.x;
-    state.pointer.startY = p.y;
-    state.pointer.lastX = p.x;
-    state.pointer.lastY = p.y;
-    state.pointer.startOffsetX = state.view.offsetX;
-	    state.pointer.startOffsetY = state.view.offsetY;
+		    }
+		    const img = getActiveImage();
+		    if (!img) return;
+        const p = canvasPointFromEvent(event);
+		    if (state.tool === "designate") {
+		      const imgPt = canvasToImage(p);
+		      state.pendingDesignation = { imageId: img.id, x: imgPt.x, y: imgPt.y, at: Date.now() };
+		      showDesignateMenuAt(canvasCssPointFromEvent(event));
+		      requestRender();
+		      return;
+		    }
 
-	    if (state.tool === "annotate") {
-	      const imgPt = canvasToImage(p);
-	      state.annotateBox = null;
-	      hideAnnotatePanel();
-	      state.annotateDraft = {
-	        imageId: img.id,
-	        x0: imgPt.x,
+        if (state.tool === "annotate" && !event.shiftKey) {
+          const circles = _getCircles(img.id);
+          const hitCircle = hitTestCircleMarks(p, circles);
+          if (hitCircle) {
+            hideAnnotatePanel();
+            showMarkPanelForCircle(hitCircle);
+            requestRender();
+            return;
+          }
+        }
+
+		    els.overlayCanvas.setPointerCapture(event.pointerId);
+		    state.pointer.active = true;
+	    state.pointer.startX = p.x;
+	    state.pointer.startY = p.y;
+	    state.pointer.lastX = p.x;
+	    state.pointer.lastY = p.y;
+    state.pointer.startOffsetX = state.view.offsetX;
+		    state.pointer.startOffsetY = state.view.offsetY;
+
+		    if (state.tool === "annotate") {
+		      const imgPt = canvasToImage(p);
+          if (event.shiftKey) {
+            hideAnnotatePanel();
+            hideMarkPanel();
+            state.annotateBox = null;
+            state.annotateDraft = null;
+            state.circleDraft = {
+              imageId: img.id,
+              cx: imgPt.x,
+              cy: imgPt.y,
+              r: 0,
+              color: "rgba(255, 95, 95, 0.92)",
+              at: Date.now(),
+            };
+            requestRender();
+            return;
+          }
+
+          hideMarkPanel();
+          state.circleDraft = null;
+		      state.annotateBox = null;
+		      hideAnnotatePanel();
+		      state.annotateDraft = {
+		        imageId: img.id,
+		        x0: imgPt.x,
 	        y0: imgPt.y,
 	        x1: imgPt.x,
 	        y1: imgPt.y,
 	        at: Date.now(),
 	      };
-	      requestRender();
-	      return;
-	    }
+		      requestRender();
+		      return;
+		    }
 
 	    if (state.tool === "lasso") {
 	      state.selection = null;
@@ -3889,29 +4351,39 @@ function installCanvasHandlers() {
     bumpInteraction();
     const p = canvasPointFromEvent(event);
     const dx = p.x - state.pointer.startX;
-    const dy = p.y - state.pointer.startY;
-    state.pointer.lastX = p.x;
-    state.pointer.lastY = p.y;
-	    if (state.tool === "annotate") {
-	      const img = getActiveImage();
-	      if (!img || !state.annotateDraft || state.annotateDraft.imageId !== img.id) return;
-	      const imgPt = canvasToImage(p);
-	      state.annotateDraft.x1 = imgPt.x;
-	      state.annotateDraft.y1 = imgPt.y;
+	    const dy = p.y - state.pointer.startY;
+	    state.pointer.lastX = p.x;
+	    state.pointer.lastY = p.y;
+		    if (state.tool === "annotate") {
+		      const img = getActiveImage();
+		      if (!img) return;
+          if (state.circleDraft && state.circleDraft.imageId === img.id) {
+            const imgPt = canvasToImage(p);
+            const dxImg = (Number(imgPt.x) || 0) - (Number(state.circleDraft.cx) || 0);
+            const dyImg = (Number(imgPt.y) || 0) - (Number(state.circleDraft.cy) || 0);
+            state.circleDraft.r = Math.max(0, Math.hypot(dxImg, dyImg));
+            requestRender();
+            return;
+          }
+		      if (!state.annotateDraft || state.annotateDraft.imageId !== img.id) return;
+		      const imgPt = canvasToImage(p);
+		      state.annotateDraft.x1 = imgPt.x;
+		      state.annotateDraft.y1 = imgPt.y;
+		      requestRender();
+		      return;
+		    }
+	    if (state.tool === "pan") {
+	      if (state.canvasMode === "multi") {
+	        state.multiView.offsetX = state.pointer.startOffsetX + dx;
+	        state.multiView.offsetY = state.pointer.startOffsetY + dy;
+	      } else {
+	        state.view.offsetX = state.pointer.startOffsetX + dx;
+	        state.view.offsetY = state.pointer.startOffsetY + dy;
+	      }
+        scheduleVisualPromptWrite();
 	      requestRender();
 	      return;
 	    }
-    if (state.tool === "pan") {
-      if (state.canvasMode === "multi") {
-        state.multiView.offsetX = state.pointer.startOffsetX + dx;
-        state.multiView.offsetY = state.pointer.startOffsetY + dy;
-      } else {
-        state.view.offsetX = state.pointer.startOffsetX + dx;
-        state.view.offsetY = state.pointer.startOffsetY + dy;
-      }
-      requestRender();
-      return;
-    }
     if (state.tool === "lasso") {
       const imgPt = canvasToImage(p);
       const last = state.lassoDraft[state.lassoDraft.length - 1];
@@ -3938,42 +4410,70 @@ function installCanvasHandlers() {
     }
   });
 
-  function finalizePointer(event) {
-    if (!state.pointer.active) return;
-    bumpInteraction();
-    state.pointer.active = false;
-	    if (state.tool === "annotate") {
-	      const img = getActiveImage();
-	      const draft = state.annotateDraft;
-	      state.annotateDraft = null;
-	      if (img && draft && draft.imageId === img.id) {
-	        const normalized = _normalizeAnnotateBox(draft, img);
+	  function finalizePointer(event) {
+	    if (!state.pointer.active) return;
+	    bumpInteraction();
+	    state.pointer.active = false;
+		    if (state.tool === "annotate") {
+		      const img = getActiveImage();
+          if (img && state.circleDraft && state.circleDraft.imageId === img.id) {
+            const draft = state.circleDraft;
+            state.circleDraft = null;
+            const r = Math.max(0, Number(draft?.r) || 0);
+            if (r >= 6) {
+              const entry = {
+                id: `c-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                imageId: img.id,
+                cx: Number(draft?.cx) || 0,
+                cy: Number(draft?.cy) || 0,
+                r,
+                color: draft?.color ? String(draft.color) : "rgba(255, 95, 95, 0.92)",
+                label: "",
+                at: Date.now(),
+              };
+              const list = _getCircles(img.id).slice();
+              list.push(entry);
+              state.circlesByImageId.set(img.id, list);
+              showMarkPanelForCircle(entry);
+              scheduleVisualPromptWrite();
+	            } else {
+	              hideMarkPanel();
+	            }
+	            requestRender();
+	          }
+		      const draft = state.annotateDraft;
+		      state.annotateDraft = null;
+		      if (img && draft && draft.imageId === img.id) {
+		        const normalized = _normalizeAnnotateBox(draft, img);
 	        const w = Math.abs((normalized?.x1 || 0) - (normalized?.x0 || 0));
 	        const h = Math.abs((normalized?.y1 || 0) - (normalized?.y0 || 0));
 	        if (normalized && w >= 8 && h >= 8) {
-	          state.annotateBox = normalized;
-	          showAnnotatePanelForBox();
-	        } else {
-	          state.annotateBox = null;
-	          hideAnnotatePanel();
-	        }
+		          state.annotateBox = normalized;
+		          showAnnotatePanelForBox();
+              scheduleVisualPromptWrite();
+		        } else {
+		          state.annotateBox = null;
+		          hideAnnotatePanel();
+              scheduleVisualPromptWrite();
+		        }
+		      }
+		      requestRender();
+		    }
+	    if (state.tool === "lasso") {
+	      if (state.lassoDraft.length >= 3) {
+	        state.selection = { points: state.lassoDraft.slice(), closed: true, at: Date.now() };
+	      } else {
+	        state.selection = null;
 	      }
+	      state.lassoDraft = [];
+	      renderSelectionMeta();
+	      chooseSpawnNodes();
+        scheduleVisualPromptWrite();
 	      requestRender();
 	    }
-    if (state.tool === "lasso") {
-      if (state.lassoDraft.length >= 3) {
-        state.selection = { points: state.lassoDraft.slice(), closed: true };
-      } else {
-        state.selection = null;
-      }
-      state.lassoDraft = [];
-      renderSelectionMeta();
-      chooseSpawnNodes();
-      requestRender();
-    }
-    try {
-      els.overlayCanvas.releasePointerCapture(event.pointerId);
-    } catch {
+	    try {
+	      els.overlayCanvas.releasePointerCapture(event.pointerId);
+	    } catch {
       // ignore
     }
   }
@@ -3995,15 +4495,16 @@ function installCanvasHandlers() {
       const before = canvasToImage(p);
       const factor = Math.exp(-event.deltaY * 0.0012);
       const next = clamp(state.view.scale * factor, 0.05, 40);
-      state.view.scale = next;
-      state.view.offsetX = p.x - before.x * state.view.scale;
-      state.view.offsetY = p.y - before.y * state.view.scale;
-      renderHudReadout();
-      requestRender();
-    },
-    { passive: false }
-  );
-}
+	      state.view.scale = next;
+	      state.view.offsetX = p.x - before.x * state.view.scale;
+	      state.view.offsetY = p.y - before.y * state.view.scale;
+	      renderHudReadout();
+        scheduleVisualPromptWrite();
+	      requestRender();
+	    },
+	    { passive: false }
+	  );
+	}
 
 function installDnD() {
   if (!els.canvasWrap) return;
@@ -4168,6 +4669,7 @@ function installUi() {
       state.annotateDraft = null;
       state.annotateBox = null;
       hideAnnotatePanel();
+      scheduleVisualPromptWrite();
       requestRender();
     });
   }
@@ -4177,6 +4679,7 @@ function installUi() {
       state.annotateDraft = null;
       state.annotateBox = null;
       hideAnnotatePanel();
+      scheduleVisualPromptWrite();
       requestRender();
     });
   }
@@ -4192,6 +4695,43 @@ function installUi() {
       if (mod && key === "Enter") {
         event.preventDefault();
         aiAnnotateEdit().catch((e) => console.error(e));
+      }
+    });
+  }
+
+  if (els.markClose) {
+    els.markClose.addEventListener("click", () => {
+      bumpInteraction();
+      hideMarkPanel();
+      requestRender();
+    });
+  }
+  if (els.markSave) {
+    els.markSave.addEventListener("click", () => {
+      bumpInteraction();
+      updateActiveCircleLabel(String(els.markText?.value || ""));
+      hideMarkPanel();
+      requestRender();
+      showToast("Circle label saved.", "tip", 1400);
+    });
+  }
+  if (els.markDelete) {
+    els.markDelete.addEventListener("click", () => {
+      bumpInteraction();
+      const ok = deleteActiveCircle();
+      if (ok) showToast("Circle deleted.", "tip", 1400);
+    });
+  }
+  if (els.markText) {
+    els.markText.addEventListener("keydown", (event) => {
+      const key = String(event?.key || "");
+      const mod = Boolean(event?.metaKey || event?.ctrlKey);
+      if (mod && key === "Enter") {
+        event.preventDefault();
+        updateActiveCircleLabel(String(els.markText?.value || ""));
+        hideMarkPanel();
+        requestRender();
+        showToast("Circle label saved.", "tip", 1400);
       }
     });
   }
@@ -4261,35 +4801,49 @@ function installUi() {
     );
     const hasModifier = Boolean(event?.metaKey || event?.ctrlKey || event?.altKey);
 
-    if (key === "escape") {
-      if (els.settingsDrawer && !els.settingsDrawer.classList.contains("hidden")) {
-        els.settingsDrawer.classList.add("hidden");
-        return;
-      }
-      if (els.annotatePanel && !els.annotatePanel.classList.contains("hidden")) {
-        state.annotateDraft = null;
-        state.annotateBox = null;
-        hideAnnotatePanel();
-        requestRender();
-        return;
-      }
-      if (state.pendingDesignation || (els.designateMenu && !els.designateMenu.classList.contains("hidden"))) {
-        state.pendingDesignation = null;
-        hideDesignateMenuAnimated({ animate: false });
-        requestRender();
-        return;
+	    if (key === "escape") {
+	      if (els.settingsDrawer && !els.settingsDrawer.classList.contains("hidden")) {
+	        els.settingsDrawer.classList.add("hidden");
+	        return;
+	      }
+        if (els.markPanel && !els.markPanel.classList.contains("hidden")) {
+          hideMarkPanel();
+          requestRender();
+          return;
+        }
+	      if (els.annotatePanel && !els.annotatePanel.classList.contains("hidden")) {
+	        state.annotateDraft = null;
+	        state.annotateBox = null;
+	        hideAnnotatePanel();
+          scheduleVisualPromptWrite();
+	        requestRender();
+	        return;
+	      }
+	      if (state.pendingDesignation || (els.designateMenu && !els.designateMenu.classList.contains("hidden"))) {
+	        state.pendingDesignation = null;
+	        hideDesignateMenuAnimated({ animate: false });
+	        requestRender();
+	        return;
       }
       clearSelection();
       return;
     }
 
-    if (isEditable || hasModifier) return;
+	    if (isEditable || hasModifier) return;
 
-    // HUD action grid 1-9.
-    if (/^[1-9]$/.test(rawKey)) {
-      const digit = rawKey;
-      const btn = document.querySelector(`.hud-keybar .tool[data-hotkey="${digit}"][data-tool]`);
-      if (btn) {
+      if (key === "backspace" || key === "delete") {
+        if (state.activeCircle) {
+          const ok = deleteActiveCircle();
+          if (ok) showToast("Circle deleted.", "tip", 1400);
+          return;
+        }
+      }
+
+	    // HUD action grid 1-9.
+	    if (/^[1-9]$/.test(rawKey)) {
+	      const digit = rawKey;
+	      const btn = document.querySelector(`.hud-keybar .tool[data-hotkey="${digit}"][data-tool]`);
+	      if (btn) {
         btn.click();
         return;
       }
@@ -4349,6 +4903,7 @@ async function boot() {
 
   new ResizeObserver(() => {
     ensureCanvasSize();
+    scheduleVisualPromptWrite();
     requestRender();
   }).observe(els.canvasWrap);
 
