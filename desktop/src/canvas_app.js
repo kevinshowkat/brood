@@ -98,6 +98,7 @@ const state = {
   canvasMode: "single", // "single" renders the active image; "multi" renders all images for pair actions (Combine demo).
   multiRects: new Map(), // imageId -> { x, y, w, h } in canvas device pixels (for hit-testing).
   pendingBlend: null, // { sourceIds: [string, string], startedAt: number }
+  pendingSwapDna: null, // { structureId: string, surfaceId: string, startedAt: number }
   pendingGeneration: null, // { remaining: number, provider: string|null, model: string|null }
   view: {
     scale: 1,
@@ -654,6 +655,37 @@ async function ensureGeminiForBlend() {
     await invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
   }
   showToast(`Combine requires Gemini. Switched image model to ${settings.imageModel}.`, "tip", 3200);
+  return providerFromModel(settings.imageModel) === "gemini";
+}
+
+async function ensureGeminiProImagePreviewForSwapDna() {
+  const desired = "gemini-3-pro-image-preview";
+  const provider = providerFromModel(settings.imageModel);
+  if (provider === "gemini" && settings.imageModel === desired) return true;
+
+  let nextModel = desired;
+  if (els.imageModel) {
+    const hasDesired = Array.from(els.imageModel.options || []).some((opt) => opt?.value === desired);
+    if (!hasDesired) nextModel = pickGeminiImageModel();
+  }
+
+  const changed = settings.imageModel !== nextModel;
+  settings.imageModel = nextModel;
+  localStorage.setItem("brood.imageModel", settings.imageModel);
+  if (els.imageModel) els.imageModel.value = settings.imageModel;
+  updatePortraitIdle();
+  if (state.ptySpawned) {
+    await invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
+  }
+
+  if (changed) {
+    if (nextModel === desired) {
+      showToast(`Swap DNA uses Gemini Pro. Switched image model to ${settings.imageModel}.`, "tip", 3200);
+    } else {
+      showToast(`Swap DNA prefers ${desired}. Using ${settings.imageModel}.`, "tip", 3400);
+    }
+  }
+
   return providerFromModel(settings.imageModel) === "gemini";
 }
 
@@ -2441,7 +2473,7 @@ function chooseSpawnNodes() {
   const img = getActiveImage();
   const items = [];
   if (state.canvasMode === "multi") {
-    const canBlend = state.images.length === 2 && !state.pendingBlend;
+    const canBlend = state.images.length === 2 && !state.pendingBlend && !state.pendingSwapDna;
     if (canBlend) items.push({ id: "blend_pair", title: "Combine", action: "blend_pair" });
   }
   items.push({ id: "bg_white", title: "Studio White", action: "bg_white" });
@@ -2503,12 +2535,20 @@ function computeQuickActions() {
   // single-image actions to reduce ambiguity.
   if (state.canvasMode === "multi") {
     if (state.images.length === 2) {
+      const runningMulti = Boolean(state.pendingBlend || state.pendingSwapDna);
       actions.push({
         id: "combine",
         label: state.pendingBlend ? "Combine (running…)" : "Combine",
         title: "Blend the two loaded photos into one",
-        disabled: Boolean(state.pendingBlend),
+        disabled: runningMulti,
         onClick: () => runBlendPair().catch((err) => console.error(err)),
+      });
+      actions.push({
+        id: "swap_dna",
+        label: state.pendingSwapDna ? "Swap DNA (running…)" : "Swap DNA",
+        title: "Use structure from the selected image and surface qualities from the other",
+        disabled: runningMulti,
+        onClick: () => runSwapDnaPair().catch((err) => console.error(err)),
       });
       return actions;
     }
@@ -3540,8 +3580,8 @@ function quoteForPtyArg(value) {
 
 async function runBlendPair() {
   bumpInteraction();
-  if (state.pendingBlend) {
-    showToast("Combine already running.", "tip", 2600);
+  if (state.pendingBlend || state.pendingSwapDna) {
+    showToast("A multi-image action is already running.", "tip", 2600);
     return;
   }
   if (!state.runDir) {
@@ -3572,6 +3612,7 @@ async function runBlendPair() {
   setStatus("Engine: combine…");
   portraitWorking("Combine");
   showToast("Combining photos…", "info", 2200);
+  renderQuickActions();
   requestRender();
 
   try {
@@ -3586,6 +3627,62 @@ async function runBlendPair() {
     showToast("Combine failed to start.", "error", 3200);
     setImageFxActive(false);
     updatePortraitIdle();
+    renderQuickActions();
+  }
+}
+
+async function runSwapDnaPair() {
+  bumpInteraction();
+  if (state.pendingBlend || state.pendingSwapDna) {
+    showToast("A multi-image action is already running.", "tip", 2600);
+    return;
+  }
+  if (!state.runDir) {
+    await ensureRun();
+  }
+  if (state.images.length !== 2) {
+    showToast("Swap DNA needs exactly 2 photos in the run.", "error", 3200);
+    return;
+  }
+  const okProvider = await ensureGeminiProImagePreviewForSwapDna();
+  if (!okProvider) {
+    showToast("Swap DNA requires a Gemini image model (multi-image).", "error", 3600);
+    return;
+  }
+
+  const active = getActiveImage();
+  const a = active || state.images[0];
+  const b = state.images.find((item) => item?.id && item.id !== a?.id) || state.images[1];
+  if (!a?.path || !b?.path) {
+    showToast("Swap DNA failed: missing image paths.", "error", 3200);
+    return;
+  }
+
+  const okEngine = await ensureEngineSpawned({ reason: "swap dna" });
+  if (!okEngine) return;
+  setImageFxActive(true, "Swap DNA");
+  state.expectingArtifacts = true;
+  state.pendingSwapDna = { structureId: a.id, surfaceId: b.id, startedAt: Date.now() };
+  state.lastAction = "Swap DNA";
+  setStatus("Engine: swap dna…");
+  portraitWorking("Swap DNA");
+  showToast("Swapping DNA…", "info", 2200);
+  renderQuickActions();
+  requestRender();
+
+  try {
+    await invoke("write_pty", {
+      data: `/swap_dna ${quoteForPtyArg(a.path)} ${quoteForPtyArg(b.path)}\n`,
+    });
+  } catch (err) {
+    console.error(err);
+    state.expectingArtifacts = false;
+    state.pendingSwapDna = null;
+    setStatus(`Engine: swap dna failed (${err?.message || err})`, true);
+    showToast("Swap DNA failed to start.", "error", 3200);
+    setImageFxActive(false);
+    updatePortraitIdle();
+    renderQuickActions();
   }
 }
 
@@ -3620,6 +3717,7 @@ async function createRun() {
   state.canvasMode = "single";
   state.multiRects.clear();
   state.pendingBlend = null;
+  state.pendingSwapDna = null;
   clearImageCache();
   state.selection = null;
   state.lassoDraft = [];
@@ -3661,6 +3759,7 @@ async function openExistingRun() {
   state.canvasMode = "single";
   state.multiRects.clear();
   state.pendingBlend = null;
+  state.pendingSwapDna = null;
   renderFilmstrip();
   clearImageCache();
   state.selection = null;
@@ -3859,11 +3958,18 @@ function handleEvent(event) {
     const path = event.image_path;
     if (!id || !path) return;
     const wasBlend = Boolean(state.pendingBlend);
+    const wasSwapDna = Boolean(state.pendingSwapDna);
     if (wasBlend) {
       state.pendingBlend = null;
       setCanvasMode("multi");
       setTip("Combine complete. Output selected.");
       showToast("Combine complete.", "tip", 2400);
+    }
+    if (wasSwapDna) {
+      state.pendingSwapDna = null;
+      setCanvasMode("multi");
+      setTip("Swap DNA complete. Output selected.");
+      showToast("Swap DNA complete.", "tip", 2400);
     }
     const pending = state.pendingReplace;
     if (pending?.targetId) {
@@ -3898,6 +4004,7 @@ function handleEvent(event) {
     showToast(msg, "error", 3200);
     state.expectingArtifacts = false;
     state.pendingBlend = null;
+    state.pendingSwapDna = null;
     clearPendingReplace();
     restoreEngineImageModelIfNeeded();
     updatePortraitIdle();
@@ -4032,7 +4139,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     octx.restore();
   }
 
-  const canSuggestBlend = items.length === 2 && !state.pendingBlend;
+  const canSuggestBlend = items.length === 2 && !state.pendingBlend && !state.pendingSwapDna;
   if (!canSuggestBlend) return;
   const aRect = items[0]?.id ? state.multiRects.get(items[0].id) : null;
   const bRect = items[1]?.id ? state.multiRects.get(items[1].id) : null;
@@ -5035,6 +5142,7 @@ async function boot() {
     resetDescribeQueue({ clearPending: true });
     state.expectingArtifacts = false;
     state.pendingBlend = null;
+    state.pendingSwapDna = null;
     clearPendingReplace();
     state.engineImageModelRestore = null;
     setImageFxActive(false);

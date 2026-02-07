@@ -120,7 +120,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
         if intent.action == "help":
             print(
                 "Commands: /profile /text_model /image_model /fast /quality /cheaper "
-                "/better /optimize /recreate /describe /use /blend /export"
+                "/better /optimize /recreate /describe /use /blend /swap_dna /export"
             )
             continue
         if intent.action == "set_profile":
@@ -241,6 +241,72 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 print(f"Blend failed: {error}")
             else:
                 print("Blend complete.")
+            continue
+        if intent.action == "swap_dna":
+            paths = intent.command_args.get("paths") or []
+            if not isinstance(paths, list) or len(paths) < 2:
+                print("Usage: /swap_dna <image_a> <image_b>")
+                continue
+            path_a = Path(str(paths[0]))
+            path_b = Path(str(paths[1]))
+            if not path_a.exists():
+                print(f"Swap DNA failed: file not found ({path_a})")
+                continue
+            if not path_b.exists():
+                print(f"Swap DNA failed: file not found ({path_b})")
+                continue
+
+            prompt = (
+                "Swap DNA between the two provided photos. "
+                "Image A provides the STRUCTURE: crop/framing, composition, hierarchy, layout, and spatial logic. "
+                "Image B provides the SURFACE: color palette, textures/materials, lighting, mood, and finish. "
+                "This is decision transfer, not a split-screen or collage. "
+                "Output a single coherent image that preserves A's structural decisions while applying B's surface qualities."
+            )
+            progress_once("Planning Swap DNA")
+            settings = _settings_from_state(state)
+            settings["init_image"] = str(path_a)
+            settings["reference_images"] = [str(path_b)]
+            plan = engine.preview_plan(prompt, settings)
+            print(
+                f"Plan: {plan['images']} images via {plan['provider']}:{plan['model']} "
+                f"size={plan['size']} cached={plan['cached']}"
+            )
+            ticker = ProgressTicker("Swapping DNA")
+            ticker.start_ticking()
+            start_reasoning_summary(prompt, engine.text_model, ticker)
+            error: Exception | None = None
+            artifacts: list[dict[str, object]] = []
+            try:
+                artifacts = engine.generate(
+                    prompt,
+                    settings,
+                    {"action": "swap_dna", "source_images": [str(path_a), str(path_b)]},
+                )
+            except Exception as exc:
+                error = exc
+            finally:
+                ticker.stop(done=True)
+
+            if not error and artifacts:
+                last_artifact_path = str(artifacts[-1].get("image_path") or last_artifact_path or "")
+
+            if engine.last_fallback_reason:
+                print(f"Model fallback: {engine.last_fallback_reason}")
+            cost_raw = engine.last_cost_latency.get("cost_total_usd") if engine.last_cost_latency else None
+            latency_raw = (
+                engine.last_cost_latency.get("latency_per_image_s") if engine.last_cost_latency else None
+            )
+            cost = format_cost_generation_cents(cost_raw) or "N/A"
+            latency = format_latency_seconds(latency_raw) or "N/A"
+            print(
+                f"Cost of generation: {ansi_highlight(cost)} | Latency per image: {ansi_highlight(latency)}"
+            )
+
+            if error:
+                print(f"Swap DNA failed: {error}")
+            else:
+                print("Swap DNA complete.")
             continue
         if intent.action == "set_quality":
             state["quality_preset"] = intent.settings_update.get("quality_preset")
