@@ -505,17 +505,16 @@ button.ghost:hover {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  bottom: 10px;
+  bottom: 0;
   z-index: 6;
-  width: min(920px, calc(100% - 28px));
+  width: 80%;
   pointer-events: none;
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
+  flex-direction: row-reverse;
+  align-items: flex-end;
 }
 
 .hud-keybar {
-  align-self: flex-end;
   z-index: 2;
   display: grid;
   grid-template-columns: repeat(3, 62px);
@@ -530,7 +529,7 @@ button.ghost:hover {
     0 20px 34px rgba(0, 0, 0, 0.52),
     inset 0 1px 0 rgba(255, 255, 255, 0.10);
   pointer-events: auto;
-  margin: 0 8px -14px 0;
+  margin: 0;
 }
 
 .hud-keybar .tool {
@@ -561,6 +560,8 @@ button.ghost:hover {
 .hud-shell {
   position: relative;
   z-index: 1;
+  flex: 1;
+  min-width: 0;
   min-height: 124px;
   padding: 26px 18px 18px;
   border-radius: 14px;
@@ -704,7 +705,10 @@ button.ghost:hover {
   font-size: 11px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: rgba(142, 162, 181, 0.9);
+  color: var(--hud-green-dim);
+  text-shadow:
+    0 0 0.8px rgba(0, 0, 0, 0.65),
+    0 0 10px rgba(82, 255, 148, 0.10);
 }
 
 .hud-v {
@@ -720,8 +724,10 @@ button.ghost:hover {
 }
 
 .hud-v.hud-desc {
-  color: var(--hud-green-dim);
+  color: var(--hud-green);
   white-space: nowrap;
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .drop-hint {
