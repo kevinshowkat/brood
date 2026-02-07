@@ -54,7 +54,18 @@ fn merge_dotenv_vars(target: &mut HashMap<String, String>, path: &Path) {
     }
     let vars = parse_dotenv(path);
     for (key, value) in vars {
-        target.entry(key).or_insert(value);
+        // Preserve existing explicit env vars, but do not let empty placeholders
+        // (e.g. `OPENAI_API_KEY=`) block a non-empty value from a later `.env`.
+        match target.get(&key) {
+            None => {
+                target.insert(key, value);
+            }
+            Some(existing) => {
+                if existing.trim().is_empty() && !value.trim().is_empty() {
+                    target.insert(key, value);
+                }
+            }
+        }
     }
 }
 
@@ -244,14 +255,20 @@ fn export_run(run_dir: String, out_path: String) -> Result<(), String> {
 #[tauri::command]
 fn get_key_status() -> Result<serde_json::Value, String> {
     let vars = collect_brood_env_snapshot();
-    let openai = vars.contains_key("OPENAI_API_KEY") || vars.contains_key("OPENAI_API_KEY_BACKUP");
-    let gemini = vars.contains_key("GEMINI_API_KEY") || vars.contains_key("GOOGLE_API_KEY");
-    let flux = vars.contains_key("BFL_API_KEY") || vars.contains_key("FLUX_API_KEY");
-    let imagen = vars.contains_key("IMAGEN_API_KEY")
-        || vars.contains_key("GOOGLE_API_KEY")
-        || vars.contains_key("IMAGEN_VERTEX_PROJECT")
-        || vars.contains_key("GOOGLE_APPLICATION_CREDENTIALS");
-    let anthropic = vars.contains_key("ANTHROPIC_API_KEY");
+    let has = |key: &str| -> bool {
+        vars.get(key)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+    };
+
+    let openai = has("OPENAI_API_KEY") || has("OPENAI_API_KEY_BACKUP");
+    let gemini = has("GEMINI_API_KEY") || has("GOOGLE_API_KEY");
+    let flux = has("BFL_API_KEY") || has("FLUX_API_KEY");
+    let imagen = has("IMAGEN_API_KEY")
+        || has("GOOGLE_API_KEY")
+        || has("IMAGEN_VERTEX_PROJECT")
+        || has("GOOGLE_APPLICATION_CREDENTIALS");
+    let anthropic = has("ANTHROPIC_API_KEY");
     Ok(serde_json::json!({
         "openai": openai,
         "gemini": gemini,

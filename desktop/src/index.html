@@ -6,39 +6,39 @@
     <title>Brood</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body>
-    <div id="app">
-      <div id="boot-error" class="boot-error hidden">
-        App failed to initialize. Check the terminal for errors.
-      </div>
-      <header class="topbar">
-        <div class="brand">
-          <img src="./assets/logo.jpeg" alt="Brood" />
-        </div>
-        <div class="topbar-center">
-          <div id="engine-status" class="engine-status">Engine: idle</div>
-        </div>
-        <div class="controls">
-          <button id="new-run">New Run</button>
-          <button id="open-run">Open Run</button>
-          <button id="import">Import Photos</button>
-          <button id="export">Export</button>
-          <button id="settings-toggle" class="ghost">Settings</button>
-        </div>
-      </header>
-      <main class="workspace">
-        <section class="stage" aria-label="Canvas">
-          <div id="canvas-wrap" class="canvas-wrap">
-            <div id="drop-hint" class="drop-hint">
-              <div class="drop-hint-inner">
-                <div class="drop-hint-title">Drop images here</div>
-                <div class="drop-hint-sub">or</div>
-                <button id="canvas-import" class="drop-hint-button" type="button">Import Photos</button>
+	  <body>
+	    <div id="app">
+	      <div id="boot-error" class="boot-error hidden">
+	        App failed to initialize. Check the terminal for errors.
+	      </div>
+	      <div class="brand-strip" aria-label="Brood">
+	        <img class="brand-strip-logo" src="./assets/logo.jpeg" alt="Brood" />
+	        <div id="engine-status" class="engine-status">Engine: idle</div>
+	      </div>
+	      <main class="workspace">
+	        <section class="stage" aria-label="Canvas">
+            <div id="canvas-wrap" class="canvas-wrap">
+              <div
+                id="drop-hint"
+                class="drop-hint"
+                role="button"
+                tabindex="0"
+                aria-label="Tap or drag to add photos"
+              >
+                <div class="drop-hint-inner" aria-hidden="true">
+                  <div class="drop-hint-plus">+</div>
+                  <div class="drop-hint-title">Tap or drag to add photos</div>
+                </div>
               </div>
-            </div>
             <canvas id="work-canvas"></canvas>
             <div id="image-fx" class="image-fx hidden" aria-hidden="true"></div>
             <canvas id="overlay-canvas"></canvas>
+            <div id="designate-menu" class="designate-menu hidden" role="menu" aria-label="Designate">
+              <button type="button" data-kind="subject">Subject</button>
+              <button type="button" data-kind="reference">Reference</button>
+              <button type="button" data-kind="object">Object</button>
+              <button class="ghost" type="button" data-kind="clear">Clear</button>
+            </div>
             <div id="hud" class="hud hidden" aria-label="Selected Unit">
               <div class="hud-shell">
                 <div class="hud-screen" aria-hidden="true">
@@ -70,7 +70,7 @@
         </section>
         <aside class="inspector" aria-label="Inspector">
           <div class="inspector-scroll">
-            <div class="panel">
+            <div class="panel panel-quick-actions">
               <div class="panel-title">Quick Actions</div>
               <div class="panel-body actions">
                 <button id="action-bg-white" type="button">Background: White</button>
@@ -79,29 +79,8 @@
                 <button id="action-variations" type="button">Variations</button>
               </div>
             </div>
-	            <div class="panel">
-	              <div class="panel-title">Tips</div>
-	              <div id="tips-text" class="panel-body muted panel-readout">
-	                Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
-	              </div>
-	            </div>
-	            <div class="panel">
-	              <div class="panel-title">Designate</div>
-	              <div class="panel-body">
-	                <div id="designate-status" class="muted panel-readout">
-	                  Select the Designate tool, click the image, then choose a label.
-	                </div>
-	                <div class="designate-actions">
-	                  <button id="designate-subject" type="button">Subject</button>
-	                  <button id="designate-reference" type="button">Reference</button>
-	                  <button id="designate-object" type="button">Object</button>
-	                  <button id="designate-clear" class="ghost" type="button">Clear</button>
-	                </div>
-	                <div id="designate-list" class="designate-list muted"></div>
-	              </div>
-	            </div>
 	            <div class="panel agent-panel">
-	              <div class="panel-title">Agent</div>
+	              <div class="panel-title">Agents</div>
 	              <div id="portrait-dock" class="panel-body portrait-dock hidden">
 	                <div class="agent-portraits">
                   <div id="agent-slot-primary" class="agent-slot">
@@ -141,8 +120,16 @@
                     </div>
                   </div>
                 </div>
-              </div>
-            </div>
+	              </div>
+	            </div>
+	            <div class="panel">
+	              <div class="panel-title">Tips</div>
+	              <div id="tips-text" class="panel-body muted panel-readout">
+	                Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
+	              </div>
+	            </div>
+          </div>
+          <div class="inspector-footer" aria-label="Tools">
             <div class="panel command-panel">
               <div class="panel-body command-card" aria-label="Agent Commands">
                 <button class="tool selected" type="button" data-tool="pan" title="Pan / Zoom" aria-label="Pan / Zoom">
@@ -162,50 +149,53 @@
                       stroke-linecap="square"
                     />
                   </svg>
+                  <span class="tool-hint" aria-hidden="true">V</span>
                   <span class="sr-only">Pan</span>
                 </button>
-	                <button class="tool" type="button" data-tool="lasso" title="Lasso selection" aria-label="Lasso selection">
-	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-	                    <ellipse cx="12" cy="9.5" rx="6.5" ry="4.5" fill="none" stroke="currentColor" stroke-width="2" />
-	                    <path
-	                      d="M15 13.5c0.9 1.2 1.9 2.6 3.5 4"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                    />
-	                    <path
-	                      d="M19.5 18l1.8 1.8"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                    />
-	                  </svg>
-	                  <span class="sr-only">Lasso</span>
-	                </button>
-	                <button
-	                  class="tool"
-	                  type="button"
-	                  data-tool="designate"
-	                  title="Designate subject/reference/object"
-	                  aria-label="Designate"
-	                >
-	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-	                    <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2" />
-	                    <path
-	                      d="M12 4v3M12 17v3M4 12h3M17 12h3"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                    />
-	                  </svg>
-	                  <span class="sr-only">Designate</span>
-	                </button>
-	                <button class="tool" type="button" data-tool="bg" title="Background replace" aria-label="Background replace">
-	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-	                    <path
+                <button class="tool" type="button" data-tool="lasso" title="Lasso selection" aria-label="Lasso selection">
+                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <ellipse cx="12" cy="9.5" rx="6.5" ry="4.5" fill="none" stroke="currentColor" stroke-width="2" />
+                    <path
+                      d="M15 13.5c0.9 1.2 1.9 2.6 3.5 4"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                    />
+                    <path
+                      d="M19.5 18l1.8 1.8"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                  <span class="tool-hint" aria-hidden="true">L</span>
+                  <span class="sr-only">Lasso</span>
+                </button>
+                <button
+                  class="tool"
+                  type="button"
+                  data-tool="designate"
+                  title="Designate subject/reference/object"
+                  aria-label="Designate"
+                >
+                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2" />
+                    <path
+                      d="M12 4v3M12 17v3M4 12h3M17 12h3"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                  <span class="tool-hint" aria-hidden="true">D</span>
+                  <span class="sr-only">Designate</span>
+                </button>
+                <button class="tool" type="button" data-tool="bg" title="Background replace" aria-label="Background replace">
+                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path
                       d="M6 7h10v4H6z"
                       fill="none"
                       stroke="currentColor"
@@ -228,6 +218,7 @@
                       stroke-linejoin="round"
                     />
                   </svg>
+                  <span class="tool-hint" aria-hidden="true">B</span>
                   <span class="sr-only">Background</span>
                 </button>
                 <button
@@ -271,8 +262,20 @@
                       stroke-linejoin="round"
                     />
                   </svg>
+                  <span class="tool-hint" aria-hidden="true">R</span>
                   <span class="sr-only">Variations</span>
                 </button>
+              </div>
+            </div>
+            <div class="panel session-panel">
+              <div class="panel-body session-card" aria-label="Session Controls">
+                <div class="session-controls">
+                  <button id="new-run">New Run</button>
+                  <button id="open-run">Open Run</button>
+                  <button id="import">Import Photos</button>
+                  <button id="export">Export</button>
+                  <button id="settings-toggle">Settings</button>
+                </div>
               </div>
             </div>
           </div>
