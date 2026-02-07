@@ -1186,7 +1186,9 @@ let lastHudHeightCssPx = null;
 let hudResizeObserver = null;
 function syncHudHeightVar() {
   if (!els.canvasWrap || !els.hud) return;
-  const rect = els.hud.getBoundingClientRect();
+  // "HUD" height should match the central readout shell, not the action grid.
+  const hudShell = els.hud.querySelector(".hud-shell") || els.hud;
+  const rect = hudShell.getBoundingClientRect();
   const h = Math.max(0, Math.round(rect.height));
   // Avoid setting 0px during early boot/layout churn; it would hide bumpers.
   if (!h) return;
@@ -5490,13 +5492,14 @@ async function boot() {
   renderFilmstrip();
   ensureCanvasSize();
   // Keep decorative canvas bumpers matched to the HUD height.
-  if (typeof ResizeObserver === "function" && els.hud) {
+  const hudShell = els.hud ? els.hud.querySelector(".hud-shell") : null;
+  if (typeof ResizeObserver === "function" && (hudShell || els.hud)) {
     try {
       if (hudResizeObserver) hudResizeObserver.disconnect();
       hudResizeObserver = new ResizeObserver(() => {
         syncHudHeightVar();
       });
-      hudResizeObserver.observe(els.hud);
+      hudResizeObserver.observe(hudShell || els.hud);
       requestAnimationFrame(() => syncHudHeightVar());
     } catch {
       // ignore
