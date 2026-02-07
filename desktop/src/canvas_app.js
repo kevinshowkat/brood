@@ -2546,9 +2546,10 @@ function computeQuickActions() {
       actions.push({
         id: "swap_dna",
         label: state.pendingSwapDna ? "Swap DNA (running…)" : "Swap DNA",
-        title: "Use structure from the selected image and surface qualities from the other",
+        title: "Use structure from the selected image and surface qualities from the other (Shift-click to invert)",
         disabled: runningMulti,
-        onClick: () => runSwapDnaPair().catch((err) => console.error(err)),
+        onClick: (ev) =>
+          runSwapDnaPair({ invert: Boolean(ev?.shiftKey) }).catch((err) => console.error(err)),
       });
       return actions;
     }
@@ -2611,9 +2612,9 @@ function renderQuickActions() {
     if (action.title) btn.title = String(action.title);
     if (action.disabled) btn.setAttribute("disabled", "disabled");
     if (!action.disabled && typeof action.onClick === "function") {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", (ev) => {
         bumpInteraction();
-        action.onClick();
+        action.onClick(ev);
       });
     }
     frag.appendChild(btn);
@@ -3631,7 +3632,7 @@ async function runBlendPair() {
   }
 }
 
-async function runSwapDnaPair() {
+async function runSwapDnaPair({ invert = false } = {}) {
   bumpInteraction();
   if (state.pendingBlend || state.pendingSwapDna) {
     showToast("A multi-image action is already running.", "tip", 2600);
@@ -3651,9 +3652,15 @@ async function runSwapDnaPair() {
   }
 
   const active = getActiveImage();
-  const a = active || state.images[0];
-  const b = state.images.find((item) => item?.id && item.id !== a?.id) || state.images[1];
-  if (!a?.path || !b?.path) {
+  const first = active || state.images[0];
+  const second = state.images.find((item) => item?.id && item.id !== first?.id) || state.images[1];
+  let structure = first;
+  let surface = second;
+  if (invert) {
+    structure = second;
+    surface = first;
+  }
+  if (!structure?.path || !surface?.path) {
     showToast("Swap DNA failed: missing image paths.", "error", 3200);
     return;
   }
@@ -3662,17 +3669,20 @@ async function runSwapDnaPair() {
   if (!okEngine) return;
   setImageFxActive(true, "Swap DNA");
   state.expectingArtifacts = true;
-  state.pendingSwapDna = { structureId: a.id, surfaceId: b.id, startedAt: Date.now() };
+  state.pendingSwapDna = { structureId: structure.id, surfaceId: surface.id, startedAt: Date.now() };
   state.lastAction = "Swap DNA";
   setStatus("Engine: swap dna…");
   portraitWorking("Swap DNA");
-  showToast("Swapping DNA…", "info", 2200);
+  const structureLabel = structure.label || basename(structure.path) || "Image A";
+  const surfaceLabel = surface.label || basename(surface.path) || "Image B";
+  const invertNote = invert ? " (inverted)" : "";
+  showToast(`Swap DNA${invertNote}: structure=${structureLabel} | surface=${surfaceLabel}`, "info", 3200);
   renderQuickActions();
   requestRender();
 
   try {
     await invoke("write_pty", {
-      data: `/swap_dna ${quoteForPtyArg(a.path)} ${quoteForPtyArg(b.path)}\n`,
+      data: `/swap_dna ${quoteForPtyArg(structure.path)} ${quoteForPtyArg(surface.path)}\n`,
     });
   } catch (err) {
     console.error(err);
@@ -5147,6 +5157,7 @@ async function boot() {
     state.engineImageModelRestore = null;
     setImageFxActive(false);
     updatePortraitIdle();
+    renderQuickActions();
   });
 
   // Consume PTY stdout as a fallback for vision describe completion/errors.
