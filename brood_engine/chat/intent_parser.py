@@ -102,12 +102,20 @@ def parse_intent(text: str) -> Intent:
             return Intent(action="recreate", raw=text, command_args={"path": arg})
         if command == "describe":
             return Intent(action="describe", raw=text, command_args={"path": arg})
+        if command == "diagnose":
+            return Intent(action="diagnose", raw=text, command_args={"path": arg})
+        if command == "recast":
+            return Intent(action="recast", raw=text, command_args={"path": arg})
         if command == "use":
             return Intent(action="set_active_image", raw=text, command_args={"path": arg})
         if command == "blend":
             return Intent(action="blend", raw=text, command_args={"paths": _parse_path_args(arg)})
         if command == "swap_dna":
             return Intent(action="swap_dna", raw=text, command_args={"paths": _parse_path_args(arg)})
+        if command == "argue":
+            return Intent(action="argue", raw=text, command_args={"paths": _parse_path_args(arg)})
+        if command == "bridge":
+            return Intent(action="bridge", raw=text, command_args={"paths": _parse_path_args(arg)})
         if command == "export":
             return Intent(action="export", raw=text, command_args={"format": arg or "html"})
         if command == "help":
