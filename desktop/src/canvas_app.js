@@ -35,6 +35,13 @@ const els = {
   workCanvas: document.getElementById("work-canvas"),
   imageFx: document.getElementById("image-fx"),
   overlayCanvas: document.getElementById("overlay-canvas"),
+  annotatePanel: document.getElementById("annotate-panel"),
+  annotateClose: document.getElementById("annotate-close"),
+  annotateMeta: document.getElementById("annotate-meta"),
+  annotateModel: document.getElementById("annotate-model"),
+  annotateText: document.getElementById("annotate-text"),
+  annotateCancel: document.getElementById("annotate-cancel"),
+  annotateSend: document.getElementById("annotate-send"),
   hud: document.getElementById("hud"),
   hudUnitName: document.getElementById("hud-unit-name"),
   hudUnitDesc: document.getElementById("hud-unit-desc"),
@@ -110,6 +117,10 @@ const state = {
   },
   selection: null, // { points: [{x,y}], closed: true }
   lassoDraft: [],
+  annotateDraft: null, // { imageId, x0, y0, x1, y1, at } | null (image pixel space)
+  annotateBox: null, // { imageId, x0, y0, x1, y1, at } | null (final box until dismissed)
+  needsEngineModelResync: false, // restore `/image_model` to settings after one-off overrides.
+  engineImageModelRestore: null, // string|null
   needsRender: false,
   lastInteractionAt: Date.now(),
   spawnNodes: [],
@@ -151,7 +162,11 @@ const state = {
   },
 };
 
-const DEFAULT_TIP = "Click Studio White to replace the background. Use L to lasso if you want a manual mask.";
+const DEFAULT_TIP = "Click Studio White to replace the background. Use 4 (Lasso) if you want a manual mask.";
+
+// Larva spawn buttons were a fun experiment, but we're turning them off for now.
+// Keep the implementation in place so we can re-enable later.
+const ENABLE_LARVA_SPAWN = false;
 
 function formatUsd(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
@@ -1137,6 +1152,7 @@ function showDesignateMenuAt(ptCss) {
   const menu = els.designateMenu;
   const wrap = els.canvasWrap;
   if (!menu || !wrap || !ptCss) return;
+  menu.classList.remove("dismissing");
   menu.classList.remove("hidden");
 
   const dx = 12;
@@ -1259,6 +1275,9 @@ function setCanvasMode(mode) {
   state.pointer.active = false;
   state.selection = null;
   state.lassoDraft = [];
+  state.annotateDraft = null;
+  state.annotateBox = null;
+  hideAnnotatePanel();
   state.pendingDesignation = null;
   hideDesignateMenu();
   chooseSpawnNodes();
@@ -1450,7 +1469,10 @@ function clearSelection() {
   state.selection = null;
   state.lassoDraft = [];
   state.pendingDesignation = null;
+  state.annotateDraft = null;
+  state.annotateBox = null;
   hideDesignateMenu();
+  hideAnnotatePanel();
   setTip(DEFAULT_TIP);
   requestRender();
   renderSelectionMeta();
@@ -1458,8 +1480,13 @@ function clearSelection() {
 }
 
 function setTool(tool) {
-  const allowed = new Set(["pan", "lasso", "designate"]);
+  const allowed = new Set(["annotate", "pan", "lasso", "designate"]);
   if (!allowed.has(tool)) return;
+  if (tool !== "annotate") {
+    state.annotateDraft = null;
+    state.annotateBox = null;
+    hideAnnotatePanel();
+  }
   if (tool !== "designate") state.pendingDesignation = null;
   hideDesignateMenu();
   state.tool = tool;
@@ -1471,8 +1498,10 @@ function setTool(tool) {
   renderHudReadout();
   if (tool === "lasso") {
     setTip("Lasso your product, then click Studio White. Or skip lasso and let the model infer the subject.");
+  } else if (tool === "annotate") {
+    setTip("Annotate: drag a box, then type an instruction to edit that region.");
   } else if (tool === "designate") {
-    setTip("Designate: click the image to mark a point, then choose Subject/Reference/Object.");
+    setTip("Designate: click the image to place a point, then pick Subject/Reference/Object.");
   } else {
     setTip(DEFAULT_TIP);
   }
@@ -1506,8 +1535,156 @@ function _getDesignations(imageId) {
 }
 
 function hideDesignateMenu() {
-  if (!els.designateMenu) return;
-  els.designateMenu.classList.add("hidden");
+  hideDesignateMenuAnimated({ animate: false });
+}
+
+let designateMenuHideTimer = null;
+function hideDesignateMenuAnimated({ animate = true } = {}) {
+  const menu = els.designateMenu;
+  if (!menu) return;
+  clearTimeout(designateMenuHideTimer);
+  designateMenuHideTimer = null;
+  menu.classList.remove("dismissing");
+
+  if (!animate) {
+    for (const btn of menu.querySelectorAll("button.confirm")) {
+      btn.classList.remove("confirm");
+    }
+    menu.classList.add("hidden");
+    return;
+  }
+  if (menu.classList.contains("hidden")) return;
+  menu.classList.add("dismissing");
+  designateMenuHideTimer = setTimeout(() => {
+    if (!els.designateMenu) return;
+    els.designateMenu.classList.add("hidden");
+    els.designateMenu.classList.remove("dismissing");
+    for (const btn of els.designateMenu.querySelectorAll("button.confirm")) {
+      btn.classList.remove("confirm");
+    }
+  }, 240);
+}
+
+function showDesignateMenuAtHudKey() {
+  const menu = els.designateMenu;
+  const wrap = els.canvasWrap;
+  if (!menu || !wrap) return;
+  const btn = els.toolButtons.find((b) => b?.dataset?.tool === "designate") || null;
+  if (!btn) return;
+  const wrapRect = wrap.getBoundingClientRect();
+  const keyRect = btn.getBoundingClientRect();
+  const x = keyRect.left - wrapRect.left;
+  const y = keyRect.bottom - wrapRect.top;
+  showDesignateMenuAt({ x, y });
+}
+
+function hideAnnotatePanel() {
+  if (!els.annotatePanel) return;
+  els.annotatePanel.classList.add("hidden");
+}
+
+function _annotateBoxToCssRect(box) {
+  if (!box) return null;
+  const dpr = getDpr();
+  const a = imageToCanvas({ x: Number(box.x0) || 0, y: Number(box.y0) || 0 });
+  const b = imageToCanvas({ x: Number(box.x1) || 0, y: Number(box.y1) || 0 });
+  const left = Math.min(a.x, b.x) / dpr;
+  const top = Math.min(a.y, b.y) / dpr;
+  const right = Math.max(a.x, b.x) / dpr;
+  const bottom = Math.max(a.y, b.y) / dpr;
+  return { left, top, right, bottom, width: right - left, height: bottom - top };
+}
+
+function _normalizeAnnotateBox(box, img) {
+  if (!box) return null;
+  const x0 = Number(box.x0) || 0;
+  const y0 = Number(box.y0) || 0;
+  const x1 = Number(box.x1) || 0;
+  const y1 = Number(box.y1) || 0;
+  let left = Math.min(x0, x1);
+  let top = Math.min(y0, y1);
+  let right = Math.max(x0, x1);
+  let bottom = Math.max(y0, y1);
+  const iw = img?.img?.naturalWidth || img?.width || null;
+  const ih = img?.img?.naturalHeight || img?.height || null;
+  if (iw && ih) {
+    left = clamp(left, 0, iw);
+    right = clamp(right, 0, iw);
+    top = clamp(top, 0, ih);
+    bottom = clamp(bottom, 0, ih);
+  }
+  return { imageId: box.imageId, x0: left, y0: top, x1: right, y1: bottom, at: box.at || Date.now() };
+}
+
+function showAnnotatePanelForBox() {
+  const panel = els.annotatePanel;
+  const wrap = els.canvasWrap;
+  const img = getActiveImage();
+  const box = state.annotateBox;
+  if (!panel || !wrap || !img || !box || box.imageId !== img.id) return;
+
+  // Populate model selector from the main image model dropdown.
+  if (els.annotateModel && els.imageModel) {
+    els.annotateModel.innerHTML = "";
+    for (const opt of Array.from(els.imageModel.options || [])) {
+      if (!opt?.value) continue;
+      const o = document.createElement("option");
+      o.value = opt.value;
+      o.textContent = opt.textContent || opt.value;
+      els.annotateModel.appendChild(o);
+    }
+    els.annotateModel.value = settings.imageModel;
+  }
+
+  const normalized = _normalizeAnnotateBox(box, img);
+  if (!normalized) return;
+  const iw = img?.img?.naturalWidth || img?.width || null;
+  const ih = img?.img?.naturalHeight || img?.height || null;
+  if (els.annotateMeta) {
+    if (iw && ih) {
+      const xPct = (normalized.x0 / iw) * 100;
+      const yPct = (normalized.y0 / ih) * 100;
+      const wPct = ((normalized.x1 - normalized.x0) / iw) * 100;
+      const hPct = ((normalized.y1 - normalized.y0) / ih) * 100;
+      els.annotateMeta.textContent = `Box: x ${xPct.toFixed(1)}% y ${yPct.toFixed(1)}% w ${wPct.toFixed(1)}% h ${hPct.toFixed(1)}%`;
+    } else {
+      const wPx = Math.max(0, normalized.x1 - normalized.x0);
+      const hPx = Math.max(0, normalized.y1 - normalized.y0);
+      els.annotateMeta.textContent = `Box: x ${Math.round(normalized.x0)} y ${Math.round(normalized.y0)} w ${Math.round(wPx)} h ${Math.round(hPx)}`;
+    }
+  }
+
+  // Position near the box, clamped within canvas.
+  panel.classList.remove("hidden");
+  const rect = _annotateBoxToCssRect(normalized);
+  const baseX = rect ? rect.right + 12 : 12;
+  const baseY = rect ? rect.top : 12;
+  panel.style.left = `${baseX}px`;
+  panel.style.top = `${baseY}px`;
+
+  requestAnimationFrame(() => {
+    const pw = panel.offsetWidth || 0;
+    const ph = panel.offsetHeight || 0;
+    const maxX = Math.max(8, wrap.clientWidth - pw - 8);
+    const maxY = Math.max(8, wrap.clientHeight - ph - 8);
+    let x = clamp(baseX, 8, maxX);
+    let y = clamp(baseY, 8, maxY);
+    // If it doesn't fit to the right, prefer left of the box.
+    if (rect && x >= maxX && rect.left - pw - 12 >= 8) {
+      x = clamp(rect.left - pw - 12, 8, maxX);
+    }
+    panel.style.left = `${x}px`;
+    panel.style.top = `${y}px`;
+  });
+
+  // Focus input for speed.
+  setTimeout(() => {
+    try {
+      if (els.annotateText) els.annotateText.focus();
+    } catch {
+      // ignore
+    }
+  }, 0);
 }
 
 function _commitDesignation(kind) {
@@ -1971,6 +2148,7 @@ function explodeSpawnNode(btnEl, nodeId, imageId) {
 function renderSpawnbar() {
   if (!els.spawnbar) return;
   els.spawnbar.innerHTML = "";
+  stopLarvaAnimator();
   state.larvaTargets = [];
   if (!state.activeId) return;
   const activeItem = getActiveImage();
@@ -1981,73 +2159,77 @@ function renderSpawnbar() {
     if (isSpawnNodeOnCooldown(node.id, activeId)) continue;
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "spawn-node";
+    btn.className = ENABLE_LARVA_SPAWN ? "spawn-node" : "spawn-action";
     btn.setAttribute("aria-label", node.title || "Action");
     const text = String(node.title || "");
-    const rawWidth = (120 + text.length * 10) * 0.8;
-    const width = clamp(Math.round(rawWidth), 150, 240);
-    btn.style.setProperty("--larva-w", `${width}px`);
-    btn.style.setProperty("--larva-h", "46px");
-    const stable = hash32(`${node.id}::${activeId}`);
-    const uid = `larva-${node.id}-${stable.toString(16)}-${state.larvaUid++}`;
-    const seed = stable % 1000;
-    const built = buildLarvaSvg(text, { uid, seed });
-    const r1 = rand01(stable + 1.1);
-    const r2 = rand01(stable + 2.2);
-    const r3 = rand01(stable + 3.3);
-    const r4 = rand01(stable + 4.4);
-    const tilt = (r1 - 0.5) * 7.0; // ~[-3.5..3.5]deg
-    btn.style.setProperty("--larva-tilt", `${tilt.toFixed(2)}deg`);
-    built.svg.style.transform = `rotate(${tilt.toFixed(2)}deg)`;
-    btn.appendChild(built.svg);
+    if (!ENABLE_LARVA_SPAWN) {
+      btn.textContent = text;
+    } else {
+      const rawWidth = (120 + text.length * 10) * 0.8;
+      const width = clamp(Math.round(rawWidth), 150, 240);
+      btn.style.setProperty("--larva-w", `${width}px`);
+      btn.style.setProperty("--larva-h", "46px");
+      const stable = hash32(`${node.id}::${activeId}`);
+      const uid = `larva-${node.id}-${stable.toString(16)}-${state.larvaUid++}`;
+      const seed = stable % 1000;
+      const built = buildLarvaSvg(text, { uid, seed });
+      const r1 = rand01(stable + 1.1);
+      const r2 = rand01(stable + 2.2);
+      const r3 = rand01(stable + 3.3);
+      const r4 = rand01(stable + 4.4);
+      const tilt = (r1 - 0.5) * 7.0; // ~[-3.5..3.5]deg
+      btn.style.setProperty("--larva-tilt", `${tilt.toFixed(2)}deg`);
+      built.svg.style.transform = `rotate(${tilt.toFixed(2)}deg)`;
+      btn.appendChild(built.svg);
 
-    // Static organic warp; we animate head/tail (not full-body squiggle).
-    const baseF1 = 0.0095 + r2 * 0.0040;
-    const baseF2 = 0.0140 + r3 * 0.0050;
-    const warpScale = 5.2 + r3 * 1.6;
-    try {
-      if (built.turbEl) built.turbEl.setAttribute("baseFrequency", `${baseF1.toFixed(4)} ${baseF2.toFixed(4)}`);
-      if (built.dispEl) built.dispEl.setAttribute("scale", `${warpScale.toFixed(1)}`);
-    } catch {
-      // ignore
+      // Static organic warp; we animate head/tail (not full-body squiggle).
+      const baseF1 = 0.0095 + r2 * 0.0040;
+      const baseF2 = 0.0140 + r3 * 0.0050;
+      const warpScale = 5.2 + r3 * 1.6;
+      try {
+        if (built.turbEl) built.turbEl.setAttribute("baseFrequency", `${baseF1.toFixed(4)} ${baseF2.toFixed(4)}`);
+        if (built.dispEl) built.dispEl.setAttribute("scale", `${warpScale.toFixed(1)}`);
+      } catch {
+        // ignore
+      }
+
+      state.larvaTargets.push({
+        nodeId: node.id,
+        imagePath: activePath,
+        btnEl: btn,
+        svgEl: built.svg,
+        turbEl: built.turbEl,
+        dispEl: built.dispEl,
+        headEl: built.headEl,
+        tailEl: built.tailEl,
+        seed,
+        tiltDeg: tilt,
+        rotAmp: 0.16 + r4 * 0.55,
+        nRot: 1 + Math.floor(r3 * 3),
+        nSquish: 1 + Math.floor(r4 * 3),
+        phaseRot: r4 * Math.PI * 2,
+        phaseSquish: r1 * Math.PI * 2,
+        squishAmp: 0.0045 + r2 * 0.0035,
+        nHead: 1 + Math.floor(r2 * 3),
+        nHeadRot: 1 + Math.floor(r3 * 3),
+        headAmpX: 1.0 + r1 * 1.6,
+        headAmpY: 0.6 + r2 * 1.2,
+        headRotAmp: 5 + r4 * 10,
+        phaseHeadX: r2 * Math.PI * 2,
+        phaseHeadY: r3 * Math.PI * 2,
+        phaseHeadRot: r4 * Math.PI * 2,
+        nTail: 1 + Math.floor(r3 * 3),
+        nTailRot: 1 + Math.floor(r4 * 3),
+        tailAmpX: 0.8 + r2 * 1.4,
+        tailAmpY: 0.5 + r1 * 1.0,
+        tailRotAmp: 4 + r3 * 8,
+        phaseTailX: r3 * Math.PI * 2,
+        phaseTailY: r4 * Math.PI * 2,
+        phaseTailRot: r1 * Math.PI * 2,
+        nShadow: 1 + Math.floor(r2 * 3),
+        phaseShadow: r4 * Math.PI * 2,
+      });
     }
-
-    state.larvaTargets.push({
-      nodeId: node.id,
-      imagePath: activePath,
-      btnEl: btn,
-      svgEl: built.svg,
-      turbEl: built.turbEl,
-      dispEl: built.dispEl,
-      headEl: built.headEl,
-      tailEl: built.tailEl,
-      seed,
-      tiltDeg: tilt,
-      rotAmp: 0.16 + r4 * 0.55,
-      nRot: 1 + Math.floor(r3 * 3),
-      nSquish: 1 + Math.floor(r4 * 3),
-      phaseRot: r4 * Math.PI * 2,
-      phaseSquish: r1 * Math.PI * 2,
-      squishAmp: 0.0045 + r2 * 0.0035,
-      nHead: 1 + Math.floor(r2 * 3),
-      nHeadRot: 1 + Math.floor(r3 * 3),
-      headAmpX: 1.0 + r1 * 1.6,
-      headAmpY: 0.6 + r2 * 1.2,
-      headRotAmp: 5 + r4 * 10,
-      phaseHeadX: r2 * Math.PI * 2,
-      phaseHeadY: r3 * Math.PI * 2,
-      phaseHeadRot: r4 * Math.PI * 2,
-      nTail: 1 + Math.floor(r3 * 3),
-      nTailRot: 1 + Math.floor(r4 * 3),
-      tailAmpX: 0.8 + r2 * 1.4,
-      tailAmpY: 0.5 + r1 * 1.0,
-      tailRotAmp: 4 + r3 * 8,
-      phaseTailX: r3 * Math.PI * 2,
-      phaseTailY: r4 * Math.PI * 2,
-      phaseTailRot: r1 * Math.PI * 2,
-      nShadow: 1 + Math.floor(r2 * 3),
-      phaseShadow: r4 * Math.PI * 2,
-    });
     btn.addEventListener("click", () => {
       bumpInteraction();
       const imageId = getActiveImage()?.id || activeId;
@@ -2060,7 +2242,7 @@ function renderSpawnbar() {
     frag.appendChild(btn);
   }
   els.spawnbar.appendChild(frag);
-  ensureLarvaAnimator();
+  if (ENABLE_LARVA_SPAWN) ensureLarvaAnimator();
 }
 
 function chooseSpawnNodes() {
@@ -2093,6 +2275,21 @@ function chooseSpawnNodes() {
   const available = items.filter((item) => !isSpawnNodeOnCooldown(item.id, imageId));
   state.spawnNodes = available.slice(0, 3);
   renderSpawnbar();
+}
+
+function respawnActions() {
+  bumpInteraction();
+  const imgId = getActiveImage()?.id || state.activeId || null;
+  if (!imgId) {
+    showToast("No image selected.", "tip", 2200);
+    return;
+  }
+  const prefix = `${String(imgId)}::`;
+  for (const key of Array.from(state.spawnCooldowns.keys())) {
+    if (String(key).startsWith(prefix)) state.spawnCooldowns.delete(key);
+  }
+  chooseSpawnNodes();
+  showToast("Actions respawned.", "tip", 1600);
 }
 
 async function handleSpawnNode(node) {
@@ -2360,6 +2557,14 @@ async function setEngineActiveImage(path) {
   });
 }
 
+function restoreEngineImageModelIfNeeded() {
+  const restore = state.engineImageModelRestore;
+  if (!restore) return;
+  state.engineImageModelRestore = null;
+  if (!state.ptySpawned) return;
+  invoke("write_pty", { data: `/image_model ${restore}\n` }).catch(() => {});
+}
+
 async function writeLocalReceipt({ artifactId, imagePath, operation, meta = {} }) {
   if (!state.runDir) return null;
   const receiptPath = `${state.runDir}/receipt-${artifactId}.json`;
@@ -2537,6 +2742,182 @@ async function aiReplaceBackground(style) {
         : "replace the background with a seamless studio white background. keep the subject exactly the same. preserve logos and text. do not crop.";
     await invoke("write_pty", { data: `${prompt}\n` });
   } catch (err) {
+    clearPendingReplace();
+    setImageFxActive(false);
+    updatePortraitIdle();
+    throw err;
+  }
+}
+
+async function aiRemovePeople() {
+  bumpInteraction();
+  const imgItem = getActiveImage();
+  if (!imgItem) {
+    showToast("No image selected.", "error");
+    return;
+  }
+
+  const label = "Remove People";
+  await ensureRun();
+  setImageFxActive(true, label);
+  portraitWorking(label, { providerOverride: "gemini" });
+  beginPendingReplace(imgItem.id, label);
+  try {
+    const ok = await ensureEngineSpawned({ reason: label });
+    if (!ok) throw new Error("Engine unavailable");
+    await setEngineActiveImage(imgItem.path);
+    state.expectingArtifacts = true;
+    state.lastAction = label;
+    setStatus(`Engine: ${label}…`);
+    showToast("Removing people…", "info", 2200);
+
+    const gemModel = pickGeminiImageModel();
+    if (state.ptySpawned && gemModel && gemModel !== settings.imageModel) {
+      state.engineImageModelRestore = settings.imageModel;
+      await invoke("write_pty", { data: `/image_model ${gemModel}\n` }).catch(() => {});
+    }
+
+    // Must start with "edit" or "replace" for Brood's edit detection.
+    const prompt =
+      "edit the image: remove any people (humans) from the image completely. " +
+      "fill in the background naturally. keep everything else exactly the same. " +
+      "preserve logos and text. do not crop.";
+    await invoke("write_pty", { data: `${prompt}\n` });
+  } catch (err) {
+    state.expectingArtifacts = false;
+    state.engineImageModelRestore = null;
+    clearPendingReplace();
+    setImageFxActive(false);
+    updatePortraitIdle();
+    throw err;
+  }
+}
+
+async function aiSurpriseMe() {
+  bumpInteraction();
+  const imgItem = getActiveImage();
+  if (!imgItem) {
+    showToast("No image selected.", "error");
+    return;
+  }
+
+  const label = "Surprise Me";
+  await ensureRun();
+  setImageFxActive(true, label);
+  portraitWorking(label, { providerOverride: "gemini" });
+  beginPendingReplace(imgItem.id, label);
+  try {
+    const ok = await ensureEngineSpawned({ reason: label });
+    if (!ok) throw new Error("Engine unavailable");
+    await setEngineActiveImage(imgItem.path);
+    state.expectingArtifacts = true;
+    state.lastAction = label;
+    setStatus(`Engine: ${label}…`);
+    showToast("Surprising you…", "info", 2200);
+
+    const gemModel = pickGeminiImageModel();
+    if (state.ptySpawned && gemModel && gemModel !== settings.imageModel) {
+      state.engineImageModelRestore = settings.imageModel;
+      await invoke("write_pty", { data: `/image_model ${gemModel}\n` }).catch(() => {});
+    }
+
+    const surprises = [
+      "replace the background with a bold but clean gradient (no patterns) and add a subtle soft shadow under the product.",
+      "make the lighting moodier and more dramatic (soft rim light + slightly deeper shadows) while keeping details crisp.",
+      "add a minimal studio tabletop plane and a gentle vignette, keeping the product unchanged.",
+      "add a tasteful subtle film look (slight contrast + very light grain), keeping all logos and text identical.",
+      "replace the background with a bright high-key studio look with a soft floor reflection, keeping the subject exactly the same.",
+    ];
+    const chosen = surprises[Math.floor(Math.random() * surprises.length)] || surprises[0];
+
+    // Must start with "edit" or "replace" for Brood's edit detection.
+    const prompt =
+      `edit the image: * surprise me.\n` +
+      `${chosen}\n` +
+      "Keep the subject exactly the same. Preserve all existing logos and text exactly. " +
+      "Do not add any new people or readable text. Do not crop.";
+    await invoke("write_pty", { data: `${prompt}\n` });
+  } catch (err) {
+    state.expectingArtifacts = false;
+    state.engineImageModelRestore = null;
+    clearPendingReplace();
+    setImageFxActive(false);
+    updatePortraitIdle();
+    throw err;
+  }
+}
+
+async function aiAnnotateEdit() {
+  bumpInteraction();
+  const imgItem = getActiveImage();
+  if (!imgItem) {
+    showToast("No image selected.", "error");
+    return;
+  }
+  const box = state.annotateBox;
+  if (!box || box.imageId !== imgItem.id) {
+    showToast("Annotate: draw a box first.", "tip", 2200);
+    return;
+  }
+  const instruction = String(els.annotateText?.value || "").trim();
+  if (!instruction) {
+    showToast("Annotate: enter an instruction.", "tip", 2200);
+    return;
+  }
+
+  const requestedModel = String(els.annotateModel?.value || settings.imageModel || "").trim();
+  const provider = providerFromModel(requestedModel || settings.imageModel);
+  const label = "Annotate";
+  await ensureRun();
+  setImageFxActive(true, label);
+  portraitWorking(label, { providerOverride: provider });
+  beginPendingReplace(imgItem.id, label);
+  try {
+    const ok = await ensureEngineSpawned({ reason: label });
+    if (!ok) throw new Error("Engine unavailable");
+    await setEngineActiveImage(imgItem.path);
+    state.expectingArtifacts = true;
+    state.lastAction = label;
+    setStatus(`Engine: ${label}…`);
+    showToast("Annotate: editing…", "info", 2200);
+
+    if (state.ptySpawned && requestedModel && requestedModel !== settings.imageModel) {
+      state.engineImageModelRestore = settings.imageModel;
+      await invoke("write_pty", { data: `/image_model ${requestedModel}\n` }).catch(() => {});
+    }
+
+    const normalized = _normalizeAnnotateBox(box, imgItem);
+    const iw = imgItem?.img?.naturalWidth || imgItem?.width || null;
+    const ih = imgItem?.img?.naturalHeight || imgItem?.height || null;
+    let boxDesc = "";
+    if (normalized && iw && ih) {
+      const xPct = (normalized.x0 / iw) * 100;
+      const yPct = (normalized.y0 / ih) * 100;
+      const wPct = ((normalized.x1 - normalized.x0) / iw) * 100;
+      const hPct = ((normalized.y1 - normalized.y0) / ih) * 100;
+      boxDesc = `x ${xPct.toFixed(1)}% y ${yPct.toFixed(1)}% w ${wPct.toFixed(1)}% h ${hPct.toFixed(1)}%`;
+    } else if (normalized) {
+      const wPx = Math.max(0, normalized.x1 - normalized.x0);
+      const hPx = Math.max(0, normalized.y1 - normalized.y0);
+      boxDesc = `x ${Math.round(normalized.x0)} y ${Math.round(normalized.y0)} w ${Math.round(wPx)} h ${Math.round(hPx)} (px)`;
+    }
+
+    // Must start with "edit" or "replace" for Brood's edit detection.
+    const prompt =
+      `edit the image: ${instruction}\n` +
+      `Apply the change only inside this bounding box (from top-left of image): ${boxDesc}.\n` +
+      "Outside the box, keep the image exactly the same. Preserve logos and text. Do not crop.";
+    await invoke("write_pty", { data: `${prompt}\n` });
+
+    // Clear UI selection now that the instruction is sent.
+    if (els.annotateText) els.annotateText.value = "";
+    state.annotateBox = null;
+    state.annotateDraft = null;
+    hideAnnotatePanel();
+    requestRender();
+  } catch (err) {
+    state.expectingArtifacts = false;
+    state.engineImageModelRestore = null;
     clearPendingReplace();
     setImageFxActive(false);
     updatePortraitIdle();
@@ -2791,6 +3172,9 @@ async function createRun() {
   clearImageCache();
   state.selection = null;
   state.lassoDraft = [];
+  state.annotateDraft = null;
+  state.annotateBox = null;
+  hideAnnotatePanel();
   state.expectingArtifacts = false;
   state.lastRecreatePrompt = null;
   setRunInfo(`Run: ${state.runDir}`);
@@ -2826,6 +3210,9 @@ async function openExistingRun() {
   clearImageCache();
   state.selection = null;
   state.lassoDraft = [];
+  state.annotateDraft = null;
+  state.annotateBox = null;
+  hideAnnotatePanel();
   state.expectingArtifacts = false;
   state.lastRecreatePrompt = null;
   setRunInfo(`Run: ${state.runDir}`);
@@ -3041,6 +3428,7 @@ function handleEvent(event) {
       );
     }
     state.expectingArtifacts = false;
+    restoreEngineImageModelIfNeeded();
     setStatus("Engine: ready");
     updatePortraitIdle();
     setImageFxActive(false);
@@ -3052,6 +3440,7 @@ function handleEvent(event) {
     state.expectingArtifacts = false;
     state.pendingBlend = null;
     clearPendingReplace();
+    restoreEngineImageModelIfNeeded();
     updatePortraitIdle();
     setImageFxActive(false);
     renderHudReadout();
@@ -3290,6 +3679,28 @@ function render() {
     octx.restore();
   }
 
+  const annotateBox = state.annotateDraft || state.annotateBox;
+  if (annotateBox && item?.id && annotateBox.imageId === item.id) {
+    const dpr = getDpr();
+    const a = imageToCanvas({ x: Number(annotateBox.x0) || 0, y: Number(annotateBox.y0) || 0 });
+    const b = imageToCanvas({ x: Number(annotateBox.x1) || 0, y: Number(annotateBox.y1) || 0 });
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    const w = Math.max(1, Math.abs(a.x - b.x));
+    const h = Math.max(1, Math.abs(a.y - b.y));
+    octx.save();
+    octx.lineWidth = Math.max(1, Math.round(2 * dpr));
+    octx.strokeStyle = "rgba(82, 255, 148, 0.92)";
+    octx.fillStyle = "rgba(82, 255, 148, 0.10)";
+    if (state.annotateDraft) {
+      octx.setLineDash([Math.round(8 * dpr), Math.round(6 * dpr)]);
+    }
+    octx.fillRect(x, y, w, h);
+    octx.strokeRect(x, y, w, h);
+    octx.setLineDash([]);
+    octx.restore();
+  }
+
   if (item?.id) {
     const dpr = getDpr();
     const marks = _getDesignations(item.id);
@@ -3378,24 +3789,46 @@ function installCanvasHandlers() {
 
 	      const img = state.imagesById.get(hit) || getActiveImage();
 	      if (!img) return;
-      if (!img.img && (!img.width || !img.height)) {
-        ensureCanvasImageLoaded(img);
-        showToast("Loading image…", "info", 1400);
-        return;
-      }
+	      if (!img.img && (!img.width || !img.height)) {
+	        ensureCanvasImageLoaded(img);
+	        showToast("Loading image…", "info", 1400);
+	        return;
+	      }
 
-      if (state.tool === "designate") {
-        const imgPt = canvasToImage(p);
-        state.pendingDesignation = { imageId: img.id, x: imgPt.x, y: imgPt.y, at: Date.now() };
-        showDesignateMenuAt(canvasCssPointFromEvent(event));
-        requestRender();
-        return;
-      }
+	      if (state.tool === "designate") {
+	        const imgPt = canvasToImage(p);
+	        state.pendingDesignation = { imageId: img.id, x: imgPt.x, y: imgPt.y, at: Date.now() };
+	        showDesignateMenuAt(canvasCssPointFromEvent(event));
+	        requestRender();
+	        return;
+	      }
 
-      if (state.tool === "lasso") {
-        els.overlayCanvas.setPointerCapture(event.pointerId);
-        state.pointer.active = true;
-        state.pointer.startX = p.x;
+	      if (state.tool === "annotate") {
+	        const imgPt = canvasToImage(p);
+	        els.overlayCanvas.setPointerCapture(event.pointerId);
+	        state.pointer.active = true;
+	        state.pointer.startX = p.x;
+	        state.pointer.startY = p.y;
+	        state.pointer.lastX = p.x;
+	        state.pointer.lastY = p.y;
+	        state.annotateBox = null;
+	        hideAnnotatePanel();
+	        state.annotateDraft = {
+	          imageId: img.id,
+	          x0: imgPt.x,
+	          y0: imgPt.y,
+	          x1: imgPt.x,
+	          y1: imgPt.y,
+	          at: Date.now(),
+	        };
+	        requestRender();
+	        return;
+	      }
+
+	      if (state.tool === "lasso") {
+	        els.overlayCanvas.setPointerCapture(event.pointerId);
+	        state.pointer.active = true;
+	        state.pointer.startX = p.x;
         state.pointer.startY = p.y;
         state.pointer.lastX = p.x;
         state.pointer.lastY = p.y;
@@ -3403,35 +3836,51 @@ function installCanvasHandlers() {
         state.pointer.startOffsetY = state.multiView.offsetY;
         state.selection = null;
         state.lassoDraft = [canvasToImage(p)];
-        requestRender();
-        return;
-      }
-      return;
-    }
-    const img = getActiveImage();
-    if (!img) return;
-    if (state.tool === "designate") {
-      const p = canvasPointFromEvent(event);
-      const imgPt = canvasToImage(p);
-      state.pendingDesignation = { imageId: img.id, x: imgPt.x, y: imgPt.y, at: Date.now() };
-      showDesignateMenuAt(canvasCssPointFromEvent(event));
-      requestRender();
-      return;
-    }
-    els.overlayCanvas.setPointerCapture(event.pointerId);
-    const p = canvasPointFromEvent(event);
-    state.pointer.active = true;
+	        requestRender();
+	        return;
+	      }
+	      return;
+	    }
+	    const img = getActiveImage();
+	    if (!img) return;
+	    if (state.tool === "designate") {
+	      const p = canvasPointFromEvent(event);
+	      const imgPt = canvasToImage(p);
+	      state.pendingDesignation = { imageId: img.id, x: imgPt.x, y: imgPt.y, at: Date.now() };
+	      showDesignateMenuAt(canvasCssPointFromEvent(event));
+	      requestRender();
+	      return;
+	    }
+	    els.overlayCanvas.setPointerCapture(event.pointerId);
+	    const p = canvasPointFromEvent(event);
+	    state.pointer.active = true;
     state.pointer.startX = p.x;
     state.pointer.startY = p.y;
     state.pointer.lastX = p.x;
     state.pointer.lastY = p.y;
     state.pointer.startOffsetX = state.view.offsetX;
-    state.pointer.startOffsetY = state.view.offsetY;
+	    state.pointer.startOffsetY = state.view.offsetY;
 
-    if (state.tool === "lasso") {
-      state.selection = null;
-      state.lassoDraft = [canvasToImage(p)];
-      requestRender();
+	    if (state.tool === "annotate") {
+	      const imgPt = canvasToImage(p);
+	      state.annotateBox = null;
+	      hideAnnotatePanel();
+	      state.annotateDraft = {
+	        imageId: img.id,
+	        x0: imgPt.x,
+	        y0: imgPt.y,
+	        x1: imgPt.x,
+	        y1: imgPt.y,
+	        at: Date.now(),
+	      };
+	      requestRender();
+	      return;
+	    }
+
+	    if (state.tool === "lasso") {
+	      state.selection = null;
+	      state.lassoDraft = [canvasToImage(p)];
+	      requestRender();
     }
   });
 
@@ -3443,6 +3892,15 @@ function installCanvasHandlers() {
     const dy = p.y - state.pointer.startY;
     state.pointer.lastX = p.x;
     state.pointer.lastY = p.y;
+	    if (state.tool === "annotate") {
+	      const img = getActiveImage();
+	      if (!img || !state.annotateDraft || state.annotateDraft.imageId !== img.id) return;
+	      const imgPt = canvasToImage(p);
+	      state.annotateDraft.x1 = imgPt.x;
+	      state.annotateDraft.y1 = imgPt.y;
+	      requestRender();
+	      return;
+	    }
     if (state.tool === "pan") {
       if (state.canvasMode === "multi") {
         state.multiView.offsetX = state.pointer.startOffsetX + dx;
@@ -3484,6 +3942,24 @@ function installCanvasHandlers() {
     if (!state.pointer.active) return;
     bumpInteraction();
     state.pointer.active = false;
+	    if (state.tool === "annotate") {
+	      const img = getActiveImage();
+	      const draft = state.annotateDraft;
+	      state.annotateDraft = null;
+	      if (img && draft && draft.imageId === img.id) {
+	        const normalized = _normalizeAnnotateBox(draft, img);
+	        const w = Math.abs((normalized?.x1 || 0) - (normalized?.x0 || 0));
+	        const h = Math.abs((normalized?.y1 || 0) - (normalized?.y0 || 0));
+	        if (normalized && w >= 8 && h >= 8) {
+	          state.annotateBox = normalized;
+	          showAnnotatePanelForBox();
+	        } else {
+	          state.annotateBox = null;
+	          hideAnnotatePanel();
+	        }
+	      }
+	      requestRender();
+	    }
     if (state.tool === "lasso") {
       if (state.lassoDraft.length >= 3) {
         state.selection = { points: state.lassoDraft.slice(), closed: true };
@@ -3659,7 +4135,7 @@ function installUi() {
     btn.addEventListener("click", () => {
       bumpInteraction();
       const tool = btn.dataset.tool;
-      if (tool === "pan" || tool === "lasso" || tool === "designate") {
+      if (tool === "annotate" || tool === "pan" || tool === "lasso" || tool === "designate") {
         setTool(tool);
         return;
       }
@@ -3667,9 +4143,55 @@ function installUi() {
         applyBackground("white").catch((e) => console.error(e));
         return;
       }
+      if (tool === "remove_people") {
+        aiRemovePeople().catch((e) => console.error(e));
+        return;
+      }
       if (tool === "variations") {
         runVariations().catch((e) => console.error(e));
         return;
+      }
+      if (tool === "surprise") {
+        aiSurpriseMe().catch((e) => console.error(e));
+        return;
+      }
+      if (tool === "respawn") {
+        respawnActions();
+        return;
+      }
+    });
+  }
+
+  if (els.annotateClose) {
+    els.annotateClose.addEventListener("click", () => {
+      bumpInteraction();
+      state.annotateDraft = null;
+      state.annotateBox = null;
+      hideAnnotatePanel();
+      requestRender();
+    });
+  }
+  if (els.annotateCancel) {
+    els.annotateCancel.addEventListener("click", () => {
+      bumpInteraction();
+      state.annotateDraft = null;
+      state.annotateBox = null;
+      hideAnnotatePanel();
+      requestRender();
+    });
+  }
+  if (els.annotateSend) {
+    els.annotateSend.addEventListener("click", () => {
+      aiAnnotateEdit().catch((e) => console.error(e));
+    });
+  }
+  if (els.annotateText) {
+    els.annotateText.addEventListener("keydown", (event) => {
+      const key = String(event?.key || "");
+      const mod = Boolean(event?.metaKey || event?.ctrlKey);
+      if (mod && key === "Enter") {
+        event.preventDefault();
+        aiAnnotateEdit().catch((e) => console.error(e));
       }
     });
   }
@@ -3688,14 +4210,22 @@ function installUi() {
       if (!kind) return;
       if (kind === "clear") {
         _clearDesignations();
-        hideDesignateMenu();
+        btn.classList.add("confirm");
+        setTimeout(() => hideDesignateMenuAnimated({ animate: true }), 360);
+        setTip("Designate: cleared.");
+        requestRender();
         return;
       }
-      if (!_commitDesignation(kind)) {
-        showToast("Click the image (Designate tool) to place a point first.", "tip", 2600);
-        return;
+
+      const committed = _commitDesignation(kind);
+      btn.classList.add("confirm");
+      setTimeout(() => hideDesignateMenuAnimated({ animate: true }), 360);
+      if (!committed) {
+        showToast(`Designate: ${kind}. Click the image to place a point.`, "tip", 2200);
+      } else {
+        showToast(`Designated: ${kind}`, "tip", 1400);
       }
-      hideDesignateMenu();
+      renderHudReadout();
     });
   }
 
@@ -3736,9 +4266,16 @@ function installUi() {
         els.settingsDrawer.classList.add("hidden");
         return;
       }
+      if (els.annotatePanel && !els.annotatePanel.classList.contains("hidden")) {
+        state.annotateDraft = null;
+        state.annotateBox = null;
+        hideAnnotatePanel();
+        requestRender();
+        return;
+      }
       if (state.pendingDesignation || (els.designateMenu && !els.designateMenu.classList.contains("hidden"))) {
         state.pendingDesignation = null;
-        hideDesignateMenu();
+        hideDesignateMenuAnimated({ animate: false });
         requestRender();
         return;
       }
@@ -3747,6 +4284,16 @@ function installUi() {
     }
 
     if (isEditable || hasModifier) return;
+
+    // HUD action grid 1-9.
+    if (/^[1-9]$/.test(rawKey)) {
+      const digit = rawKey;
+      const btn = document.querySelector(`.hud-keybar .tool[data-hotkey="${digit}"][data-tool]`);
+      if (btn) {
+        btn.click();
+        return;
+      }
+    }
 
     if (key === "l") {
       setTool("lasso");
@@ -3817,6 +4364,7 @@ async function boot() {
     state.expectingArtifacts = false;
     state.pendingBlend = null;
     clearPendingReplace();
+    state.engineImageModelRestore = null;
     setImageFxActive(false);
     updatePortraitIdle();
   });
