@@ -2506,6 +2506,10 @@ function renderSpawnbar() {
   if (ENABLE_LARVA_SPAWN) ensureLarvaAnimator();
 }
 
+function isMultiActionRunning() {
+  return Boolean(state.pendingBlend || state.pendingSwapDna || state.pendingBridge || state.pendingArgue);
+}
+
 function chooseSpawnNodes() {
   if (!ENABLE_SPAWN_ACTIONS) {
     state.spawnNodes = [];
@@ -2522,7 +2526,7 @@ function chooseSpawnNodes() {
   const img = getActiveImage();
   const items = [];
   if (state.canvasMode === "multi") {
-    const canBlend = state.images.length === 2 && !state.pendingBlend && !state.pendingSwapDna;
+    const canBlend = state.images.length === 2 && !isMultiActionRunning();
     if (canBlend) items.push({ id: "blend_pair", title: "Combine", action: "blend_pair" });
   }
   items.push({ id: "bg_white", title: "Studio White", action: "bg_white" });
@@ -2584,9 +2588,7 @@ function computeQuickActions() {
   // single-image actions to reduce ambiguity.
   if (state.canvasMode === "multi") {
     if (state.images.length === 2) {
-      const runningMulti = Boolean(
-        state.pendingBlend || state.pendingSwapDna || state.pendingBridge || state.pendingArgue
-      );
+      const runningMulti = isMultiActionRunning();
       actions.push({
         id: "combine",
         label: state.pendingBlend ? "Combine (running…)" : "Combine",
@@ -3664,7 +3666,7 @@ function quoteForPtyArg(value) {
 
 async function runBlendPair() {
   bumpInteraction();
-  if (state.pendingBlend || state.pendingSwapDna) {
+  if (isMultiActionRunning()) {
     showToast("A multi-image action is already running.", "tip", 2600);
     return;
   }
@@ -3717,7 +3719,7 @@ async function runBlendPair() {
 
 async function runSwapDnaPair({ invert = false } = {}) {
   bumpInteraction();
-  if (state.pendingBlend || state.pendingSwapDna) {
+  if (isMultiActionRunning()) {
     showToast("A multi-image action is already running.", "tip", 2600);
     return;
   }
@@ -3781,7 +3783,7 @@ async function runSwapDnaPair({ invert = false } = {}) {
 
 async function runBridgePair() {
   bumpInteraction();
-  if (state.pendingBlend || state.pendingSwapDna || state.pendingBridge || state.pendingArgue) {
+  if (isMultiActionRunning()) {
     showToast("A multi-image action is already running.", "tip", 2600);
     return;
   }
@@ -3838,7 +3840,7 @@ async function runBridgePair() {
 
 async function runArguePair() {
   bumpInteraction();
-  if (state.pendingBlend || state.pendingSwapDna || state.pendingBridge || state.pendingArgue) {
+  if (isMultiActionRunning()) {
     showToast("A multi-image action is already running.", "tip", 2600);
     return;
   }
@@ -4497,7 +4499,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     octx.restore();
   }
 
-  const canSuggestBlend = items.length === 2 && !state.pendingBlend && !state.pendingSwapDna;
+  const canSuggestBlend = items.length === 2 && !isMultiActionRunning();
   if (!canSuggestBlend) return;
   const aRect = items[0]?.id ? state.multiRects.get(items[0].id) : null;
   const bRect = items[1]?.id ? state.multiRects.get(items[1].id) : null;
