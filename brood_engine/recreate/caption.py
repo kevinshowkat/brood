@@ -11,6 +11,10 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
+import subprocess
+import tempfile
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -137,6 +141,34 @@ def _prepare_vision_image(reference_path: Path, *, max_dim: int = 1024) -> tuple
             rgb.save(buf, format="JPEG", quality=90)
             return buf.getvalue(), "image/jpeg"
     except Exception:
+        # PIL doesn't support HEIC/HEIF out of the box. On macOS we can use `sips`
+        # to convert to a JPEG that vision models reliably accept.
+        if sys.platform == "darwin" and reference_path.suffix.lower() in {".heic", ".heif"}:
+            try:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    out_path = Path(tmpdir) / "vision.jpg"
+                    cmd = [
+                        "/usr/bin/sips",
+                        "-Z",
+                        str(int(max_dim)),
+                        "-s",
+                        "format",
+                        "jpeg",
+                        "-s",
+                        "formatOptions",
+                        "90",
+                        str(reference_path),
+                        "--out",
+                        str(out_path),
+                    ]
+                    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    data = out_path.read_bytes()
+                    if data:
+                        return data, "image/jpeg"
+            except Exception:
+                # Fall through to raw bytes.
+                pass
+
         data = reference_path.read_bytes()
         mime = _guess_mime(reference_path)
         return data, mime
@@ -207,7 +239,22 @@ def _openai_api_key() -> str | None:
 
 
 def _openai_api_base() -> str:
-    return (os.getenv("OPENAI_API_BASE") or "https://api.openai.com/v1").rstrip("/")
+    """Return the OpenAI API base URL (without trailing slash).
+
+    Supports both legacy `OPENAI_API_BASE` and the newer `OPENAI_BASE_URL` env var
+    used by official SDKs. If the configured base is just a host (no path), we
+    append `/v1` so callers can safely add endpoint paths like `/responses`.
+    """
+    raw = os.getenv("OPENAI_API_BASE") or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+    base = str(raw).strip().rstrip("/")
+    try:
+        parsed = urlparse(base)
+        if parsed.scheme and parsed.netloc and parsed.path in {"", "/"}:
+            base = f"{base}/v1"
+    except Exception:
+        # If parsing fails, keep the string as-is.
+        pass
+    return base.rstrip("/")
 
 
 def _caption_with_openai(reference_path: Path) -> PromptInference | None:
