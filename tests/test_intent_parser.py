@@ -31,10 +31,22 @@ def test_parse_intent_diagnose_basic():
     assert intent.command_args["path"] == "a.png"
 
 
+def test_parse_intent_diagnose_quoted_path():
+    intent = parse_intent('/diagnose "/tmp/a b.png"')
+    assert intent.action == "diagnose"
+    assert intent.command_args["path"] == "/tmp/a b.png"
+
+
 def test_parse_intent_recast_basic():
     intent = parse_intent("/recast a.png")
     assert intent.action == "recast"
     assert intent.command_args["path"] == "a.png"
+
+
+def test_parse_intent_recast_quoted_path():
+    intent = parse_intent('/recast "/tmp/a b.png"')
+    assert intent.action == "recast"
+    assert intent.command_args["path"] == "/tmp/a b.png"
 
 
 def test_parse_intent_argue_basic():
