@@ -1182,6 +1182,20 @@ function getDpr() {
   return Math.max(1, Math.min(window.devicePixelRatio || 1, 3));
 }
 
+let lastHudHeightCssPx = null;
+let hudResizeObserver = null;
+function syncHudHeightVar() {
+  if (!els.canvasWrap || !els.hud) return;
+  const rect = els.hud.getBoundingClientRect();
+  const h = Math.max(0, Math.round(rect.height));
+  // Avoid setting 0px during early boot/layout churn; it would hide bumpers.
+  if (!h) return;
+  const next = `${h}px`;
+  if (next === lastHudHeightCssPx) return;
+  lastHudHeightCssPx = next;
+  els.canvasWrap.style.setProperty("--hud-h", next);
+}
+
 function ensureCanvasSize() {
   if (!els.canvasWrap || !els.workCanvas || !els.overlayCanvas) return;
   const rect = els.canvasWrap.getBoundingClientRect();
@@ -5475,6 +5489,19 @@ async function boot() {
   chooseSpawnNodes();
   renderFilmstrip();
   ensureCanvasSize();
+  // Keep decorative canvas bumpers matched to the HUD height.
+  if (typeof ResizeObserver === "function" && els.hud) {
+    try {
+      if (hudResizeObserver) hudResizeObserver.disconnect();
+      hudResizeObserver = new ResizeObserver(() => {
+        syncHudHeightVar();
+      });
+      hudResizeObserver.observe(els.hud);
+      requestAnimationFrame(() => syncHudHeightVar());
+    } catch {
+      // ignore
+    }
+  }
   installDprWatcher();
 
   document.addEventListener("visibilitychange", () => {
