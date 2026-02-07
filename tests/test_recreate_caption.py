@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
-from brood_engine.recreate.caption import infer_prompt
+from brood_engine.recreate.caption import infer_prompt, infer_diagnosis, infer_argument
 
 
 def test_prepare_vision_image_converts_heic_on_macos(tmp_path: Path) -> None:
@@ -68,3 +68,21 @@ def test_infer_prompt_falls_back_without_keys(tmp_path: Path, monkeypatch: pytes
     inference = infer_prompt(path)
     assert inference.source == "fallback"
     assert "recreate an image similar to" in inference.prompt.lower()
+
+
+def test_infer_diagnosis_returns_none_without_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_caption_env(monkeypatch)
+    path = tmp_path / "ref.png"
+    Image.new("RGB", (16, 16), (30, 30, 30)).save(path)
+
+    assert infer_diagnosis(path) is None
+
+
+def test_infer_argument_returns_none_without_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_caption_env(monkeypatch)
+    a = tmp_path / "a.png"
+    b = tmp_path / "b.png"
+    Image.new("RGB", (16, 16), (200, 30, 30)).save(a)
+    Image.new("RGB", (16, 16), (30, 30, 200)).save(b)
+
+    assert infer_argument(a, b) is None

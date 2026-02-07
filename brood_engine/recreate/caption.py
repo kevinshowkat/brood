@@ -39,6 +39,13 @@ class DescriptionInference:
     model: str | None = None
 
 
+@dataclass(frozen=True)
+class TextInference:
+    text: str
+    source: str
+    model: str | None = None
+
+
 def infer_prompt(reference_path: Path) -> PromptInference:
     try:
         with Image.open(reference_path) as image:
@@ -71,6 +78,34 @@ def infer_description(reference_path: Path, *, max_chars: int = 48) -> Descripti
     gemini = _describe_with_gemini(reference_path, max_chars=max_chars)
     if gemini is not None:
         return gemini
+    return None
+
+
+def infer_diagnosis(reference_path: Path) -> TextInference | None:
+    """Return a creative-director style critique of an image.
+
+    This is intentionally NOT a neutral description; it's meant to call out what's
+    working, what's not, and what to change next.
+    """
+    # Prefer Gemini for this workflow (matches Brood's default image stack), but
+    # fall back to OpenAI when Gemini isn't configured.
+    gemini = _diagnose_with_gemini(reference_path)
+    if gemini is not None:
+        return gemini
+    openai = _diagnose_with_openai(reference_path)
+    if openai is not None:
+        return openai
+    return None
+
+
+def infer_argument(path_a: Path, path_b: Path) -> TextInference | None:
+    """Return a debate between two image directions."""
+    gemini = _argue_with_gemini(path_a, path_b)
+    if gemini is not None:
+        return gemini
+    openai = _argue_with_openai(path_a, path_b)
+    if openai is not None:
+        return openai
     return None
 
 
@@ -121,6 +156,38 @@ def _description_instruction(max_chars: int) -> str:
         "No punctuation. No quotes. No branding. Do not copy text that appears in the image. "
         "Avoid generic filler words like image, photo, screenshot, label, subject. "
         "Output ONLY the label."
+    )
+
+
+def _diagnose_instruction() -> str:
+    return (
+        "DIAGNOSE this image like a brutally honest creative director.\n"
+        "Do NOT describe the image. Diagnose what's working and what isn't, using specific visual evidence.\n\n"
+        "Output format:\n"
+        "WHAT'S WORKING:\n"
+        "- (3-5 bullets)\n\n"
+        "WHAT'S NOT WORKING:\n"
+        "- (4-7 bullets)\n\n"
+        "FIX NEXT (prioritized):\n"
+        "- (3-5 bullets)\n\n"
+        "Be concrete about: composition/hierarchy, focal point, color story, lighting, depth, typography/legibility "
+        "(if present), material realism, scale, and intent. No generic platitudes."
+    )
+
+
+def _argue_instruction() -> str:
+    return (
+        "ARGUE between two creative directions based on Image A and Image B.\n"
+        "You are not neutral: make the strongest case for each, using specific visual evidence.\n\n"
+        "Output format:\n"
+        "CASE FOR IMAGE A:\n"
+        "- (5-8 bullets)\n\n"
+        "CASE FOR IMAGE B:\n"
+        "- (5-8 bullets)\n\n"
+        "VERDICT:\n"
+        "(2-4 sentences, name the deciding criteria)\n\n"
+        "NEXT TEST:\n"
+        "- (3 bullets: what to change / try next)\n"
     )
 
 
@@ -509,5 +576,179 @@ def _describe_with_gemini(reference_path: Path, *, max_chars: int) -> Descriptio
                 cleaned = _clean_description(chunk, max_chars=max_chars)
                 if cleaned:
                     return DescriptionInference(description=cleaned, source="gemini_vision", model=model)
+
+    return None
+
+
+def _clean_text_inference(text: str, *, max_chars: int | None = None) -> str:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return ""
+    if max_chars is not None and max_chars > 0 and len(cleaned) > max_chars:
+        cleaned = cleaned[:max_chars].rstrip()
+    return cleaned
+
+
+def _diagnose_with_openai(reference_path: Path) -> TextInference | None:
+    api_key = _openai_api_key()
+    if not api_key:
+        return None
+    model = os.getenv("BROOD_DIAGNOSE_MODEL") or os.getenv("OPENAI_DIAGNOSE_MODEL") or "gpt-4o-mini"
+    image_bytes, mime = _prepare_vision_image(reference_path)
+    data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": _diagnose_instruction()},
+                    {"type": "input_image", "image_url": data_url},
+                ],
+            }
+        ],
+        "max_output_tokens": 900,
+    }
+    endpoint = f"{_openai_api_base()}/responses"
+    try:
+        _, response = _post_openai_json(endpoint, payload, api_key, timeout_s=45.0)
+    except Exception:
+        return None
+    text = _extract_openai_output_text(response)
+    cleaned = _clean_text_inference(text, max_chars=8000)
+    if not cleaned:
+        return None
+    return TextInference(text=cleaned, source="openai_vision", model=model)
+
+
+def _argue_with_openai(path_a: Path, path_b: Path) -> TextInference | None:
+    api_key = _openai_api_key()
+    if not api_key:
+        return None
+    model = os.getenv("BROOD_ARGUE_MODEL") or os.getenv("OPENAI_ARGUE_MODEL") or "gpt-4o-mini"
+    a_bytes, a_mime = _prepare_vision_image(path_a)
+    b_bytes, b_mime = _prepare_vision_image(path_b)
+    a_url = f"data:{a_mime};base64,{base64.b64encode(a_bytes).decode('ascii')}"
+    b_url = f"data:{b_mime};base64,{base64.b64encode(b_bytes).decode('ascii')}"
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Image A:"},
+                    {"type": "input_image", "image_url": a_url},
+                    {"type": "input_text", "text": "Image B:"},
+                    {"type": "input_image", "image_url": b_url},
+                    {"type": "input_text", "text": _argue_instruction()},
+                ],
+            }
+        ],
+        "max_output_tokens": 1100,
+    }
+    endpoint = f"{_openai_api_base()}/responses"
+    try:
+        _, response = _post_openai_json(endpoint, payload, api_key, timeout_s=55.0)
+    except Exception:
+        return None
+    text = _extract_openai_output_text(response)
+    cleaned = _clean_text_inference(text, max_chars=10000)
+    if not cleaned:
+        return None
+    return TextInference(text=cleaned, source="openai_vision", model=model)
+
+
+def _diagnose_with_gemini(reference_path: Path) -> TextInference | None:
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return None
+    try:
+        from google import genai  # type: ignore
+        from google.genai import types  # type: ignore
+    except Exception:
+        return None
+
+    model = os.getenv("BROOD_GEMINI_DIAGNOSE_MODEL") or "gemini-3-pro-preview"
+    image_bytes, mime = _prepare_vision_image(reference_path)
+    instruction = _diagnose_instruction()
+
+    try:
+        client = genai.Client(api_key=api_key)
+        chat = client.chats.create(model=model)
+        parts = [
+            types.Part(inline_data=types.Blob(data=image_bytes, mime_type=mime)),
+            types.Part(text=instruction),
+        ]
+        response = chat.send_message(parts)
+    except Exception:
+        return None
+
+    text = getattr(response, "text", None)
+    if isinstance(text, str) and text.strip():
+        cleaned = _clean_text_inference(text, max_chars=8000)
+        if cleaned:
+            return TextInference(text=cleaned, source="gemini_vision", model=model)
+
+    candidates = getattr(response, "candidates", []) or []
+    for candidate in candidates:
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) or getattr(candidate, "parts", None) or []
+        for part in parts:
+            chunk = getattr(part, "text", None)
+            if isinstance(chunk, str) and chunk.strip():
+                cleaned = _clean_text_inference(chunk, max_chars=8000)
+                if cleaned:
+                    return TextInference(text=cleaned, source="gemini_vision", model=model)
+
+    return None
+
+
+def _argue_with_gemini(path_a: Path, path_b: Path) -> TextInference | None:
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return None
+    try:
+        from google import genai  # type: ignore
+        from google.genai import types  # type: ignore
+    except Exception:
+        return None
+
+    model = os.getenv("BROOD_GEMINI_ARGUE_MODEL") or os.getenv("BROOD_GEMINI_DIAGNOSE_MODEL") or "gemini-3-pro-preview"
+    a_bytes, a_mime = _prepare_vision_image(path_a)
+    b_bytes, b_mime = _prepare_vision_image(path_b)
+    instruction = _argue_instruction()
+
+    try:
+        client = genai.Client(api_key=api_key)
+        chat = client.chats.create(model=model)
+        parts = [
+            types.Part(text="Image A:"),
+            types.Part(inline_data=types.Blob(data=a_bytes, mime_type=a_mime)),
+            types.Part(text="Image B:"),
+            types.Part(inline_data=types.Blob(data=b_bytes, mime_type=b_mime)),
+            types.Part(text=instruction),
+        ]
+        response = chat.send_message(parts)
+    except Exception:
+        return None
+
+    text = getattr(response, "text", None)
+    if isinstance(text, str) and text.strip():
+        cleaned = _clean_text_inference(text, max_chars=10000)
+        if cleaned:
+            return TextInference(text=cleaned, source="gemini_vision", model=model)
+
+    candidates = getattr(response, "candidates", []) or []
+    for candidate in candidates:
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) or getattr(candidate, "parts", None) or []
+        for part in parts:
+            chunk = getattr(part, "text", None)
+            if isinstance(chunk, str) and chunk.strip():
+                cleaned = _clean_text_inference(chunk, max_chars=10000)
+                if cleaned:
+                    return TextInference(text=cleaned, source="gemini_vision", model=model)
 
     return None
