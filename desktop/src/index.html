@@ -360,20 +360,24 @@
 	              </div>
 		              <div class="hud-shell">
 	                <div class="hud-screen" aria-hidden="true">
-		                  <div class="hud-readout">
-		                    <div class="hud-line">
+		              <div class="hud-readout">
+		                    <div id="hud-line-unit" class="hud-line">
 	                      <span class="hud-k">UNIT</span>
 	                      <span id="hud-unit-desc" class="hud-v hud-desc"></span>
 	                    </div>
-	                    <div class="hud-line">
+	                    <div id="hud-line-director" class="hud-line hud-director-line hidden">
+	                      <span id="hud-director-k" class="hud-k">DIR</span>
+	                      <div id="hud-director-v" class="hud-v hud-director"></div>
+	                    </div>
+	                    <div id="hud-line-desc" class="hud-line">
 	                      <span class="hud-k">DESC</span>
 	                      <span id="hud-unit-name" class="hud-v"></span>
 	                    </div>
-	                    <div class="hud-line">
+	                    <div id="hud-line-sel" class="hud-line">
 	                      <span class="hud-k">SEL</span>
 	                      <span id="hud-unit-sel" class="hud-v"></span>
                     </div>
-	                    <div class="hud-line">
+	                    <div id="hud-line-gen" class="hud-line">
 	                      <span class="hud-k">GEN</span>
 	                      <span id="hud-unit-stat" class="hud-v"></span>
 	                    </div>
@@ -392,16 +396,6 @@
 	              <div class="panel-title">Quick Actions</div>
 		              <div id="quick-actions" class="panel-body actions" aria-label="Quick Actions"></div>
 		            </div>
-	            <div class="panel panel-director">
-	              <div class="panel-title">Director</div>
-	              <div
-	                id="director-text"
-	                class="panel-body muted panel-readout director-readout"
-	                aria-label="Director Readout"
-	              >
-	                Run Diagnose or Argue to see notes here.
-	              </div>
-	            </div>
 	            <div class="panel agent-panel">
 	              <div class="panel-title">Agents</div>
 		              <div id="portrait-dock" class="panel-body portrait-dock">
