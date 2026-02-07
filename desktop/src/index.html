@@ -39,10 +39,73 @@
               <button type="button" data-kind="object">Object</button>
               <button class="ghost" type="button" data-kind="clear">Clear</button>
             </div>
-	            <div id="hud" class="hud" aria-label="Selected Unit">
-	              <div class="hud-keybar" role="toolbar" aria-label="Tools">
-	                <div class="tool tool-blank" aria-hidden="true"></div>
-	                <button class="tool selected" type="button" data-tool="pan" title="Pan / Zoom" aria-label="Pan / Zoom">
+            <div id="annotate-panel" class="annotate-panel hidden" role="dialog" aria-label="Annotate">
+              <div class="annotate-header">
+                <div class="annotate-title">Annotate</div>
+                <button id="annotate-close" class="ghost" type="button" aria-label="Close annotate">Close</button>
+              </div>
+              <div class="annotate-body">
+                <div id="annotate-meta" class="annotate-meta muted"></div>
+                <label class="annotate-field">
+                  <div class="annotate-label">Model</div>
+                  <select id="annotate-model"></select>
+                </label>
+                <textarea
+                  id="annotate-text"
+                  class="annotate-text"
+                  rows="4"
+                  placeholder="Custom instruction…"
+                ></textarea>
+                <div class="annotate-actions">
+                  <button id="annotate-cancel" type="button">Cancel</button>
+                  <button id="annotate-send" type="button">Send</button>
+                </div>
+              </div>
+            </div>
+		            <div id="hud" class="hud" aria-label="Selected Unit">
+		              <div class="hud-keybar" role="toolbar" aria-label="Tools">
+	                <button
+	                  class="tool"
+	                  type="button"
+	                  data-tool="annotate"
+	                  data-hotkey="1"
+	                  title="Annotate (box + instruction)"
+	                  aria-label="Annotate"
+	                >
+	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+	                    <path
+	                      d="M5 6h11v11H5z"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linejoin="round"
+	                    />
+	                    <path
+	                      d="M14.5 4.5l5 5"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                    />
+	                    <path
+	                      d="M13 6l6 6"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                    />
+	                  </svg>
+	                  <span class="tool-hint" aria-hidden="true">1</span>
+	                  <span class="sr-only">Annotate</span>
+	                </button>
+	                <button
+	                  class="tool selected"
+	                  type="button"
+	                  data-tool="pan"
+	                  data-hotkey="2"
+	                  title="Pan / Zoom"
+	                  aria-label="Pan / Zoom"
+	                >
 	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
 	                    <path
 	                      d="M12 3v6M12 21v-6M3 12h6M21 12h-6"
@@ -59,11 +122,51 @@
 	                      stroke-linecap="square"
 	                    />
 	                  </svg>
-	                  <span class="tool-hint" aria-hidden="true">V</span>
+	                  <span class="tool-hint" aria-hidden="true">2</span>
 	                  <span class="sr-only">Pan</span>
 	                </button>
-	                <div class="tool tool-blank" aria-hidden="true"></div>
-	                <button class="tool" type="button" data-tool="lasso" title="Lasso selection" aria-label="Lasso selection">
+	                <button
+	                  class="tool"
+	                  type="button"
+	                  data-tool="remove_people"
+	                  data-hotkey="3"
+	                  title="Remove people from the active image"
+	                  aria-label="Remove people"
+	                >
+	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+	                    <path
+	                      d="M12 12a3.5 3.5 0 1 0-0.01 0"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                    />
+	                    <path
+	                      d="M5 20c1.2-3 4-5 7-5s5.8 2 7 5"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                    />
+	                    <path
+	                      d="M6 6l12 12"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                    />
+	                  </svg>
+	                  <span class="tool-hint" aria-hidden="true">3</span>
+	                  <span class="sr-only">Remove people</span>
+	                </button>
+	                <button
+	                  class="tool"
+	                  type="button"
+	                  data-tool="lasso"
+	                  data-hotkey="4"
+	                  title="Lasso selection"
+	                  aria-label="Lasso selection"
+	                >
 	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
 	                    <ellipse cx="12" cy="9.5" rx="6.5" ry="4.5" fill="none" stroke="currentColor" stroke-width="2" />
 	                    <path
@@ -81,13 +184,14 @@
 	                      stroke-linecap="round"
 	                    />
 	                  </svg>
-	                  <span class="tool-hint" aria-hidden="true">L</span>
+	                  <span class="tool-hint" aria-hidden="true">4</span>
 	                  <span class="sr-only">Lasso</span>
 	                </button>
 	                <button
 	                  class="tool"
 	                  type="button"
 	                  data-tool="designate"
+	                  data-hotkey="5"
 	                  title="Designate subject/reference/object"
 	                  aria-label="Designate"
 	                >
@@ -101,10 +205,17 @@
 	                      stroke-linecap="round"
 	                    />
 	                  </svg>
-	                  <span class="tool-hint" aria-hidden="true">D</span>
+	                  <span class="tool-hint" aria-hidden="true">5</span>
 	                  <span class="sr-only">Designate</span>
 	                </button>
-	                <button class="tool" type="button" data-tool="bg" title="Background replace" aria-label="Background replace">
+	                <button
+	                  class="tool"
+	                  type="button"
+	                  data-tool="bg"
+	                  data-hotkey="6"
+	                  title="Background replace"
+	                  aria-label="Background replace"
+	                >
 	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
 	                    <path
 	                      d="M6 7h10v4H6z"
@@ -129,14 +240,41 @@
 	                      stroke-linejoin="round"
 	                    />
 	                  </svg>
-	                  <span class="tool-hint" aria-hidden="true">B</span>
+	                  <span class="tool-hint" aria-hidden="true">6</span>
 	                  <span class="sr-only">Background</span>
 	                </button>
-	                <div class="tool tool-blank" aria-hidden="true"></div>
+		                <button
+		                  class="tool tool-danger"
+		                  type="button"
+		                  data-tool="surprise"
+		                  data-hotkey="7"
+		                  title="Surprise me"
+		                  aria-label="Surprise me"
+		                >
+		                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+		                    <path
+		                      d="M12 2l1.4 5.6L19 9l-5.6 1.4L12 16l-1.4-5.6L5 9l5.6-1.4L12 2z"
+		                      fill="none"
+		                      stroke="currentColor"
+		                      stroke-width="2"
+		                      stroke-linejoin="round"
+		                    />
+		                    <path
+		                      d="M4 14l0.8 3.2L8 18l-3.2 0.8L4 22l-0.8-3.2L0 18l3.2-0.8L4 14z"
+		                      fill="none"
+		                      stroke="currentColor"
+		                      stroke-width="2"
+		                      stroke-linejoin="round"
+		                    />
+		                  </svg>
+		                  <span class="tool-hint" aria-hidden="true">7</span>
+		                  <span class="sr-only">Surprise me</span>
+		                </button>
 	                <button
 	                  class="tool"
 	                  type="button"
 	                  data-tool="variations"
+	                  data-hotkey="8"
 	                  title="Zero-prompt variations"
 	                  aria-label="Zero-prompt variations"
 	                >
@@ -174,12 +312,39 @@
 	                      stroke-linejoin="round"
 	                    />
 	                  </svg>
-	                  <span class="tool-hint" aria-hidden="true">R</span>
+	                  <span class="tool-hint" aria-hidden="true">8</span>
 	                  <span class="sr-only">Variations</span>
 	                </button>
-	                <div class="tool tool-blank" aria-hidden="true"></div>
+	                <button
+	                  class="tool"
+	                  type="button"
+	                  data-tool="respawn"
+	                  data-hotkey="9"
+	                  title="Respawn action buttons"
+	                  aria-label="Respawn actions"
+	                >
+	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+	                    <path
+	                      d="M21 12a9 9 0 1 1-2.7-6.4"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                    />
+	                    <path
+	                      d="M21 3v6h-6"
+	                      fill="none"
+	                      stroke="currentColor"
+	                      stroke-width="2"
+	                      stroke-linecap="round"
+	                      stroke-linejoin="round"
+	                    />
+	                  </svg>
+	                  <span class="tool-hint" aria-hidden="true">9</span>
+	                  <span class="sr-only">Respawn</span>
+	                </button>
 	              </div>
-	              <div class="hud-shell">
+		              <div class="hud-shell">
 	                <div class="hud-screen" aria-hidden="true">
 	                  <div class="hud-readout">
 	                    <div class="hud-line">
@@ -209,15 +374,15 @@
         </section>
         <aside class="inspector" aria-label="Inspector">
           <div class="inspector-scroll">
-            <div class="panel panel-quick-actions">
-              <div class="panel-title">Quick Actions</div>
-              <div class="panel-body actions">
-                <button id="action-bg-white" type="button">Background: White</button>
-                <button id="action-bg-sweep" type="button">Background: Sweep</button>
-                <button id="action-crop-square" type="button">Crop: Square</button>
-                <button id="action-variations" type="button">Variations</button>
-              </div>
-            </div>
+	            <div class="panel panel-quick-actions">
+	              <div class="panel-title">Quick Actions</div>
+		              <div class="panel-body actions">
+		                <button id="action-bg-white" type="button">Background: White</button>
+		                <button id="action-bg-sweep" type="button">Background: Sweep</button>
+		                <button id="action-crop-square" type="button">Crop: Square</button>
+		                <button id="action-variations" type="button">Variations</button>
+		              </div>
+		            </div>
 	            <div class="panel agent-panel">
 	              <div class="panel-title">Agents</div>
 		              <div id="portrait-dock" class="panel-body portrait-dock">
