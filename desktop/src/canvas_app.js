@@ -34,6 +34,7 @@ const els = {
   dropHint: document.getElementById("drop-hint"),
   workCanvas: document.getElementById("work-canvas"),
   imageFx: document.getElementById("image-fx"),
+  imageFx2: document.getElementById("image-fx-2"),
   overlayCanvas: document.getElementById("overlay-canvas"),
   annotatePanel: document.getElementById("annotate-panel"),
   annotateClose: document.getElementById("annotate-close"),
@@ -689,7 +690,7 @@ async function ensureGeminiForBlend() {
   settings.imageModel = nextModel;
   localStorage.setItem("brood.imageModel", settings.imageModel);
   if (els.imageModel) els.imageModel.value = settings.imageModel;
-  updatePortraitIdle();
+  updatePortraitIdle({ fromSettings: true });
   if (state.ptySpawned) {
     await invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
   }
@@ -712,7 +713,7 @@ async function ensureGeminiProImagePreviewForAction(actionLabel = "This action")
   settings.imageModel = nextModel;
   localStorage.setItem("brood.imageModel", settings.imageModel);
   if (els.imageModel) els.imageModel.value = settings.imageModel;
-  updatePortraitIdle();
+  updatePortraitIdle({ fromSettings: true });
   if (state.ptySpawned) {
     await invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
   }
@@ -1598,22 +1599,84 @@ function getActiveImageRectCss() {
   };
 }
 
+function getImageRectCss(imageId) {
+  if (!imageId) return null;
+  if (state.canvasMode === "multi") {
+    const dpr = getDpr();
+    const mx = state.multiView?.offsetX || 0;
+    const my = state.multiView?.offsetY || 0;
+    const rect = state.multiRects.get(imageId) || null;
+    if (!rect) return null;
+    return {
+      left: (mx + rect.x) / dpr,
+      top: (my + rect.y) / dpr,
+      width: rect.w / dpr,
+      height: rect.h / dpr,
+    };
+  }
+  if (state.canvasMode !== "single") return null;
+  if (state.activeId !== imageId) return null;
+  return getActiveImageRectCss();
+}
+
+function getImageFxTargets() {
+  const swap = state.pendingSwapDna;
+  if (swap?.structureId && swap?.surfaceId) return [swap.structureId, swap.surfaceId];
+
+  const blend = state.pendingBlend?.sourceIds;
+  if (Array.isArray(blend) && blend.length >= 2) return [blend[0], blend[1]];
+
+  const bridge = state.pendingBridge?.sourceIds;
+  if (Array.isArray(bridge) && bridge.length >= 2) return [bridge[0], bridge[1]];
+
+  const replaceId = state.pendingReplace?.targetId;
+  if (replaceId) return [replaceId];
+
+  const recastId = state.pendingRecast?.sourceId;
+  if (recastId) return [recastId];
+
+  const activeId = state.activeId;
+  if (activeId) return [activeId];
+  return [];
+}
+
 function updateImageFxRect() {
-  if (!els.imageFx) return;
-  if (els.imageFx.classList.contains("hidden")) return;
-  const rect = getActiveImageRectCss();
-  if (!rect) return;
-  els.imageFx.style.left = `${rect.left.toFixed(2)}px`;
-  els.imageFx.style.top = `${rect.top.toFixed(2)}px`;
-  els.imageFx.style.width = `${Math.max(0, rect.width).toFixed(2)}px`;
-  els.imageFx.style.height = `${Math.max(0, rect.height).toFixed(2)}px`;
+  const fx1 = els.imageFx;
+  const fx2 = els.imageFx2;
+  if (!fx1) return;
+  if (fx1.classList.contains("hidden")) {
+    if (fx2) fx2.classList.add("hidden");
+    return;
+  }
+
+  const setRect = (el, rect) => {
+    if (!el) return;
+    if (!rect) {
+      el.style.width = "0px";
+      el.style.height = "0px";
+      return;
+    }
+    el.style.left = `${rect.left.toFixed(2)}px`;
+    el.style.top = `${rect.top.toFixed(2)}px`;
+    el.style.width = `${Math.max(0, rect.width).toFixed(2)}px`;
+    el.style.height = `${Math.max(0, rect.height).toFixed(2)}px`;
+  };
+
+  const targets = getImageFxTargets();
+  const rect1 = targets[0] ? getImageRectCss(targets[0]) : getActiveImageRectCss();
+  setRect(fx1, rect1);
+
+  if (!fx2) return;
+  const rect2 = targets[1] ? getImageRectCss(targets[1]) : null;
+  fx2.classList.toggle("hidden", !rect2);
+  setRect(fx2, rect2);
 }
 
 function setImageFxActive(active, label = null) {
   state.imageFx.active = Boolean(active);
   state.imageFx.label = label || null;
-  if (!els.imageFx) return;
-  els.imageFx.classList.toggle("hidden", !state.imageFx.active);
+  if (els.imageFx) els.imageFx.classList.toggle("hidden", !state.imageFx.active);
+  if (els.imageFx2) els.imageFx2.classList.toggle("hidden", !state.imageFx.active);
   if (state.imageFx.active) updateImageFxRect();
   requestRender();
 }
