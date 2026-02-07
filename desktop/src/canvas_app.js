@@ -54,12 +54,7 @@ const els = {
   portraitVideo2: document.getElementById("portrait-video-2"),
   selectionMeta: document.getElementById("selection-meta"),
   tipsText: document.getElementById("tips-text"),
-  designateStatus: document.getElementById("designate-status"),
-  designateSubject: document.getElementById("designate-subject"),
-  designateReference: document.getElementById("designate-reference"),
-  designateObject: document.getElementById("designate-object"),
-  designateClear: document.getElementById("designate-clear"),
-  designateList: document.getElementById("designate-list"),
+  designateMenu: document.getElementById("designate-menu"),
   actionBgWhite: document.getElementById("action-bg-white"),
   actionBgSweep: document.getElementById("action-bg-sweep"),
   actionCropSquare: document.getElementById("action-crop-square"),
@@ -95,6 +90,11 @@ const state = {
   pendingGeneration: null, // { remaining: number, provider: string|null, model: string|null }
   view: {
     scale: 1,
+    offsetX: 0,
+    offsetY: 0,
+  },
+  // Multi-mode doesn't use the single-image view transform, but users still expect panning.
+  multiView: {
     offsetX: 0,
     offsetY: 0,
   },
@@ -232,9 +232,12 @@ function renderHudReadout() {
     desc = clampText(img.visionDesc, 32);
   } else if (img?.visionPending) {
     desc = "SCANNING…";
+  } else if (img?.path && describeQueued.has(img.path)) {
+    desc = state.ptySpawned ? "QUEUED…" : state.ptySpawning ? "STARTING…" : "ENGINE OFFLINE";
   } else {
     const allowVision = state.keyStatus ? Boolean(state.keyStatus.openai || state.keyStatus.gemini) : true;
-    desc = allowVision ? "—" : "NO VISION KEYS";
+    if (!state.ptySpawned) desc = "ENGINE OFFLINE";
+    else desc = allowVision ? "—" : "NO VISION KEYS";
   }
   if (els.hudUnitDesc) els.hudUnitDesc.textContent = desc || "—";
 
@@ -255,43 +258,217 @@ function renderHudReadout() {
   if (gen) pieces.push(gen);
   if (cost) pieces.push(cost);
   if (lat) pieces.push(`${lat}/img`);
+  const vmeta = img?.visionDescMeta || null;
+  if (vmeta && (vmeta.source || vmeta.model)) {
+    const src = vmeta.source ? String(vmeta.source).replace(/_vision$/i, "") : "vision";
+    const mdl = vmeta.model ? String(vmeta.model) : "";
+    pieces.push(`vision:${src}${mdl ? `:${mdl}` : ""}`);
+  }
   if (els.hudUnitStat) els.hudUnitStat.textContent = pieces.length ? pieces.join(" · ") : "—";
 }
 
-let describeTimer = null;
-function scheduleVisionDescribe(path) {
-  if (!state.ptySpawned) return;
-  if (!path) return;
-  const allowVision = state.keyStatus ? Boolean(state.keyStatus.openai || state.keyStatus.gemini) : true;
-  if (!allowVision) return;
-  const prevPath = state.describePendingPath;
-  if (prevPath && prevPath !== path) {
-    const prevItem = state.images.find((img) => img?.path === prevPath);
-    if (prevItem && prevItem.visionPending && !prevItem.visionDesc) prevItem.visionPending = false;
+// Give vision requests enough time to complete under normal network conditions.
+// (Engine-side OpenAI timeout is ~22s; keep a little buffer.)
+const DESCRIBE_TIMEOUT_MS = 30000;
+let describeQueue = [];
+let describeQueued = new Set(); // path strings
+let describeInFlightPath = null;
+let describeInFlightTimer = null;
+let ptyLineBuffer = "";
+
+function allowVisionDescribe() {
+  return state.keyStatus ? Boolean(state.keyStatus.openai || state.keyStatus.gemini) : true;
+}
+
+function resetDescribeQueue({ clearPending = false } = {}) {
+  describeQueue = [];
+  describeQueued.clear();
+  describeInFlightPath = null;
+  clearTimeout(describeInFlightTimer);
+  describeInFlightTimer = null;
+  state.describePendingPath = null;
+
+  if (!clearPending) return;
+  for (const item of state.images) {
+    if (item && item.visionPending && !item.visionDesc) {
+      item.visionPending = false;
+    }
   }
+  renderHudReadout();
+}
+
+function processDescribeQueue() {
+  if (describeInFlightPath) return;
+  if (!state.ptySpawned) {
+    // If something queued a vision request before the engine came up (or after it exited),
+    // attempt to bring the engine back automatically.
+    if (!state.ptySpawning && state.runDir && state.eventsPath && describeQueue.length > 0) {
+      spawnEngine().catch(() => {});
+    }
+    return;
+  }
+  if (!allowVisionDescribe()) {
+    resetDescribeQueue({ clearPending: true });
+    return;
+  }
+
+  while (describeQueue.length) {
+    const path = describeQueue.shift();
+    if (typeof path !== "string" || !path) continue;
+    describeQueued.delete(path);
+
+    const item = state.images.find((img) => img?.path === path) || null;
+    if (item && item.visionDesc) {
+      item.visionPending = false;
+      continue;
+    }
+
+    if (item) {
+      item.visionPending = true;
+      item.visionPendingAt = Date.now();
+    }
+
+    describeInFlightPath = path;
+    state.describePendingPath = path;
+    if (getActiveImage()?.path === path) renderHudReadout();
+
+    // NOTE: do not quote paths here. `/describe` uses a raw arg string (not shlex-split),
+    // so adding quotes would become part of the path and fail to resolve.
+    invoke("write_pty", { data: `/describe ${path}\n` }).catch(() => {});
+
+    clearTimeout(describeInFlightTimer);
+    describeInFlightTimer = setTimeout(() => {
+      describeInFlightTimer = null;
+      const inflight = describeInFlightPath;
+      if (!inflight) return;
+      const img = state.images.find((it) => it?.path === inflight) || null;
+      if (img && img.visionPending && !img.visionDesc) img.visionPending = false;
+      if (state.describePendingPath === inflight) state.describePendingPath = null;
+      describeInFlightPath = null;
+      if (getActiveImage()?.path === inflight) renderHudReadout();
+      processDescribeQueue();
+    }, DESCRIBE_TIMEOUT_MS);
+
+    return;
+  }
+}
+
+function scheduleVisionDescribe(path, { priority = false } = {}) {
+  if (!path) return;
+  if (!allowVisionDescribe()) return;
+
   const item = state.images.find((img) => img?.path === path) || null;
   if (item) {
     if (item.visionDesc) return;
-    if (item.visionPending) return;
-    item.visionPending = true;
-    item.visionPendingAt = Date.now();
-    state.describePendingPath = path;
-    renderHudReadout();
   }
-  clearTimeout(describeTimer);
-  describeTimer = setTimeout(() => {
-    invoke("write_pty", { data: `/describe ${path}\n` }).catch(() => {});
-    // Safety valve: clear "SCANNING…" if the engine doesn't return an event.
-    if (item) {
-      setTimeout(() => {
-        if (!item.visionPending || item.visionDesc) return;
-        const startedAt = item.visionPendingAt || 0;
-        if (Date.now() - startedAt < 8000) return;
-        item.visionPending = false;
-        if (getActiveImage()?.path === path) renderHudReadout();
-      }, 8200);
+
+  if (describeInFlightPath === path) return;
+  if (describeQueued.has(path)) {
+    // If a user focuses an image, bump it to the front of the queue.
+    if (priority) {
+      describeQueue = [path, ...describeQueue.filter((p) => p !== path)];
+      processDescribeQueue();
     }
-  }, 360);
+    return;
+  }
+  if (priority) describeQueue.unshift(path);
+  else describeQueue.push(path);
+  describeQueued.add(path);
+  if (getActiveImage()?.path === path) renderHudReadout();
+  processDescribeQueue();
+}
+
+function _completeDescribeInFlight({
+  description = null,
+  meta = null, // { source, model }
+  errorMessage = null,
+} = {}) {
+  const inflight = describeInFlightPath || state.describePendingPath || null;
+  if (!inflight) return;
+  const item = state.images.find((img) => img?.path === inflight) || null;
+  if (item) {
+    if (typeof description === "string" && description.trim()) {
+      item.visionDesc = description.trim();
+      item.visionDescMeta = {
+        source: meta?.source || null,
+        model: meta?.model || null,
+        at: Date.now(),
+      };
+    }
+    item.visionPending = false;
+  }
+  if (state.describePendingPath === inflight) state.describePendingPath = null;
+
+  describeQueued.delete(inflight);
+  describeInFlightPath = null;
+  clearTimeout(describeInFlightTimer);
+  describeInFlightTimer = null;
+
+  if (errorMessage) {
+    showToast(errorMessage, "error", 3200);
+  }
+  if (getActiveImage()?.path === inflight) renderHudReadout();
+  processDescribeQueue();
+}
+
+function _handlePtyLine(line) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed) return;
+
+  // Successful describe output from engine:
+  //   Description (openai_vision, gpt-5-nano): Purple surface plastic
+  if (trimmed.startsWith("Description")) {
+    const parts = trimmed.split(":", 2);
+    if (parts.length >= 2) {
+      const metaPart = parts[0] || "";
+      const descPart = parts[1] || "";
+      const desc = descPart.trim();
+      if (!desc) return;
+
+      let source = null;
+      let model = null;
+      const openIdx = metaPart.indexOf("(");
+      const closeIdx = metaPart.indexOf(")");
+      if (openIdx >= 0 && closeIdx > openIdx) {
+        const raw = metaPart.slice(openIdx + 1, closeIdx);
+        const items = raw
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (items.length >= 1) source = items[0];
+        if (items.length >= 2) model = items[1];
+      }
+
+      _completeDescribeInFlight({ description: desc, meta: { source, model } });
+    }
+    return;
+  }
+
+  // Common failure paths from engine when describe can't run.
+  if (trimmed.startsWith("Describe unavailable")) {
+    _completeDescribeInFlight({
+      description: null,
+      errorMessage: "Vision describe unavailable. Check OpenAI/Gemini keys and network.",
+    });
+    return;
+  }
+  if (trimmed.startsWith("Describe failed")) {
+    _completeDescribeInFlight({
+      description: null,
+      errorMessage: trimmed,
+    });
+  }
+}
+
+function scheduleVisionDescribeAll() {
+  if (!allowVisionDescribe()) return;
+  const active = getActiveImage();
+  if (active?.path) scheduleVisionDescribe(active.path, { priority: true });
+  for (const item of state.images) {
+    if (!item?.path) continue;
+    if (active?.path && item.path === active.path) continue;
+    scheduleVisionDescribe(item.path);
+  }
 }
 
 let thumbObserver = null;
@@ -897,9 +1074,60 @@ function canvasPointFromEvent(event) {
   return { x, y };
 }
 
+function canvasCssPointFromEvent(event) {
+  const ox = event?.offsetX;
+  const oy = event?.offsetY;
+  if (typeof ox === "number" && typeof oy === "number" && Number.isFinite(ox) && Number.isFinite(oy)) {
+    return { x: ox, y: oy };
+  }
+  const rect = els.overlayCanvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  return { x, y };
+}
+
+function showDesignateMenuAt(ptCss) {
+  const menu = els.designateMenu;
+  const wrap = els.canvasWrap;
+  if (!menu || !wrap || !ptCss) return;
+  menu.classList.remove("hidden");
+
+  const dx = 12;
+  const dy = 12;
+  const x0 = (Number(ptCss.x) || 0) + dx;
+  const y0 = (Number(ptCss.y) || 0) + dy;
+
+  menu.style.left = `${x0}px`;
+  menu.style.top = `${y0}px`;
+
+  requestAnimationFrame(() => {
+    const mw = menu.offsetWidth || 0;
+    const mh = menu.offsetHeight || 0;
+    const maxX = Math.max(8, wrap.clientWidth - mw - 8);
+    const maxY = Math.max(8, wrap.clientHeight - mh - 8);
+    const x = clamp(x0, 8, maxX);
+    const y = clamp(y0, 8, maxY);
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+  });
+}
+
 function canvasToImage(pt) {
   const img = getActiveImage();
   if (!img) return { x: 0, y: 0 };
+  if (state.canvasMode === "multi") {
+    const mx = state.multiView?.offsetX || 0;
+    const my = state.multiView?.offsetY || 0;
+    const rect = img?.id ? state.multiRects.get(img.id) : null;
+    if (rect) {
+      const iw = img?.img?.naturalWidth || img?.width || rect.w || 1;
+      const ih = img?.img?.naturalHeight || img?.height || rect.h || 1;
+      return {
+        x: ((pt.x - mx - rect.x) * iw) / Math.max(1, rect.w),
+        y: ((pt.y - my - rect.y) * ih) / Math.max(1, rect.h),
+      };
+    }
+  }
   return {
     x: (pt.x - state.view.offsetX) / state.view.scale,
     y: (pt.y - state.view.offsetY) / state.view.scale,
@@ -907,6 +1135,20 @@ function canvasToImage(pt) {
 }
 
 function imageToCanvas(pt) {
+  if (state.canvasMode === "multi") {
+    const img = getActiveImage();
+    const mx = state.multiView?.offsetX || 0;
+    const my = state.multiView?.offsetY || 0;
+    const rect = img?.id ? state.multiRects.get(img.id) : null;
+    if (img && rect) {
+      const iw = img?.img?.naturalWidth || img?.width || rect.w || 1;
+      const ih = img?.img?.naturalHeight || img?.height || rect.h || 1;
+      return {
+        x: mx + rect.x + (pt.x * rect.w) / Math.max(1, iw),
+        y: my + rect.y + (pt.y * rect.h) / Math.max(1, ih),
+      };
+    }
+  }
   return {
     x: state.view.offsetX + pt.x * state.view.scale,
     y: state.view.offsetY + pt.y * state.view.scale,
@@ -963,15 +1205,20 @@ function setCanvasMode(mode) {
   if (state.canvasMode === next) return;
   state.canvasMode = next;
   state.multiRects.clear();
+  if (next === "multi") {
+    state.multiView.offsetX = 0;
+    state.multiView.offsetY = 0;
+  }
   state.pointer.active = false;
   state.selection = null;
   state.lassoDraft = [];
   state.pendingDesignation = null;
-  // Multi-view is a tile layout; lasso doesn't have well-defined coordinates.
-  if (next === "multi" && state.tool === "lasso") {
-    setTool("pan");
-  }
+  hideDesignateMenu();
   chooseSpawnNodes();
+  renderFilmstrip();
+  if (next === "multi") {
+    scheduleVisionDescribeAll();
+  }
   renderSelectionMeta();
   requestRender();
 }
@@ -1049,12 +1296,16 @@ function computeMultiRects(items, canvasW, canvasH) {
 
 function hitTestMulti(pt) {
   if (!pt) return null;
+  const mx = state.multiView?.offsetX || 0;
+  const my = state.multiView?.offsetY || 0;
+  const x = pt.x - mx;
+  const y = pt.y - my;
   const entries = Array.from(state.multiRects.entries());
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const [id, rect] = entries[i];
     if (!rect) continue;
-    if (pt.x < rect.x || pt.x > rect.x + rect.w) continue;
-    if (pt.y < rect.y || pt.y > rect.y + rect.h) continue;
+    if (x < rect.x || x > rect.x + rect.w) continue;
+    if (y < rect.y || y > rect.y + rect.h) continue;
     return id;
   }
   return null;
@@ -1094,11 +1345,13 @@ function resetViewToFit() {
 function getActiveImageRectCss() {
   const dpr = getDpr();
   if (state.canvasMode === "multi") {
+    const mx = state.multiView?.offsetX || 0;
+    const my = state.multiView?.offsetY || 0;
     const rect = state.activeId ? state.multiRects.get(state.activeId) : null;
     if (!rect) return null;
     return {
-      left: rect.x / dpr,
-      top: rect.y / dpr,
+      left: (mx + rect.x) / dpr,
+      top: (my + rect.y) / dpr,
       width: rect.w / dpr,
       height: rect.h / dpr,
     };
@@ -1149,6 +1402,8 @@ function clearPendingReplace() {
 function clearSelection() {
   state.selection = null;
   state.lassoDraft = [];
+  state.pendingDesignation = null;
+  hideDesignateMenu();
   setTip(DEFAULT_TIP);
   requestRender();
   renderSelectionMeta();
@@ -1158,11 +1413,8 @@ function clearSelection() {
 function setTool(tool) {
   const allowed = new Set(["pan", "lasso", "designate"]);
   if (!allowed.has(tool)) return;
-  if (tool === "lasso" && state.canvasMode === "multi") {
-    showToast("Lasso is disabled in multi-view. Combine or click an image to focus it first.", "tip", 2600);
-    return;
-  }
   if (tool !== "designate") state.pendingDesignation = null;
+  hideDesignateMenu();
   state.tool = tool;
   for (const btn of els.toolButtons) {
     const t = btn.dataset.tool;
@@ -1189,14 +1441,14 @@ function renderSelectionMeta() {
   if (!img) {
     if (els.selectionMeta) els.selectionMeta.textContent = "No image selected.";
     renderHudReadout();
-    renderDesignatePanel();
+    state.pendingDesignation = null;
+    hideDesignateMenu();
     return;
   }
   const name = basename(img.path);
   const sel = state.selection ? `${state.selection.points.length} pts` : "none";
   if (els.selectionMeta) els.selectionMeta.textContent = `${name}\nSelection: ${sel}`;
   renderHudReadout();
-  renderDesignatePanel();
 }
 
 function _getDesignations(imageId) {
@@ -1206,33 +1458,9 @@ function _getDesignations(imageId) {
   return Array.isArray(existing) ? existing : [];
 }
 
-function renderDesignatePanel() {
-  if (!els.designateStatus || !els.designateList) return;
-  const img = getActiveImage();
-  if (!img) {
-    els.designateStatus.textContent = "No image selected.";
-    els.designateList.textContent = "";
-    return;
-  }
-
-  const pending = state.pendingDesignation && state.pendingDesignation.imageId === img.id ? state.pendingDesignation : null;
-  if (pending) {
-    els.designateStatus.textContent = `Pending: (${Math.round(pending.x)}, ${Math.round(pending.y)}). Choose a label.`;
-  } else if (state.tool === "designate") {
-    els.designateStatus.textContent = "Click the image to place a designation, then choose a label.";
-  } else {
-    els.designateStatus.textContent = "Select the Designate tool, click the image, then choose a label.";
-  }
-
-  const items = _getDesignations(img.id);
-  if (!items.length) {
-    els.designateList.textContent = "No designations yet.";
-    return;
-  }
-  const lines = items
-    .slice(-8)
-    .map((d) => `${String(d.kind || "mark")}: (${Math.round(d.x)}, ${Math.round(d.y)})`);
-  els.designateList.textContent = lines.join("\n");
+function hideDesignateMenu() {
+  if (!els.designateMenu) return;
+  els.designateMenu.classList.add("hidden");
 }
 
 function _commitDesignation(kind) {
@@ -1250,7 +1478,6 @@ function _commitDesignation(kind) {
   list.push(entry);
   state.designationsByImageId.set(img.id, list);
   state.pendingDesignation = null;
-  renderDesignatePanel();
   requestRender();
   return true;
 }
@@ -1260,7 +1487,6 @@ function _clearDesignations() {
   if (!img) return;
   state.designationsByImageId.delete(img.id);
   if (state.pendingDesignation?.imageId === img.id) state.pendingDesignation = null;
-  renderDesignatePanel();
   requestRender();
 }
 
@@ -1848,6 +2074,21 @@ async function handleSpawnNode(node) {
 
 function renderFilmstrip() {
   if (!els.filmstrip) return;
+  if (state.canvasMode === "multi") {
+    els.filmstrip.classList.add("hidden");
+    // Avoid accumulating observed nodes when we teardown/rebuild the filmstrip.
+    if (thumbObserver) {
+      try {
+        thumbObserver.disconnect();
+      } catch {
+        // ignore
+      }
+    }
+    state.thumbsById.clear();
+    els.filmstrip.innerHTML = "";
+    return;
+  }
+  els.filmstrip.classList.remove("hidden");
   ensureThumbObserver();
   // Avoid accumulating observed nodes when we teardown/rebuild the filmstrip.
   if (thumbObserver) {
@@ -1893,6 +2134,7 @@ function renderFilmstrip() {
 
 function appendFilmstripThumb(item) {
   if (!els.filmstrip || !item?.id || !item?.path) return;
+  if (state.canvasMode === "multi") return;
   if (state.thumbsById.has(item.id)) return;
   ensureThumbObserver();
   const div = document.createElement("div");
@@ -1965,7 +2207,7 @@ async function setActiveImage(id) {
   updatePortraitIdle();
   await setEngineActiveImage(item.path);
   if (!item.visionDesc) {
-    scheduleVisionDescribe(item.path);
+    scheduleVisionDescribe(item.path, { priority: true });
   }
   try {
     item.img = await loadImage(item.path);
@@ -1985,6 +2227,10 @@ function addImage(item, { select = false } = {}) {
   state.imagesById.set(item.id, item);
   state.images.push(item);
   appendFilmstripThumb(item);
+  if (state.canvasMode === "multi") {
+    // Multi-canvas is the "working set"; keep HUD descriptions available for all tiles.
+    scheduleVisionDescribe(item.path);
+  }
   if (item.receiptPath && !item.receiptMetaChecked) {
     ensureReceiptMeta(item).catch(() => {});
   }
@@ -2046,7 +2292,7 @@ async function replaceImageInPlace(
       console.error(err);
     }
     await setEngineActiveImage(item.path);
-    if (!item.visionDesc) scheduleVisionDescribe(item.path);
+    if (!item.visionDesc) scheduleVisionDescribe(item.path, { priority: true });
     renderSelectionMeta();
     chooseSpawnNodes();
     renderHudReadout();
@@ -2167,7 +2413,7 @@ async function importPhotos() {
     setStatus(`Engine: imported ${ok} photo${ok === 1 ? "" : "s"}${suffix}`, failed > 0);
     if (state.images.length > 1) {
       setCanvasMode("multi");
-      setTip("Multiple photos loaded. Click a photo to focus it.");
+      setTip("Multiple photos loaded. Click a photo to select it. Use L to lasso or D to designate.");
     }
     const importedOnly = state.images.length === 2 && state.images.every((item) => item?.kind === "import");
     if (importedOnly) {
@@ -2484,6 +2730,7 @@ async function createRun() {
   state.eventsTail = "";
   state.fallbackToFullRead = false;
   fallbackLineOffset = 0;
+  resetDescribeQueue();
   state.images = [];
   state.imagesById.clear();
   state.activeId = null;
@@ -2504,7 +2751,7 @@ async function createRun() {
   chooseSpawnNodes();
   await spawnEngine();
   await startEventsPolling();
-  setStatus("Engine: ready");
+  if (state.ptySpawned) setStatus("Engine: ready");
 }
 
 async function openExistingRun() {
@@ -2517,6 +2764,7 @@ async function openExistingRun() {
   state.eventsTail = "";
   state.fallbackToFullRead = false;
   fallbackLineOffset = 0;
+  resetDescribeQueue();
   state.images = [];
   state.imagesById.clear();
   state.activeId = null;
@@ -2537,7 +2785,7 @@ async function openExistingRun() {
   await loadExistingArtifacts();
   await spawnEngine();
   await startEventsPolling();
-  setStatus("Engine: ready");
+  if (state.ptySpawned) setStatus("Engine: ready");
 }
 
 async function loadExistingArtifacts() {
@@ -2635,8 +2883,9 @@ async function spawnEngine() {
     const active = getActiveImage();
     if (active?.path) {
       await invoke("write_pty", { data: `/use ${active.path}\n` }).catch(() => {});
-      if (!active.visionDesc) scheduleVisionDescribe(active.path);
+      if (!active.visionDesc) scheduleVisionDescribe(active.path, { priority: true });
     }
+    processDescribeQueue();
     setStatus("Engine: started");
   } catch (err) {
     console.error(err);
@@ -2717,9 +2966,8 @@ function handleEvent(event) {
     const wasBlend = Boolean(state.pendingBlend);
     if (wasBlend) {
       state.pendingBlend = null;
-      state.canvasMode = "single";
-      state.multiRects.clear();
-      setTip(DEFAULT_TIP);
+      setCanvasMode("multi");
+      setTip("Combine complete. Output selected.");
       showToast("Combine complete.", "tip", 2400);
     }
     const pending = state.pendingReplace;
@@ -2788,6 +3036,13 @@ function handleEvent(event) {
         }
       }
       if (state.describePendingPath === path) state.describePendingPath = null;
+      describeQueued.delete(path);
+      if (describeInFlightPath === path) {
+        describeInFlightPath = null;
+        clearTimeout(describeInFlightTimer);
+        describeInFlightTimer = null;
+        processDescribeQueue();
+      }
       if (getActiveImage()?.path === path) renderHudReadout();
     }
   } else if (event.type === "recreate_prompt_inferred") {
@@ -2824,6 +3079,8 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   }
 
   state.multiRects = computeMultiRects(items, canvasW, canvasH);
+  const mox = state.multiView?.offsetX || 0;
+  const moy = state.multiView?.offsetY || 0;
 
   const dpr = getDpr();
   wctx.save();
@@ -2833,8 +3090,8 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   for (const item of items) {
     const rect = item?.id ? state.multiRects.get(item.id) : null;
     if (!rect) continue;
-    const x = rect.x;
-    const y = rect.y;
+    const x = rect.x + mox;
+    const y = rect.y + moy;
     const w = rect.w;
     const h = rect.h;
     if (item?.img) {
@@ -2869,7 +3126,12 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     octx.strokeStyle = "rgba(255, 212, 0, 0.88)";
     octx.shadowColor = "rgba(255, 212, 0, 0.20)";
     octx.shadowBlur = Math.round(22 * dpr);
-    octx.strokeRect(activeRect.x - 2, activeRect.y - 2, activeRect.w + 4, activeRect.h + 4);
+    octx.strokeRect(
+      activeRect.x + mox - 2,
+      activeRect.y + moy - 2,
+      activeRect.w + 4,
+      activeRect.h + 4
+    );
     octx.restore();
   }
 
@@ -2879,12 +3141,12 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   const bRect = items[1]?.id ? state.multiRects.get(items[1].id) : null;
   if (!aRect || !bRect) return;
 
-  const ax = aRect.x + aRect.w;
-  const ay = aRect.y + aRect.h * 0.5;
-  const bx = bRect.x;
-  const by = bRect.y + bRect.h * 0.5;
-  const mx = (ax + bx) * 0.5;
-  const my = (ay + by) * 0.5;
+  const ax = aRect.x + mox + aRect.w;
+  const ay = aRect.y + moy + aRect.h * 0.5;
+  const bx = bRect.x + mox;
+  const by = bRect.y + moy + bRect.h * 0.5;
+  const midX = (ax + bx) * 0.5;
+  const midY = (ay + by) * 0.5;
 
   octx.save();
   octx.lineWidth = Math.max(1, Math.round(2 * dpr));
@@ -2906,8 +3168,8 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   const padY = Math.round(6 * dpr);
   const tagW = Math.round(textW + padX * 2);
   const tagH = Math.round(22 * dpr);
-  const tagX = Math.round(mx - tagW / 2);
-  const tagY = Math.round(my - tagH / 2);
+  const tagX = Math.round(midX - tagW / 2);
+  const tagY = Math.round(midY - tagH / 2);
   const r = Math.round(9 * dpr);
   const roundRect = (ctx, x, y, w, h, radius) => {
     const rr = Math.max(0, Math.min(radius, Math.min(w, h) / 2));
@@ -2941,21 +3203,20 @@ function render() {
   wctx.clearRect(0, 0, work.width, work.height);
   octx.clearRect(0, 0, overlay.width, overlay.height);
 
+  const item = getActiveImage();
+
   if (state.canvasMode === "multi") {
     renderMultiCanvas(wctx, octx, work.width, work.height);
-    updateImageFxRect();
-    return;
-  }
-
-  const item = getActiveImage();
-  const img = item?.img;
-  if (img) {
-    wctx.save();
-    wctx.setTransform(state.view.scale, 0, 0, state.view.scale, state.view.offsetX, state.view.offsetY);
-    wctx.imageSmoothingEnabled = true;
-    wctx.imageSmoothingQuality = "high";
-    wctx.drawImage(img, 0, 0);
-    wctx.restore();
+  } else {
+    const img = item?.img;
+    if (img) {
+      wctx.save();
+      wctx.setTransform(state.view.scale, 0, 0, state.view.scale, state.view.offsetX, state.view.offsetY);
+      wctx.imageSmoothingEnabled = true;
+      wctx.imageSmoothingQuality = "high";
+      wctx.drawImage(img, 0, 0);
+      wctx.restore();
+    }
   }
   updateImageFxRect();
 
@@ -3035,30 +3296,84 @@ function installCanvasHandlers() {
 
   els.overlayCanvas.addEventListener("pointerdown", (event) => {
     bumpInteraction();
-    if (state.canvasMode === "multi") {
-      const p = canvasPointFromEvent(event);
-      const hit = hitTestMulti(p);
-      if (hit) {
-        setCanvasMode("single");
-        setActiveImage(hit).catch(() => {});
+	    hideDesignateMenu();
+	    if (state.canvasMode === "multi") {
+	      const canvas = els.workCanvas;
+	      if (canvas && state.multiRects.size === 0) {
+	        state.multiRects = computeMultiRects(state.images, canvas.width, canvas.height);
+	      }
+
+	      const p = canvasPointFromEvent(event);
+	      let hit = hitTestMulti(p);
+	      if (!hit && canvas) {
+	        state.multiRects = computeMultiRects(state.images, canvas.width, canvas.height);
+	        hit = hitTestMulti(p);
+	      }
+
+	      if (hit && hit !== state.activeId) setActiveImage(hit).catch(() => {});
+
+	      if (state.tool === "pan") {
+	        els.overlayCanvas.setPointerCapture(event.pointerId);
+	        state.pointer.active = true;
+	        state.pointer.startX = p.x;
+	        state.pointer.startY = p.y;
+        state.pointer.lastX = p.x;
+        state.pointer.lastY = p.y;
+        state.pointer.startOffsetX = state.multiView.offsetX;
+        state.pointer.startOffsetY = state.multiView.offsetY;
+	        requestRender();
+	        return;
+	      }
+
+	      if (!hit) return;
+
+	      const img = state.imagesById.get(hit) || getActiveImage();
+	      if (!img) return;
+      if (!img.img && (!img.width || !img.height)) {
+        ensureCanvasImageLoaded(img);
+        showToast("Loading image…", "info", 1400);
+        return;
+      }
+
+      if (state.tool === "designate") {
+        const imgPt = canvasToImage(p);
+        state.pendingDesignation = { imageId: img.id, x: imgPt.x, y: imgPt.y, at: Date.now() };
+        showDesignateMenuAt(canvasCssPointFromEvent(event));
+        requestRender();
+        return;
+      }
+
+      if (state.tool === "lasso") {
+        els.overlayCanvas.setPointerCapture(event.pointerId);
+        state.pointer.active = true;
+        state.pointer.startX = p.x;
+        state.pointer.startY = p.y;
+        state.pointer.lastX = p.x;
+        state.pointer.lastY = p.y;
+        state.pointer.startOffsetX = state.multiView.offsetX;
+        state.pointer.startOffsetY = state.multiView.offsetY;
+        state.selection = null;
+        state.lassoDraft = [canvasToImage(p)];
+        requestRender();
+        return;
       }
       return;
-	    }
-	    const img = getActiveImage();
-	    if (!img) return;
-	    if (state.tool === "designate") {
-	      const p = canvasPointFromEvent(event);
-	      const imgPt = canvasToImage(p);
-	      state.pendingDesignation = { imageId: img.id, x: imgPt.x, y: imgPt.y, at: Date.now() };
-	      renderDesignatePanel();
-	      requestRender();
-	      return;
-	    }
-	    els.overlayCanvas.setPointerCapture(event.pointerId);
-	    const p = canvasPointFromEvent(event);
-	    state.pointer.active = true;
-	    state.pointer.startX = p.x;
-	    state.pointer.startY = p.y;
+    }
+    const img = getActiveImage();
+    if (!img) return;
+    if (state.tool === "designate") {
+      const p = canvasPointFromEvent(event);
+      const imgPt = canvasToImage(p);
+      state.pendingDesignation = { imageId: img.id, x: imgPt.x, y: imgPt.y, at: Date.now() };
+      showDesignateMenuAt(canvasCssPointFromEvent(event));
+      requestRender();
+      return;
+    }
+    els.overlayCanvas.setPointerCapture(event.pointerId);
+    const p = canvasPointFromEvent(event);
+    state.pointer.active = true;
+    state.pointer.startX = p.x;
+    state.pointer.startY = p.y;
     state.pointer.lastX = p.x;
     state.pointer.lastY = p.y;
     state.pointer.startOffsetX = state.view.offsetX;
@@ -3080,8 +3395,13 @@ function installCanvasHandlers() {
     state.pointer.lastX = p.x;
     state.pointer.lastY = p.y;
     if (state.tool === "pan") {
-      state.view.offsetX = state.pointer.startOffsetX + dx;
-      state.view.offsetY = state.pointer.startOffsetY + dy;
+      if (state.canvasMode === "multi") {
+        state.multiView.offsetX = state.pointer.startOffsetX + dx;
+        state.multiView.offsetY = state.pointer.startOffsetY + dy;
+      } else {
+        state.view.offsetX = state.pointer.startOffsetX + dx;
+        state.view.offsetY = state.pointer.startOffsetY + dy;
+      }
       requestRender();
       return;
     }
@@ -3089,7 +3409,21 @@ function installCanvasHandlers() {
       const imgPt = canvasToImage(p);
       const last = state.lassoDraft[state.lassoDraft.length - 1];
       const dist2 = (imgPt.x - last.x) ** 2 + (imgPt.y - last.y) ** 2;
-      const minDist = 4 / Math.max(state.view.scale, 0.25);
+      let scale = state.view.scale;
+      if (state.canvasMode === "multi") {
+        const img = getActiveImage();
+        const rect = img?.id ? state.multiRects.get(img.id) : null;
+        if (img && rect) {
+          const iw = img?.img?.naturalWidth || img?.width || rect.w || 1;
+          const ih = img?.img?.naturalHeight || img?.height || rect.h || 1;
+          const sx = rect.w / Math.max(1, iw);
+          const sy = rect.h / Math.max(1, ih);
+          scale = Math.min(sx, sy);
+        } else {
+          scale = 1;
+        }
+      }
+      const minDist = 4 / Math.max(scale, 0.02);
       if (dist2 >= minDist * minDist) {
         state.lassoDraft.push(imgPt);
         requestRender();
@@ -3207,14 +3541,23 @@ function installUi() {
   if (els.newRun) els.newRun.addEventListener("click", () => createRun().catch((e) => console.error(e)));
   if (els.openRun) els.openRun.addEventListener("click", () => openExistingRun().catch((e) => console.error(e)));
   if (els.import) els.import.addEventListener("click", () => importPhotos().catch((e) => console.error(e)));
-  if (els.canvasImport) {
-    els.canvasImport.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
+  if (els.export) els.export.addEventListener("click", () => exportRun().catch((e) => console.error(e)));
+
+  if (els.dropHint) {
+    const openPicker = (event) => {
+      if (els.dropHint.classList.contains("hidden")) return;
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
       importPhotos().catch((e) => console.error(e));
+    };
+    els.dropHint.addEventListener("click", openPicker);
+    els.dropHint.addEventListener("keydown", (event) => {
+      const key = String(event?.key || "");
+      if (key === "Enter" || key === " ") {
+        openPicker(event);
+      }
     });
   }
-  if (els.export) els.export.addEventListener("click", () => exportRun().catch((e) => console.error(e)));
 
   if (els.settingsToggle && els.settingsDrawer) {
     els.settingsToggle.addEventListener("click", () => {
@@ -3287,31 +3630,32 @@ function installUi() {
   if (els.actionCropSquare) els.actionCropSquare.addEventListener("click", () => cropSquare().catch(() => {}));
   if (els.actionVariations) els.actionVariations.addEventListener("click", () => runVariations().catch(() => {}));
 
-  if (els.designateSubject) {
-    els.designateSubject.addEventListener("click", () => {
+  if (els.designateMenu) {
+    els.designateMenu.addEventListener("click", (event) => {
+      const btn = event?.target?.closest ? event.target.closest("button[data-kind]") : null;
+      if (!btn || !els.designateMenu.contains(btn)) return;
       bumpInteraction();
-      if (!_commitDesignation("subject")) showToast("Click the image (Designate tool) to place a point first.", "tip", 2600);
-    });
-  }
-  if (els.designateReference) {
-    els.designateReference.addEventListener("click", () => {
-      bumpInteraction();
-      if (!_commitDesignation("reference"))
+      const kind = btn.dataset?.kind;
+      if (!kind) return;
+      if (kind === "clear") {
+        _clearDesignations();
+        hideDesignateMenu();
+        return;
+      }
+      if (!_commitDesignation(kind)) {
         showToast("Click the image (Designate tool) to place a point first.", "tip", 2600);
+        return;
+      }
+      hideDesignateMenu();
     });
   }
-  if (els.designateObject) {
-    els.designateObject.addEventListener("click", () => {
-      bumpInteraction();
-      if (!_commitDesignation("object")) showToast("Click the image (Designate tool) to place a point first.", "tip", 2600);
-    });
-  }
-  if (els.designateClear) {
-    els.designateClear.addEventListener("click", () => {
-      bumpInteraction();
-      _clearDesignations();
-    });
-  }
+
+  document.addEventListener("pointerdown", (event) => {
+    if (!els.designateMenu || els.designateMenu.classList.contains("hidden")) return;
+    const hit = event?.target?.closest ? event.target.closest("#designate-menu") : null;
+    if (hit) return;
+    hideDesignateMenu();
+  });
 
   if (els.filmstrip) {
     els.filmstrip.addEventListener("click", (event) => {
@@ -3325,14 +3669,59 @@ function installUi() {
   }
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
+    const rawKey = String(event?.key || "");
+    const key = rawKey.toLowerCase();
+    const target = event?.target;
+    const tag = target?.tagName ? String(target.tagName).toLowerCase() : "";
+    const isEditable = Boolean(
+      target &&
+        (target.isContentEditable ||
+          tag === "input" ||
+          tag === "textarea" ||
+          tag === "select")
+    );
+    const hasModifier = Boolean(event?.metaKey || event?.ctrlKey || event?.altKey);
+
+    if (key === "escape") {
+      if (els.settingsDrawer && !els.settingsDrawer.classList.contains("hidden")) {
+        els.settingsDrawer.classList.add("hidden");
+        return;
+      }
+      if (state.pendingDesignation || (els.designateMenu && !els.designateMenu.classList.contains("hidden"))) {
+        state.pendingDesignation = null;
+        hideDesignateMenu();
+        requestRender();
+        return;
+      }
       clearSelection();
-    } else if (event.key.toLowerCase() === "l") {
+      return;
+    }
+
+    if (isEditable || hasModifier) return;
+
+    if (key === "l") {
       setTool("lasso");
-    } else if (event.key.toLowerCase() === "v") {
+      return;
+    }
+    if (key === "v") {
       setTool("pan");
-    } else if (event.key.toLowerCase() === "f") {
+      return;
+    }
+    if (key === "d") {
+      setTool("designate");
+      return;
+    }
+    if (key === "b") {
+      applyBackground("white").catch((e) => console.error(e));
+      return;
+    }
+    if (key === "r") {
+      runVariations().catch((e) => console.error(e));
+      return;
+    }
+    if (key === "f") {
       resetViewToFit();
+      return;
     }
   });
 }
@@ -3375,11 +3764,26 @@ async function boot() {
   await listen("pty-exit", () => {
     setStatus("Engine: exited", true);
     state.ptySpawned = false;
+    resetDescribeQueue({ clearPending: true });
     state.expectingArtifacts = false;
     state.pendingBlend = null;
     clearPendingReplace();
     setImageFxActive(false);
     updatePortraitIdle();
+  });
+
+  // Consume PTY stdout as a fallback for vision describe completion/errors.
+  // Desktop normally uses `events.jsonl`, but if event polling is disrupted, this
+  // keeps the HUD "DESC" from getting stuck at SCANNING.
+  await listen("pty-data", (event) => {
+    const chunk = event?.payload;
+    if (typeof chunk !== "string" || !chunk) return;
+    ptyLineBuffer += chunk;
+    const lines = ptyLineBuffer.split("\n");
+    ptyLineBuffer = lines.pop() || "";
+    for (const line of lines) {
+      _handlePtyLine(line);
+    }
   });
 
   // Auto-create a run for speed; users can always "Open Run" later.
