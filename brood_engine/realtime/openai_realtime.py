@@ -114,7 +114,10 @@ class CanvasContextRealtimeSession:
         ]
 
         try:
-            async with websockets.connect(ws_url, extra_headers=headers, ping_interval=20, ping_timeout=20) as ws:
+            # websockets>=15 uses `additional_headers` (older versions used `extra_headers`).
+            async with websockets.connect(
+                ws_url, additional_headers=headers, ping_interval=20, ping_timeout=20
+            ) as ws:
                 await ws.send(
                     json.dumps(
                         {
@@ -348,4 +351,3 @@ def _canvas_context_instruction() -> str:
         "Rules: no fluff, no marketing language, be specific about composition, lighting, color, materials, "
         "and use case."
     )
-
