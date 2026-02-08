@@ -183,7 +183,7 @@ class CanvasContextRealtimeSession:
                     "response": {
                         # Out-of-band: avoid growing conversation state inside the persistent session.
                         "conversation": "none",
-                        "output_modalities": ["text"],
+                        "modalities": ["text"],
                         "input": [
                             {
                                 "type": "message",
