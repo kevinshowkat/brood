@@ -12,6 +12,7 @@ from .chat.refine import extract_model_directive, detect_edit_model, is_edit_req
 from .cli_progress import progress_once, ProgressTicker, elapsed_line
 from .engine import BroodEngine
 from .recreate.caption import infer_description, infer_diagnosis, infer_argument
+from .recreate.triplet import infer_triplet_rule, infer_triplet_odd_one_out
 from .runs.export import export_html
 from .reasoning import (
     start_reasoning_summary,
@@ -121,7 +122,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
             print(
                 "Commands: /profile /text_model /image_model /fast /quality /cheaper "
                 "/better /optimize /recreate /describe /diagnose /recast /use "
-                "/blend /swap_dna /argue /bridge /export"
+                "/blend /swap_dna /argue /bridge /extract_rule /odd_one_out /triforce /export"
             )
             continue
         if intent.action == "set_profile":
@@ -359,6 +360,172 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 model=inference.model,
             )
             print(inference.text)
+            continue
+        if intent.action == "extract_rule":
+            paths = intent.command_args.get("paths") or []
+            if not isinstance(paths, list) or len(paths) < 3:
+                print("Usage: /extract_rule <image_a> <image_b> <image_c>")
+                continue
+            path_a = Path(str(paths[0]))
+            path_b = Path(str(paths[1]))
+            path_c = Path(str(paths[2]))
+            if not path_a.exists():
+                print(f"Extract the Rule failed: file not found ({path_a})")
+                continue
+            if not path_b.exists():
+                print(f"Extract the Rule failed: file not found ({path_b})")
+                continue
+            if not path_c.exists():
+                print(f"Extract the Rule failed: file not found ({path_c})")
+                continue
+            inference = None
+            try:
+                inference = infer_triplet_rule(path_a, path_b, path_c)
+            except Exception:
+                inference = None
+            if inference is None or not inference.principle:
+                msg = "Extract the Rule unavailable (missing keys or vision client)."
+                engine.events.emit(
+                    "triplet_rule_failed",
+                    image_paths=[str(path_a), str(path_b), str(path_c)],
+                    error=msg,
+                )
+                print(msg)
+                continue
+            engine.events.emit(
+                "triplet_rule",
+                image_paths=[str(path_a), str(path_b), str(path_c)],
+                principle=inference.principle,
+                evidence=inference.evidence,
+                annotations=inference.annotations,
+                source=inference.source,
+                model=inference.model,
+                confidence=inference.confidence,
+            )
+            print(f"RULE:\n{inference.principle}")
+            if inference.evidence:
+                print("\nEVIDENCE:")
+                for item in inference.evidence:
+                    print(f"- {item.get('image', '')}: {item.get('note', '')}")
+            continue
+        if intent.action == "odd_one_out":
+            paths = intent.command_args.get("paths") or []
+            if not isinstance(paths, list) or len(paths) < 3:
+                print("Usage: /odd_one_out <image_a> <image_b> <image_c>")
+                continue
+            path_a = Path(str(paths[0]))
+            path_b = Path(str(paths[1]))
+            path_c = Path(str(paths[2]))
+            if not path_a.exists():
+                print(f"Odd One Out failed: file not found ({path_a})")
+                continue
+            if not path_b.exists():
+                print(f"Odd One Out failed: file not found ({path_b})")
+                continue
+            if not path_c.exists():
+                print(f"Odd One Out failed: file not found ({path_c})")
+                continue
+            inference = None
+            try:
+                inference = infer_triplet_odd_one_out(path_a, path_b, path_c)
+            except Exception:
+                inference = None
+            if inference is None or not inference.odd_image:
+                msg = "Odd One Out unavailable (missing keys or vision client)."
+                engine.events.emit(
+                    "triplet_odd_one_out_failed",
+                    image_paths=[str(path_a), str(path_b), str(path_c)],
+                    error=msg,
+                )
+                print(msg)
+                continue
+            engine.events.emit(
+                "triplet_odd_one_out",
+                image_paths=[str(path_a), str(path_b), str(path_c)],
+                odd_image=inference.odd_image,
+                odd_index=inference.odd_index,
+                pattern=inference.pattern,
+                explanation=inference.explanation,
+                source=inference.source,
+                model=inference.model,
+                confidence=inference.confidence,
+            )
+            print(f"ODD ONE OUT: {inference.odd_image}")
+            if inference.pattern:
+                print(f"\nPATTERN:\n{inference.pattern}")
+            if inference.explanation:
+                print(f"\nWHY:\n{inference.explanation}")
+            continue
+        if intent.action == "triforce":
+            paths = intent.command_args.get("paths") or []
+            if not isinstance(paths, list) or len(paths) < 3:
+                print("Usage: /triforce <image_a> <image_b> <image_c>")
+                continue
+            path_a = Path(str(paths[0]))
+            path_b = Path(str(paths[1]))
+            path_c = Path(str(paths[2]))
+            if not path_a.exists():
+                print(f"Triforce failed: file not found ({path_a})")
+                continue
+            if not path_b.exists():
+                print(f"Triforce failed: file not found ({path_b})")
+                continue
+            if not path_c.exists():
+                print(f"Triforce failed: file not found ({path_c})")
+                continue
+
+            prompt = (
+                "Take the three provided images as vertices of a creative space and generate the centroid: "
+                "ONE new image that sits equidistant from all three references. "
+                "This is mood board distillation, not a collage. "
+                "Find the shared design language (composition, lighting logic, color story, material palette, and mood), "
+                "then output one coherent image that could plausibly sit between all three."
+            )
+            progress_once("Planning triforce")
+            settings = _settings_from_state(state)
+            settings["n"] = 1
+            settings["init_image"] = str(path_a)
+            settings["reference_images"] = [str(path_b), str(path_c)]
+            plan = engine.preview_plan(prompt, settings)
+            print(
+                f"Plan: {plan['images']} images via {plan['provider']}:{plan['model']} "
+                f"size={plan['size']} cached={plan['cached']}"
+            )
+            ticker = ProgressTicker("Triforcing images")
+            ticker.start_ticking()
+            start_reasoning_summary(prompt, engine.text_model, ticker)
+            error: Exception | None = None
+            artifacts: list[dict[str, object]] = []
+            try:
+                artifacts = engine.generate(
+                    prompt,
+                    settings,
+                    {"action": "triforce", "source_images": [str(path_a), str(path_b), str(path_c)]},
+                )
+            except Exception as exc:
+                error = exc
+            finally:
+                ticker.stop(done=True)
+
+            if not error and artifacts:
+                last_artifact_path = str(artifacts[-1].get("image_path") or last_artifact_path or "")
+
+            if engine.last_fallback_reason:
+                print(f"Model fallback: {engine.last_fallback_reason}")
+            cost_raw = engine.last_cost_latency.get("cost_total_usd") if engine.last_cost_latency else None
+            latency_raw = (
+                engine.last_cost_latency.get("latency_per_image_s") if engine.last_cost_latency else None
+            )
+            cost = format_cost_generation_cents(cost_raw) or "N/A"
+            latency = format_latency_seconds(latency_raw) or "N/A"
+            print(
+                f"Cost of generation: {ansi_highlight(cost)} | Latency per image: {ansi_highlight(latency)}"
+            )
+
+            if error:
+                print(f"Triforce failed: {error}")
+            else:
+                print("Triforce complete.")
             continue
         if intent.action == "bridge":
             paths = intent.command_args.get("paths") or []

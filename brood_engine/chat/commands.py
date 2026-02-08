@@ -20,6 +20,9 @@ COMMANDS = {
     "/use": "Set active image path for edits",
     "/blend": "Combine two images into one (multi-image prompt)",
     "/swap_dna": "Apply structure of image A with surface qualities of image B (multi-image prompt)",
+    "/extract_rule": "Extract the shared design rule across three images (vision analysis)",
+    "/odd_one_out": "Identify which of three images breaks the pattern (vision analysis)",
+    "/triforce": "Generate the centroid image equidistant from three references (multi-image prompt)",
     "/export": "Export report",
     "/help": "Show help",
 }
