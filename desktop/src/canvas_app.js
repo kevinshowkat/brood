@@ -29,6 +29,9 @@ const els = {
   memoryToggle: document.getElementById("memory-toggle"),
   textModel: document.getElementById("text-model"),
   imageModel: document.getElementById("image-model"),
+  portraitsDir: document.getElementById("portraits-dir"),
+  portraitsDirPick: document.getElementById("portraits-dir-pick"),
+  portraitsDirClear: document.getElementById("portraits-dir-clear"),
   keyStatus: document.getElementById("key-status"),
   canvasWrap: document.getElementById("canvas-wrap"),
   dropHint: document.getElementById("drop-hint"),
@@ -747,6 +750,53 @@ function providerDisplay(provider) {
 
 const PORTRAITS_DIR_LS_KEY = "brood.portraitsDir";
 
+function renderPortraitsDirReadout() {
+  if (!els.portraitsDir) return;
+  const custom = localStorage.getItem(PORTRAITS_DIR_LS_KEY);
+  const resolved = state.portraitMedia.dir;
+  const lines = [];
+  if (custom) lines.push(`Custom: ${custom}`);
+  if (resolved) {
+    lines.push(`Using: ${resolved}`);
+  } else if (state.portraitMedia.dirChecked) {
+    lines.push("Using: (not found)");
+  } else {
+    lines.push("Using: (searching...)");
+  }
+  els.portraitsDir.textContent = lines.join("\n");
+}
+
+async function refreshPortraitsDirReadout() {
+  renderPortraitsDirReadout();
+  try {
+    await resolvePortraitsDir();
+  } catch (_) {}
+  renderPortraitsDirReadout();
+}
+
+function invalidatePortraitMediaCache() {
+  state.portraitMedia.dir = null;
+  state.portraitMedia.dirChecked = false;
+  state.portraitMedia.dirPromise = null;
+  state.portraitMedia.index = null;
+  state.portraitMedia.indexChecked = false;
+  state.portraitMedia.indexPromise = null;
+  state.portraitMedia.activeKey1 = null;
+  state.portraitMedia.activeKey2 = null;
+}
+
+async function pickPortraitsDir() {
+  bumpInteraction();
+  const picked = await open({ directory: true, multiple: false });
+  const dir = Array.isArray(picked) ? picked[0] : picked;
+  if (!dir) return;
+  localStorage.setItem(PORTRAITS_DIR_LS_KEY, String(dir));
+  invalidatePortraitMediaCache();
+  renderPortraitsDirReadout();
+  ensurePortraitIndex().catch(() => {});
+  updatePortraitIdle({ fromSettings: true });
+}
+
 function portraitAgentFromProvider(provider) {
   const p = String(provider || "").toLowerCase();
   // Requested swap: OpenAI uses Stability clips; Stability (SDXL) uses OpenAI clips.
@@ -792,6 +842,7 @@ async function resolvePortraitsDir() {
   try {
     state.portraitMedia.dir = await state.portraitMedia.dirPromise;
     state.portraitMedia.dirChecked = true;
+    renderPortraitsDirReadout();
     return state.portraitMedia.dir;
   } finally {
     state.portraitMedia.dirPromise = null;
@@ -805,8 +856,13 @@ function extractPortraitStamp(name) {
 }
 
 function isStablePortraitName(name, agent, clipState) {
-  const target = `${agent}_${clipState}.mp4`;
-  return String(name || "").toLowerCase() === target;
+  const lower = String(name || "").toLowerCase();
+  const targets = [
+    `${agent}_${clipState}.mp4`,
+    `${agent}_${clipState}.mov`,
+    `${agent}_${clipState}.webm`,
+  ];
+  return targets.includes(lower);
 }
 
 async function buildPortraitIndex(dir) {
@@ -828,11 +884,17 @@ async function buildPortraitIndex(dir) {
 
   const candidates = entries
     .map((e) => ({ path: e?.path, name: e?.name || basename(e?.path) }))
-    .filter((e) => e.path && extname(e.path) === ".mp4");
+    .filter((e) => {
+      if (!e.path) return false;
+      const ext = extname(e.path);
+      return ext === ".mp4" || ext === ".mov" || ext === ".webm";
+    });
 
   for (const item of candidates) {
     const name = String(item.name || "").toLowerCase();
-    const match = name.match(/^(dryrun|openai|gemini|imagen|flux|stability)_(idle|working)(?:_|\\.)/);
+    // Accept both "agent_idle_*" (timestamped / variant clips) and the stable
+    // "agent_idle.mp4" naming used for hand-curated overrides.
+    const match = name.match(/^(dryrun|openai|gemini|imagen|flux|stability)_(idle|working)(?:_|\.)/);
     if (!match) continue;
     const agent = match[1];
     const clipState = match[2];
@@ -874,6 +936,7 @@ async function ensurePortraitIndex() {
   try {
     state.portraitMedia.index = await state.portraitMedia.indexPromise;
     state.portraitMedia.indexChecked = true;
+    renderPortraitsDirReadout();
     return state.portraitMedia.index;
   } finally {
     state.portraitMedia.indexPromise = null;
@@ -909,7 +972,8 @@ function secondaryProviderFor(primaryProvider, index = null) {
 
 async function refreshPortraitVideoSlot({ videoEl, provider, busy, activeKeyField }) {
   if (!videoEl) return;
-  const visible = Boolean(state.activeId) && els.portraitDock && !els.portraitDock.classList.contains("hidden");
+  // Portraits are decorative UI; they should load even before a run/photo is active.
+  const visible = Boolean(els.portraitDock) && !els.portraitDock.classList.contains("hidden");
   if (!visible) {
     try {
       videoEl.pause();
@@ -1182,6 +1246,8 @@ function mimeFromPath(path) {
   if (ext === ".webp") return "image/webp";
   if (ext === ".heic") return "image/heic";
   if (ext === ".mp4") return "video/mp4";
+  if (ext === ".mov") return "video/quicktime";
+  if (ext === ".webm") return "video/webm";
   return "application/octet-stream";
 }
 
@@ -5290,12 +5356,29 @@ function installUi() {
       bumpInteraction();
       els.settingsDrawer.classList.remove("hidden");
       refreshKeyStatus().catch(() => {});
+      refreshPortraitsDirReadout().catch(() => {});
     });
   }
   if (els.settingsClose && els.settingsDrawer) {
     els.settingsClose.addEventListener("click", () => {
       bumpInteraction();
       els.settingsDrawer.classList.add("hidden");
+    });
+  }
+
+  if (els.portraitsDirPick) {
+    els.portraitsDirPick.addEventListener("click", () => {
+      pickPortraitsDir().catch((e) => console.error(e));
+    });
+  }
+  if (els.portraitsDirClear) {
+    els.portraitsDirClear.addEventListener("click", () => {
+      bumpInteraction();
+      localStorage.removeItem(PORTRAITS_DIR_LS_KEY);
+      invalidatePortraitMediaCache();
+      renderPortraitsDirReadout();
+      ensurePortraitIndex().catch(() => {});
+      updatePortraitIdle({ fromSettings: true });
     });
   }
 
@@ -5581,6 +5664,7 @@ async function boot() {
   setRunInfo("No run");
   refreshKeyStatus().catch(() => {});
   ensurePortraitIndex().catch(() => {});
+  updatePortraitIdle({ fromSettings: true });
   showDropHint(true);
   renderSelectionMeta();
   chooseSpawnNodes();
