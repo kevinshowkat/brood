@@ -97,6 +97,20 @@ def infer_diagnosis(reference_path: Path) -> TextInference | None:
     return None
 
 
+def infer_canvas_context(reference_path: Path) -> TextInference | None:
+    """Return compact background context for a canvas snapshot.
+
+    Used by desktop "always-on" vision to anticipate what a user might do next.
+    """
+    openai = _canvas_context_with_openai(reference_path)
+    if openai is not None:
+        return openai
+    gemini = _canvas_context_with_gemini(reference_path)
+    if gemini is not None:
+        return gemini
+    return None
+
+
 def infer_argument(path_a: Path, path_b: Path) -> TextInference | None:
     """Return a debate between two image directions."""
     gemini = _argue_with_gemini(path_a, path_b)
@@ -182,6 +196,25 @@ def _diagnose_instruction() -> str:
         "- <2 bullets>\n\n"
         "Rules: keep bullets to one line each. Be concrete about composition/hierarchy, focal point, color, "
         "lighting, depth, typography/legibility (if present), and realism/materials. No generic praise."
+    )
+
+
+def _canvas_context_instruction() -> str:
+    return (
+        "You are Brood's always-on background vision.\n"
+        "Analyze the attached CANVAS SNAPSHOT (it may contain multiple photos arranged in a grid).\n"
+        "Output compact, machine-readable notes we can use for future action recommendations.\n\n"
+        "Format (keep under ~170 words):\n"
+        "CANVAS:\n"
+        "<one sentence summary>\n\n"
+        "SUBJECTS:\n"
+        "- <2-6 bullets>\n\n"
+        "STYLE:\n"
+        "- <3-7 short tags>\n\n"
+        "NEXT ACTIONS:\n"
+        "- <Action>: <why>  (max 5)\n\n"
+        "Actions must be chosen from: Combine, Bridge, Swap DNA, Recast, Variations, Background: White, Background: Sweep, Crop: Square, Annotate.\n"
+        "Rules: no fluff, no marketing language, be specific about composition, lighting, color, materials, and use case."
     )
 
 
@@ -634,6 +667,95 @@ def _diagnose_with_openai(reference_path: Path) -> TextInference | None:
     if not cleaned:
         return None
     return TextInference(text=cleaned, source="openai_vision", model=model)
+
+
+def _canvas_context_with_openai(reference_path: Path) -> TextInference | None:
+    api_key = _openai_api_key()
+    if not api_key:
+        return None
+    requested_model = os.getenv("BROOD_CANVAS_CONTEXT_MODEL") or os.getenv("OPENAI_CANVAS_CONTEXT_MODEL") or "gpt-4o-mini"
+    requested_model = str(requested_model or "").strip() or "gpt-4o-mini"
+    # Realtime models require the Realtime API (WebRTC/WebSocket). This path uses
+    # the standard Responses endpoint, so avoid attempting to call realtime models.
+    if "realtime" in requested_model.lower():
+        requested_model = "gpt-4o-mini"
+    image_bytes, mime = _prepare_vision_image(reference_path, max_dim=768)
+    data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+
+    endpoint = f"{_openai_api_base()}/responses"
+    models_to_try = [requested_model]
+    if requested_model != "gpt-4o-mini":
+        models_to_try.append("gpt-4o-mini")
+
+    for model in models_to_try:
+        payload: dict[str, Any] = {
+            "model": model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": _canvas_context_instruction()},
+                        {"type": "input_image", "image_url": data_url},
+                    ],
+                }
+            ],
+            "max_output_tokens": 520,
+        }
+        try:
+            _, response = _post_openai_json(endpoint, payload, api_key, timeout_s=28.0)
+        except Exception:
+            continue
+        text = _extract_openai_output_text(response)
+        cleaned = _clean_text_inference(text, max_chars=12000)
+        if cleaned:
+            return TextInference(text=cleaned, source="openai_vision", model=model)
+
+    return None
+
+
+def _canvas_context_with_gemini(reference_path: Path) -> TextInference | None:
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return None
+    try:
+        from google import genai  # type: ignore
+        from google.genai import types  # type: ignore
+    except Exception:
+        return None
+
+    model = os.getenv("BROOD_GEMINI_CANVAS_CONTEXT_MODEL") or "gemini-3-pro-preview"
+    image_bytes, mime = _prepare_vision_image(reference_path, max_dim=768)
+    instruction = _canvas_context_instruction()
+
+    try:
+        client = genai.Client(api_key=api_key)
+        chat = client.chats.create(model=model)
+        parts = [
+            types.Part(inline_data=types.Blob(data=image_bytes, mime_type=mime)),
+            types.Part(text=instruction),
+        ]
+        response = chat.send_message(parts)
+    except Exception:
+        return None
+
+    text = getattr(response, "text", None)
+    if isinstance(text, str) and text.strip():
+        cleaned = _clean_text_inference(text, max_chars=12000)
+        if cleaned:
+            return TextInference(text=cleaned, source="gemini_vision", model=model)
+
+    candidates = getattr(response, "candidates", []) or []
+    for candidate in candidates:
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) or getattr(candidate, "parts", None) or []
+        for part in parts:
+            chunk = getattr(part, "text", None)
+            if isinstance(chunk, str) and chunk.strip():
+                cleaned = _clean_text_inference(chunk, max_chars=12000)
+                if cleaned:
+                    return TextInference(text=cleaned, source="gemini_vision", model=model)
+
+    return None
 
 
 def _argue_with_openai(path_a: Path, path_b: Path) -> TextInference | None:

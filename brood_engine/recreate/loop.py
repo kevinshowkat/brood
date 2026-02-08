@@ -49,44 +49,62 @@ class RecreateLoop:
         )
         best: dict[str, Any] | None = None
         best_score = 0.0
+        iterations_run = 0
+        error: str | None = None
 
-        for iteration in range(1, iterations + 1):
-            intent = {
-                "action": "recreate",
-                "reference": str(reference_path),
-                "iteration": iteration,
-                "base_prompt": base_prompt,
-                "prompt_source": prompt_source,
-                "caption_model": caption_model,
-            }
-            artifacts = self.engine_generate(prompt, run_settings, intent)
-            for artifact in artifacts:
-                image_path = Path(artifact["image_path"])
-                receipt_path = Path(artifact["receipt_path"])
-                metrics = compare(reference_path, image_path)
-                artifact["similarity"] = metrics
-                if metrics["overall"] > best_score:
-                    best_score = metrics["overall"]
-                    best = artifact
-                # Update receipt metadata
-                payload = read_json(receipt_path, {})
-                if isinstance(payload, dict):
-                    meta = payload.get("result_metadata")
-                    if not isinstance(meta, dict):
-                        meta = {}
-                        payload["result_metadata"] = meta
-                    meta["similarity"] = metrics
-                    write_json(receipt_path, payload)
+        try:
+            for iteration in range(1, iterations + 1):
+                iterations_run = iteration
+                intent = {
+                    "action": "recreate",
+                    "reference": str(reference_path),
+                    "iteration": iteration,
+                    "base_prompt": base_prompt,
+                    "prompt_source": prompt_source,
+                    "caption_model": caption_model,
+                }
+                artifacts = self.engine_generate(prompt, run_settings, intent)
+                for artifact in artifacts:
+                    image_path = Path(artifact["image_path"])
+                    receipt_path = Path(artifact["receipt_path"])
+                    metrics = compare(reference_path, image_path)
+                    artifact["similarity"] = metrics
+                    if metrics["overall"] > best_score:
+                        best_score = metrics["overall"]
+                        best = artifact
+                    # Update receipt metadata
+                    payload = read_json(receipt_path, {})
+                    if isinstance(payload, dict):
+                        meta = payload.get("result_metadata")
+                        if not isinstance(meta, dict):
+                            meta = {}
+                            payload["result_metadata"] = meta
+                        meta["similarity"] = metrics
+                        write_json(receipt_path, payload)
+                best_id = best.get("artifact_id") if best else None
+                self.event_writer.emit(
+                    "recreate_iteration_update",
+                    iteration=iteration,
+                    similarity=best_score,
+                    best_artifact_id=best_id,
+                )
+                if best_score >= target_similarity:
+                    break
+                prompt = f"{prompt} Refine to better match the reference image.".strip()
+        except Exception as exc:
+            error = str(exc)
+            raise
+        finally:
             best_id = best.get("artifact_id") if best else None
             self.event_writer.emit(
-                "recreate_iteration_update",
-                iteration=iteration,
-                similarity=best_score,
+                "recreate_done",
+                reference=str(reference_path),
                 best_artifact_id=best_id,
+                best_score=best_score,
+                iterations=iterations_run,
+                success=error is None,
+                error=error,
             )
-            if best_score >= target_similarity:
-                break
-            prompt = f"{prompt} Refine to better match the reference image.".strip()
 
         return {
             "best": best,

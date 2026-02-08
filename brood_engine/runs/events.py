@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,7 @@ from ..utils import now_utc_iso
 class EventWriter:
     path: Path
     run_id: str
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, init=False)
 
     def emit(self, event_type: str, **payload: Any) -> dict[str, Any]:
         event = {
@@ -23,7 +26,8 @@ class EventWriter:
         }
         event.update(payload)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event))
-            handle.write("\n")
+        line = f"{json.dumps(event)}\n"
+        with self._lock:
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(line)
         return event

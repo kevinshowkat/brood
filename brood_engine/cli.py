@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -11,7 +12,9 @@ from .chat.intent_parser import parse_intent
 from .chat.refine import extract_model_directive, detect_edit_model, is_edit_request, is_refinement, is_repeat_request
 from .cli_progress import progress_once, ProgressTicker, elapsed_line
 from .engine import BroodEngine
-from .recreate.caption import infer_description, infer_diagnosis, infer_argument
+from .realtime.openai_realtime import CanvasContextRealtimeSession
+from .recreate.caption import infer_description, infer_diagnosis, infer_argument, infer_canvas_context
+from .recreate.triplet import infer_triplet_rule, infer_triplet_odd_one_out
 from .runs.export import export_html
 from .reasoning import (
     start_reasoning_summary,
@@ -107,6 +110,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
     }
     last_prompt: str | None = None
     last_artifact_path: str | None = None
+    canvas_context_rt: CanvasContextRealtimeSession | None = None
 
     print("Brood chat started. Type /help for commands.")
     while True:
@@ -120,8 +124,9 @@ def _handle_chat(args: argparse.Namespace) -> int:
         if intent.action == "help":
             print(
                 "Commands: /profile /text_model /image_model /fast /quality /cheaper "
-                "/better /optimize /recreate /describe /diagnose /recast /use "
-                "/blend /swap_dna /argue /bridge /export"
+                "/better /optimize /recreate /describe /canvas_context /diagnose /recast /use "
+                "/canvas_context_rt_start /canvas_context_rt_stop /canvas_context_rt "
+                "/blend /swap_dna /argue /bridge /extract_rule /odd_one_out /triforce /export"
             )
             continue
         if intent.action == "set_profile":
@@ -178,6 +183,120 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 meta.append(str(inference.model))
             suffix = f" ({', '.join(meta)})" if meta else ""
             print(f"Description{suffix}: {inference.description}")
+            continue
+        if intent.action == "canvas_context":
+            raw_path = intent.command_args.get("path") or last_artifact_path
+            if not raw_path:
+                print("/canvas_context requires a path (or set an active image with /use)")
+                continue
+            path = Path(str(raw_path))
+            if not path.exists():
+                print(f"Canvas context failed: file not found ({path})")
+                continue
+            inference = None
+            try:
+                inference = infer_canvas_context(path)
+            except Exception:
+                inference = None
+            if inference is None or not inference.text:
+                msg = "Canvas context unavailable (missing keys or vision client)."
+                engine.events.emit("canvas_context_failed", image_path=str(path), error=msg)
+                print(msg)
+                continue
+            engine.events.emit(
+                "canvas_context",
+                image_path=str(path),
+                text=inference.text,
+                source=inference.source,
+                model=inference.model,
+            )
+            print(inference.text)
+            continue
+        if intent.action == "canvas_context_rt_start":
+            if canvas_context_rt is None:
+                canvas_context_rt = CanvasContextRealtimeSession(engine.events)
+            ok, err = canvas_context_rt.start()
+            if not ok:
+                model = (
+                    os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_MODEL")
+                    or os.getenv("OPENAI_CANVAS_CONTEXT_REALTIME_MODEL")
+                    or "gpt-realtime-mini"
+                )
+                engine.events.emit(
+                    "canvas_context_failed",
+                    image_path=None,
+                    error=err or "Realtime start failed.",
+                    source="openai_realtime",
+                    model=model,
+                    fatal=True,
+                )
+                print(f"Canvas context realtime start failed: {err}")
+                # Drop state so future updates fail loudly (avoids silent thrash).
+                canvas_context_rt = None
+                continue
+            print("Canvas context realtime started.")
+            continue
+        if intent.action == "canvas_context_rt_stop":
+            if canvas_context_rt is not None:
+                canvas_context_rt.stop()
+                canvas_context_rt = None
+            print("Canvas context realtime stopped.")
+            continue
+        if intent.action == "canvas_context_rt":
+            raw_path = intent.command_args.get("path") or last_artifact_path
+            if not raw_path:
+                msg = "/canvas_context_rt requires a path (or set an active image with /use)"
+                engine.events.emit(
+                    "canvas_context_failed",
+                    image_path=None,
+                    error=msg,
+                    source="openai_realtime",
+                    model=os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_MODEL") or "gpt-realtime-mini",
+                    fatal=True,
+                )
+                print(msg)
+                continue
+            path = Path(str(raw_path))
+            if not path.exists():
+                msg = f"Canvas context realtime failed: file not found ({path})"
+                engine.events.emit(
+                    "canvas_context_failed",
+                    image_path=str(path),
+                    error=msg,
+                    source="openai_realtime",
+                    model=os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_MODEL") or "gpt-realtime-mini",
+                    fatal=True,
+                )
+                print(msg)
+                continue
+            if canvas_context_rt is None:
+                msg = "Realtime session not started. Run /canvas_context_rt_start first."
+                engine.events.emit(
+                    "canvas_context_failed",
+                    image_path=str(path),
+                    error=msg,
+                    source="openai_realtime",
+                    model=os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_MODEL") or "gpt-realtime-mini",
+                    fatal=True,
+                )
+                print(msg)
+                continue
+            ok, err = canvas_context_rt.submit_snapshot(path)
+            if not ok:
+                engine.events.emit(
+                    "canvas_context_failed",
+                    image_path=str(path),
+                    error=err or "Realtime submit failed.",
+                    source="openai_realtime",
+                    model=os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_MODEL") or "gpt-realtime-mini",
+                    fatal=True,
+                )
+                print(f"Canvas context realtime submit failed: {err}")
+                # Ensure we stop to avoid any background thrash.
+                canvas_context_rt.stop()
+                canvas_context_rt = None
+                continue
+            # No blocking here. Results stream via `canvas_context` events.
             continue
         if intent.action == "diagnose":
             raw_path = intent.command_args.get("path") or last_artifact_path
@@ -359,6 +478,172 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 model=inference.model,
             )
             print(inference.text)
+            continue
+        if intent.action == "extract_rule":
+            paths = intent.command_args.get("paths") or []
+            if not isinstance(paths, list) or len(paths) < 3:
+                print("Usage: /extract_rule <image_a> <image_b> <image_c>")
+                continue
+            path_a = Path(str(paths[0]))
+            path_b = Path(str(paths[1]))
+            path_c = Path(str(paths[2]))
+            if not path_a.exists():
+                print(f"Extract the Rule failed: file not found ({path_a})")
+                continue
+            if not path_b.exists():
+                print(f"Extract the Rule failed: file not found ({path_b})")
+                continue
+            if not path_c.exists():
+                print(f"Extract the Rule failed: file not found ({path_c})")
+                continue
+            inference = None
+            try:
+                inference = infer_triplet_rule(path_a, path_b, path_c)
+            except Exception:
+                inference = None
+            if inference is None or not inference.principle:
+                msg = "Extract the Rule unavailable (missing keys or vision client)."
+                engine.events.emit(
+                    "triplet_rule_failed",
+                    image_paths=[str(path_a), str(path_b), str(path_c)],
+                    error=msg,
+                )
+                print(msg)
+                continue
+            engine.events.emit(
+                "triplet_rule",
+                image_paths=[str(path_a), str(path_b), str(path_c)],
+                principle=inference.principle,
+                evidence=inference.evidence,
+                annotations=inference.annotations,
+                source=inference.source,
+                model=inference.model,
+                confidence=inference.confidence,
+            )
+            print(f"RULE:\n{inference.principle}")
+            if inference.evidence:
+                print("\nEVIDENCE:")
+                for item in inference.evidence:
+                    print(f"- {item.get('image', '')}: {item.get('note', '')}")
+            continue
+        if intent.action == "odd_one_out":
+            paths = intent.command_args.get("paths") or []
+            if not isinstance(paths, list) or len(paths) < 3:
+                print("Usage: /odd_one_out <image_a> <image_b> <image_c>")
+                continue
+            path_a = Path(str(paths[0]))
+            path_b = Path(str(paths[1]))
+            path_c = Path(str(paths[2]))
+            if not path_a.exists():
+                print(f"Odd One Out failed: file not found ({path_a})")
+                continue
+            if not path_b.exists():
+                print(f"Odd One Out failed: file not found ({path_b})")
+                continue
+            if not path_c.exists():
+                print(f"Odd One Out failed: file not found ({path_c})")
+                continue
+            inference = None
+            try:
+                inference = infer_triplet_odd_one_out(path_a, path_b, path_c)
+            except Exception:
+                inference = None
+            if inference is None or not inference.odd_image:
+                msg = "Odd One Out unavailable (missing keys or vision client)."
+                engine.events.emit(
+                    "triplet_odd_one_out_failed",
+                    image_paths=[str(path_a), str(path_b), str(path_c)],
+                    error=msg,
+                )
+                print(msg)
+                continue
+            engine.events.emit(
+                "triplet_odd_one_out",
+                image_paths=[str(path_a), str(path_b), str(path_c)],
+                odd_image=inference.odd_image,
+                odd_index=inference.odd_index,
+                pattern=inference.pattern,
+                explanation=inference.explanation,
+                source=inference.source,
+                model=inference.model,
+                confidence=inference.confidence,
+            )
+            print(f"ODD ONE OUT: {inference.odd_image}")
+            if inference.pattern:
+                print(f"\nPATTERN:\n{inference.pattern}")
+            if inference.explanation:
+                print(f"\nWHY:\n{inference.explanation}")
+            continue
+        if intent.action == "triforce":
+            paths = intent.command_args.get("paths") or []
+            if not isinstance(paths, list) or len(paths) < 3:
+                print("Usage: /triforce <image_a> <image_b> <image_c>")
+                continue
+            path_a = Path(str(paths[0]))
+            path_b = Path(str(paths[1]))
+            path_c = Path(str(paths[2]))
+            if not path_a.exists():
+                print(f"Triforce failed: file not found ({path_a})")
+                continue
+            if not path_b.exists():
+                print(f"Triforce failed: file not found ({path_b})")
+                continue
+            if not path_c.exists():
+                print(f"Triforce failed: file not found ({path_c})")
+                continue
+
+            prompt = (
+                "Take the three provided images as vertices of a creative space and generate the centroid: "
+                "ONE new image that sits equidistant from all three references. "
+                "This is mood board distillation, not a collage. "
+                "Find the shared design language (composition, lighting logic, color story, material palette, and mood), "
+                "then output one coherent image that could plausibly sit between all three."
+            )
+            progress_once("Planning triforce")
+            settings = _settings_from_state(state)
+            settings["n"] = 1
+            settings["init_image"] = str(path_a)
+            settings["reference_images"] = [str(path_b), str(path_c)]
+            plan = engine.preview_plan(prompt, settings)
+            print(
+                f"Plan: {plan['images']} images via {plan['provider']}:{plan['model']} "
+                f"size={plan['size']} cached={plan['cached']}"
+            )
+            ticker = ProgressTicker("Triforcing images")
+            ticker.start_ticking()
+            start_reasoning_summary(prompt, engine.text_model, ticker)
+            error: Exception | None = None
+            artifacts: list[dict[str, object]] = []
+            try:
+                artifacts = engine.generate(
+                    prompt,
+                    settings,
+                    {"action": "triforce", "source_images": [str(path_a), str(path_b), str(path_c)]},
+                )
+            except Exception as exc:
+                error = exc
+            finally:
+                ticker.stop(done=True)
+
+            if not error and artifacts:
+                last_artifact_path = str(artifacts[-1].get("image_path") or last_artifact_path or "")
+
+            if engine.last_fallback_reason:
+                print(f"Model fallback: {engine.last_fallback_reason}")
+            cost_raw = engine.last_cost_latency.get("cost_total_usd") if engine.last_cost_latency else None
+            latency_raw = (
+                engine.last_cost_latency.get("latency_per_image_s") if engine.last_cost_latency else None
+            )
+            cost = format_cost_generation_cents(cost_raw) or "N/A"
+            latency = format_latency_seconds(latency_raw) or "N/A"
+            print(
+                f"Cost of generation: {ansi_highlight(cost)} | Latency per image: {ansi_highlight(latency)}"
+            )
+
+            if error:
+                print(f"Triforce failed: {error}")
+            else:
+                print("Triforce complete.")
             continue
         if intent.action == "bridge":
             paths = intent.command_args.get("paths") or []
@@ -741,6 +1026,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 print("Generation complete.")
             continue
 
+    if canvas_context_rt is not None:
+        canvas_context_rt.stop()
     engine.finish()
     return 0
 

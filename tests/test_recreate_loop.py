@@ -43,3 +43,4 @@ def test_recreate_loop_updates_receipt(tmp_path: Path, monkeypatch: pytest.Monke
 
     events = events_path.read_text(encoding="utf-8").strip().splitlines()
     assert any("recreate_iteration_update" in line for line in events)
+    assert any("recreate_done" in line for line in events)

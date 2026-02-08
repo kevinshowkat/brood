@@ -11,10 +11,12 @@
 	      <div id="boot-error" class="boot-error hidden">
 	        App failed to initialize. Check the terminal for errors.
 	      </div>
-	      <div class="brand-strip" aria-label="Brood">
-	        <img class="brand-strip-logo" src="./assets/logo.jpeg" alt="Brood" />
-	        <div id="engine-status" class="engine-status">Engine: idle</div>
-	      </div>
+      <div class="brand-strip" aria-label="Brood">
+        <div class="brand-stack">
+          <img class="brand-strip-logo" src="./assets/logo.jpeg" alt="Brood" />
+          <div id="engine-status" class="engine-status">Engine: idle</div>
+        </div>
+      </div>
 	      <main class="workspace">
 	        <section class="stage" aria-label="Canvas">
             <div id="canvas-wrap" class="canvas-wrap">
@@ -36,11 +38,15 @@
 		            <canvas id="overlay-canvas"></canvas>
 		            <div class="canvas-bumper canvas-bumper--left" aria-hidden="true"></div>
 		            <div class="canvas-bumper canvas-bumper--right" aria-hidden="true"></div>
-		            <div id="designate-menu" class="designate-menu hidden" role="menu" aria-label="Designate">
-	              <button type="button" data-kind="subject">Subject</button>
-	              <button type="button" data-kind="reference">Reference</button>
-	              <button type="button" data-kind="object">Object</button>
+            <div id="designate-menu" class="designate-menu hidden" role="menu" aria-label="Designate">
+              <button type="button" data-kind="subject">Subject</button>
+              <button type="button" data-kind="reference">Reference</button>
+              <button type="button" data-kind="object">Object</button>
               <button class="ghost" type="button" data-kind="clear">Clear</button>
+            </div>
+            <div id="image-menu" class="designate-menu hidden image-menu" role="menu" aria-label="Image menu">
+              <button type="button" data-action="remove">Remove from canvas</button>
+              <button class="ghost" type="button" data-action="cancel">Cancel</button>
             </div>
             <div id="annotate-panel" class="annotate-panel hidden" role="dialog" aria-label="Annotate">
               <div class="annotate-header">
@@ -475,6 +481,10 @@
             <input id="memory-toggle" type="checkbox" />
           </label>
           <label class="field">
+            <div class="field-label">Always-On Vision</div>
+            <input id="always-on-vision-toggle" type="checkbox" />
+          </label>
+          <label class="field">
             <div class="field-label">Text Model</div>
             <select id="text-model">
               <option value="dryrun-text-1">dryrun-text-1</option>
@@ -518,8 +528,31 @@
             <div class="key-status-title">API Keys</div>
             <div id="key-status" class="key-status-list muted">Detecting local keys…</div>
           </div>
+          <div class="key-status-card">
+            <div class="key-status-title">Timeline</div>
+            <div class="timeline-controls">
+              <button id="timeline-toggle" type="button">Open Timeline</button>
+            </div>
+            <div class="muted timeline-footnote">Track edits and jump back to earlier versions.</div>
+          </div>
+          <div class="key-status-card">
+            <div class="key-status-title">Canvas Context</div>
+            <div id="always-on-vision-readout" class="key-status-list muted">Off</div>
+          </div>
           <div class="drawer-footnote muted">
             For image-to-image edits and recreate, prefer a model that accepts image inputs (Gemini).
+          </div>
+        </div>
+      </div>
+      <div id="timeline-overlay" class="timeline-overlay hidden" role="dialog" aria-label="Timeline">
+        <div class="timeline-shell">
+          <div class="timeline-header">
+            <div class="timeline-title">Timeline</div>
+            <button id="timeline-close" class="ghost" type="button" aria-label="Close timeline">Close</button>
+          </div>
+          <div class="timeline-body">
+            <div id="timeline-strip" class="timeline-strip" aria-label="Timeline strip"></div>
+            <div id="timeline-detail" class="timeline-detail muted"></div>
           </div>
         </div>
       </div>

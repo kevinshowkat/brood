@@ -27,6 +27,8 @@ const els = {
   settingsDrawer: document.getElementById("settings-drawer"),
   settingsClose: document.getElementById("settings-close"),
   memoryToggle: document.getElementById("memory-toggle"),
+  alwaysOnVisionToggle: document.getElementById("always-on-vision-toggle"),
+  alwaysOnVisionReadout: document.getElementById("always-on-vision-readout"),
   textModel: document.getElementById("text-model"),
   imageModel: document.getElementById("image-model"),
   portraitsDir: document.getElementById("portraits-dir"),
@@ -80,12 +82,19 @@ const els = {
   selectionMeta: document.getElementById("selection-meta"),
   tipsText: document.getElementById("tips-text"),
   designateMenu: document.getElementById("designate-menu"),
+  imageMenu: document.getElementById("image-menu"),
   quickActions: document.getElementById("quick-actions"),
+  timelineToggle: document.getElementById("timeline-toggle"),
+  timelineOverlay: document.getElementById("timeline-overlay"),
+  timelineClose: document.getElementById("timeline-close"),
+  timelineStrip: document.getElementById("timeline-strip"),
+  timelineDetail: document.getElementById("timeline-detail"),
   toolButtons: Array.from(document.querySelectorAll(".tool[data-tool]")),
 };
 
 const settings = {
   memory: localStorage.getItem("brood.memory") === "1",
+  alwaysOnVision: localStorage.getItem("brood.alwaysOnVision") === "1",
   textModel: localStorage.getItem("brood.textModel") || "gpt-5.2",
   imageModel: localStorage.getItem("brood.imageModel") || "gemini-2.5-flash-image",
 };
@@ -104,17 +113,33 @@ const state = {
   activeId: null,
   imageCache: new Map(), // path -> { url: string|null, urlPromise: Promise<string>|null, imgPromise: Promise<HTMLImageElement>|null }
   thumbsById: new Map(), // artifactId -> { rootEl, imgEl, labelEl }
+  timelineNodes: [], // [{ nodeId, imageId, path, receiptPath, label, action, parents, createdAt }]
+  timelineNodesById: new Map(), // nodeId -> node
+  timelineOpen: false,
   designationsByImageId: new Map(), // imageId -> [{ id, kind, x, y, at }]
   pendingDesignation: null, // { imageId, x, y, at } | null
+  imageMenuTargetId: null,
   canvasMode: "single", // "single" renders the active image; "multi" renders all images for pair actions (Combine demo).
   multiRects: new Map(), // imageId -> { x, y, w, h } in canvas device pixels (for hit-testing).
   pendingBlend: null, // { sourceIds: [string, string], startedAt: number }
   pendingSwapDna: null, // { structureId: string, surfaceId: string, startedAt: number }
   pendingBridge: null, // { sourceIds: [string, string], startedAt: number }
   pendingArgue: null, // { sourceIds: [string, string], startedAt: number }
+  pendingExtractRule: null, // { sourceIds: [string, string, string], startedAt: number }
+  pendingOddOneOut: null, // { sourceIds: [string, string, string], startedAt: number }
+  pendingTriforce: null, // { sourceIds: [string, string, string], startedAt: number }
   pendingRecast: null, // { sourceId: string, startedAt: number }
   pendingDiagnose: null, // { sourceId: string, startedAt: number }
+  pendingCanvasDiagnose: null, // { signature: string, startedAt: number, imagePath: string } | null
+  autoCanvasDiagnoseSig: null,
+  autoCanvasDiagnoseCompletedAt: 0,
+  autoCanvasDiagnoseTimer: null,
+  autoCanvasDiagnosePath: null,
   pendingGeneration: null, // { remaining: number, provider: string|null, model: string|null }
+  pendingRecreate: null, // { startedAt: number } | null
+  actionQueue: [],
+  actionQueueActive: null, // { id, label, key, priority, enqueuedAt, source } | null
+  actionQueueRunning: false,
   view: {
     scale: 1,
     offsetX: 0,
@@ -122,6 +147,7 @@ const state = {
   },
   // Multi-mode doesn't use the single-image view transform, but users still expect panning.
   multiView: {
+    scale: 1,
     offsetX: 0,
     offsetY: 0,
   },
@@ -142,6 +168,8 @@ const state = {
   circleDraft: null, // { imageId, cx, cy, r, color, at } | null (image pixel space)
   circlesByImageId: new Map(), // imageId -> [{ id, cx, cy, r, color, label, at }]
   activeCircle: null, // { imageId, id } | null
+  tripletRuleAnnotations: new Map(), // imageId -> [{ x: number, y: number, label: string }]
+  tripletOddOneOutId: null, // string|null
   needsEngineModelResync: false, // restore `/image_model` to settings after one-off overrides.
   engineImageModelRestore: null, // string|null
   needsRender: false,
@@ -161,6 +189,18 @@ const state = {
   lastCostLatency: null, // { provider, model, cost_total_usd, cost_per_1k_images_usd, latency_per_image_s, at }
   fallbackToFullRead: false,
   keyStatus: null, // { openai, gemini, imagen, flux, anthropic }
+  alwaysOnVision: {
+    enabled: settings.alwaysOnVision,
+    pending: false,
+    pendingPath: null,
+    pendingAt: 0,
+    lastSignature: null,
+    lastRunAt: 0,
+    lastText: null,
+    lastMeta: null, // { source, model, at, image_path }
+    rtState: settings.alwaysOnVision ? "connecting" : "off", // "off" | "connecting" | "ready" | "failed"
+    disabledReason: null, // string|null (set when auto-disabled due to a fatal realtime error)
+  },
   imageFx: {
     active: false,
     label: null,
@@ -273,10 +313,11 @@ function renderHudReadout() {
   if (!els.hud) return;
   const img = getActiveImage();
   const hasImage = Boolean(img);
+  const zoomScale = state.canvasMode === "multi" ? state.multiView.scale || 1 : state.view.scale || 1;
   // HUD is always visible; show placeholders when no image is loaded.
   if (!hasImage) {
     const sel = state.selection?.points?.length >= 3 ? `${state.selection.points.length} pts` : "none";
-    const zoomPct = Math.round((state.view.scale || 1) * 100);
+    const zoomPct = Math.round(zoomScale * 100);
     if (els.hudUnitName) els.hudUnitName.textContent = "NO IMAGE";
     if (els.hudUnitDesc) els.hudUnitDesc.textContent = "Tap or drag to add photos";
     if (els.hudUnitSel) els.hudUnitSel.textContent = `${sel} · ${state.tool} · ${zoomPct}%`;
@@ -314,7 +355,7 @@ function renderHudReadout() {
   if (els.hudUnitDesc) els.hudUnitDesc.textContent = desc || "—";
 
   const sel = state.selection?.points?.length >= 3 ? `${state.selection.points.length} pts` : "none";
-  const zoomPct = Math.round((state.view.scale || 1) * 100);
+  const zoomPct = Math.round(zoomScale * 100);
   if (els.hudUnitSel) els.hudUnitSel.textContent = `${sel} · ${state.tool} · ${zoomPct}%`;
 
   const meta = img?.receiptMeta || null;
@@ -349,6 +390,8 @@ function renderHudReadout() {
     let key = "DIR";
     if (directorKind === "diagnose") key = "DIAG";
     if (directorKind === "argue") key = "ARG";
+    if (directorKind === "extract_rule") key = "RULE";
+    if (directorKind === "odd_one_out") key = "ODD";
     els.hudDirectorKey.textContent = key;
   }
   if (els.hudDirectorVal) els.hudDirectorVal.textContent = directorText || "";
@@ -422,6 +465,8 @@ function resetDescribeQueue({ clearPending = false } = {}) {
 
 function processDescribeQueue() {
   if (describeInFlightPath) return;
+  // Treat describe as background work; don't compete with queued actions.
+  if (state.actionQueueActive || state.actionQueue.length || isEngineBusy()) return;
   if (!state.ptySpawned) {
     if (describeQueue.length > 0) {
       ensureEngineSpawned({ reason: "vision" })
@@ -604,6 +649,255 @@ function scheduleVisionDescribeAll() {
   }
 }
 
+const ALWAYS_ON_VISION_DEBOUNCE_MS = 900;
+const ALWAYS_ON_VISION_THROTTLE_MS = 12000;
+const ALWAYS_ON_VISION_IDLE_MS = 900;
+const ALWAYS_ON_VISION_TIMEOUT_MS = 45000;
+
+let alwaysOnVisionTimer = null;
+let alwaysOnVisionTimeout = null;
+
+function updateAlwaysOnVisionReadout() {
+  const el = els.alwaysOnVisionReadout;
+  if (!el) return;
+  const aov = state.alwaysOnVision;
+  const meta = aov?.lastMeta || null;
+  if (meta && (meta.source || meta.model)) {
+    const parts = [];
+    if (meta.source) parts.push(meta.source);
+    if (meta.model) parts.push(meta.model);
+    el.title = parts.join(" · ");
+  } else {
+    el.title = "";
+  }
+  if (!aov?.enabled) {
+    if (aov?.disabledReason) {
+      const cleaned = String(aov.disabledReason || "").trim();
+      el.textContent = cleaned.length > 1400 ? `${cleaned.slice(0, 1399).trimEnd()}\n…` : cleaned;
+      return;
+    }
+    el.textContent = "Off";
+    return;
+  }
+  if (
+    aov.rtState === "connecting" &&
+    !aov.pending &&
+    !(typeof aov.lastText === "string" && aov.lastText.trim())
+  ) {
+    el.textContent = "Connecting…";
+    return;
+  }
+  if (aov.pending) {
+    el.textContent = "SCANNING…";
+    return;
+  }
+  if (typeof aov.lastText === "string" && aov.lastText.trim()) {
+    // Keep it readable in the settings drawer (but preserve newlines).
+    const cleaned = aov.lastText.trim();
+    el.textContent = cleaned.length > 1400 ? `${cleaned.slice(0, 1399).trimEnd()}\n…` : cleaned;
+    return;
+  }
+  el.textContent = state.images.length ? "On (waiting…)" : "On (no images loaded)";
+}
+
+function allowAlwaysOnVision() {
+  if (!state.alwaysOnVision?.enabled) return false;
+  if (!state.images.length) return false;
+  if (!state.runDir) return false;
+  // Realtime canvas context requires an OpenAI key; fail fast before dispatch.
+  if (state.keyStatus) {
+    if (!state.keyStatus.openai) return false;
+  }
+  return true;
+}
+
+function isForegroundActionRunning() {
+  return Boolean(
+    state.ptySpawning ||
+      state.actionQueueActive ||
+      state.actionQueue.length ||
+      state.pendingBlend ||
+      state.pendingSwapDna ||
+      state.pendingBridge ||
+      state.pendingArgue ||
+      state.pendingExtractRule ||
+      state.pendingOddOneOut ||
+      state.pendingTriforce ||
+      state.pendingRecast ||
+      state.pendingCanvasDiagnose ||
+      state.pendingDiagnose ||
+      state.expectingArtifacts ||
+      state.pendingReplace
+  );
+}
+
+function computeCanvasSignature() {
+  const parts = [];
+  parts.push(`mode=${state.canvasMode}`);
+  parts.push(`active=${state.activeId || ""}`);
+  for (const item of state.images) {
+    if (item?.path) parts.push(item.path);
+  }
+  return parts.join("|");
+}
+
+function scheduleAlwaysOnVision({ immediate = false } = {}) {
+  if (!allowAlwaysOnVision()) {
+    updateAlwaysOnVisionReadout();
+    return;
+  }
+  clearTimeout(alwaysOnVisionTimer);
+  const delay = immediate ? 0 : ALWAYS_ON_VISION_DEBOUNCE_MS;
+  alwaysOnVisionTimer = setTimeout(() => {
+    alwaysOnVisionTimer = null;
+    if ("requestIdleCallback" in window) {
+      window.requestIdleCallback(
+        () => {
+          runAlwaysOnVisionOnce().catch((err) => console.warn("Always-on vision failed:", err));
+        },
+        { timeout: 1200 }
+      );
+    } else {
+      runAlwaysOnVisionOnce().catch((err) => console.warn("Always-on vision failed:", err));
+    }
+  }, delay);
+}
+
+async function writeAlwaysOnVisionSnapshot(outPath, { maxDim = 768 } = {}) {
+  const items = state.images.filter((it) => it?.path).slice(0, 6);
+  for (const item of items) ensureCanvasImageLoaded(item);
+  const n = items.length;
+  if (!n) return null;
+
+  const cols = n <= 1 ? 1 : n === 2 ? 2 : n <= 4 ? 2 : 3;
+  const rows = Math.ceil(n / cols);
+  const pad = 14;
+  const gap = 10;
+  const w = Math.max(128, Math.round(maxDim));
+  const h = w;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, w, h);
+
+  const cellW = (w - pad * 2 - gap * (cols - 1)) / cols;
+  const cellH = (h - pad * 2 - gap * (rows - 1)) / rows;
+
+  const drawContain = (img, x, y, cw, ch) => {
+    const iw = img?.naturalWidth || 1;
+    const ih = img?.naturalHeight || 1;
+    const scale = Math.min(cw / iw, ch / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    const dx = x + (cw - dw) * 0.5;
+    const dy = y + (ch - dh) * 0.5;
+    ctx.drawImage(img, dx, dy, dw, dh);
+  };
+
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    const cx = i % cols;
+    const cy = Math.floor(i / cols);
+    const x = pad + cx * (cellW + gap);
+    const y = pad + cy * (cellH + gap);
+
+    // Card background + frame.
+    ctx.fillStyle = "rgba(13, 18, 25, 0.06)";
+    ctx.fillRect(x, y, cellW, cellH);
+    ctx.strokeStyle = "rgba(53, 71, 96, 0.25)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, cellW - 2, cellH - 2);
+
+    if (item?.img) {
+      drawContain(item.img, x + 6, y + 6, cellW - 12, cellH - 12);
+    } else {
+      ctx.fillStyle = "rgba(13, 18, 25, 0.08)";
+      ctx.fillRect(x + 6, y + 6, cellW - 12, cellH - 12);
+      ctx.fillStyle = "rgba(13, 18, 25, 0.55)";
+      ctx.font = "12px IBM Plex Mono";
+      ctx.fillText("LOADING…", x + 14, y + 26);
+    }
+  }
+
+  let blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.82));
+  if (!blob) blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error("Failed to encode always-on snapshot");
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  await writeBinaryFile(outPath, buf);
+  return { path: outPath, images: n, width: w, height: h };
+}
+
+async function runAlwaysOnVisionOnce() {
+  if (!allowAlwaysOnVision()) {
+    updateAlwaysOnVisionReadout();
+    return;
+  }
+  const aov = state.alwaysOnVision;
+  if (aov.pending) return;
+
+  const now = Date.now();
+  const quietFor = now - (state.lastInteractionAt || 0);
+  if (quietFor < ALWAYS_ON_VISION_IDLE_MS) {
+    scheduleAlwaysOnVision();
+    return;
+  }
+  if (isForegroundActionRunning()) {
+    scheduleAlwaysOnVision();
+    return;
+  }
+
+  const since = now - (aov.lastRunAt || 0);
+  if (since < ALWAYS_ON_VISION_THROTTLE_MS) {
+    scheduleAlwaysOnVision();
+    return;
+  }
+
+  const signature = computeCanvasSignature();
+  if (signature && aov.lastSignature === signature && aov.lastText) return;
+
+  await ensureRun();
+  const stamp = Date.now();
+  const snapshotPath = `${state.runDir}/alwayson-${stamp}.jpg`;
+  await writeAlwaysOnVisionSnapshot(snapshotPath, { maxDim: 768 });
+
+  const ok = await ensureEngineSpawned({ reason: "always-on vision" });
+  if (!ok) return;
+
+  aov.pending = true;
+  aov.pendingPath = snapshotPath;
+  aov.pendingAt = now;
+  aov.lastRunAt = now;
+  aov.lastSignature = signature;
+  updateAlwaysOnVisionReadout();
+
+  clearTimeout(alwaysOnVisionTimeout);
+  alwaysOnVisionTimeout = setTimeout(() => {
+    if (!state.alwaysOnVision?.pending) return;
+    state.alwaysOnVision.pending = false;
+    state.alwaysOnVision.pendingPath = null;
+    updateAlwaysOnVisionReadout();
+  }, ALWAYS_ON_VISION_TIMEOUT_MS);
+
+  if (aov.rtState === "off") aov.rtState = "connecting";
+
+  // Ensure the realtime session is running before dispatching snapshot work.
+  await invoke("write_pty", { data: `/canvas_context_rt_start\n` }).catch((err) => {
+    console.warn("Always-on vision realtime start failed:", err);
+  });
+
+  await invoke("write_pty", { data: `/canvas_context_rt ${quoteForPtyArg(snapshotPath)}\n` }).catch((err) => {
+    console.warn("Always-on vision dispatch failed:", err);
+    aov.pending = false;
+    aov.pendingPath = null;
+    updateAlwaysOnVisionReadout();
+  });
+}
+
 let thumbObserver = null;
 function ensureThumbObserver() {
   if (thumbObserver) return;
@@ -685,6 +979,24 @@ function pickGeminiImageModel() {
   }
   return "gemini-3-pro-image-preview";
 }
+
+function pickGeminiFastImageModel() {
+  const desired = "gemini-2.5-flash-image";
+  if (!els.imageModel) return desired;
+  const hasDesired = Array.from(els.imageModel.options || []).some((opt) => opt?.value === desired);
+  return hasDesired ? desired : pickGeminiImageModel();
+}
+
+// Action-specific model routing (quick actions / tools that drive the engine).
+const ACTION_IMAGE_MODEL = {
+  bg_replace: "gemini-2.5-flash-image",
+  surprise: "gemini-2.5-flash-image",
+  combine: "gemini-3-pro-image-preview",
+  swap_dna: "gemini-3-pro-image-preview",
+  bridge: "gemini-3-pro-image-preview",
+  recast: "gemini-3-pro-image-preview",
+  remove_people: "gemini-3-pro-image-preview",
+};
 
 async function ensureGeminiForBlend() {
   const provider = providerFromModel(settings.imageModel);
@@ -809,6 +1121,51 @@ function portraitAgentFromProvider(provider) {
   return "dryrun";
 }
 
+function looksLikePortraitClipName(name) {
+  const lower = String(name || "").toLowerCase();
+  return Boolean(lower.match(/^(dryrun|openai|gemini|imagen|flux|stability)_(idle|working).+\\.mp4$/));
+}
+
+async function dirHasPortraitClips(dir) {
+  if (!dir) return false;
+  try {
+    const entries = await readDir(dir, { recursive: false });
+    for (const entry of entries || []) {
+      const path = entry?.path;
+      if (!path) continue;
+      if (extname(path) !== ".mp4") continue;
+      const name = entry?.name || basename(path);
+      if (looksLikePortraitClipName(name)) return true;
+    }
+  } catch (_) {
+    // ignore
+  }
+  return false;
+}
+
+async function deriveMainRepoRootFromWorktree(repoRoot) {
+  if (!repoRoot) return null;
+  try {
+    const gitPath = await join(repoRoot, ".git");
+    const content = await readTextFile(gitPath);
+    const firstLine = String(content || "").split(/\r?\n/)[0] || "";
+    const match = firstLine.match(/^gitdir:\\s*(.+)\\s*$/i);
+    if (!match) return null;
+    const gitdir = String(match[1] || "").trim();
+    if (!gitdir) return null;
+
+    const needlePosix = "/.git/worktrees/";
+    const needleWin = "\\\\.git\\\\worktrees\\\\";
+    let idx = gitdir.indexOf(needlePosix);
+    if (idx !== -1) return gitdir.slice(0, idx) || null;
+    idx = gitdir.indexOf(needleWin);
+    if (idx !== -1) return gitdir.slice(0, idx) || null;
+  } catch (_) {
+    // ignore
+  }
+  return null;
+}
+
 async function resolvePortraitsDir() {
   if (state.portraitMedia.dirChecked) return state.portraitMedia.dir;
   if (state.portraitMedia.dirPromise) return await state.portraitMedia.dirPromise;
@@ -820,7 +1177,17 @@ async function resolvePortraitsDir() {
     // Dev convenience: use repo-local outputs if we can locate the repo root.
     try {
       const repoRoot = await invoke("get_repo_root");
-      if (repoRoot) candidates.push(await join(repoRoot, "outputs", "sora_portraits"));
+      if (repoRoot) {
+        candidates.push(await join(repoRoot, "outputs", "sora_portraits"));
+
+        // If we're running inside a git worktree checkout, `.git` is a file that points
+        // at the main repo's `.git/worktrees/...`. The portrait MP4s are often generated
+        // in the main repo's `outputs/` (and are usually untracked), so prefer that if present.
+        const mainRoot = await deriveMainRepoRootFromWorktree(repoRoot);
+        if (mainRoot && mainRoot !== repoRoot) {
+          candidates.push(await join(mainRoot, "outputs", "sora_portraits"));
+        }
+      }
     } catch (_) {}
 
     // Default persisted location (recommended for packaged builds).
@@ -834,7 +1201,8 @@ async function resolvePortraitsDir() {
 
     for (const dir of candidates) {
       try {
-        if (await exists(dir)) return dir;
+        if (!(await exists(dir))) continue;
+        if (await dirHasPortraitClips(dir)) return dir;
       } catch (_) {}
     }
     return null;
@@ -1172,6 +1540,8 @@ async function refreshKeyStatus() {
     console.warn("Key detection failed:", err);
     state.keyStatus = null;
     renderKeyStatus(null);
+  } finally {
+    updateAlwaysOnVisionReadout();
   }
 }
 
@@ -1378,15 +1748,18 @@ function canvasToImage(pt) {
   const img = getActiveImage();
   if (!img) return { x: 0, y: 0 };
   if (state.canvasMode === "multi") {
+    const ms = state.multiView?.scale || 1;
     const mx = state.multiView?.offsetX || 0;
     const my = state.multiView?.offsetY || 0;
     const rect = img?.id ? state.multiRects.get(img.id) : null;
     if (rect) {
       const iw = img?.img?.naturalWidth || img?.width || rect.w || 1;
       const ih = img?.img?.naturalHeight || img?.height || rect.h || 1;
+      const lx = (pt.x - mx) / Math.max(ms, 0.0001);
+      const ly = (pt.y - my) / Math.max(ms, 0.0001);
       return {
-        x: ((pt.x - mx - rect.x) * iw) / Math.max(1, rect.w),
-        y: ((pt.y - my - rect.y) * ih) / Math.max(1, rect.h),
+        x: ((lx - rect.x) * iw) / Math.max(1, rect.w),
+        y: ((ly - rect.y) * ih) / Math.max(1, rect.h),
       };
     }
   }
@@ -1399,15 +1772,18 @@ function canvasToImage(pt) {
 function imageToCanvas(pt) {
   if (state.canvasMode === "multi") {
     const img = getActiveImage();
+    const ms = state.multiView?.scale || 1;
     const mx = state.multiView?.offsetX || 0;
     const my = state.multiView?.offsetY || 0;
     const rect = img?.id ? state.multiRects.get(img.id) : null;
     if (img && rect) {
       const iw = img?.img?.naturalWidth || img?.width || rect.w || 1;
       const ih = img?.img?.naturalHeight || img?.height || rect.h || 1;
+      const lx = rect.x + (pt.x * rect.w) / Math.max(1, iw);
+      const ly = rect.y + (pt.y * rect.h) / Math.max(1, ih);
       return {
-        x: mx + rect.x + (pt.x * rect.w) / Math.max(1, iw),
-        y: my + rect.y + (pt.y * rect.h) / Math.max(1, ih),
+        x: mx + lx * ms,
+        y: my + ly * ms,
       };
     }
   }
@@ -1494,6 +1870,7 @@ function setCanvasMode(mode) {
   state.canvasMode = next;
   state.multiRects.clear();
   if (next === "multi") {
+    state.multiView.scale = 1;
     state.multiView.offsetX = 0;
     state.multiView.offsetY = 0;
   }
@@ -1514,6 +1891,7 @@ function setCanvasMode(mode) {
   }
   renderSelectionMeta();
   scheduleVisualPromptWrite();
+  scheduleAlwaysOnVision();
   requestRender();
 }
 
@@ -1588,12 +1966,125 @@ function computeMultiRects(items, canvasW, canvasH) {
   return rects;
 }
 
+function computeAutoCanvasDiagnoseSignature() {
+  const paths = (state.images || [])
+    .map((item) => (item?.path ? String(item.path) : ""))
+    .filter(Boolean)
+    .sort();
+  return paths.join("|");
+}
+
+function scheduleAutoCanvasDiagnose({ debounceMs = 1200 } = {}) {
+  if (!state.runDir) return;
+  if ((state.images?.length || 0) < 2) return;
+  const signature = computeAutoCanvasDiagnoseSignature();
+  if (!signature) return;
+  const now = Date.now();
+  // Avoid re-running constantly for the same canvas.
+  if (signature === state.autoCanvasDiagnoseSig && now - (state.autoCanvasDiagnoseCompletedAt || 0) < 60_000) return;
+
+  clearTimeout(state.autoCanvasDiagnoseTimer);
+  state.autoCanvasDiagnoseTimer = setTimeout(() => {
+    state.autoCanvasDiagnoseTimer = null;
+    runAutoCanvasDiagnose(signature).catch((err) => console.error(err));
+  }, Math.max(250, Number(debounceMs) || 1200));
+}
+
+async function runAutoCanvasDiagnose(signature) {
+  if (!state.runDir) return;
+  if ((state.images?.length || 0) < 2) return;
+  if (!signature || signature !== computeAutoCanvasDiagnoseSignature()) return;
+  if (state.pendingCanvasDiagnose) return;
+
+  // Don't contend with foreground actions or queued user work.
+  if (
+    state.ptySpawning ||
+    state.actionQueueActive ||
+    state.actionQueue.length ||
+    state.pendingBlend ||
+    state.pendingSwapDna ||
+    state.pendingBridge ||
+    state.pendingArgue ||
+    state.pendingExtractRule ||
+    state.pendingOddOneOut ||
+    state.pendingTriforce ||
+    state.pendingRecast ||
+    state.pendingDiagnose ||
+    state.pendingRecreate ||
+    state.expectingArtifacts ||
+    state.pendingReplace
+  ) {
+    scheduleAutoCanvasDiagnose({ debounceMs: 1800 });
+    return;
+  }
+
+  const ok = await ensureEngineSpawned({ reason: "canvas diagnose" });
+  if (!ok) return;
+
+  const snapshotCanvas = await renderCanvasSnapshotForDiagnose().catch((err) => {
+    console.error(err);
+    return null;
+  });
+  if (!snapshotCanvas) return;
+
+  const outPath = `${state.runDir}/tmp-canvas-diagnose-${Date.now()}.png`;
+  await writeCanvasPngToPath(snapshotCanvas, outPath);
+  state.pendingCanvasDiagnose = { signature, startedAt: Date.now(), imagePath: outPath };
+  state.autoCanvasDiagnosePath = outPath;
+  setStatus("Director: canvas diagnose…");
+  await invoke("write_pty", { data: `/diagnose ${quoteForPtyArg(outPath)}\n` }).catch(() => {});
+}
+
+async function renderCanvasSnapshotForDiagnose({ maxDimPx = 1200 } = {}) {
+  const baseCanvas = els.workCanvas;
+  const dpr = getDpr();
+  const baseW = baseCanvas?.width || Math.round(900 * dpr);
+  const baseH = baseCanvas?.height || Math.round(700 * dpr);
+  const maxDim = Math.max(420 * dpr, Math.round(Number(maxDimPx) * dpr));
+  const scale = Math.min(1, maxDim / Math.max(1, Math.max(baseW, baseH)));
+  const w = Math.max(1, Math.round(baseW * scale));
+  const h = Math.max(1, Math.round(baseH * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+
+  const bg = ctx.createLinearGradient(0, 0, 0, h);
+  bg.addColorStop(0, "rgba(18, 26, 37, 0.92)");
+  bg.addColorStop(1, "rgba(6, 8, 12, 0.96)");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+
+  const rects = computeMultiRects(state.images || [], w, h);
+  for (const item of state.images || []) {
+    if (!item?.id || !item?.path) continue;
+    const rect = rects.get(item.id);
+    if (!rect) continue;
+    if (!item.img) {
+      try {
+        item.img = await loadImage(item.path);
+        item.width = item.img?.naturalWidth || item.width || null;
+        item.height = item.img?.naturalHeight || item.height || null;
+      } catch {
+        continue;
+      }
+    }
+    if (!item.img) continue;
+    ctx.drawImage(item.img, rect.x, rect.y, rect.w, rect.h);
+  }
+  return canvas;
+}
+
 function hitTestMulti(pt) {
   if (!pt) return null;
+  const ms = state.multiView?.scale || 1;
   const mx = state.multiView?.offsetX || 0;
   const my = state.multiView?.offsetY || 0;
-  const x = pt.x - mx;
-  const y = pt.y - my;
+  const x = (pt.x - mx) / Math.max(ms, 0.0001);
+  const y = (pt.y - my) / Math.max(ms, 0.0001);
   const entries = Array.from(state.multiRects.entries());
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const [id, rect] = entries[i];
@@ -1640,15 +2131,16 @@ function resetViewToFit() {
 function getActiveImageRectCss() {
   const dpr = getDpr();
   if (state.canvasMode === "multi") {
+    const ms = state.multiView?.scale || 1;
     const mx = state.multiView?.offsetX || 0;
     const my = state.multiView?.offsetY || 0;
     const rect = state.activeId ? state.multiRects.get(state.activeId) : null;
     if (!rect) return null;
     return {
-      left: (mx + rect.x) / dpr,
-      top: (my + rect.y) / dpr,
-      width: rect.w / dpr,
-      height: rect.h / dpr,
+      left: (mx + rect.x * ms) / dpr,
+      top: (my + rect.y * ms) / dpr,
+      width: (rect.w * ms) / dpr,
+      height: (rect.h * ms) / dpr,
     };
   }
   if (state.canvasMode !== "single") return null;
@@ -1669,15 +2161,16 @@ function getImageRectCss(imageId) {
   if (!imageId) return null;
   if (state.canvasMode === "multi") {
     const dpr = getDpr();
+    const ms = state.multiView?.scale || 1;
     const mx = state.multiView?.offsetX || 0;
     const my = state.multiView?.offsetY || 0;
     const rect = state.multiRects.get(imageId) || null;
     if (!rect) return null;
     return {
-      left: (mx + rect.x) / dpr,
-      top: (my + rect.y) / dpr,
-      width: rect.w / dpr,
-      height: rect.h / dpr,
+      left: (mx + rect.x * ms) / dpr,
+      top: (my + rect.y * ms) / dpr,
+      width: (rect.w * ms) / dpr,
+      height: (rect.h * ms) / dpr,
     };
   }
   if (state.canvasMode !== "single") return null;
@@ -1747,9 +2240,17 @@ function setImageFxActive(active, label = null) {
   requestRender();
 }
 
-function beginPendingReplace(targetId, label) {
+function beginPendingReplace(targetId, label, extra = null) {
   if (!targetId) return;
-  state.pendingReplace = { targetId, startedAt: Date.now(), label: label || null };
+  const payload = { targetId, startedAt: Date.now(), label: label || null };
+  if (extra && typeof extra === "object") {
+    for (const [key, value] of Object.entries(extra)) {
+      // Prevent accidental override of the core routing keys.
+      if (key === "targetId" || key === "startedAt") continue;
+      payload[key] = value;
+    }
+  }
+  state.pendingReplace = payload;
 }
 
 function clearPendingReplace() {
@@ -1860,6 +2361,39 @@ function hideDesignateMenuAnimated({ animate = true } = {}) {
       btn.classList.remove("confirm");
     }
   }, 240);
+}
+
+function hideImageMenu() {
+  if (!els.imageMenu) return;
+  els.imageMenu.classList.add("hidden");
+  state.imageMenuTargetId = null;
+}
+
+function showImageMenuAt(ptCss, imageId) {
+  const menu = els.imageMenu;
+  const wrap = els.canvasWrap;
+  if (!menu || !wrap || !ptCss || !imageId) return;
+  state.imageMenuTargetId = String(imageId);
+  menu.classList.remove("hidden");
+
+  const dx = 12;
+  const dy = 12;
+  const x0 = (Number(ptCss.x) || 0) + dx;
+  const y0 = (Number(ptCss.y) || 0) + dy;
+
+  menu.style.left = `${x0}px`;
+  menu.style.top = `${y0}px`;
+
+  requestAnimationFrame(() => {
+    const mw = menu.offsetWidth || 0;
+    const mh = menu.offsetHeight || 0;
+    const maxX = Math.max(8, wrap.clientWidth - mw - 8);
+    const maxY = Math.max(8, wrap.clientHeight - mh - 8);
+    const x = clamp(x0, 8, maxX);
+    const y = clamp(y0, 8, maxY);
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+  });
 }
 
 function showDesignateMenuAtHudKey() {
@@ -2662,7 +3196,165 @@ function renderSpawnbar() {
 }
 
 function isMultiActionRunning() {
-  return Boolean(state.pendingBlend || state.pendingSwapDna || state.pendingBridge || state.pendingArgue);
+  return Boolean(
+    state.pendingBlend ||
+      state.pendingSwapDna ||
+      state.pendingBridge ||
+      state.pendingArgue ||
+      state.pendingExtractRule ||
+      state.pendingOddOneOut ||
+      state.pendingTriforce
+  );
+}
+
+const ACTION_QUEUE_MAX = 32;
+const ACTION_QUEUE_PRIORITY = {
+  user: 100,
+  background: 10,
+};
+
+function isEngineBusy() {
+  return Boolean(
+    state.ptySpawning ||
+      state.pendingBlend ||
+      state.pendingSwapDna ||
+      state.pendingBridge ||
+      state.pendingArgue ||
+      state.pendingExtractRule ||
+      state.pendingOddOneOut ||
+      state.pendingTriforce ||
+      state.pendingRecast ||
+      state.pendingCanvasDiagnose ||
+      state.pendingDiagnose ||
+      state.pendingReplace ||
+      state.pendingRecreate ||
+      state.expectingArtifacts
+  );
+}
+
+function resetActionQueue() {
+  state.actionQueue = [];
+  state.actionQueueActive = null;
+  state.actionQueueRunning = false;
+}
+
+function _actionQueueMakeId() {
+  return `aq-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+}
+
+function enqueueAction({ label, key = null, priority = ACTION_QUEUE_PRIORITY.user, source = "user", run } = {}) {
+  const fn = typeof run === "function" ? run : null;
+  if (!label || !fn) return false;
+
+  if (key && state.actionQueueActive?.key && state.actionQueueActive.key === key) {
+    showToast(`${label} already running.`, "tip", 1800);
+    return false;
+  }
+
+  const now = Date.now();
+  if (key) {
+    // De-dupe repeated clicks; keep latest request.
+    state.actionQueue = state.actionQueue.filter((item) => item?.key !== key);
+  }
+
+  state.actionQueue.push({
+    id: _actionQueueMakeId(),
+    label: String(label),
+    key: key ? String(key) : null,
+    priority: typeof priority === "number" ? priority : ACTION_QUEUE_PRIORITY.user,
+    enqueuedAt: now,
+    source: source ? String(source) : "user",
+    run: fn,
+  });
+
+  // Keep queue bounded by dropping the lowest-priority oldest items.
+  while (state.actionQueue.length > ACTION_QUEUE_MAX) {
+    let dropIdx = 0;
+    for (let i = 1; i < state.actionQueue.length; i += 1) {
+      const a = state.actionQueue[i];
+      const b = state.actionQueue[dropIdx];
+      const ap = typeof a?.priority === "number" ? a.priority : 0;
+      const bp = typeof b?.priority === "number" ? b.priority : 0;
+      if (ap < bp) {
+        dropIdx = i;
+        continue;
+      }
+      if (ap === bp && (a?.enqueuedAt || 0) < (b?.enqueuedAt || 0)) {
+        dropIdx = i;
+      }
+    }
+    state.actionQueue.splice(dropIdx, 1);
+  }
+
+  showToast(`Queued: ${label}`, "tip", 1400);
+  renderQuickActions();
+  processActionQueue().catch(() => {});
+  return true;
+}
+
+function _pickNextQueuedActionIndex() {
+  if (!state.actionQueue.length) return -1;
+  let bestIdx = 0;
+  for (let i = 1; i < state.actionQueue.length; i += 1) {
+    const a = state.actionQueue[i];
+    const b = state.actionQueue[bestIdx];
+    const ap = typeof a?.priority === "number" ? a.priority : 0;
+    const bp = typeof b?.priority === "number" ? b.priority : 0;
+    if (ap > bp) {
+      bestIdx = i;
+      continue;
+    }
+    if (ap === bp && (a?.enqueuedAt || 0) < (b?.enqueuedAt || 0)) {
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
+async function processActionQueue() {
+  if (state.actionQueueRunning) return;
+  state.actionQueueRunning = true;
+  try {
+    if (state.actionQueueActive && !isEngineBusy()) {
+      state.actionQueueActive = null;
+      renderQuickActions();
+    }
+
+    while (!state.actionQueueActive && !isEngineBusy() && state.actionQueue.length) {
+      const idx = _pickNextQueuedActionIndex();
+      if (idx < 0) return;
+      const item = state.actionQueue.splice(idx, 1)[0];
+      if (!item) return;
+
+      state.actionQueueActive = {
+        id: item.id,
+        label: item.label,
+        key: item.key || null,
+        priority: item.priority,
+        enqueuedAt: item.enqueuedAt,
+        source: item.source || "user",
+      };
+      renderQuickActions();
+
+      try {
+        await Promise.resolve(item.run());
+      } catch (err) {
+        console.error("Queued action failed:", item?.label, err);
+        showToast(`${item?.label || "Action"} failed to start.`, "error", 3200);
+      }
+
+      if (isEngineBusy()) {
+        // Engine-driven action is in flight; completion events will resume the queue.
+        return;
+      }
+
+      // Completed immediately (local action or no-op); continue draining.
+      state.actionQueueActive = null;
+      renderQuickActions();
+    }
+  } finally {
+    state.actionQueueRunning = false;
+  }
 }
 
 function chooseSpawnNodes() {
@@ -2750,26 +3442,25 @@ function computeQuickActions() {
       onClick: () => setCanvasMode("single"),
     });
     if (state.images.length === 2) {
-      const runningMulti = isMultiActionRunning();
       actions.push({
         id: "combine",
         label: state.pendingBlend ? "Combine (running…)" : "Combine",
         title: "Blend the two loaded photos into one",
-        disabled: runningMulti,
+        disabled: false,
         onClick: () => runBlendPair().catch((err) => console.error(err)),
       });
       actions.push({
         id: "bridge",
         label: state.pendingBridge ? "Bridge (running…)" : "Bridge",
         title: "Find the aesthetic midpoint between the two images (not a collage)",
-        disabled: runningMulti,
+        disabled: false,
         onClick: () => runBridgePair().catch((err) => console.error(err)),
       });
       actions.push({
         id: "swap_dna",
         label: state.pendingSwapDna ? "Swap DNA (running…)" : "Swap DNA",
         title: "Use structure from the selected image and surface qualities from the other (Shift-click to invert)",
-        disabled: runningMulti,
+        disabled: false,
         onClick: (ev) =>
           runSwapDnaPair({ invert: Boolean(ev?.shiftKey) }).catch((err) => console.error(err)),
       });
@@ -2777,8 +3468,36 @@ function computeQuickActions() {
         id: "argue",
         label: state.pendingArgue ? "Argue (running…)" : "Argue",
         title: "Debate the two directions (why each is stronger, with visual evidence)",
-        disabled: runningMulti,
+        disabled: false,
         onClick: () => runArguePair().catch((err) => console.error(err)),
+      });
+      return actions;
+    }
+    if (state.images.length === 3) {
+      const runningMulti = isMultiActionRunning();
+      actions.push({
+        id: "extract_rule",
+        label: state.pendingExtractRule ? "Extract the Rule (running…)" : "Extract the Rule",
+        title:
+          "Three images is the minimum for pattern recognition. Extract the invisible rule you're applying.",
+        disabled: runningMulti,
+        onClick: () => runExtractRuleTriplet().catch((err) => console.error(err)),
+      });
+      actions.push({
+        id: "odd_one_out",
+        label: state.pendingOddOneOut ? "Odd One Out (running…)" : "Odd One Out",
+        title:
+          "Identify which of the three breaks the shared pattern, and explain why (brutal but useful).",
+        disabled: runningMulti,
+        onClick: () => runOddOneOutTriplet().catch((err) => console.error(err)),
+      });
+      actions.push({
+        id: "triforce",
+        label: state.pendingTriforce ? "Triforce (running…)" : "Triforce",
+        title:
+          "Generate the centroid: a single image equidistant from all three references (mood board distillation).",
+        disabled: runningMulti,
+        onClick: () => runTriforceTriplet().catch((err) => console.error(err)),
       });
       return actions;
     }
@@ -2794,9 +3513,6 @@ function computeQuickActions() {
   const iw = active?.img?.naturalWidth || active?.width || null;
   const ih = active?.img?.naturalHeight || active?.height || null;
   const canCropSquare = Boolean(iw && ih && Math.abs(iw - ih) > 8);
-  const runningSingle = Boolean(
-    state.pendingDiagnose || state.pendingRecast || state.expectingArtifacts || state.pendingReplace
-  );
 
   if (state.canvasMode !== "multi" && state.images.length > 1) {
     actions.push({
@@ -2812,14 +3528,14 @@ function computeQuickActions() {
     id: "diagnose",
     label: state.pendingDiagnose ? "Diagnose (running…)" : "Diagnose",
     title: "Creative-director diagnosis: what's working, what isn't, and what to fix next",
-    disabled: runningSingle,
+    disabled: false,
     onClick: () => runDiagnose().catch((err) => console.error(err)),
   });
   actions.push({
     id: "recast",
     label: state.pendingRecast ? "Recast (running…)" : "Recast",
     title: "Reimagine the image in a totally different medium/context (lateral leap)",
-    disabled: runningSingle,
+    disabled: false,
     onClick: () => runRecast().catch((err) => console.error(err)),
   });
 
@@ -3027,6 +3743,161 @@ function updateFilmstripThumb(item) {
   }
 }
 
+function _timelineMakeNodeId() {
+  return `tl-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+}
+
+function recordTimelineNode({ imageId, path, receiptPath = null, label = null, action = null, parents = [] } = {}) {
+  if (!imageId || !path) return null;
+  const nodeId = _timelineMakeNodeId();
+  const parentIds = Array.isArray(parents)
+    ? Array.from(new Set(parents.map((p) => String(p || "")).filter(Boolean)))
+    : [];
+  const node = {
+    nodeId,
+    imageId: String(imageId),
+    path: String(path),
+    receiptPath: receiptPath ? String(receiptPath) : null,
+    label: label ? String(label) : basename(path),
+    action: action ? String(action) : null,
+    parents: parentIds,
+    createdAt: Date.now(),
+  };
+  state.timelineNodes.push(node);
+  state.timelineNodesById.set(nodeId, node);
+  if (state.timelineOpen) renderTimeline();
+  return nodeId;
+}
+
+function ensureTimelineNodeForImageItem(item) {
+  if (!item || !item.id || !item.path) return null;
+  if (item.timelineNodeId && state.timelineNodesById.has(item.timelineNodeId)) return item.timelineNodeId;
+  const action = item.timelineAction || item.kind || null;
+  const parents = Array.isArray(item.timelineParents) ? item.timelineParents : [];
+  const nodeId = recordTimelineNode({
+    imageId: item.id,
+    path: item.path,
+    receiptPath: item.receiptPath || null,
+    label: item.label || null,
+    action,
+    parents,
+  });
+  item.timelineNodeId = nodeId;
+  // Clear one-shot metadata (keeps `state.images` objects tidy).
+  if ("timelineAction" in item) delete item.timelineAction;
+  if ("timelineParents" in item) delete item.timelineParents;
+  return nodeId;
+}
+
+function openTimeline() {
+  if (!els.timelineOverlay) return;
+  state.timelineOpen = true;
+  els.timelineOverlay.classList.remove("hidden");
+  renderTimeline();
+}
+
+function closeTimeline() {
+  if (!els.timelineOverlay) return;
+  state.timelineOpen = false;
+  els.timelineOverlay.classList.add("hidden");
+}
+
+function renderTimeline() {
+  if (!state.timelineOpen) return;
+  const strip = els.timelineStrip;
+  const detail = els.timelineDetail;
+  if (!strip) return;
+  strip.innerHTML = "";
+
+  const nodes = Array.from(state.timelineNodes || []).sort((a, b) => (a?.createdAt || 0) - (b?.createdAt || 0));
+  if (!nodes.length) {
+    const empty = document.createElement("div");
+    empty.className = "muted";
+    empty.textContent = "No timeline yet.";
+    strip.appendChild(empty);
+    if (detail) detail.textContent = "";
+    return;
+  }
+
+  const activeNodeId = getActiveImage()?.timelineNodeId || null;
+  let activeNode = activeNodeId ? state.timelineNodesById.get(activeNodeId) : null;
+  if (!activeNode && activeNodeId) {
+    activeNode = nodes.find((n) => n?.nodeId === activeNodeId) || null;
+  }
+
+  const frag = document.createDocumentFragment();
+  for (const node of nodes) {
+    if (!node?.nodeId || !node.path) continue;
+    const card = document.createElement("div");
+    card.className = "timeline-card" + (activeNodeId && node.nodeId === activeNodeId ? " selected" : "");
+    card.dataset.nodeId = node.nodeId;
+    card.tabIndex = 0;
+    const img = document.createElement("img");
+    img.alt = node.label || basename(node.path) || "Timeline item";
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.src = THUMB_PLACEHOLDER_SRC;
+    ensureImageUrl(node.path)
+      .then((url) => {
+        if (url) img.src = url;
+      })
+      .catch(() => {});
+    card.appendChild(img);
+    const meta = document.createElement("div");
+    meta.className = "timeline-meta";
+    const action = document.createElement("div");
+    action.className = "timeline-action";
+    action.textContent = node.action ? String(node.action) : "artifact";
+    const name = document.createElement("div");
+    name.textContent = node.label || basename(node.path);
+    meta.appendChild(action);
+    meta.appendChild(name);
+    card.appendChild(meta);
+    frag.appendChild(card);
+  }
+  strip.appendChild(frag);
+
+  if (detail) {
+    if (!activeNode) {
+      detail.textContent = "Select a point in time to jump back.";
+    } else {
+      const pieces = [];
+      pieces.push(activeNode.action ? `Action: ${activeNode.action}` : "Action: (unknown)");
+      pieces.push(`File: ${basename(activeNode.path)}`);
+      if (activeNode.parents?.length) pieces.push(`Parents: ${activeNode.parents.length}`);
+      detail.textContent = pieces.join("\n");
+    }
+  }
+}
+
+async function jumpToTimelineNode(nodeId) {
+  const node = nodeId ? state.timelineNodesById.get(nodeId) : null;
+  if (!node) return;
+
+  const imgItem = state.imagesById.get(node.imageId) || null;
+  if (!imgItem) {
+    showToast("Timeline item no longer in canvas.", "error", 2400);
+    return;
+  }
+
+  if (state.activeId !== imgItem.id) {
+    await setActiveImage(imgItem.id).catch(() => {});
+  }
+
+  if (imgItem.path !== node.path) {
+    const ok = await replaceImageInPlace(imgItem.id, {
+      path: node.path,
+      receiptPath: node.receiptPath || null,
+      kind: imgItem.kind,
+      clearVision: true,
+    });
+    if (!ok) return;
+  }
+
+  imgItem.timelineNodeId = node.nodeId;
+  renderTimeline();
+}
+
 async function setActiveImage(id) {
   const item = state.imagesById.get(id);
   if (!item) return;
@@ -3052,6 +3923,8 @@ async function setActiveImage(id) {
   renderHudReadout();
   resetViewToFit();
   requestRender();
+  if (state.timelineOpen) renderTimeline();
+  scheduleAlwaysOnVision();
 }
 
 function addImage(item, { select = false } = {}) {
@@ -3059,6 +3932,7 @@ function addImage(item, { select = false } = {}) {
   if (state.imagesById.has(item.id)) return;
   state.imagesById.set(item.id, item);
   state.images.push(item);
+  ensureTimelineNodeForImageItem(item);
   appendFilmstripThumb(item);
   if (state.canvasMode === "multi") {
     // Multi-canvas is the "working set"; keep HUD descriptions available for all tiles.
@@ -3069,9 +3943,85 @@ function addImage(item, { select = false } = {}) {
   }
   showDropHint(state.images.length === 0);
   scheduleVisualPromptWrite();
+  scheduleAlwaysOnVision();
   if (select || !state.activeId) {
     setActiveImage(item.id).catch(() => {});
   }
+}
+
+async function removeImageFromCanvas(imageId) {
+  const id = String(imageId || "");
+  if (!id) return false;
+  const item = state.imagesById.get(id) || null;
+  if (!item) return false;
+
+  hideImageMenu();
+  hideDesignateMenu();
+
+  if (item?.path) invalidateImageCache(item.path);
+
+  // Drop per-image marks.
+  state.designationsByImageId.delete(id);
+  state.circlesByImageId.delete(id);
+
+  // Remove from collections.
+  state.imagesById.delete(id);
+  state.images = (state.images || []).filter((item) => item?.id !== id);
+  state.multiRects.delete(id);
+
+  // Remove filmstrip thumb if present (filmstrip might be hidden in multi mode).
+  const thumb = state.thumbsById.get(id);
+  if (thumb?.rootEl && thumb.rootEl.parentNode) {
+    try {
+      thumb.rootEl.parentNode.removeChild(thumb.rootEl);
+    } catch {
+      // ignore
+    }
+  }
+  state.thumbsById.delete(id);
+
+  // If we removed the active image, select a sensible next.
+  if (state.activeId === id) {
+    state.activeId = null;
+    const next = state.images.length ? state.images[state.images.length - 1] : null;
+    if (next?.id) {
+      await setActiveImage(next.id);
+    }
+  }
+
+  if (state.images.length === 0) {
+    clearImageCache();
+    state.activeId = null;
+    state.canvasMode = "single";
+    state.multiRects.clear();
+    state.pendingBlend = null;
+    state.pendingSwapDna = null;
+    state.pendingBridge = null;
+    state.pendingArgue = null;
+    state.pendingRecast = null;
+    state.pendingDiagnose = null;
+    clearSelection();
+    showDropHint(true);
+    setTip(DEFAULT_TIP);
+    setDirectorText(null, null);
+    renderFilmstrip();
+    renderQuickActions();
+    renderHudReadout();
+    requestRender();
+    return true;
+  }
+
+  if (state.canvasMode === "multi" && state.images.length < 2) {
+    setCanvasMode("single");
+  } else {
+    renderFilmstrip();
+  }
+
+  scheduleVisualPromptWrite();
+  renderQuickActions();
+  renderHudReadout();
+  requestRender();
+  return true;
 }
 
 function invalidateImageCache(path) {
@@ -3134,8 +4084,9 @@ async function replaceImageInPlace(
 	    requestRender();
 	  }
     scheduleVisualPromptWrite();
-	  return true;
-	}
+    scheduleAlwaysOnVision();
+		  return true;
+		}
 
 async function setEngineActiveImage(path) {
   if (!path) return;
@@ -3154,6 +4105,16 @@ function restoreEngineImageModelIfNeeded() {
   state.engineImageModelRestore = null;
   if (!state.ptySpawned) return;
   invoke("write_pty", { data: `/image_model ${restore}\n` }).catch(() => {});
+}
+
+async function maybeOverrideEngineImageModel(desiredModel) {
+  const desired = String(desiredModel || "").trim();
+  if (!desired) return false;
+  if (!state.ptySpawned) return false;
+  if (desired === settings.imageModel) return false;
+  state.engineImageModelRestore = settings.imageModel;
+  await invoke("write_pty", { data: `/image_model ${desired}\n` }).catch(() => {});
+  return true;
 }
 
 async function writeLocalReceipt({ artifactId, imagePath, operation, meta = {} }) {
@@ -3343,6 +4304,7 @@ function buildVisualPrompt() {
         offset_y: Number(state.view?.offsetY) || 0,
       },
       multi_view: {
+        scale: Number(state.multiView?.scale) || 1,
         offset_x: Number(state.multiView?.offsetX) || 0,
         offset_y: Number(state.multiView?.offsetY) || 0,
       },
@@ -3420,11 +4382,7 @@ async function importPhotos() {
     if (state.images.length > 1) {
       setCanvasMode("multi");
       setTip("Multiple photos loaded. Click a photo to select it. Use L to lasso or D to designate.");
-    }
-    const importedOnly = state.images.length === 2 && state.images.every((item) => item?.kind === "import");
-    if (importedOnly) {
-      setTip("Suggested: Combine the two photos into a single image.");
-      showToast("Suggested action: Combine", "tip", 2600);
+      scheduleAutoCanvasDiagnose();
     }
   } else {
     const msg = lastErr?.message || String(lastErr || "unknown error");
@@ -3432,8 +4390,17 @@ async function importPhotos() {
   }
 }
 
-async function cropSquare() {
+async function cropSquare({ fromQueue = false } = {}) {
   bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Crop: Square",
+      key: "crop_square",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => cropSquare({ fromQueue: true }),
+    });
+    return;
+  }
   state.lastAction = "Square Crop";
   const imgItem = getActiveImage();
   if (!imgItem || !imgItem.img) return;
@@ -3473,12 +4440,13 @@ async function aiReplaceBackground(style) {
   await ensureRun();
   const label = style === "sweep" ? "Soft Sweep" : "Studio White";
   setImageFxActive(true, label);
-  portraitWorking(label);
+  portraitWorking(label, { providerOverride: providerFromModel(ACTION_IMAGE_MODEL.bg_replace) });
   beginPendingReplace(imgItem.id, label);
   try {
     const ok = await ensureEngineSpawned({ reason: label });
     if (!ok) throw new Error("Engine unavailable");
     await setEngineActiveImage(imgItem.path);
+    await maybeOverrideEngineImageModel(ACTION_IMAGE_MODEL.bg_replace);
     state.expectingArtifacts = true;
     state.lastAction = label;
     setStatus(`Engine: ${label}…`);
@@ -3498,8 +4466,17 @@ async function aiReplaceBackground(style) {
   }
 }
 
-async function aiRemovePeople() {
+async function aiRemovePeople({ fromQueue = false } = {}) {
   bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Remove People",
+      key: "remove_people",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => aiRemovePeople({ fromQueue: true }),
+    });
+    return;
+  }
   const imgItem = getActiveImage();
   if (!imgItem) {
     showToast("No image selected.", "error");
@@ -3509,7 +4486,7 @@ async function aiRemovePeople() {
   const label = "Remove People";
   await ensureRun();
   setImageFxActive(true, label);
-  portraitWorking(label, { providerOverride: "gemini" });
+  portraitWorking(label, { providerOverride: providerFromModel(ACTION_IMAGE_MODEL.remove_people) || "gemini" });
   beginPendingReplace(imgItem.id, label);
   try {
     const ok = await ensureEngineSpawned({ reason: label });
@@ -3520,11 +4497,7 @@ async function aiRemovePeople() {
     setStatus(`Engine: ${label}…`);
     showToast("Removing people…", "info", 2200);
 
-    const gemModel = pickGeminiImageModel();
-    if (state.ptySpawned && gemModel && gemModel !== settings.imageModel) {
-      state.engineImageModelRestore = settings.imageModel;
-      await invoke("write_pty", { data: `/image_model ${gemModel}\n` }).catch(() => {});
-    }
+    await maybeOverrideEngineImageModel(ACTION_IMAGE_MODEL.remove_people || pickGeminiImageModel());
 
     // Must start with "edit" or "replace" for Brood's edit detection.
     const prompt =
@@ -3542,8 +4515,17 @@ async function aiRemovePeople() {
   }
 }
 
-async function aiSurpriseMe() {
+async function aiSurpriseMe({ fromQueue = false } = {}) {
   bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Surprise Me",
+      key: "surprise_me",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => aiSurpriseMe({ fromQueue: true }),
+    });
+    return;
+  }
   const imgItem = getActiveImage();
   if (!imgItem) {
     showToast("No image selected.", "error");
@@ -3553,7 +4535,7 @@ async function aiSurpriseMe() {
   const label = "Surprise Me";
   await ensureRun();
   setImageFxActive(true, label);
-  portraitWorking(label, { providerOverride: "gemini" });
+  portraitWorking(label, { providerOverride: providerFromModel(ACTION_IMAGE_MODEL.surprise) || "gemini" });
   beginPendingReplace(imgItem.id, label);
   try {
     const ok = await ensureEngineSpawned({ reason: label });
@@ -3564,11 +4546,7 @@ async function aiSurpriseMe() {
     setStatus(`Engine: ${label}…`);
     showToast("Surprising you…", "info", 2200);
 
-    const gemModel = pickGeminiImageModel();
-    if (state.ptySpawned && gemModel && gemModel !== settings.imageModel) {
-      state.engineImageModelRestore = settings.imageModel;
-      await invoke("write_pty", { data: `/image_model ${gemModel}\n` }).catch(() => {});
-    }
+    await maybeOverrideEngineImageModel(ACTION_IMAGE_MODEL.surprise || pickGeminiFastImageModel());
 
     const surprises = [
       "replace the background with a bold but clean gradient (no patterns) and add a subtle soft shadow under the product.",
@@ -3596,76 +4574,168 @@ async function aiSurpriseMe() {
   }
 }
 
-async function aiAnnotateEdit() {
+async function aiAnnotateEdit({
+  fromQueue = false,
+  targetId = null,
+  boxOverride = null,
+  instructionOverride = null,
+  requestedModelOverride = null,
+} = {}) {
   bumpInteraction();
-  const imgItem = getActiveImage();
+  const activeItem = getActiveImage();
+  const imgItem = targetId ? state.imagesById.get(targetId) || null : activeItem;
   if (!imgItem) {
     showToast("No image selected.", "error");
     return;
   }
-  const box = state.annotateBox;
+
+  const box = boxOverride || state.annotateBox;
   if (!box || box.imageId !== imgItem.id) {
     showToast("Annotate: draw a box first.", "tip", 2200);
     return;
   }
-  const instruction = String(els.annotateText?.value || "").trim();
+
+  const instruction =
+    typeof instructionOverride === "string"
+      ? instructionOverride.trim()
+      : String(els.annotateText?.value || "").trim();
   if (!instruction) {
     showToast("Annotate: enter an instruction.", "tip", 2200);
     return;
   }
 
-  const requestedModel = String(els.annotateModel?.value || settings.imageModel || "").trim();
-  const provider = providerFromModel(requestedModel || settings.imageModel);
+  const requestedModel =
+    typeof requestedModelOverride === "string"
+      ? requestedModelOverride.trim()
+      : String(els.annotateModel?.value || settings.imageModel || "").trim();
+
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    const captured = {
+      targetId: imgItem.id,
+      box: { ...box },
+      instruction,
+      requestedModel,
+    };
+
+    // Mirror the "send" UX: clear the box + prompt input immediately, even if queued.
+    if (els.annotateText) els.annotateText.value = "";
+    state.annotateBox = null;
+    state.annotateDraft = null;
+    hideAnnotatePanel();
+    scheduleVisualPromptWrite();
+    requestRender();
+
+    enqueueAction({
+      label: "Annotate",
+      key: `annotate:${captured.targetId}`,
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () =>
+        aiAnnotateEdit({
+          fromQueue: true,
+          targetId: captured.targetId,
+          boxOverride: captured.box,
+          instructionOverride: captured.instruction,
+          requestedModelOverride: captured.requestedModel,
+        }),
+    });
+    return;
+  }
+
+  // Keep the target image visible when replaying queued edits.
+  if (state.activeId !== imgItem.id) {
+    await setActiveImage(imgItem.id).catch(() => {});
+  }
+
+  let effectiveModel = requestedModel || settings.imageModel;
+  if (providerFromModel(effectiveModel) !== "gemini") {
+    effectiveModel = pickGeminiImageModel();
+    if (!fromQueue) {
+      showToast(`Annotate box edits currently require Gemini. Using ${effectiveModel}.`, "tip", 3200);
+    }
+  }
+  const provider = providerFromModel(effectiveModel);
   const label = "Annotate";
   await ensureRun();
   setImageFxActive(true, label);
   portraitWorking(label, { providerOverride: provider });
-  beginPendingReplace(imgItem.id, label);
   try {
     const ok = await ensureEngineSpawned({ reason: label });
     if (!ok) throw new Error("Engine unavailable");
-    await setEngineActiveImage(imgItem.path);
+
+    if (!imgItem.img) {
+      setStatus("Engine: loading image…");
+      try {
+        imgItem.img = await loadImage(imgItem.path);
+        imgItem.width = imgItem.img?.naturalWidth || imgItem.width || null;
+        imgItem.height = imgItem.img?.naturalHeight || imgItem.height || null;
+      } catch (err) {
+        showToast("Failed to load image.", "error", 3200);
+        setStatus("Engine: ready");
+        return;
+      }
+      setStatus("Engine: ready");
+    }
+
+    const normalized = _normalizeAnnotateBox(box, imgItem);
+    if (!normalized) {
+      showToast("Annotate: invalid box.", "error", 2600);
+      return;
+    }
+    const x0 = Math.floor(Number(normalized.x0) || 0);
+    const y0 = Math.floor(Number(normalized.y0) || 0);
+    const x1 = Math.ceil(Number(normalized.x1) || 0);
+    const y1 = Math.ceil(Number(normalized.y1) || 0);
+    const wBox = Math.max(1, x1 - x0);
+    const hBox = Math.max(1, y1 - y0);
+    if (wBox < 8 || hBox < 8) {
+      showToast("Annotate: box too small.", "tip", 2200);
+      return;
+    }
+
+    // Crop the selection region so the model can only edit what's inside the box.
+    const cropCanvas = document.createElement("canvas");
+    cropCanvas.width = wBox;
+    cropCanvas.height = hBox;
+    const cropCtx = cropCanvas.getContext("2d");
+    cropCtx.drawImage(imgItem.img, x0, y0, wBox, hBox, 0, 0, wBox, hBox);
+    const cropPath = `${state.runDir}/tmp-annotate-crop-${Date.now()}-${Math.random().toString(16).slice(2)}.png`;
+    await writeCanvasPngToPath(cropCanvas, cropPath);
+
+    beginPendingReplace(imgItem.id, label, {
+      mode: "annotate_box",
+      basePath: imgItem.path,
+      box: { x0, y0, x1, y1, w: wBox, h: hBox },
+      cropPath,
+      instruction,
+    });
+
+    // Point the engine at the cropped image so "edit the image" edits the crop.
+    await invoke("write_pty", { data: `/use ${quoteForPtyArg(cropPath)}\n` }).catch(() => {});
+
     state.expectingArtifacts = true;
     state.lastAction = label;
     setStatus(`Engine: ${label}…`);
     showToast("Annotate: editing…", "info", 2200);
 
-    if (state.ptySpawned && requestedModel && requestedModel !== settings.imageModel) {
+    if (state.ptySpawned && effectiveModel && effectiveModel !== settings.imageModel) {
       state.engineImageModelRestore = settings.imageModel;
-      await invoke("write_pty", { data: `/image_model ${requestedModel}\n` }).catch(() => {});
-    }
-
-    const normalized = _normalizeAnnotateBox(box, imgItem);
-    const iw = imgItem?.img?.naturalWidth || imgItem?.width || null;
-    const ih = imgItem?.img?.naturalHeight || imgItem?.height || null;
-    let boxDesc = "";
-    if (normalized && iw && ih) {
-      const xPct = (normalized.x0 / iw) * 100;
-      const yPct = (normalized.y0 / ih) * 100;
-      const wPct = ((normalized.x1 - normalized.x0) / iw) * 100;
-      const hPct = ((normalized.y1 - normalized.y0) / ih) * 100;
-      boxDesc = `x ${xPct.toFixed(1)}% y ${yPct.toFixed(1)}% w ${wPct.toFixed(1)}% h ${hPct.toFixed(1)}%`;
-    } else if (normalized) {
-      const wPx = Math.max(0, normalized.x1 - normalized.x0);
-      const hPx = Math.max(0, normalized.y1 - normalized.y0);
-      boxDesc = `x ${Math.round(normalized.x0)} y ${Math.round(normalized.y0)} w ${Math.round(wPx)} h ${Math.round(hPx)} (px)`;
+      await invoke("write_pty", { data: `/image_model ${effectiveModel}\n` }).catch(() => {});
     }
 
     // Must start with "edit" or "replace" for Brood's edit detection.
     const prompt =
       `edit the image: ${instruction}\n` +
-      `Apply the change only inside this bounding box (from top-left of image): ${boxDesc}.\n` +
-      "Outside the box, keep the image exactly the same. Preserve logos and text. Do not crop.";
+      "Output ONE image. No split-screen or collage. Do not add any text or logos. Do not crop.";
     await invoke("write_pty", { data: `${prompt}\n` });
 
     // Clear UI selection now that the instruction is sent.
-	    if (els.annotateText) els.annotateText.value = "";
-	    state.annotateBox = null;
-	    state.annotateDraft = null;
-	    hideAnnotatePanel();
-      scheduleVisualPromptWrite();
-	    requestRender();
-	  } catch (err) {
+    if (els.annotateText) els.annotateText.value = "";
+    state.annotateBox = null;
+    state.annotateDraft = null;
+    hideAnnotatePanel();
+    scheduleVisualPromptWrite();
+    requestRender();
+  } catch (err) {
     state.expectingArtifacts = false;
     state.engineImageModelRestore = null;
     clearPendingReplace();
@@ -3675,8 +4745,67 @@ async function aiAnnotateEdit() {
   }
 }
 
-async function applyBackground(style) {
+async function compositeAnnotateBoxEdit(targetId, editedCropPath, { box, instruction = null } = {}) {
+  if (!targetId || !editedCropPath || !box) return false;
+  const item = state.imagesById.get(targetId) || null;
+  if (!item?.path) return false;
+
+  // Ensure base + crop images are loaded.
+  if (!item.img) {
+    try {
+      item.img = await loadImage(item.path);
+      item.width = item.img?.naturalWidth || item.width || null;
+      item.height = item.img?.naturalHeight || item.height || null;
+    } catch (err) {
+      console.error("Annotate composite failed to load base image:", err);
+      return false;
+    }
+  }
+
+  let cropImg = null;
+  try {
+    cropImg = await loadImage(editedCropPath);
+  } catch (err) {
+    console.error("Annotate composite failed to load crop image:", err);
+    return false;
+  }
+
+  const baseImg = item.img;
+  const bw = baseImg?.naturalWidth || item.width || 1;
+  const bh = baseImg?.naturalHeight || item.height || 1;
+  const out = document.createElement("canvas");
+  out.width = bw;
+  out.height = bh;
+  const ctx = out.getContext("2d");
+  ctx.drawImage(baseImg, 0, 0);
+  ctx.drawImage(cropImg, Number(box.x0) || 0, Number(box.y0) || 0, Number(box.w) || 1, Number(box.h) || 1);
+
+  await saveCanvasAsArtifact(out, {
+    operation: "annotate_box",
+    label: "Annotate",
+    meta: {
+      instruction: instruction ? String(instruction) : null,
+      box,
+      edited_crop_path: String(editedCropPath),
+    },
+    replaceActive: true,
+    targetId,
+  });
+  return true;
+}
+
+async function applyBackground(style, { fromQueue = false } = {}) {
   bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    const label = style === "sweep" ? "Background: Sweep" : "Background: White";
+    enqueueAction({
+      label,
+      key: `bg:${String(style || "")}`,
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => applyBackground(style, { fromQueue: true }),
+    });
+    return;
+  }
   const imgItem = getActiveImage();
   if (!imgItem) {
     showToast("No image selected.", "error");
@@ -3764,6 +4893,14 @@ async function applyBackground(style) {
   }
 }
 
+async function writeCanvasPngToPath(canvas, outPath) {
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error("Failed to encode PNG");
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  await writeBinaryFile(outPath, buf);
+  return outPath;
+}
+
 async function saveCanvasAsArtifact(canvas, { operation, label, meta = {}, replaceActive = false, targetId = null }) {
   if (!state.runDir) return;
   const stamp = Date.now();
@@ -3782,8 +4919,20 @@ async function saveCanvasAsArtifact(canvas, { operation, label, meta = {}, repla
   });
   if (replaceActive) {
     const id = targetId || state.activeId;
+    const parentNodeId = id ? state.imagesById.get(id)?.timelineNodeId || null : null;
     const ok = id ? await replaceImageInPlace(id, { path: imagePath, receiptPath, kind: "local" }) : false;
-    if (!ok) {
+    if (ok && id) {
+      const nodeId = recordTimelineNode({
+        imageId: id,
+        path: imagePath,
+        receiptPath,
+        label: label || basename(imagePath),
+        action: label || operation,
+        parents: parentNodeId ? [parentNodeId] : [],
+      });
+      const item = state.imagesById.get(id) || null;
+      if (item && nodeId) item.timelineNodeId = nodeId;
+    } else {
       addImage(
         {
           id: artifactId,
@@ -3791,11 +4940,13 @@ async function saveCanvasAsArtifact(canvas, { operation, label, meta = {}, repla
           path: imagePath,
           receiptPath,
           label: label || operation,
+          timelineAction: label || operation,
         },
         { select: true }
       );
     }
   } else {
+    const parentNodeId = state.activeId ? state.imagesById.get(state.activeId)?.timelineNodeId || null : null;
     addImage(
       {
         id: artifactId,
@@ -3803,6 +4954,8 @@ async function saveCanvasAsArtifact(canvas, { operation, label, meta = {}, repla
         path: imagePath,
         receiptPath,
         label: label || operation,
+        timelineAction: label || operation,
+        timelineParents: parentNodeId ? [parentNodeId] : [],
       },
       { select: true }
     );
@@ -3810,8 +4963,17 @@ async function saveCanvasAsArtifact(canvas, { operation, label, meta = {}, repla
   setStatus("Engine: ready");
 }
 
-async function runVariations() {
+async function runVariations({ fromQueue = false } = {}) {
   bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Variations",
+      key: "variations",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runVariations({ fromQueue: true }),
+    });
+    return;
+  }
   state.lastAction = "Variations";
   const imgItem = getActiveImage();
   if (!imgItem) return;
@@ -3822,9 +4984,12 @@ async function runVariations() {
     const ok = await ensureEngineSpawned({ reason: "variations" });
     if (!ok) throw new Error("Engine unavailable");
     state.expectingArtifacts = true;
+    state.pendingRecreate = { startedAt: Date.now() };
     setStatus("Engine: variations…");
     await invoke("write_pty", { data: `/recreate ${imgItem.path}\n` });
   } catch (err) {
+    state.expectingArtifacts = false;
+    state.pendingRecreate = null;
     setImageFxActive(false);
     updatePortraitIdle();
     throw err;
@@ -3837,10 +5002,15 @@ function quoteForPtyArg(value) {
   return `"${escaped}"`;
 }
 
-async function runBlendPair() {
+async function runBlendPair({ fromQueue = false } = {}) {
   bumpInteraction();
-  if (isMultiActionRunning()) {
-    showToast("A multi-image action is already running.", "tip", 2600);
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Combine",
+      key: "combine",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runBlendPair({ fromQueue: true }),
+    });
     return;
   }
   if (!state.runDir) {
@@ -3848,11 +5018,6 @@ async function runBlendPair() {
   }
   if (state.images.length !== 2) {
     showToast("Combine needs exactly 2 photos in the run.", "error", 3200);
-    return;
-  }
-  const okProvider = await ensureGeminiForBlend();
-  if (!okProvider) {
-    showToast("Combine requires a Gemini image model (multi-image).", "error", 3600);
     return;
   }
   const a = state.images[0];
@@ -3864,12 +5029,13 @@ async function runBlendPair() {
 
   const okEngine = await ensureEngineSpawned({ reason: "combine" });
   if (!okEngine) return;
+  await maybeOverrideEngineImageModel(ACTION_IMAGE_MODEL.combine);
   setImageFxActive(true, "Combine");
   state.expectingArtifacts = true;
   state.pendingBlend = { sourceIds: [a.id, b.id], startedAt: Date.now() };
   state.lastAction = "Combine";
   setStatus("Engine: combine…");
-  portraitWorking("Combine");
+  portraitWorking("Combine", { providerOverride: providerFromModel(ACTION_IMAGE_MODEL.combine) });
   showToast("Combining photos…", "info", 2200);
   renderQuickActions();
   requestRender();
@@ -3890,10 +5056,15 @@ async function runBlendPair() {
   }
 }
 
-async function runSwapDnaPair({ invert = false } = {}) {
+async function runSwapDnaPair({ invert = false, fromQueue = false } = {}) {
   bumpInteraction();
-  if (isMultiActionRunning()) {
-    showToast("A multi-image action is already running.", "tip", 2600);
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Swap DNA",
+      key: `swap_dna:${invert ? "1" : "0"}`,
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runSwapDnaPair({ invert, fromQueue: true }),
+    });
     return;
   }
   if (!state.runDir) {
@@ -3901,11 +5072,6 @@ async function runSwapDnaPair({ invert = false } = {}) {
   }
   if (state.images.length !== 2) {
     showToast("Swap DNA needs exactly 2 photos in the run.", "error", 3200);
-    return;
-  }
-  const okProvider = await ensureGeminiProImagePreviewForSwapDna();
-  if (!okProvider) {
-    showToast("Swap DNA requires a Gemini image model (multi-image).", "error", 3600);
     return;
   }
 
@@ -3925,12 +5091,13 @@ async function runSwapDnaPair({ invert = false } = {}) {
 
   const okEngine = await ensureEngineSpawned({ reason: "swap dna" });
   if (!okEngine) return;
+  await maybeOverrideEngineImageModel(ACTION_IMAGE_MODEL.swap_dna);
   setImageFxActive(true, "Swap DNA");
   state.expectingArtifacts = true;
   state.pendingSwapDna = { structureId: structure.id, surfaceId: surface.id, startedAt: Date.now() };
   state.lastAction = "Swap DNA";
   setStatus("Engine: swap dna…");
-  portraitWorking("Swap DNA");
+  portraitWorking("Swap DNA", { providerOverride: providerFromModel(ACTION_IMAGE_MODEL.swap_dna) });
   const structureLabel = structure.label || basename(structure.path) || "Image A";
   const surfaceLabel = surface.label || basename(surface.path) || "Image B";
   const invertNote = invert ? " (inverted)" : "";
@@ -3954,10 +5121,15 @@ async function runSwapDnaPair({ invert = false } = {}) {
   }
 }
 
-async function runBridgePair() {
+async function runBridgePair({ fromQueue = false } = {}) {
   bumpInteraction();
-  if (isMultiActionRunning()) {
-    showToast("A multi-image action is already running.", "tip", 2600);
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Bridge",
+      key: "bridge",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runBridgePair({ fromQueue: true }),
+    });
     return;
   }
   if (!state.runDir) {
@@ -3965,11 +5137,6 @@ async function runBridgePair() {
   }
   if (state.images.length !== 2) {
     showToast("Bridge needs exactly 2 photos in the run.", "error", 3200);
-    return;
-  }
-  const okProvider = await ensureGeminiProImagePreviewForAction("Bridge");
-  if (!okProvider) {
-    showToast("Bridge requires a Gemini image model (multi-image).", "error", 3600);
     return;
   }
 
@@ -3983,12 +5150,13 @@ async function runBridgePair() {
 
   const okEngine = await ensureEngineSpawned({ reason: "bridge" });
   if (!okEngine) return;
+  await maybeOverrideEngineImageModel(ACTION_IMAGE_MODEL.bridge);
   setImageFxActive(true, "Bridge");
   state.expectingArtifacts = true;
   state.pendingBridge = { sourceIds: [first.id, second.id], startedAt: Date.now() };
   state.lastAction = "Bridge";
   setStatus("Engine: bridge…");
-  portraitWorking("Bridge");
+  portraitWorking("Bridge", { providerOverride: providerFromModel(ACTION_IMAGE_MODEL.bridge) });
   const aLabel = first.label || basename(first.path) || "Image A";
   const bLabel = second.label || basename(second.path) || "Image B";
   showToast(`Bridging: ${aLabel} ↔ ${bLabel}`, "info", 3200);
@@ -4011,10 +5179,15 @@ async function runBridgePair() {
   }
 }
 
-async function runArguePair() {
+async function runArguePair({ fromQueue = false } = {}) {
   bumpInteraction();
-  if (isMultiActionRunning()) {
-    showToast("A multi-image action is already running.", "tip", 2600);
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Argue",
+      key: "argue",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runArguePair({ fromQueue: true }),
+    });
     return;
   }
   if (!state.runDir) {
@@ -4060,10 +5233,187 @@ async function runArguePair() {
   }
 }
 
-async function runDiagnose() {
+async function runExtractRuleTriplet({ fromQueue = false } = {}) {
   bumpInteraction();
-  if (state.pendingDiagnose || state.pendingRecast || state.expectingArtifacts || state.pendingReplace) {
-    showToast("An action is already running.", "tip", 2400);
+  if (!fromQueue && (isEngineBusy() || isMultiActionRunning() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Extract the Rule",
+      key: "extract_rule",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runExtractRuleTriplet({ fromQueue: true }),
+    });
+    return;
+  }
+  if (!state.runDir) {
+    await ensureRun();
+  }
+  if (state.images.length !== 3) {
+    showToast("Extract the Rule needs exactly 3 photos in the run.", "error", 3200);
+    return;
+  }
+  const a = state.images[0];
+  const b = state.images[1];
+  const c = state.images[2];
+  if (!a?.path || !b?.path || !c?.path) {
+    showToast("Extract the Rule failed: missing image paths.", "error", 3200);
+    return;
+  }
+
+  const okEngine = await ensureEngineSpawned({ reason: "extract rule" });
+  if (!okEngine) return;
+
+  state.pendingExtractRule = { sourceIds: [a.id, b.id, c.id], startedAt: Date.now() };
+  state.lastAction = "Extract the Rule";
+  setStatus("Director: extract rule…");
+  setDirectorText("Extracting the rule…", { kind: "extract_rule", at: Date.now(), paths: [a.path, b.path, c.path] });
+  portraitWorking("Extract the Rule", { providerOverride: "openai", clearDirector: false });
+  showToast("Extracting the rule…", "info", 2200);
+  state.tripletRuleAnnotations.clear();
+  state.tripletOddOneOutId = null;
+  renderQuickActions();
+  requestRender();
+
+  try {
+    await invoke("write_pty", {
+      data: `/extract_rule ${quoteForPtyArg(a.path)} ${quoteForPtyArg(b.path)} ${quoteForPtyArg(c.path)}\n`,
+    });
+  } catch (err) {
+    console.error(err);
+    state.pendingExtractRule = null;
+    setStatus(`Director: extract rule failed (${err?.message || err})`, true);
+    showToast("Extract the Rule failed to start.", "error", 3200);
+    updatePortraitIdle();
+    renderQuickActions();
+  }
+}
+
+async function runOddOneOutTriplet({ fromQueue = false } = {}) {
+  bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || isMultiActionRunning() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Odd One Out",
+      key: "odd_one_out",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runOddOneOutTriplet({ fromQueue: true }),
+    });
+    return;
+  }
+  if (!state.runDir) {
+    await ensureRun();
+  }
+  if (state.images.length !== 3) {
+    showToast("Odd One Out needs exactly 3 photos in the run.", "error", 3200);
+    return;
+  }
+  const a = state.images[0];
+  const b = state.images[1];
+  const c = state.images[2];
+  if (!a?.path || !b?.path || !c?.path) {
+    showToast("Odd One Out failed: missing image paths.", "error", 3200);
+    return;
+  }
+
+  const okEngine = await ensureEngineSpawned({ reason: "odd one out" });
+  if (!okEngine) return;
+
+  state.pendingOddOneOut = { sourceIds: [a.id, b.id, c.id], startedAt: Date.now() };
+  state.lastAction = "Odd One Out";
+  setStatus("Director: odd one out…");
+  setDirectorText("Finding the odd one out…", { kind: "odd_one_out", at: Date.now(), paths: [a.path, b.path, c.path] });
+  portraitWorking("Odd One Out", { providerOverride: "openai", clearDirector: false });
+  showToast("Finding the odd one out…", "info", 2200);
+  state.tripletRuleAnnotations.clear();
+  state.tripletOddOneOutId = null;
+  renderQuickActions();
+  requestRender();
+
+  try {
+    await invoke("write_pty", {
+      data: `/odd_one_out ${quoteForPtyArg(a.path)} ${quoteForPtyArg(b.path)} ${quoteForPtyArg(c.path)}\n`,
+    });
+  } catch (err) {
+    console.error(err);
+    state.pendingOddOneOut = null;
+    setStatus(`Director: odd one out failed (${err?.message || err})`, true);
+    showToast("Odd One Out failed to start.", "error", 3200);
+    updatePortraitIdle();
+    renderQuickActions();
+  }
+}
+
+async function runTriforceTriplet({ fromQueue = false } = {}) {
+  bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || isMultiActionRunning() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Triforce",
+      key: "triforce",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runTriforceTriplet({ fromQueue: true }),
+    });
+    return;
+  }
+  if (!state.runDir) {
+    await ensureRun();
+  }
+  if (state.images.length !== 3) {
+    showToast("Triforce needs exactly 3 photos in the run.", "error", 3200);
+    return;
+  }
+  const okProvider = await ensureGeminiProImagePreviewForAction("Triforce");
+  if (!okProvider) {
+    showToast("Triforce requires a Gemini image model (multi-image).", "error", 3600);
+    return;
+  }
+
+  const active = getActiveImage();
+  const first = active || state.images[0];
+  const rest = state.images.filter((item) => item?.id && item.id !== first?.id);
+  const second = rest[0] || state.images[1];
+  const third = rest[1] || state.images[2];
+  if (!first?.path || !second?.path || !third?.path) {
+    showToast("Triforce failed: missing image paths.", "error", 3200);
+    return;
+  }
+
+  const okEngine = await ensureEngineSpawned({ reason: "triforce" });
+  if (!okEngine) return;
+  setImageFxActive(true, "Triforce");
+  state.expectingArtifacts = true;
+  state.pendingTriforce = { sourceIds: [first.id, second.id, third.id], startedAt: Date.now() };
+  state.lastAction = "Triforce";
+  setStatus("Engine: triforce…");
+  portraitWorking("Triforce", { providerOverride: "gemini" });
+  showToast("Generating centroid…", "info", 2200);
+  state.tripletRuleAnnotations.clear();
+  state.tripletOddOneOutId = null;
+  renderQuickActions();
+  requestRender();
+
+  try {
+    await invoke("write_pty", {
+      data: `/triforce ${quoteForPtyArg(first.path)} ${quoteForPtyArg(second.path)} ${quoteForPtyArg(third.path)}\n`,
+    });
+  } catch (err) {
+    console.error(err);
+    state.expectingArtifacts = false;
+    state.pendingTriforce = null;
+    setStatus(`Engine: triforce failed (${err?.message || err})`, true);
+    showToast("Triforce failed to start.", "error", 3200);
+    setImageFxActive(false);
+    updatePortraitIdle();
+    renderQuickActions();
+  }
+}
+
+async function runDiagnose({ fromQueue = false } = {}) {
+  bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Diagnose",
+      key: "diagnose",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runDiagnose({ fromQueue: true }),
+    });
     return;
   }
   const imgItem = getActiveImage();
@@ -4094,10 +5444,15 @@ async function runDiagnose() {
   }
 }
 
-async function runRecast() {
+async function runRecast({ fromQueue = false } = {}) {
   bumpInteraction();
-  if (state.pendingDiagnose || state.pendingRecast || state.expectingArtifacts || state.pendingReplace) {
-    showToast("An action is already running.", "tip", 2400);
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Recast",
+      key: "recast",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runRecast({ fromQueue: true }),
+    });
     return;
   }
   const imgItem = getActiveImage();
@@ -4166,6 +5521,9 @@ async function createRun() {
   state.images = [];
   state.imagesById.clear();
   state.activeId = null;
+  state.timelineNodes = [];
+  state.timelineNodesById.clear();
+  closeTimeline();
   state.designationsByImageId.clear();
   state.pendingDesignation = null;
   state.canvasMode = "single";
@@ -4174,8 +5532,15 @@ async function createRun() {
   state.pendingSwapDna = null;
   state.pendingBridge = null;
   state.pendingArgue = null;
+  state.pendingExtractRule = null;
+  state.pendingOddOneOut = null;
+  state.pendingTriforce = null;
   state.pendingRecast = null;
   state.pendingDiagnose = null;
+  state.pendingRecreate = null;
+  resetActionQueue();
+  state.tripletRuleAnnotations.clear();
+  state.tripletOddOneOutId = null;
   clearImageCache();
   state.selection = null;
   state.lassoDraft = [];
@@ -4215,6 +5580,9 @@ async function openExistingRun() {
   state.images = [];
   state.imagesById.clear();
   state.activeId = null;
+  state.timelineNodes = [];
+  state.timelineNodesById.clear();
+  closeTimeline();
   state.designationsByImageId.clear();
   state.pendingDesignation = null;
   state.canvasMode = "single";
@@ -4223,8 +5591,15 @@ async function openExistingRun() {
   state.pendingSwapDna = null;
   state.pendingBridge = null;
   state.pendingArgue = null;
+  state.pendingExtractRule = null;
+  state.pendingOddOneOut = null;
+  state.pendingTriforce = null;
   state.pendingRecast = null;
   state.pendingDiagnose = null;
+  state.pendingRecreate = null;
+  resetActionQueue();
+  state.tripletRuleAnnotations.clear();
+  state.tripletOddOneOutId = null;
   renderFilmstrip();
   clearImageCache();
   state.selection = null;
@@ -4354,6 +5729,7 @@ async function spawnEngine() {
     setStatus(`Engine: failed (${err?.message || err})`, true);
   } finally {
     state.ptySpawning = false;
+    processActionQueue().catch(() => {});
   }
 }
 
@@ -4391,7 +5767,7 @@ async function pollEventsOnce() {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
-        handleEvent(JSON.parse(trimmed));
+        await handleEvent(JSON.parse(trimmed));
       } catch {
         // ignore malformed
       }
@@ -4411,7 +5787,7 @@ async function pollEventsFallback() {
   const lines = content.trim().split("\n").filter(Boolean);
   for (let i = fallbackLineOffset; i < lines.length; i += 1) {
     try {
-      handleEvent(JSON.parse(lines[i]));
+      await handleEvent(JSON.parse(lines[i]));
     } catch {
       // ignore
     }
@@ -4419,17 +5795,51 @@ async function pollEventsFallback() {
   fallbackLineOffset = lines.length;
 }
 
-function handleEvent(event) {
+async function handleEvent(event) {
   if (!event || typeof event !== "object") return;
   if (event.type === "artifact_created") {
     const id = event.artifact_id;
     const path = event.image_path;
     if (!id || !path) return;
-    const wasBlend = Boolean(state.pendingBlend);
-    const wasSwapDna = Boolean(state.pendingSwapDna);
-    const wasBridge = Boolean(state.pendingBridge);
-    const wasRecast = Boolean(state.pendingRecast);
-    const wasPairAction = wasBlend || wasSwapDna || wasBridge;
+    const blend = state.pendingBlend;
+    const swapDna = state.pendingSwapDna;
+    const bridge = state.pendingBridge;
+    const triforce = state.pendingTriforce;
+    const recast = state.pendingRecast;
+    const pending = state.pendingReplace;
+
+    const wasBlend = Boolean(blend);
+    const wasSwapDna = Boolean(swapDna);
+    const wasBridge = Boolean(bridge);
+    const wasTriforce = Boolean(triforce);
+    const wasRecast = Boolean(recast);
+    const wasMultiGenAction = wasBlend || wasSwapDna || wasBridge || wasTriforce;
+
+    // Timeline metadata for this newly created artifact.
+    let timelineAction = state.lastAction || null;
+    let timelineParents = [];
+    if (blend?.sourceIds?.length) {
+      timelineAction = "Combine";
+      timelineParents = blend.sourceIds.map((src) => state.imagesById.get(src)?.timelineNodeId).filter(Boolean);
+    } else if (swapDna?.structureId && swapDna?.surfaceId) {
+      timelineAction = "Swap DNA";
+      timelineParents = [swapDna.structureId, swapDna.surfaceId]
+        .map((src) => state.imagesById.get(src)?.timelineNodeId)
+        .filter(Boolean);
+    } else if (bridge?.sourceIds?.length) {
+      timelineAction = "Bridge";
+      timelineParents = bridge.sourceIds.map((src) => state.imagesById.get(src)?.timelineNodeId).filter(Boolean);
+    } else if (triforce?.sourceIds?.length) {
+      timelineAction = "Triforce";
+      timelineParents = triforce.sourceIds.map((src) => state.imagesById.get(src)?.timelineNodeId).filter(Boolean);
+    } else if (recast?.sourceId) {
+      timelineAction = "Recast";
+      const parent = state.imagesById.get(recast.sourceId)?.timelineNodeId || null;
+      timelineParents = parent ? [parent] : [];
+    } else {
+      const activeParent = getActiveImage()?.timelineNodeId || null;
+      timelineParents = activeParent ? [activeParent] : [];
+    }
     if (wasBlend) {
       state.pendingBlend = null;
       setTip("Combine complete. Output selected.");
@@ -4445,20 +5855,54 @@ function handleEvent(event) {
       setTip("Bridge complete. Output selected.");
       showToast("Bridge complete.", "tip", 2400);
     }
+    if (wasTriforce) {
+      state.pendingTriforce = null;
+      setTip("Triforce complete. Output selected.");
+      showToast("Triforce complete.", "tip", 2400);
+    }
     if (wasRecast) {
       state.pendingRecast = null;
       setTip("Recast complete. Output selected.");
       showToast("Recast complete.", "tip", 2400);
     }
-    const pending = state.pendingReplace;
     if (pending?.targetId) {
       const targetId = pending.targetId;
+      const mode = pending.mode ? String(pending.mode) : "";
+      const box = pending.box || null;
+      const instruction = pending.instruction || null;
+      const actionLabel = pending.label || timelineAction || "Edit";
+      const parentNodeId = state.imagesById.get(targetId)?.timelineNodeId || null;
       clearPendingReplace();
-      replaceImageInPlace(targetId, {
-        path,
-        receiptPath: event.receipt_path || null,
-        kind: "engine",
-      }).catch((err) => console.error(err));
+      if (mode === "annotate_box") {
+        const ok = await compositeAnnotateBoxEdit(targetId, path, { box, instruction }).catch((err) => {
+          console.error(err);
+          return false;
+        });
+        if (!ok) {
+          showToast("Annotate failed to apply the box edit.", "error", 3600);
+        }
+      } else {
+        const ok = await replaceImageInPlace(targetId, {
+          path,
+          receiptPath: event.receipt_path || null,
+          kind: "engine",
+        }).catch((err) => {
+          console.error(err);
+          return false;
+        });
+        if (ok) {
+          const nodeId = recordTimelineNode({
+            imageId: targetId,
+            path,
+            receiptPath: event.receipt_path || null,
+            label: basename(path),
+            action: actionLabel,
+            parents: parentNodeId ? [parentNodeId] : [],
+          });
+          const item = state.imagesById.get(targetId) || null;
+          if (item && nodeId) item.timelineNodeId = nodeId;
+        }
+      }
     } else {
       addImage(
         {
@@ -4467,14 +5911,16 @@ function handleEvent(event) {
           path,
           receiptPath: event.receipt_path || null,
           label: basename(path),
+          timelineAction,
+          timelineParents,
         },
         { select: state.expectingArtifacts || !state.activeId }
       );
     }
 
-    // After 2-photo quick actions (Combine / Swap DNA / Bridge), show only the output
+    // After multi-image generations (Combine / Swap DNA / Bridge / Triforce), show only the output
     // image on the canvas. The filmstrip retains sources for now (lineage TBD).
-    if (wasPairAction) {
+    if (wasMultiGenAction) {
       setCanvasMode("single");
     }
     state.expectingArtifacts = false;
@@ -4484,17 +5930,25 @@ function handleEvent(event) {
     setImageFxActive(false);
     renderQuickActions();
     renderHudReadout();
+    processActionQueue().catch(() => {});
   } else if (event.type === "generation_failed") {
     const msg = event.error ? `Generation failed: ${event.error}` : "Generation failed.";
     setStatus(`Engine: ${msg}`, true);
     showToast(msg, "error", 3200);
     state.expectingArtifacts = false;
+    state.pendingRecreate = null;
     state.pendingBlend = null;
     state.pendingSwapDna = null;
     state.pendingBridge = null;
+    state.pendingTriforce = null;
     state.pendingRecast = null;
     state.pendingDiagnose = null;
     state.pendingArgue = null;
+    state.pendingExtractRule = null;
+    state.pendingOddOneOut = null;
+    state.tripletRuleAnnotations.clear();
+    state.tripletOddOneOutId = null;
+    resetActionQueue();
     clearPendingReplace();
     restoreEngineImageModelIfNeeded();
     updatePortraitIdle();
@@ -4503,6 +5957,7 @@ function handleEvent(event) {
     renderHudReadout();
     chooseSpawnNodes();
     requestRender();
+    processActionQueue().catch(() => {});
   } else if (event.type === "cost_latency_update") {
     state.lastCostLatency = {
       provider: event.provider,
@@ -4513,6 +5968,65 @@ function handleEvent(event) {
       at: Date.now(),
     };
     renderHudReadout();
+  } else if (event.type === "canvas_context") {
+    const text = event.text;
+    const aov = state.alwaysOnVision;
+    if (aov) {
+      aov.pending = false;
+      aov.pendingPath = null;
+      aov.pendingAt = 0;
+      if (typeof text === "string" && text.trim()) {
+        aov.lastText = text.trim();
+      }
+      aov.lastMeta = {
+        source: event.source || null,
+        model: event.model || null,
+        at: Date.now(),
+        image_path: event.image_path || null,
+      };
+      if (String(event.source || "") === "openai_realtime") {
+        aov.rtState = "ready";
+        aov.disabledReason = null;
+      }
+    }
+    clearTimeout(alwaysOnVisionTimeout);
+    alwaysOnVisionTimeout = null;
+    updateAlwaysOnVisionReadout();
+  } else if (event.type === "canvas_context_failed") {
+    const aov = state.alwaysOnVision;
+    if (aov) {
+      aov.pending = false;
+      aov.pendingPath = null;
+      aov.pendingAt = 0;
+      const msg = event.error ? `Canvas context failed: ${event.error}` : "Canvas context failed.";
+      aov.lastText = msg;
+      aov.lastMeta = {
+        source: event.source || null,
+        model: event.model || null,
+        at: Date.now(),
+        image_path: event.image_path || null,
+      };
+      if (event.fatal && String(event.source || "") === "openai_realtime") {
+        aov.enabled = false;
+        aov.rtState = "failed";
+        aov.disabledReason = event.error
+          ? `Always-on vision disabled: ${event.error}`
+          : "Always-on vision disabled (realtime error).";
+        settings.alwaysOnVision = false;
+        localStorage.setItem("brood.alwaysOnVision", "0");
+        if (els.alwaysOnVisionToggle) els.alwaysOnVisionToggle.checked = false;
+
+        clearTimeout(alwaysOnVisionTimer);
+        alwaysOnVisionTimer = null;
+
+        // Best-effort shutdown; the engine will ignore if not running.
+        if (state.ptySpawned) invoke("write_pty", { data: `/canvas_context_rt_stop\n` }).catch(() => {});
+        setStatus("Engine: always-on vision disabled (realtime failure)", true);
+      }
+    }
+    clearTimeout(alwaysOnVisionTimeout);
+    alwaysOnVisionTimeout = null;
+    updateAlwaysOnVisionReadout();
   } else if (event.type === "image_description") {
     const path = event.image_path;
     const desc = event.description;
@@ -4543,26 +6057,52 @@ function handleEvent(event) {
   } else if (event.type === "image_diagnosis") {
     const text = event.text;
     if (typeof text === "string" && text.trim()) {
-      state.pendingDiagnose = null;
+      const diagPath = typeof event.image_path === "string" ? event.image_path : "";
+      const pendingCanvas = state.pendingCanvasDiagnose;
+      const isCanvasDiagnose = Boolean(pendingCanvas && pendingCanvas.imagePath === diagPath);
+      if (isCanvasDiagnose) {
+        state.pendingCanvasDiagnose = null;
+        state.autoCanvasDiagnoseSig = pendingCanvas.signature;
+        state.autoCanvasDiagnoseCompletedAt = Date.now();
+        state.autoCanvasDiagnosePath = null;
+      } else {
+        state.pendingDiagnose = null;
+      }
+
       setDirectorText(text.trim(), {
         kind: "diagnose",
         source: event.source || null,
         model: event.model || null,
         at: Date.now(),
-        paths: event.image_path ? [event.image_path] : [],
+        paths: diagPath ? [diagPath] : [],
+        canvas: isCanvasDiagnose ? true : null,
       });
-      setStatus("Director: diagnose ready");
-      showToast("Diagnose ready.", "tip", 2400);
+      setStatus(isCanvasDiagnose ? "Director: canvas diagnose ready" : "Director: diagnose ready");
+      if (!isCanvasDiagnose) {
+        showToast("Diagnose ready.", "tip", 2400);
+      }
       updatePortraitIdle();
       renderQuickActions();
+      processActionQueue().catch(() => {});
     }
   } else if (event.type === "image_diagnosis_failed") {
-    state.pendingDiagnose = null;
+    const diagPath = typeof event.image_path === "string" ? event.image_path : "";
+    const pendingCanvas = state.pendingCanvasDiagnose;
+    const isCanvasDiagnose = Boolean(pendingCanvas && pendingCanvas.imagePath === diagPath);
+    if (isCanvasDiagnose) {
+      state.pendingCanvasDiagnose = null;
+      state.autoCanvasDiagnosePath = null;
+    } else {
+      state.pendingDiagnose = null;
+    }
     const msg = event.error ? `Diagnose failed: ${event.error}` : "Diagnose failed.";
     setStatus(`Director: ${msg}`, true);
-    showToast(msg, "error", 3200);
+    if (!isCanvasDiagnose) {
+      showToast(msg, "error", 3200);
+    }
     updatePortraitIdle();
     renderQuickActions();
+    processActionQueue().catch(() => {});
   } else if (event.type === "image_argument") {
     const text = event.text;
     if (typeof text === "string" && text.trim()) {
@@ -4578,6 +6118,7 @@ function handleEvent(event) {
       showToast("Argue ready.", "tip", 2400);
       updatePortraitIdle();
       renderQuickActions();
+      processActionQueue().catch(() => {});
     }
   } else if (event.type === "image_argument_failed") {
     state.pendingArgue = null;
@@ -4586,6 +6127,137 @@ function handleEvent(event) {
     showToast(msg, "error", 3200);
     updatePortraitIdle();
     renderQuickActions();
+    processActionQueue().catch(() => {});
+  } else if (event.type === "triplet_rule") {
+    state.pendingExtractRule = null;
+    const paths = Array.isArray(event.image_paths) ? event.image_paths : [];
+    const principle = typeof event.principle === "string" ? event.principle.trim() : "";
+    const evidence = Array.isArray(event.evidence) ? event.evidence : [];
+    const textRaw = typeof event.text === "string" ? event.text.trim() : "";
+    let text = textRaw;
+    if (!text) {
+      const lines = [];
+      if (principle) {
+        lines.push("RULE:");
+        lines.push(principle);
+      }
+      if (evidence.length) {
+        if (lines.length) lines.push("");
+        lines.push("EVIDENCE:");
+        for (const item of evidence.slice(0, 6)) {
+          const img = item?.image ? String(item.image).trim() : "";
+          const note = item?.note ? String(item.note).trim() : "";
+          if (!note) continue;
+          lines.push(`- ${img ? `${img}: ` : ""}${note}`);
+        }
+      }
+      text = lines.join("\n").trim();
+    }
+
+    state.tripletRuleAnnotations.clear();
+    state.tripletOddOneOutId = null;
+    const annotations = Array.isArray(event.annotations) ? event.annotations : [];
+    if (paths.length === 3 && annotations.length) {
+      for (const ann of annotations) {
+        const tag = String(ann?.image || "").trim().toUpperCase();
+        const idx = tag === "A" ? 0 : tag === "B" ? 1 : tag === "C" ? 2 : -1;
+        if (idx < 0) continue;
+        const x = Number(ann?.x);
+        const y = Number(ann?.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const label = ann?.label ? String(ann.label).trim() : "";
+        const targetPath = paths[idx];
+        const imgItem = state.images.find((it) => it?.path === targetPath) || null;
+        if (!imgItem?.id) continue;
+        const points = state.tripletRuleAnnotations.get(imgItem.id) || [];
+        points.push({ x: clamp(x, 0, 1), y: clamp(y, 0, 1), label: clampText(label, 64) });
+        state.tripletRuleAnnotations.set(imgItem.id, points);
+      }
+    }
+
+    if (text) {
+      setDirectorText(text, {
+        kind: "extract_rule",
+        source: event.source || null,
+        model: event.model || null,
+        at: Date.now(),
+        paths,
+      });
+    }
+    setStatus("Director: rule ready");
+    showToast("Extract the Rule ready.", "tip", 2400);
+    updatePortraitIdle();
+    renderQuickActions();
+    requestRender();
+    processActionQueue().catch(() => {});
+  } else if (event.type === "triplet_rule_failed") {
+    state.pendingExtractRule = null;
+    const msg = event.error ? `Extract the Rule failed: ${event.error}` : "Extract the Rule failed.";
+    setStatus(`Director: ${msg}`, true);
+    showToast(msg, "error", 3200);
+    updatePortraitIdle();
+    renderQuickActions();
+    processActionQueue().catch(() => {});
+  } else if (event.type === "triplet_odd_one_out") {
+    state.pendingOddOneOut = null;
+    const paths = Array.isArray(event.image_paths) ? event.image_paths : [];
+    const oddIndex = typeof event.odd_index === "number" ? event.odd_index : null;
+    const oddTag = typeof event.odd_image === "string" ? event.odd_image.trim().toUpperCase() : "";
+    let oddPath = null;
+    if (oddIndex !== null && oddIndex >= 0 && oddIndex < paths.length) {
+      oddPath = paths[oddIndex];
+    } else if (paths.length === 3) {
+      if (oddTag === "A") oddPath = paths[0];
+      if (oddTag === "B") oddPath = paths[1];
+      if (oddTag === "C") oddPath = paths[2];
+    }
+    const oddItem = oddPath ? state.images.find((it) => it?.path === oddPath) || null : null;
+    state.tripletOddOneOutId = oddItem?.id || null;
+    state.tripletRuleAnnotations.clear();
+
+    const textRaw = typeof event.text === "string" ? event.text.trim() : "";
+    let text = textRaw;
+    if (!text) {
+      const pattern = typeof event.pattern === "string" ? event.pattern.trim() : "";
+      const why = typeof event.explanation === "string" ? event.explanation.trim() : "";
+      const lines = [];
+      if (oddTag || oddIndex !== null) lines.push(`ODD ONE OUT: ${oddTag || String(oddIndex + 1)}`);
+      if (pattern) {
+        if (lines.length) lines.push("");
+        lines.push("THE SHARED PATTERN:");
+        lines.push(pattern);
+      }
+      if (why) {
+        if (lines.length) lines.push("");
+        lines.push("WHY IT BREAKS:");
+        lines.push(why);
+      }
+      text = lines.join("\n").trim();
+    }
+
+    if (text) {
+      setDirectorText(text, {
+        kind: "odd_one_out",
+        source: event.source || null,
+        model: event.model || null,
+        at: Date.now(),
+        paths,
+      });
+    }
+    setStatus("Director: odd one out ready");
+    showToast("Odd One Out ready.", "tip", 2400);
+    updatePortraitIdle();
+    renderQuickActions();
+    requestRender();
+    processActionQueue().catch(() => {});
+  } else if (event.type === "triplet_odd_one_out_failed") {
+    state.pendingOddOneOut = null;
+    const msg = event.error ? `Odd One Out failed: ${event.error}` : "Odd One Out failed.";
+    setStatus(`Director: ${msg}`, true);
+    showToast(msg, "error", 3200);
+    updatePortraitIdle();
+    renderQuickActions();
+    processActionQueue().catch(() => {});
   } else if (event.type === "recreate_prompt_inferred") {
     const prompt = event.prompt;
     if (typeof prompt === "string") {
@@ -4610,6 +6282,14 @@ function handleEvent(event) {
       setStatus(`Engine: recreate iter ${iter} (best ${pct})`);
     }
     renderHudReadout();
+  } else if (event.type === "recreate_done") {
+    state.pendingRecreate = null;
+    setStatus("Engine: variations ready");
+    setTip("Variations complete.");
+    updatePortraitIdle();
+    renderQuickActions();
+    renderHudReadout();
+    processActionQueue().catch(() => {});
   }
 }
 
@@ -4620,6 +6300,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   }
 
   state.multiRects = computeMultiRects(items, canvasW, canvasH);
+  const ms = state.multiView?.scale || 1;
   const mox = state.multiView?.offsetX || 0;
   const moy = state.multiView?.offsetY || 0;
 
@@ -4631,10 +6312,10 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   for (const item of items) {
     const rect = item?.id ? state.multiRects.get(item.id) : null;
     if (!rect) continue;
-    const x = rect.x + mox;
-    const y = rect.y + moy;
-    const w = rect.w;
-    const h = rect.h;
+    const x = rect.x * ms + mox;
+    const y = rect.y * ms + moy;
+    const w = rect.w * ms;
+    const h = rect.h * ms;
     if (item?.img) {
       wctx.drawImage(item.img, x, y, w, h);
     } else {
@@ -4668,69 +6349,82 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     octx.shadowColor = "rgba(255, 212, 0, 0.20)";
     octx.shadowBlur = Math.round(22 * dpr);
     octx.strokeRect(
-      activeRect.x + mox - 2,
-      activeRect.y + moy - 2,
-      activeRect.w + 4,
-      activeRect.h + 4
+      activeRect.x * ms + mox - 2,
+      activeRect.y * ms + moy - 2,
+      activeRect.w * ms + 4,
+      activeRect.h * ms + 4
     );
     octx.restore();
   }
 
-  const canSuggestBlend = items.length === 2 && !isMultiActionRunning();
-  if (!canSuggestBlend) return;
-  const aRect = items[0]?.id ? state.multiRects.get(items[0].id) : null;
-  const bRect = items[1]?.id ? state.multiRects.get(items[1].id) : null;
-  if (!aRect || !bRect) return;
+  // Triplet insights overlays (Extract the Rule / Odd One Out).
+  if (items.length === 3) {
+    const oddId = state.tripletOddOneOutId;
+    if (oddId) {
+      const rect = state.multiRects.get(oddId) || null;
+      if (rect) {
+        octx.save();
+        octx.lineWidth = Math.max(1, Math.round(2.5 * dpr));
+        octx.setLineDash([Math.round(10 * dpr), Math.round(8 * dpr)]);
+        octx.strokeStyle = "rgba(255, 72, 72, 0.86)";
+        octx.shadowColor = "rgba(255, 72, 72, 0.18)";
+        octx.shadowBlur = Math.round(18 * dpr);
+        octx.strokeRect(rect.x + mox - 3, rect.y + moy - 3, rect.w + 6, rect.h + 6);
+        octx.setLineDash([]);
+        octx.restore();
+      }
+    }
 
-  const ax = aRect.x + mox + aRect.w;
-  const ay = aRect.y + moy + aRect.h * 0.5;
-  const bx = bRect.x + mox;
-  const by = bRect.y + moy + bRect.h * 0.5;
-  const midX = (ax + bx) * 0.5;
-  const midY = (ay + by) * 0.5;
+    if (state.tripletRuleAnnotations && state.tripletRuleAnnotations.size) {
+      octx.save();
+      octx.lineWidth = Math.max(1, Math.round(2 * dpr));
+      octx.font = `${Math.max(10, Math.round(11 * dpr))}px IBM Plex Mono`;
+      const dotR = Math.max(3, Math.round(5 * dpr));
+      for (const item of items) {
+        if (!item?.id) continue;
+        const rect = state.multiRects.get(item.id) || null;
+        if (!rect) continue;
+        const points = state.tripletRuleAnnotations.get(item.id) || [];
+        for (const pt of points.slice(0, 6)) {
+          const xRaw = Number(pt?.x);
+          const yRaw = Number(pt?.y);
+          if (!Number.isFinite(xRaw) || !Number.isFinite(yRaw)) continue;
+          const x = clamp(xRaw, 0, 1);
+          const y = clamp(yRaw, 0, 1);
+          const cx = rect.x + mox + rect.w * x;
+          const cy = rect.y + moy + rect.h * y;
+          octx.save();
+          octx.shadowColor = "rgba(0, 221, 255, 0.20)";
+          octx.shadowBlur = Math.round(14 * dpr);
+          octx.beginPath();
+          octx.arc(cx, cy, dotR, 0, Math.PI * 2);
+          octx.fillStyle = "rgba(0, 221, 255, 0.14)";
+          octx.strokeStyle = "rgba(0, 221, 255, 0.92)";
+          octx.fill();
+          octx.stroke();
 
-  octx.save();
-  octx.lineWidth = Math.max(1, Math.round(2 * dpr));
-  octx.setLineDash([Math.round(10 * dpr), Math.round(8 * dpr)]);
-  octx.strokeStyle = "rgba(255, 212, 0, 0.28)";
-  octx.shadowColor = "rgba(255, 212, 0, 0.12)";
-  octx.shadowBlur = Math.round(14 * dpr);
-  octx.beginPath();
-  octx.moveTo(ax + Math.round(8 * dpr), ay);
-  octx.lineTo(bx - Math.round(8 * dpr), by);
-  octx.stroke();
-  octx.setLineDash([]);
-
-  // Small tag that reads like a "system suggestion" connecting the two tiles.
-  const label = "SUGGESTED: COMBINE";
-  octx.font = `${Math.max(10, Math.round(11.5 * dpr))}px IBM Plex Mono`;
-  const textW = octx.measureText(label).width;
-  const padX = Math.round(10 * dpr);
-  const padY = Math.round(6 * dpr);
-  const tagW = Math.round(textW + padX * 2);
-  const tagH = Math.round(22 * dpr);
-  const tagX = Math.round(midX - tagW / 2);
-  const tagY = Math.round(midY - tagH / 2);
-  const r = Math.round(9 * dpr);
-  const roundRect = (ctx, x, y, w, h, radius) => {
-    const rr = Math.max(0, Math.min(radius, Math.min(w, h) / 2));
-    ctx.beginPath();
-    ctx.moveTo(x + rr, y);
-    ctx.arcTo(x + w, y, x + w, y + h, rr);
-    ctx.arcTo(x + w, y + h, x, y + h, rr);
-    ctx.arcTo(x, y + h, x, y, rr);
-    ctx.arcTo(x, y, x + w, y, rr);
-    ctx.closePath();
-  };
-  roundRect(octx, tagX, tagY, tagW, tagH, r);
-  octx.fillStyle = "rgba(8, 10, 14, 0.76)";
-  octx.fill();
-  octx.lineWidth = Math.max(1, Math.round(1 * dpr));
-  octx.strokeStyle = "rgba(255, 212, 0, 0.32)";
-  octx.stroke();
-  octx.fillStyle = "rgba(255, 212, 0, 0.86)";
-  octx.fillText(label, tagX + padX, tagY + tagH - padY);
-  octx.restore();
+          const label = pt?.label ? clampText(pt.label, 28) : "";
+          if (label) {
+            const padX = Math.round(7 * dpr);
+            const padY = Math.round(5 * dpr);
+            const textW = octx.measureText(label).width;
+            const boxW = Math.round(textW + padX * 2);
+            const boxH = Math.round(20 * dpr);
+            const boxX = Math.round(cx + 10 * dpr);
+            const boxY = Math.round(cy - boxH / 2);
+            octx.fillStyle = "rgba(8, 10, 14, 0.78)";
+            octx.fillRect(boxX, boxY, boxW, boxH);
+            octx.strokeStyle = "rgba(0, 221, 255, 0.34)";
+            octx.strokeRect(boxX, boxY, boxW, boxH);
+            octx.fillStyle = "rgba(0, 221, 255, 0.92)";
+            octx.fillText(label, boxX + padX, boxY + boxH - padY);
+          }
+          octx.restore();
+        }
+      }
+      octx.restore();
+    }
+  }
 }
 
 function render() {
@@ -4914,6 +6608,25 @@ function startSpawnTimer() {
 
 function installCanvasHandlers() {
   if (!els.overlayCanvas) return;
+
+  els.overlayCanvas.addEventListener("contextmenu", (event) => {
+    bumpInteraction();
+    if (!getActiveImage()) return;
+    event.preventDefault();
+    hideDesignateMenu();
+
+    let hit = null;
+    if (state.canvasMode === "multi") {
+      const p = canvasPointFromEvent(event);
+      hit = hitTestMulti(p);
+    } else {
+      hit = state.activeId;
+    }
+    if (!hit) return;
+    showImageMenuAt(canvasCssPointFromEvent(event), hit);
+    // Prevent global "click outside" handlers from immediately closing the menu.
+    event.stopPropagation();
+  });
 
   els.overlayCanvas.addEventListener("pointerdown", (event) => {
     bumpInteraction();
@@ -5150,24 +6863,25 @@ function installCanvasHandlers() {
 	      requestRender();
 	      return;
 	    }
-    if (state.tool === "lasso") {
-      const imgPt = canvasToImage(p);
-      const last = state.lassoDraft[state.lassoDraft.length - 1];
-      const dist2 = (imgPt.x - last.x) ** 2 + (imgPt.y - last.y) ** 2;
-      let scale = state.view.scale;
-      if (state.canvasMode === "multi") {
-        const img = getActiveImage();
-        const rect = img?.id ? state.multiRects.get(img.id) : null;
-        if (img && rect) {
-          const iw = img?.img?.naturalWidth || img?.width || rect.w || 1;
-          const ih = img?.img?.naturalHeight || img?.height || rect.h || 1;
-          const sx = rect.w / Math.max(1, iw);
-          const sy = rect.h / Math.max(1, ih);
-          scale = Math.min(sx, sy);
-        } else {
-          scale = 1;
-        }
-      }
+	    if (state.tool === "lasso") {
+	      const imgPt = canvasToImage(p);
+	      const last = state.lassoDraft[state.lassoDraft.length - 1];
+	      const dist2 = (imgPt.x - last.x) ** 2 + (imgPt.y - last.y) ** 2;
+	      let scale = state.view.scale;
+	      if (state.canvasMode === "multi") {
+	        const ms = state.multiView?.scale || 1;
+	        const img = getActiveImage();
+	        const rect = img?.id ? state.multiRects.get(img.id) : null;
+	        if (img && rect) {
+	          const iw = img?.img?.naturalWidth || img?.width || rect.w || 1;
+	          const ih = img?.img?.naturalHeight || img?.height || rect.h || 1;
+	          const sx = rect.w / Math.max(1, iw);
+	          const sy = rect.h / Math.max(1, ih);
+	          scale = Math.min(sx, sy) * ms;
+	        } else {
+	          scale = ms;
+	        }
+	      }
       const minDist = 4 / Math.max(scale, 0.02);
       if (dist2 >= minDist * minDist) {
         state.lassoDraft.push(imgPt);
@@ -5252,24 +6966,31 @@ function installCanvasHandlers() {
     (event) => {
       bumpInteraction();
       if (!getActiveImage()) return;
-      if (state.canvasMode === "multi") {
-        event.preventDefault();
-        return;
-      }
       event.preventDefault();
       const p = canvasPointFromEvent(event);
-      const before = canvasToImage(p);
       const factor = Math.exp(-event.deltaY * 0.0012);
-      const next = clamp(state.view.scale * factor, 0.05, 40);
-	      state.view.scale = next;
-	      state.view.offsetX = p.x - before.x * state.view.scale;
-	      state.view.offsetY = p.y - before.y * state.view.scale;
-	      renderHudReadout();
-        scheduleVisualPromptWrite();
-	      requestRender();
-	    },
-	    { passive: false }
-	  );
+      if (state.canvasMode === "multi") {
+        const before = {
+          x: (p.x - (state.multiView?.offsetX || 0)) / Math.max(state.multiView?.scale || 1, 0.0001),
+          y: (p.y - (state.multiView?.offsetY || 0)) / Math.max(state.multiView?.scale || 1, 0.0001),
+        };
+        const next = clamp((state.multiView?.scale || 1) * factor, 0.05, 40);
+        state.multiView.scale = next;
+        state.multiView.offsetX = p.x - before.x * state.multiView.scale;
+        state.multiView.offsetY = p.y - before.y * state.multiView.scale;
+      } else {
+        const before = canvasToImage(p);
+        const next = clamp(state.view.scale * factor, 0.05, 40);
+        state.view.scale = next;
+        state.view.offsetX = p.x - before.x * state.view.scale;
+        state.view.offsetY = p.y - before.y * state.view.scale;
+      }
+      renderHudReadout();
+      scheduleVisualPromptWrite();
+      requestRender();
+    },
+    { passive: false }
+  );
 	}
 
 function installDnD() {
@@ -5320,11 +7041,7 @@ function installDnD() {
     if (state.images.length > 1) {
       setCanvasMode("multi");
       setTip("Multiple photos loaded. Click a photo to focus it.");
-    }
-    const importedOnly = state.images.length === 2 && state.images.every((item) => item?.kind === "import");
-    if (importedOnly) {
-      setTip("Suggested: Combine the two photos into a single image.");
-      showToast("Suggested action: Combine", "tip", 2600);
+      scheduleAutoCanvasDiagnose();
     }
   });
 }
@@ -5382,6 +7099,48 @@ function installUi() {
     });
   }
 
+  if (els.timelineToggle) {
+    els.timelineToggle.addEventListener("click", () => {
+      bumpInteraction();
+      openTimeline();
+    });
+  }
+  if (els.timelineClose) {
+    els.timelineClose.addEventListener("click", () => {
+      bumpInteraction();
+      closeTimeline();
+    });
+  }
+  if (els.timelineOverlay) {
+    els.timelineOverlay.addEventListener("pointerdown", (event) => {
+      if (event?.target === els.timelineOverlay) {
+        bumpInteraction();
+        closeTimeline();
+      }
+    });
+  }
+  if (els.timelineStrip) {
+    els.timelineStrip.addEventListener("click", (event) => {
+      const card = event?.target?.closest ? event.target.closest(".timeline-card[data-node-id]") : null;
+      if (!card || !els.timelineStrip.contains(card)) return;
+      const nodeId = card.dataset?.nodeId;
+      if (!nodeId) return;
+      bumpInteraction();
+      jumpToTimelineNode(nodeId).catch((err) => console.error(err));
+    });
+    els.timelineStrip.addEventListener("keydown", (event) => {
+      const key = String(event?.key || "");
+      if (key !== "Enter" && key !== " ") return;
+      const card = event?.target?.closest ? event.target.closest(".timeline-card[data-node-id]") : null;
+      if (!card || !els.timelineStrip.contains(card)) return;
+      const nodeId = card.dataset?.nodeId;
+      if (!nodeId) return;
+      event.preventDefault();
+      bumpInteraction();
+      jumpToTimelineNode(nodeId).catch((err) => console.error(err));
+    });
+  }
+
   if (els.memoryToggle) {
     els.memoryToggle.checked = settings.memory;
     els.memoryToggle.addEventListener("change", () => {
@@ -5389,6 +7148,39 @@ function installUi() {
       settings.memory = els.memoryToggle.checked;
       localStorage.setItem("brood.memory", settings.memory ? "1" : "0");
       setStatus("Engine: memory applies next run");
+    });
+  }
+  if (els.alwaysOnVisionToggle) {
+    els.alwaysOnVisionToggle.checked = settings.alwaysOnVision;
+    els.alwaysOnVisionToggle.addEventListener("change", () => {
+      bumpInteraction();
+      settings.alwaysOnVision = els.alwaysOnVisionToggle.checked;
+      localStorage.setItem("brood.alwaysOnVision", settings.alwaysOnVision ? "1" : "0");
+      if (state.alwaysOnVision) {
+        state.alwaysOnVision.enabled = settings.alwaysOnVision;
+        state.alwaysOnVision.pending = false;
+        state.alwaysOnVision.pendingPath = null;
+        state.alwaysOnVision.pendingAt = 0;
+        state.alwaysOnVision.disabledReason = null;
+        state.alwaysOnVision.rtState = settings.alwaysOnVision ? "connecting" : "off";
+        if (!settings.alwaysOnVision) state.alwaysOnVision.lastText = null;
+      }
+      updateAlwaysOnVisionReadout();
+      if (settings.alwaysOnVision) {
+        setStatus("Engine: always-on vision enabled");
+        ensureEngineSpawned({ reason: "always-on vision" })
+          .then((ok) => {
+            if (!ok) return;
+            return invoke("write_pty", { data: `/canvas_context_rt_start\n` }).catch(() => {});
+          })
+          .catch(() => {});
+        scheduleAlwaysOnVision({ immediate: true });
+      } else {
+        setStatus("Engine: always-on vision disabled");
+        if (state.ptySpawned) {
+          invoke("write_pty", { data: `/canvas_context_rt_stop\n` }).catch(() => {});
+        }
+      }
     });
   }
   if (els.textModel) {
@@ -5547,11 +7339,39 @@ function installUi() {
     });
   }
 
+  if (els.imageMenu) {
+    els.imageMenu.addEventListener("click", (event) => {
+      const btn = event?.target?.closest ? event.target.closest("button[data-action]") : null;
+      if (!btn || !els.imageMenu.contains(btn)) return;
+      bumpInteraction();
+      const action = btn.dataset?.action;
+      if (!action) return;
+      if (action === "cancel") {
+        hideImageMenu();
+        return;
+      }
+      if (action === "remove") {
+        const targetId = state.imageMenuTargetId;
+        hideImageMenu();
+        if (targetId) {
+          removeImageFromCanvas(targetId).catch((err) => console.error(err));
+        }
+      }
+    });
+  }
+
   document.addEventListener("pointerdown", (event) => {
     if (!els.designateMenu || els.designateMenu.classList.contains("hidden")) return;
     const hit = event?.target?.closest ? event.target.closest("#designate-menu") : null;
     if (hit) return;
     hideDesignateMenu();
+  });
+
+  document.addEventListener("pointerdown", (event) => {
+    if (!els.imageMenu || els.imageMenu.classList.contains("hidden")) return;
+    const hit = event?.target?.closest ? event.target.closest("#image-menu") : null;
+    if (hit) return;
+    hideImageMenu();
   });
 
   if (els.filmstrip) {
@@ -5579,24 +7399,28 @@ function installUi() {
     );
     const hasModifier = Boolean(event?.metaKey || event?.ctrlKey || event?.altKey);
 
-	    if (key === "escape") {
-	      if (els.settingsDrawer && !els.settingsDrawer.classList.contains("hidden")) {
-	        els.settingsDrawer.classList.add("hidden");
-	        return;
-	      }
-        if (els.markPanel && !els.markPanel.classList.contains("hidden")) {
-          hideMarkPanel();
-          requestRender();
-          return;
-        }
-	      if (els.annotatePanel && !els.annotatePanel.classList.contains("hidden")) {
-	        state.annotateDraft = null;
-	        state.annotateBox = null;
-	        hideAnnotatePanel();
-          scheduleVisualPromptWrite();
-	        requestRender();
-	        return;
-	      }
+		    if (key === "escape") {
+		      if (els.settingsDrawer && !els.settingsDrawer.classList.contains("hidden")) {
+		        els.settingsDrawer.classList.add("hidden");
+		        return;
+		      }
+	        if (els.markPanel && !els.markPanel.classList.contains("hidden")) {
+	          hideMarkPanel();
+	          requestRender();
+	          return;
+	        }
+	        if (els.imageMenu && !els.imageMenu.classList.contains("hidden")) {
+	          hideImageMenu();
+	          return;
+	        }
+		      if (els.annotatePanel && !els.annotatePanel.classList.contains("hidden")) {
+		        state.annotateDraft = null;
+		        state.annotateBox = null;
+		        hideAnnotatePanel();
+	          scheduleVisualPromptWrite();
+		        requestRender();
+		        return;
+		      }
 	      if (state.pendingDesignation || (els.designateMenu && !els.designateMenu.classList.contains("hidden"))) {
 	        state.pendingDesignation = null;
 	        hideDesignateMenuAnimated({ animate: false });
@@ -5663,6 +7487,7 @@ async function boot() {
   setStatus("Engine: booting…");
   setRunInfo("No run");
   refreshKeyStatus().catch(() => {});
+  updateAlwaysOnVisionReadout();
   ensurePortraitIndex().catch(() => {});
   updatePortraitIdle({ fromSettings: true });
   showDropHint(true);
