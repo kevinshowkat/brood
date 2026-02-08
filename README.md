@@ -1,8 +1,29 @@
 # Brood
 
-Brood is a desktop "creative IDE" for image generation with a terminal-like command experience and a live canvas.
+Brood is an image-first desktop canvas for steering AI image edits and generations using reference images.
 
-## Quickstart (engine)
+- 1 image in: `Diagnose` (creative-direction critique), `Recast` (reimagine in a new medium/context)
+- 2 images in: `Combine`, `Swap DNA`, `Bridge`, `Argue`
+- Provider/model switching is a first-class concept (OpenAI, Gemini, Imagen, Flux, SDXL)
+
+## Quickstart (desktop)
+
+```bash
+./scripts/dev_desktop.sh
+```
+
+This runs the Tauri app in dev mode (`desktop/`) and will spawn the Python engine in the background.
+
+## Desktop usage
+- Click **Import Photos** (or drag files onto the canvas).
+- Use **Quick Actions** in the right panel.
+- Use `Multi view` to run 2-photo actions (when exactly 2 photos are loaded). After a 2-photo action completes, Brood switches back to single-image view (output-only).
+- `Diagnose` / `Argue` output appears in the bottom HUD as `DIAG` / `ARG`.
+- Hotkeys: `L` lasso, `D` designate, `F` fit-to-view, `Esc` clears selection, `1`-`9` activate tools in the HUD keybar
+
+More details: `docs/desktop.md`.
+
+## Quickstart (engine / CLI)
 
 ```bash
 python -m venv .venv
@@ -19,27 +40,13 @@ brood run --prompt "hero image for Series A" --out /tmp/brood-run
 brood recreate --reference path/to/image.png --out /tmp/brood-recreate
 ```
 
-## Desktop app (Tauri)
-
-```bash
-cd desktop
-npm install
-npm run tauri dev
-```
-
-Build:
+## Desktop build
 
 ```bash
 cd desktop
 npm install
 npm run tauri build
 ```
-
-### Desktop usage
-- Type commands in the **input field at the bottom of the left pane** and press **Enter** or **Send**.
-- Example: `Generate an image of a boat`
-- Use the “Try” chips for common prompts and `/help` for slash commands.
-- Use **Build aesthetic** in the top bar to import 10-20 brand reference images (see `docs/aesthetic.md`).
 
 ## Memory
 
@@ -65,7 +72,7 @@ Edit `~/.brood/pricing_overrides.json` to override pricing or latency values.
   Ensure Tauri v1 APIs are used. This repo expects `@tauri-apps/api` v1 and the v1 CLI.
 - **Images not rendering**  
   Tauri must allow file access under `$HOME/**` (see `desktop/src-tauri/tauri.conf.json`).
-- **Aesthetic import fails or does nothing**  
+- **Import Photos fails or does nothing**  
   The selected files must be within the allowed FS scope (default: `$HOME/**`). Adjust the scope in `desktop/src-tauri/tauri.conf.json` if needed.
 
 ## Project layout
@@ -74,4 +81,4 @@ Edit `~/.brood/pricing_overrides.json` to override pricing or latency values.
 - `desktop/` Tauri desktop app
 - `tests/` pytest suite
 - `docs/param_forge_reference.md` Param Forge reference notes
-- `docs/aesthetic.md` Build aesthetic wizard notes
+- `docs/desktop.md` Desktop UI notes (quick actions + workflows)

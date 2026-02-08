@@ -1,5 +1,7 @@
 # Product Spec: Spawn (v0, True Cold Start, Local-Only)
 
+Status: PRD draft (not implemented). In the current desktop app, hotkey `9` is `Respawn`.
+
 ## North Star
 Spawn is the cold-start hook: Brood proves it understands the user's visual identity before asking for an image prompt.
 
@@ -163,4 +165,3 @@ Add a "Fingerprint" entry in the AGENTS area:
 ## Open Risks
 - macOS-only embedding requires native Vision plumbing via Tauri (Rust <-> Apple frameworks).
 - File access scope: directory selection must reliably grant read access to the selected images without copying into the run.
-
