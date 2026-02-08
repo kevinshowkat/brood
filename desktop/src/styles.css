@@ -1807,7 +1807,7 @@ button.ghost:hover {
     border-color 0.12s ease,
     box-shadow 0.12s ease,
     color 0.12s ease,
-    filter 0.12s ease;
+    background 0.12s ease;
   overflow: hidden;
 }
 
@@ -1852,9 +1852,16 @@ button.ghost:hover {
 .panel-body.actions button:hover {
   border-color: rgba(255, 212, 0, 0.76);
   color: var(--sc-yellow);
-  filter:
-    drop-shadow(0 18px 26px rgba(0, 0, 0, 0.4))
-    drop-shadow(0 0 14px rgba(255, 212, 0, 0.10));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -18px 26px rgba(0, 0, 0, 0.70),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 18px 26px rgba(0, 0, 0, 0.40),
+    0 0 16px rgba(255, 212, 0, 0.10);
+  background:
+    radial-gradient(140px 70px at 26% 18%, rgba(255, 212, 0, 0.12), transparent 58%),
+    radial-gradient(180px 90px at 82% 28%, rgba(100, 210, 255, 0.12), transparent 62%),
+    linear-gradient(180deg, rgba(40, 56, 80, 0.98), rgba(6, 8, 12, 0.96));
 }
 
 .panel-body.actions button:active {
@@ -1869,7 +1876,10 @@ button.ghost:hover {
 .panel-body.actions button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-  filter: none;
+  background:
+    radial-gradient(140px 70px at 26% 18%, rgba(255, 212, 0, 0.06), transparent 58%),
+    radial-gradient(180px 90px at 82% 28%, rgba(100, 210, 255, 0.06), transparent 62%),
+    linear-gradient(180deg, rgba(32, 44, 62, 0.88), rgba(6, 8, 12, 0.94));
 }
 
 .spawnbar {
