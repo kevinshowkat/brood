@@ -686,15 +686,21 @@ function allowAlwaysOnVision() {
 
 function isForegroundActionRunning() {
   return Boolean(
-    state.pendingBlend ||
+    state.ptySpawning ||
+      state.actionQueueActive ||
+      state.actionQueue.length ||
+      state.pendingBlend ||
       state.pendingSwapDna ||
       state.pendingBridge ||
       state.pendingArgue ||
+      state.pendingExtractRule ||
+      state.pendingOddOneOut ||
+      state.pendingTriforce ||
       state.pendingRecast ||
+      state.pendingCanvasDiagnose ||
       state.pendingDiagnose ||
       state.expectingArtifacts ||
-      state.pendingReplace ||
-      state.ptySpawning
+      state.pendingReplace
   );
 }
 
@@ -1837,14 +1843,21 @@ async function runAutoCanvasDiagnose(signature) {
   if (!signature || signature !== computeAutoCanvasDiagnoseSignature()) return;
   if (state.pendingCanvasDiagnose) return;
 
-  // Don't contend with foreground actions.
+  // Don't contend with foreground actions or queued user work.
   if (
+    state.ptySpawning ||
+    state.actionQueueActive ||
+    state.actionQueue.length ||
     state.pendingBlend ||
     state.pendingSwapDna ||
     state.pendingBridge ||
     state.pendingArgue ||
+    state.pendingExtractRule ||
+    state.pendingOddOneOut ||
+    state.pendingTriforce ||
     state.pendingRecast ||
     state.pendingDiagnose ||
+    state.pendingRecreate ||
     state.expectingArtifacts ||
     state.pendingReplace
   ) {
@@ -3054,7 +3067,11 @@ function isEngineBusy() {
       state.pendingSwapDna ||
       state.pendingBridge ||
       state.pendingArgue ||
+      state.pendingExtractRule ||
+      state.pendingOddOneOut ||
+      state.pendingTriforce ||
       state.pendingRecast ||
+      state.pendingCanvasDiagnose ||
       state.pendingDiagnose ||
       state.pendingReplace ||
       state.pendingRecreate ||
