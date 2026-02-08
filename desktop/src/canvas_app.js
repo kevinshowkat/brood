@@ -1711,9 +1711,17 @@ function setImageFxActive(active, label = null) {
   requestRender();
 }
 
-function beginPendingReplace(targetId, label) {
+function beginPendingReplace(targetId, label, extra = null) {
   if (!targetId) return;
-  state.pendingReplace = { targetId, startedAt: Date.now(), label: label || null };
+  const payload = { targetId, startedAt: Date.now(), label: label || null };
+  if (extra && typeof extra === "object") {
+    for (const [key, value] of Object.entries(extra)) {
+      // Prevent accidental override of the core routing keys.
+      if (key === "targetId" || key === "startedAt") continue;
+      payload[key] = value;
+    }
+  }
+  state.pendingReplace = payload;
 }
 
 function clearPendingReplace() {
@@ -3578,57 +3586,94 @@ async function aiAnnotateEdit() {
   }
 
   const requestedModel = String(els.annotateModel?.value || settings.imageModel || "").trim();
-  const provider = providerFromModel(requestedModel || settings.imageModel);
+  let effectiveModel = requestedModel || settings.imageModel;
+  if (providerFromModel(effectiveModel) !== "gemini") {
+    effectiveModel = pickGeminiImageModel();
+    showToast(`Annotate box edits currently require Gemini. Using ${effectiveModel}.`, "tip", 3200);
+  }
+  const provider = providerFromModel(effectiveModel);
   const label = "Annotate";
   await ensureRun();
   setImageFxActive(true, label);
   portraitWorking(label, { providerOverride: provider });
-  beginPendingReplace(imgItem.id, label);
   try {
     const ok = await ensureEngineSpawned({ reason: label });
     if (!ok) throw new Error("Engine unavailable");
-    await setEngineActiveImage(imgItem.path);
+
+    if (!imgItem.img) {
+      setStatus("Engine: loading image…");
+      try {
+        imgItem.img = await loadImage(imgItem.path);
+        imgItem.width = imgItem.img?.naturalWidth || imgItem.width || null;
+        imgItem.height = imgItem.img?.naturalHeight || imgItem.height || null;
+      } catch (err) {
+        showToast("Failed to load image.", "error", 3200);
+        setStatus("Engine: ready");
+        return;
+      }
+      setStatus("Engine: ready");
+    }
+
+    const normalized = _normalizeAnnotateBox(box, imgItem);
+    if (!normalized) {
+      showToast("Annotate: invalid box.", "error", 2600);
+      return;
+    }
+    const x0 = Math.floor(Number(normalized.x0) || 0);
+    const y0 = Math.floor(Number(normalized.y0) || 0);
+    const x1 = Math.ceil(Number(normalized.x1) || 0);
+    const y1 = Math.ceil(Number(normalized.y1) || 0);
+    const wBox = Math.max(1, x1 - x0);
+    const hBox = Math.max(1, y1 - y0);
+    if (wBox < 8 || hBox < 8) {
+      showToast("Annotate: box too small.", "tip", 2200);
+      return;
+    }
+
+    // Crop the selection region so the model can only edit what's inside the box.
+    const cropCanvas = document.createElement("canvas");
+    cropCanvas.width = wBox;
+    cropCanvas.height = hBox;
+    const cropCtx = cropCanvas.getContext("2d");
+    cropCtx.drawImage(imgItem.img, x0, y0, wBox, hBox, 0, 0, wBox, hBox);
+    const cropPath = `${state.runDir}/tmp-annotate-crop-${Date.now()}-${Math.random().toString(16).slice(2)}.png`;
+    await writeCanvasPngToPath(cropCanvas, cropPath);
+
+    beginPendingReplace(imgItem.id, label, {
+      mode: "annotate_box",
+      basePath: imgItem.path,
+      box: { x0, y0, x1, y1, w: wBox, h: hBox },
+      cropPath,
+      instruction,
+    });
+
+    // Point the engine at the cropped image so "edit the image" edits the crop.
+    await invoke("write_pty", { data: `/use ${quoteForPtyArg(cropPath)}\n` }).catch(() => {});
+
     state.expectingArtifacts = true;
     state.lastAction = label;
     setStatus(`Engine: ${label}…`);
     showToast("Annotate: editing…", "info", 2200);
 
-    if (state.ptySpawned && requestedModel && requestedModel !== settings.imageModel) {
+    if (state.ptySpawned && effectiveModel && effectiveModel !== settings.imageModel) {
       state.engineImageModelRestore = settings.imageModel;
-      await invoke("write_pty", { data: `/image_model ${requestedModel}\n` }).catch(() => {});
-    }
-
-    const normalized = _normalizeAnnotateBox(box, imgItem);
-    const iw = imgItem?.img?.naturalWidth || imgItem?.width || null;
-    const ih = imgItem?.img?.naturalHeight || imgItem?.height || null;
-    let boxDesc = "";
-    if (normalized && iw && ih) {
-      const xPct = (normalized.x0 / iw) * 100;
-      const yPct = (normalized.y0 / ih) * 100;
-      const wPct = ((normalized.x1 - normalized.x0) / iw) * 100;
-      const hPct = ((normalized.y1 - normalized.y0) / ih) * 100;
-      boxDesc = `x ${xPct.toFixed(1)}% y ${yPct.toFixed(1)}% w ${wPct.toFixed(1)}% h ${hPct.toFixed(1)}%`;
-    } else if (normalized) {
-      const wPx = Math.max(0, normalized.x1 - normalized.x0);
-      const hPx = Math.max(0, normalized.y1 - normalized.y0);
-      boxDesc = `x ${Math.round(normalized.x0)} y ${Math.round(normalized.y0)} w ${Math.round(wPx)} h ${Math.round(hPx)} (px)`;
+      await invoke("write_pty", { data: `/image_model ${effectiveModel}\n` }).catch(() => {});
     }
 
     // Must start with "edit" or "replace" for Brood's edit detection.
     const prompt =
       `edit the image: ${instruction}\n` +
-      `Apply the change only inside this bounding box (from top-left of image): ${boxDesc}.\n` +
-      "Outside the box, keep the image exactly the same. Preserve logos and text. Do not crop.";
+      "Output ONE image. No split-screen or collage. Do not add any text or logos. Do not crop.";
     await invoke("write_pty", { data: `${prompt}\n` });
 
     // Clear UI selection now that the instruction is sent.
-	    if (els.annotateText) els.annotateText.value = "";
-	    state.annotateBox = null;
-	    state.annotateDraft = null;
-	    hideAnnotatePanel();
-      scheduleVisualPromptWrite();
-	    requestRender();
-	  } catch (err) {
+    if (els.annotateText) els.annotateText.value = "";
+    state.annotateBox = null;
+    state.annotateDraft = null;
+    hideAnnotatePanel();
+    scheduleVisualPromptWrite();
+    requestRender();
+  } catch (err) {
     state.expectingArtifacts = false;
     state.engineImageModelRestore = null;
     clearPendingReplace();
@@ -3636,6 +3681,63 @@ async function aiAnnotateEdit() {
     updatePortraitIdle();
     throw err;
   }
+}
+
+async function writeCanvasPngToPath(canvas, outPath) {
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error("Failed to encode PNG");
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  await writeBinaryFile(outPath, buf);
+  return outPath;
+}
+
+async function compositeAnnotateBoxEdit(targetId, editedCropPath, { box, instruction = null } = {}) {
+  if (!targetId || !editedCropPath || !box) return false;
+  const item = state.imagesById.get(targetId) || null;
+  if (!item?.path) return false;
+
+  // Ensure base + crop images are loaded.
+  if (!item.img) {
+    try {
+      item.img = await loadImage(item.path);
+      item.width = item.img?.naturalWidth || item.width || null;
+      item.height = item.img?.naturalHeight || item.height || null;
+    } catch (err) {
+      console.error("Annotate composite failed to load base image:", err);
+      return false;
+    }
+  }
+
+  let cropImg = null;
+  try {
+    cropImg = await loadImage(editedCropPath);
+  } catch (err) {
+    console.error("Annotate composite failed to load crop image:", err);
+    return false;
+  }
+
+  const baseImg = item.img;
+  const bw = baseImg?.naturalWidth || item.width || 1;
+  const bh = baseImg?.naturalHeight || item.height || 1;
+  const out = document.createElement("canvas");
+  out.width = bw;
+  out.height = bh;
+  const ctx = out.getContext("2d");
+  ctx.drawImage(baseImg, 0, 0);
+  ctx.drawImage(cropImg, Number(box.x0) || 0, Number(box.y0) || 0, Number(box.w) || 1, Number(box.h) || 1);
+
+  await saveCanvasAsArtifact(out, {
+    operation: "annotate_box",
+    label: "Annotate",
+    meta: {
+      instruction: instruction ? String(instruction) : null,
+      box,
+      edited_crop_path: String(editedCropPath),
+    },
+    replaceActive: true,
+    targetId,
+  });
+  return true;
 }
 
 async function applyBackground(style) {
@@ -4342,7 +4444,7 @@ async function pollEventsOnce() {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
-        handleEvent(JSON.parse(trimmed));
+        await handleEvent(JSON.parse(trimmed));
       } catch {
         // ignore malformed
       }
@@ -4362,7 +4464,7 @@ async function pollEventsFallback() {
   const lines = content.trim().split("\n").filter(Boolean);
   for (let i = fallbackLineOffset; i < lines.length; i += 1) {
     try {
-      handleEvent(JSON.parse(lines[i]));
+      await handleEvent(JSON.parse(lines[i]));
     } catch {
       // ignore
     }
@@ -4370,7 +4472,7 @@ async function pollEventsFallback() {
   fallbackLineOffset = lines.length;
 }
 
-function handleEvent(event) {
+async function handleEvent(event) {
   if (!event || typeof event !== "object") return;
   if (event.type === "artifact_created") {
     const id = event.artifact_id;
@@ -4404,12 +4506,25 @@ function handleEvent(event) {
     const pending = state.pendingReplace;
     if (pending?.targetId) {
       const targetId = pending.targetId;
+      const mode = pending.mode ? String(pending.mode) : "";
+      const box = pending.box || null;
+      const instruction = pending.instruction || null;
       clearPendingReplace();
-      replaceImageInPlace(targetId, {
-        path,
-        receiptPath: event.receipt_path || null,
-        kind: "engine",
-      }).catch((err) => console.error(err));
+      if (mode === "annotate_box") {
+        const ok = await compositeAnnotateBoxEdit(targetId, path, { box, instruction }).catch((err) => {
+          console.error(err);
+          return false;
+        });
+        if (!ok) {
+          showToast("Annotate failed to apply the box edit.", "error", 3600);
+        }
+      } else {
+        await replaceImageInPlace(targetId, {
+          path,
+          receiptPath: event.receipt_path || null,
+          kind: "engine",
+        }).catch((err) => console.error(err));
+      }
     } else {
       addImage(
         {
