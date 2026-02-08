@@ -2207,6 +2207,128 @@ button.ghost:hover {
   line-height: 1.4;
 }
 
+.timeline-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.timeline-footnote {
+  margin-top: 8px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.timeline-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(0, 0, 0, 0.56);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 14px;
+}
+
+.timeline-shell {
+  width: min(980px, 96vw);
+  max-height: min(420px, 70vh);
+  background: rgba(13, 18, 25, 0.96);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 32px 90px rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(10px);
+  display: flex;
+  flex-direction: column;
+}
+
+.timeline-header {
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid rgba(53, 71, 96, 0.55);
+}
+
+.timeline-title {
+  font-weight: 600;
+}
+
+.timeline-body {
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.timeline-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 6px;
+  scroll-behavior: smooth;
+}
+
+.timeline-card {
+  flex: 0 0 auto;
+  width: 156px;
+  border: 1px solid rgba(53, 71, 96, 0.65);
+  border-radius: 14px;
+  background: rgba(18, 26, 37, 0.62);
+  padding: 8px;
+  cursor: pointer;
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.timeline-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 212, 0, 0.45);
+}
+
+.timeline-card.selected {
+  border-color: rgba(255, 212, 0, 0.75);
+  box-shadow: 0 0 0 1px rgba(255, 212, 0, 0.15), 0 16px 38px rgba(0, 0, 0, 0.48);
+}
+
+.timeline-card img {
+  width: 100%;
+  height: 104px;
+  object-fit: cover;
+  border-radius: 10px;
+  display: block;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.timeline-meta {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  line-height: 1.25;
+  color: rgba(230, 237, 243, 0.82);
+}
+
+.timeline-action {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+  color: rgba(230, 237, 243, 0.68);
+}
+
+.timeline-detail {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  white-space: pre-line;
+  max-height: 140px;
+  overflow: auto;
+}
+
 @media (max-width: 980px) {
   .workspace {
     grid-template-columns: 1fr;

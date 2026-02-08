@@ -79,6 +79,11 @@ const els = {
   designateMenu: document.getElementById("designate-menu"),
   imageMenu: document.getElementById("image-menu"),
   quickActions: document.getElementById("quick-actions"),
+  timelineToggle: document.getElementById("timeline-toggle"),
+  timelineOverlay: document.getElementById("timeline-overlay"),
+  timelineClose: document.getElementById("timeline-close"),
+  timelineStrip: document.getElementById("timeline-strip"),
+  timelineDetail: document.getElementById("timeline-detail"),
   toolButtons: Array.from(document.querySelectorAll(".tool[data-tool]")),
 };
 
@@ -102,6 +107,9 @@ const state = {
   activeId: null,
   imageCache: new Map(), // path -> { url: string|null, urlPromise: Promise<string>|null, imgPromise: Promise<HTMLImageElement>|null }
   thumbsById: new Map(), // artifactId -> { rootEl, imgEl, labelEl }
+  timelineNodes: [], // [{ nodeId, imageId, path, receiptPath, label, action, parents, createdAt }]
+  timelineNodesById: new Map(), // nodeId -> node
+  timelineOpen: false,
   designationsByImageId: new Map(), // imageId -> [{ id, kind, x, y, at }]
   pendingDesignation: null, // { imageId, x, y, at } | null
   imageMenuTargetId: null,
@@ -3292,6 +3300,161 @@ function updateFilmstripThumb(item) {
   }
 }
 
+function _timelineMakeNodeId() {
+  return `tl-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+}
+
+function recordTimelineNode({ imageId, path, receiptPath = null, label = null, action = null, parents = [] } = {}) {
+  if (!imageId || !path) return null;
+  const nodeId = _timelineMakeNodeId();
+  const parentIds = Array.isArray(parents)
+    ? Array.from(new Set(parents.map((p) => String(p || "")).filter(Boolean)))
+    : [];
+  const node = {
+    nodeId,
+    imageId: String(imageId),
+    path: String(path),
+    receiptPath: receiptPath ? String(receiptPath) : null,
+    label: label ? String(label) : basename(path),
+    action: action ? String(action) : null,
+    parents: parentIds,
+    createdAt: Date.now(),
+  };
+  state.timelineNodes.push(node);
+  state.timelineNodesById.set(nodeId, node);
+  if (state.timelineOpen) renderTimeline();
+  return nodeId;
+}
+
+function ensureTimelineNodeForImageItem(item) {
+  if (!item || !item.id || !item.path) return null;
+  if (item.timelineNodeId && state.timelineNodesById.has(item.timelineNodeId)) return item.timelineNodeId;
+  const action = item.timelineAction || item.kind || null;
+  const parents = Array.isArray(item.timelineParents) ? item.timelineParents : [];
+  const nodeId = recordTimelineNode({
+    imageId: item.id,
+    path: item.path,
+    receiptPath: item.receiptPath || null,
+    label: item.label || null,
+    action,
+    parents,
+  });
+  item.timelineNodeId = nodeId;
+  // Clear one-shot metadata (keeps `state.images` objects tidy).
+  if ("timelineAction" in item) delete item.timelineAction;
+  if ("timelineParents" in item) delete item.timelineParents;
+  return nodeId;
+}
+
+function openTimeline() {
+  if (!els.timelineOverlay) return;
+  state.timelineOpen = true;
+  els.timelineOverlay.classList.remove("hidden");
+  renderTimeline();
+}
+
+function closeTimeline() {
+  if (!els.timelineOverlay) return;
+  state.timelineOpen = false;
+  els.timelineOverlay.classList.add("hidden");
+}
+
+function renderTimeline() {
+  if (!state.timelineOpen) return;
+  const strip = els.timelineStrip;
+  const detail = els.timelineDetail;
+  if (!strip) return;
+  strip.innerHTML = "";
+
+  const nodes = Array.from(state.timelineNodes || []).sort((a, b) => (a?.createdAt || 0) - (b?.createdAt || 0));
+  if (!nodes.length) {
+    const empty = document.createElement("div");
+    empty.className = "muted";
+    empty.textContent = "No timeline yet.";
+    strip.appendChild(empty);
+    if (detail) detail.textContent = "";
+    return;
+  }
+
+  const activeNodeId = getActiveImage()?.timelineNodeId || null;
+  let activeNode = activeNodeId ? state.timelineNodesById.get(activeNodeId) : null;
+  if (!activeNode && activeNodeId) {
+    activeNode = nodes.find((n) => n?.nodeId === activeNodeId) || null;
+  }
+
+  const frag = document.createDocumentFragment();
+  for (const node of nodes) {
+    if (!node?.nodeId || !node.path) continue;
+    const card = document.createElement("div");
+    card.className = "timeline-card" + (activeNodeId && node.nodeId === activeNodeId ? " selected" : "");
+    card.dataset.nodeId = node.nodeId;
+    card.tabIndex = 0;
+    const img = document.createElement("img");
+    img.alt = node.label || basename(node.path) || "Timeline item";
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.src = THUMB_PLACEHOLDER_SRC;
+    ensureImageUrl(node.path)
+      .then((url) => {
+        if (url) img.src = url;
+      })
+      .catch(() => {});
+    card.appendChild(img);
+    const meta = document.createElement("div");
+    meta.className = "timeline-meta";
+    const action = document.createElement("div");
+    action.className = "timeline-action";
+    action.textContent = node.action ? String(node.action) : "artifact";
+    const name = document.createElement("div");
+    name.textContent = node.label || basename(node.path);
+    meta.appendChild(action);
+    meta.appendChild(name);
+    card.appendChild(meta);
+    frag.appendChild(card);
+  }
+  strip.appendChild(frag);
+
+  if (detail) {
+    if (!activeNode) {
+      detail.textContent = "Select a point in time to jump back.";
+    } else {
+      const pieces = [];
+      pieces.push(activeNode.action ? `Action: ${activeNode.action}` : "Action: (unknown)");
+      pieces.push(`File: ${basename(activeNode.path)}`);
+      if (activeNode.parents?.length) pieces.push(`Parents: ${activeNode.parents.length}`);
+      detail.textContent = pieces.join("\n");
+    }
+  }
+}
+
+async function jumpToTimelineNode(nodeId) {
+  const node = nodeId ? state.timelineNodesById.get(nodeId) : null;
+  if (!node) return;
+
+  const imgItem = state.imagesById.get(node.imageId) || null;
+  if (!imgItem) {
+    showToast("Timeline item no longer in canvas.", "error", 2400);
+    return;
+  }
+
+  if (state.activeId !== imgItem.id) {
+    await setActiveImage(imgItem.id).catch(() => {});
+  }
+
+  if (imgItem.path !== node.path) {
+    const ok = await replaceImageInPlace(imgItem.id, {
+      path: node.path,
+      receiptPath: node.receiptPath || null,
+      kind: imgItem.kind,
+      clearVision: true,
+    });
+    if (!ok) return;
+  }
+
+  imgItem.timelineNodeId = node.nodeId;
+  renderTimeline();
+}
+
 async function setActiveImage(id) {
   const item = state.imagesById.get(id);
   if (!item) return;
@@ -3317,6 +3480,7 @@ async function setActiveImage(id) {
   renderHudReadout();
   resetViewToFit();
   requestRender();
+  if (state.timelineOpen) renderTimeline();
 }
 
 function addImage(item, { select = false } = {}) {
@@ -3324,6 +3488,7 @@ function addImage(item, { select = false } = {}) {
   if (state.imagesById.has(item.id)) return;
   state.imagesById.set(item.id, item);
   state.images.push(item);
+  ensureTimelineNodeForImageItem(item);
   appendFilmstripThumb(item);
   if (state.canvasMode === "multi") {
     // Multi-canvas is the "working set"; keep HUD descriptions available for all tiles.
@@ -4308,8 +4473,20 @@ async function saveCanvasAsArtifact(canvas, { operation, label, meta = {}, repla
   });
   if (replaceActive) {
     const id = targetId || state.activeId;
+    const parentNodeId = id ? state.imagesById.get(id)?.timelineNodeId || null : null;
     const ok = id ? await replaceImageInPlace(id, { path: imagePath, receiptPath, kind: "local" }) : false;
-    if (!ok) {
+    if (ok && id) {
+      const nodeId = recordTimelineNode({
+        imageId: id,
+        path: imagePath,
+        receiptPath,
+        label: label || basename(imagePath),
+        action: label || operation,
+        parents: parentNodeId ? [parentNodeId] : [],
+      });
+      const item = state.imagesById.get(id) || null;
+      if (item && nodeId) item.timelineNodeId = nodeId;
+    } else {
       addImage(
         {
           id: artifactId,
@@ -4317,11 +4494,13 @@ async function saveCanvasAsArtifact(canvas, { operation, label, meta = {}, repla
           path: imagePath,
           receiptPath,
           label: label || operation,
+          timelineAction: label || operation,
         },
         { select: true }
       );
     }
   } else {
+    const parentNodeId = state.activeId ? state.imagesById.get(state.activeId)?.timelineNodeId || null : null;
     addImage(
       {
         id: artifactId,
@@ -4329,6 +4508,8 @@ async function saveCanvasAsArtifact(canvas, { operation, label, meta = {}, repla
         path: imagePath,
         receiptPath,
         label: label || operation,
+        timelineAction: label || operation,
+        timelineParents: parentNodeId ? [parentNodeId] : [],
       },
       { select: true }
     );
@@ -4722,6 +4903,9 @@ async function createRun() {
   state.images = [];
   state.imagesById.clear();
   state.activeId = null;
+  state.timelineNodes = [];
+  state.timelineNodesById.clear();
+  closeTimeline();
   state.designationsByImageId.clear();
   state.pendingDesignation = null;
   state.canvasMode = "single";
@@ -4773,6 +4957,9 @@ async function openExistingRun() {
   state.images = [];
   state.imagesById.clear();
   state.activeId = null;
+  state.timelineNodes = [];
+  state.timelineNodesById.clear();
+  closeTimeline();
   state.designationsByImageId.clear();
   state.pendingDesignation = null;
   state.canvasMode = "single";
@@ -4986,11 +5173,41 @@ async function handleEvent(event) {
     const id = event.artifact_id;
     const path = event.image_path;
     if (!id || !path) return;
-    const wasBlend = Boolean(state.pendingBlend);
-    const wasSwapDna = Boolean(state.pendingSwapDna);
-    const wasBridge = Boolean(state.pendingBridge);
-    const wasRecast = Boolean(state.pendingRecast);
+    const blend = state.pendingBlend;
+    const swapDna = state.pendingSwapDna;
+    const bridge = state.pendingBridge;
+    const recast = state.pendingRecast;
+    const pending = state.pendingReplace;
+
+    const wasBlend = Boolean(blend);
+    const wasSwapDna = Boolean(swapDna);
+    const wasBridge = Boolean(bridge);
+    const wasRecast = Boolean(recast);
     const wasPairAction = wasBlend || wasSwapDna || wasBridge;
+
+    // Timeline metadata for this newly created artifact.
+    let timelineAction = state.lastAction || null;
+    let timelineParents = [];
+    if (blend?.sourceIds?.length) {
+      timelineAction = "Combine";
+      timelineParents = blend.sourceIds.map((src) => state.imagesById.get(src)?.timelineNodeId).filter(Boolean);
+    } else if (swapDna?.structureId && swapDna?.surfaceId) {
+      timelineAction = "Swap DNA";
+      timelineParents = [swapDna.structureId, swapDna.surfaceId]
+        .map((src) => state.imagesById.get(src)?.timelineNodeId)
+        .filter(Boolean);
+    } else if (bridge?.sourceIds?.length) {
+      timelineAction = "Bridge";
+      timelineParents = bridge.sourceIds.map((src) => state.imagesById.get(src)?.timelineNodeId).filter(Boolean);
+    } else if (recast?.sourceId) {
+      timelineAction = "Recast";
+      const parent = state.imagesById.get(recast.sourceId)?.timelineNodeId || null;
+      timelineParents = parent ? [parent] : [];
+    } else {
+      const activeParent = getActiveImage()?.timelineNodeId || null;
+      timelineParents = activeParent ? [activeParent] : [];
+    }
+
     if (wasBlend) {
       state.pendingBlend = null;
       setTip("Combine complete. Output selected.");
@@ -5011,12 +5228,13 @@ async function handleEvent(event) {
       setTip("Recast complete. Output selected.");
       showToast("Recast complete.", "tip", 2400);
     }
-    const pending = state.pendingReplace;
     if (pending?.targetId) {
       const targetId = pending.targetId;
       const mode = pending.mode ? String(pending.mode) : "";
       const box = pending.box || null;
       const instruction = pending.instruction || null;
+      const actionLabel = pending.label || timelineAction || "Edit";
+      const parentNodeId = state.imagesById.get(targetId)?.timelineNodeId || null;
       clearPendingReplace();
       if (mode === "annotate_box") {
         const ok = await compositeAnnotateBoxEdit(targetId, path, { box, instruction }).catch((err) => {
@@ -5027,11 +5245,26 @@ async function handleEvent(event) {
           showToast("Annotate failed to apply the box edit.", "error", 3600);
         }
       } else {
-        await replaceImageInPlace(targetId, {
+        const ok = await replaceImageInPlace(targetId, {
           path,
           receiptPath: event.receipt_path || null,
           kind: "engine",
-        }).catch((err) => console.error(err));
+        }).catch((err) => {
+          console.error(err);
+          return false;
+        });
+        if (ok) {
+          const nodeId = recordTimelineNode({
+            imageId: targetId,
+            path,
+            receiptPath: event.receipt_path || null,
+            label: basename(path),
+            action: actionLabel,
+            parents: parentNodeId ? [parentNodeId] : [],
+          });
+          const item = state.imagesById.get(targetId) || null;
+          if (item && nodeId) item.timelineNodeId = nodeId;
+        }
       }
     } else {
       addImage(
@@ -5041,6 +5274,8 @@ async function handleEvent(event) {
           path,
           receiptPath: event.receipt_path || null,
           label: basename(path),
+          timelineAction,
+          timelineParents,
         },
         { select: state.expectingArtifacts || !state.activeId }
       );
@@ -5945,6 +6180,48 @@ function installUi() {
     els.settingsClose.addEventListener("click", () => {
       bumpInteraction();
       els.settingsDrawer.classList.add("hidden");
+    });
+  }
+
+  if (els.timelineToggle) {
+    els.timelineToggle.addEventListener("click", () => {
+      bumpInteraction();
+      openTimeline();
+    });
+  }
+  if (els.timelineClose) {
+    els.timelineClose.addEventListener("click", () => {
+      bumpInteraction();
+      closeTimeline();
+    });
+  }
+  if (els.timelineOverlay) {
+    els.timelineOverlay.addEventListener("pointerdown", (event) => {
+      if (event?.target === els.timelineOverlay) {
+        bumpInteraction();
+        closeTimeline();
+      }
+    });
+  }
+  if (els.timelineStrip) {
+    els.timelineStrip.addEventListener("click", (event) => {
+      const card = event?.target?.closest ? event.target.closest(".timeline-card[data-node-id]") : null;
+      if (!card || !els.timelineStrip.contains(card)) return;
+      const nodeId = card.dataset?.nodeId;
+      if (!nodeId) return;
+      bumpInteraction();
+      jumpToTimelineNode(nodeId).catch((err) => console.error(err));
+    });
+    els.timelineStrip.addEventListener("keydown", (event) => {
+      const key = String(event?.key || "");
+      if (key !== "Enter" && key !== " ") return;
+      const card = event?.target?.closest ? event.target.closest(".timeline-card[data-node-id]") : null;
+      if (!card || !els.timelineStrip.contains(card)) return;
+      const nodeId = card.dataset?.nodeId;
+      if (!nodeId) return;
+      event.preventDefault();
+      bumpInteraction();
+      jumpToTimelineNode(nodeId).catch((err) => console.error(err));
     });
   }
 

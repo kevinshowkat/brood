@@ -516,8 +516,27 @@
             <div class="key-status-title">API Keys</div>
             <div id="key-status" class="key-status-list muted">Detecting local keys…</div>
           </div>
+          <div class="key-status-card">
+            <div class="key-status-title">Timeline</div>
+            <div class="timeline-controls">
+              <button id="timeline-toggle" type="button">Open Timeline</button>
+            </div>
+            <div class="muted timeline-footnote">Track edits and jump back to earlier versions.</div>
+          </div>
           <div class="drawer-footnote muted">
             For image-to-image edits and recreate, prefer a model that accepts image inputs (Gemini).
+          </div>
+        </div>
+      </div>
+      <div id="timeline-overlay" class="timeline-overlay hidden" role="dialog" aria-label="Timeline">
+        <div class="timeline-shell">
+          <div class="timeline-header">
+            <div class="timeline-title">Timeline</div>
+            <button id="timeline-close" class="ghost" type="button" aria-label="Close timeline">Close</button>
+          </div>
+          <div class="timeline-body">
+            <div id="timeline-strip" class="timeline-strip" aria-label="Timeline strip"></div>
+            <div id="timeline-detail" class="timeline-detail muted"></div>
           </div>
         </div>
       </div>
