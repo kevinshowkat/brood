@@ -116,6 +116,8 @@ def parse_intent(text: str) -> Intent:
             return Intent(action="recreate", raw=text, command_args={"path": _parse_single_path_arg(arg)})
         if command == "describe":
             return Intent(action="describe", raw=text, command_args={"path": _parse_single_path_arg(arg)})
+        if command == "canvas_context":
+            return Intent(action="canvas_context", raw=text, command_args={"path": _parse_single_path_arg(arg)})
         if command == "diagnose":
             return Intent(action="diagnose", raw=text, command_args={"path": _parse_single_path_arg(arg)})
         if command == "recast":
