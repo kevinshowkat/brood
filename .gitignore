@@ -35,6 +35,8 @@ npm-debug.log*
 
 # Generated artifacts
 outputs/first_light/
+outputs/aip_packs/
+outputs/aip_server/
 
 # Editor
 .idea/
