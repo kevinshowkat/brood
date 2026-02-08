@@ -111,6 +111,11 @@ const state = {
   pendingArgue: null, // { sourceIds: [string, string], startedAt: number }
   pendingRecast: null, // { sourceId: string, startedAt: number }
   pendingDiagnose: null, // { sourceId: string, startedAt: number }
+  pendingCanvasDiagnose: null, // { signature: string, startedAt: number, imagePath: string } | null
+  autoCanvasDiagnoseSig: null,
+  autoCanvasDiagnoseCompletedAt: 0,
+  autoCanvasDiagnoseTimer: null,
+  autoCanvasDiagnosePath: null,
   pendingGeneration: null, // { remaining: number, provider: string|null, model: string|null }
   pendingRecreate: null, // { startedAt: number } | null
   actionQueue: [],
@@ -1553,6 +1558,111 @@ function computeMultiRects(items, canvasW, canvasH) {
     rects.set(item.id, { x, y, w, h, cellX, cellY, cellW, cellH });
   }
   return rects;
+}
+
+function computeAutoCanvasDiagnoseSignature() {
+  const paths = (state.images || [])
+    .map((item) => (item?.path ? String(item.path) : ""))
+    .filter(Boolean)
+    .sort();
+  return paths.join("|");
+}
+
+function scheduleAutoCanvasDiagnose({ debounceMs = 1200 } = {}) {
+  if (!state.runDir) return;
+  if ((state.images?.length || 0) < 2) return;
+  const signature = computeAutoCanvasDiagnoseSignature();
+  if (!signature) return;
+  const now = Date.now();
+  // Avoid re-running constantly for the same canvas.
+  if (signature === state.autoCanvasDiagnoseSig && now - (state.autoCanvasDiagnoseCompletedAt || 0) < 60_000) return;
+
+  clearTimeout(state.autoCanvasDiagnoseTimer);
+  state.autoCanvasDiagnoseTimer = setTimeout(() => {
+    state.autoCanvasDiagnoseTimer = null;
+    runAutoCanvasDiagnose(signature).catch((err) => console.error(err));
+  }, Math.max(250, Number(debounceMs) || 1200));
+}
+
+async function runAutoCanvasDiagnose(signature) {
+  if (!state.runDir) return;
+  if ((state.images?.length || 0) < 2) return;
+  if (!signature || signature !== computeAutoCanvasDiagnoseSignature()) return;
+  if (state.pendingCanvasDiagnose) return;
+
+  // Don't contend with foreground actions.
+  if (
+    state.pendingBlend ||
+    state.pendingSwapDna ||
+    state.pendingBridge ||
+    state.pendingArgue ||
+    state.pendingRecast ||
+    state.pendingDiagnose ||
+    state.expectingArtifacts ||
+    state.pendingReplace
+  ) {
+    scheduleAutoCanvasDiagnose({ debounceMs: 1800 });
+    return;
+  }
+
+  const ok = await ensureEngineSpawned({ reason: "canvas diagnose" });
+  if (!ok) return;
+
+  const snapshotCanvas = await renderCanvasSnapshotForDiagnose().catch((err) => {
+    console.error(err);
+    return null;
+  });
+  if (!snapshotCanvas) return;
+
+  const outPath = `${state.runDir}/tmp-canvas-diagnose-${Date.now()}.png`;
+  await writeCanvasPngToPath(snapshotCanvas, outPath);
+  state.pendingCanvasDiagnose = { signature, startedAt: Date.now(), imagePath: outPath };
+  state.autoCanvasDiagnosePath = outPath;
+  setStatus("Director: canvas diagnose…");
+  await invoke("write_pty", { data: `/diagnose ${quoteForPtyArg(outPath)}\n` }).catch(() => {});
+}
+
+async function renderCanvasSnapshotForDiagnose({ maxDimPx = 1200 } = {}) {
+  const baseCanvas = els.workCanvas;
+  const dpr = getDpr();
+  const baseW = baseCanvas?.width || Math.round(900 * dpr);
+  const baseH = baseCanvas?.height || Math.round(700 * dpr);
+  const maxDim = Math.max(420 * dpr, Math.round(Number(maxDimPx) * dpr));
+  const scale = Math.min(1, maxDim / Math.max(1, Math.max(baseW, baseH)));
+  const w = Math.max(1, Math.round(baseW * scale));
+  const h = Math.max(1, Math.round(baseH * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+
+  const bg = ctx.createLinearGradient(0, 0, 0, h);
+  bg.addColorStop(0, "rgba(18, 26, 37, 0.92)");
+  bg.addColorStop(1, "rgba(6, 8, 12, 0.96)");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+
+  const rects = computeMultiRects(state.images || [], w, h);
+  for (const item of state.images || []) {
+    if (!item?.id || !item?.path) continue;
+    const rect = rects.get(item.id);
+    if (!rect) continue;
+    if (!item.img) {
+      try {
+        item.img = await loadImage(item.path);
+        item.width = item.img?.naturalWidth || item.width || null;
+        item.height = item.img?.naturalHeight || item.height || null;
+      } catch {
+        continue;
+      }
+    }
+    if (!item.img) continue;
+    ctx.drawImage(item.img, rect.x, rect.y, rect.w, rect.h);
+  }
+  return canvas;
 }
 
 function hitTestMulti(pt) {
@@ -3548,15 +3658,16 @@ async function importPhotos() {
   if (ok > 0) {
     const suffix = failed ? ` (${failed} failed)` : "";
     setStatus(`Engine: imported ${ok} photo${ok === 1 ? "" : "s"}${suffix}`, failed > 0);
-	    if (state.images.length > 1) {
-	      setCanvasMode("multi");
-	      setTip("Multiple photos loaded. Click a photo to select it. Use L to lasso or D to designate.");
-	    }
-	  } else {
-	    const msg = lastErr?.message || String(lastErr || "unknown error");
-	    setStatus(`Engine: import failed (${msg})`, true);
-	  }
-	}
+    if (state.images.length > 1) {
+      setCanvasMode("multi");
+      setTip("Multiple photos loaded. Click a photo to select it. Use L to lasso or D to designate.");
+      scheduleAutoCanvasDiagnose();
+    }
+  } else {
+    const msg = lastErr?.message || String(lastErr || "unknown error");
+    setStatus(`Engine: import failed (${msg})`, true);
+  }
+}
 
 async function cropSquare({ fromQueue = false } = {}) {
   bumpInteraction();
@@ -4067,6 +4178,14 @@ async function applyBackground(style, { fromQueue = false } = {}) {
     setImageFxActive(false);
     updatePortraitIdle();
   }
+}
+
+async function writeCanvasPngToPath(canvas, outPath) {
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error("Failed to encode PNG");
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  await writeBinaryFile(outPath, buf);
+  return outPath;
 }
 
 async function saveCanvasAsArtifact(canvas, { operation, label, meta = {}, replaceActive = false, targetId = null }) {
@@ -4901,25 +5020,49 @@ async function handleEvent(event) {
   } else if (event.type === "image_diagnosis") {
     const text = event.text;
     if (typeof text === "string" && text.trim()) {
-      state.pendingDiagnose = null;
+      const diagPath = typeof event.image_path === "string" ? event.image_path : "";
+      const pendingCanvas = state.pendingCanvasDiagnose;
+      const isCanvasDiagnose = Boolean(pendingCanvas && pendingCanvas.imagePath === diagPath);
+      if (isCanvasDiagnose) {
+        state.pendingCanvasDiagnose = null;
+        state.autoCanvasDiagnoseSig = pendingCanvas.signature;
+        state.autoCanvasDiagnoseCompletedAt = Date.now();
+        state.autoCanvasDiagnosePath = null;
+      } else {
+        state.pendingDiagnose = null;
+      }
+
       setDirectorText(text.trim(), {
         kind: "diagnose",
         source: event.source || null,
         model: event.model || null,
         at: Date.now(),
-        paths: event.image_path ? [event.image_path] : [],
+        paths: diagPath ? [diagPath] : [],
+        canvas: isCanvasDiagnose ? true : null,
       });
-      setStatus("Director: diagnose ready");
-      showToast("Diagnose ready.", "tip", 2400);
+      setStatus(isCanvasDiagnose ? "Director: canvas diagnose ready" : "Director: diagnose ready");
+      if (!isCanvasDiagnose) {
+        showToast("Diagnose ready.", "tip", 2400);
+      }
       updatePortraitIdle();
       renderQuickActions();
       processActionQueue().catch(() => {});
     }
   } else if (event.type === "image_diagnosis_failed") {
-    state.pendingDiagnose = null;
+    const diagPath = typeof event.image_path === "string" ? event.image_path : "";
+    const pendingCanvas = state.pendingCanvasDiagnose;
+    const isCanvasDiagnose = Boolean(pendingCanvas && pendingCanvas.imagePath === diagPath);
+    if (isCanvasDiagnose) {
+      state.pendingCanvasDiagnose = null;
+      state.autoCanvasDiagnosePath = null;
+    } else {
+      state.pendingDiagnose = null;
+    }
     const msg = event.error ? `Diagnose failed: ${event.error}` : "Diagnose failed.";
     setStatus(`Director: ${msg}`, true);
-    showToast(msg, "error", 3200);
+    if (!isCanvasDiagnose) {
+      showToast(msg, "error", 3200);
+    }
     updatePortraitIdle();
     renderQuickActions();
     processActionQueue().catch(() => {});
@@ -5640,12 +5783,13 @@ function installDnD() {
       );
     }
     setStatus(`Engine: imported ${paths.length} dropped file${paths.length === 1 ? "" : "s"}`);
-	    if (state.images.length > 1) {
-	      setCanvasMode("multi");
-	      setTip("Multiple photos loaded. Click a photo to focus it.");
-	    }
-	  });
-	}
+    if (state.images.length > 1) {
+      setCanvasMode("multi");
+      setTip("Multiple photos loaded. Click a photo to focus it.");
+      scheduleAutoCanvasDiagnose();
+    }
+  });
+}
 
 function installUi() {
   if (els.newRun) els.newRun.addEventListener("click", () => createRun().catch((e) => console.error(e)));
