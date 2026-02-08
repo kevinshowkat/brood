@@ -122,6 +122,9 @@ const state = {
   pendingSwapDna: null, // { structureId: string, surfaceId: string, startedAt: number }
   pendingBridge: null, // { sourceIds: [string, string], startedAt: number }
   pendingArgue: null, // { sourceIds: [string, string], startedAt: number }
+  pendingExtractRule: null, // { sourceIds: [string, string, string], startedAt: number }
+  pendingOddOneOut: null, // { sourceIds: [string, string, string], startedAt: number }
+  pendingTriforce: null, // { sourceIds: [string, string, string], startedAt: number }
   pendingRecast: null, // { sourceId: string, startedAt: number }
   pendingDiagnose: null, // { sourceId: string, startedAt: number }
   pendingCanvasDiagnose: null, // { signature: string, startedAt: number, imagePath: string } | null
@@ -162,6 +165,8 @@ const state = {
   circleDraft: null, // { imageId, cx, cy, r, color, at } | null (image pixel space)
   circlesByImageId: new Map(), // imageId -> [{ id, cx, cy, r, color, label, at }]
   activeCircle: null, // { imageId, id } | null
+  tripletRuleAnnotations: new Map(), // imageId -> [{ x: number, y: number, label: string }]
+  tripletOddOneOutId: null, // string|null
   needsEngineModelResync: false, // restore `/image_model` to settings after one-off overrides.
   engineImageModelRestore: null, // string|null
   needsRender: false,
@@ -380,6 +385,8 @@ function renderHudReadout() {
     let key = "DIR";
     if (directorKind === "diagnose") key = "DIAG";
     if (directorKind === "argue") key = "ARG";
+    if (directorKind === "extract_rule") key = "RULE";
+    if (directorKind === "odd_one_out") key = "ODD";
     els.hudDirectorKey.textContent = key;
   }
   if (els.hudDirectorVal) els.hudDirectorVal.textContent = directorText || "";
@@ -3023,7 +3030,15 @@ function renderSpawnbar() {
 }
 
 function isMultiActionRunning() {
-  return Boolean(state.pendingBlend || state.pendingSwapDna || state.pendingBridge || state.pendingArgue);
+  return Boolean(
+    state.pendingBlend ||
+      state.pendingSwapDna ||
+      state.pendingBridge ||
+      state.pendingArgue ||
+      state.pendingExtractRule ||
+      state.pendingOddOneOut ||
+      state.pendingTriforce
+  );
 }
 
 const ACTION_QUEUE_MAX = 32;
@@ -3285,6 +3300,34 @@ function computeQuickActions() {
         title: "Debate the two directions (why each is stronger, with visual evidence)",
         disabled: false,
         onClick: () => runArguePair().catch((err) => console.error(err)),
+      });
+      return actions;
+    }
+    if (state.images.length === 3) {
+      const runningMulti = isMultiActionRunning();
+      actions.push({
+        id: "extract_rule",
+        label: state.pendingExtractRule ? "Extract the Rule (running…)" : "Extract the Rule",
+        title:
+          "Three images is the minimum for pattern recognition. Extract the invisible rule you're applying.",
+        disabled: runningMulti,
+        onClick: () => runExtractRuleTriplet().catch((err) => console.error(err)),
+      });
+      actions.push({
+        id: "odd_one_out",
+        label: state.pendingOddOneOut ? "Odd One Out (running…)" : "Odd One Out",
+        title:
+          "Identify which of the three breaks the shared pattern, and explain why (brutal but useful).",
+        disabled: runningMulti,
+        onClick: () => runOddOneOutTriplet().catch((err) => console.error(err)),
+      });
+      actions.push({
+        id: "triforce",
+        label: state.pendingTriforce ? "Triforce (running…)" : "Triforce",
+        title:
+          "Generate the centroid: a single image equidistant from all three references (mood board distillation).",
+        disabled: runningMulti,
+        onClick: () => runTriforceTriplet().catch((err) => console.error(err)),
       });
       return actions;
     }
@@ -5020,6 +5063,178 @@ async function runArguePair({ fromQueue = false } = {}) {
   }
 }
 
+async function runExtractRuleTriplet({ fromQueue = false } = {}) {
+  bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || isMultiActionRunning() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Extract the Rule",
+      key: "extract_rule",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runExtractRuleTriplet({ fromQueue: true }),
+    });
+    return;
+  }
+  if (!state.runDir) {
+    await ensureRun();
+  }
+  if (state.images.length !== 3) {
+    showToast("Extract the Rule needs exactly 3 photos in the run.", "error", 3200);
+    return;
+  }
+  const a = state.images[0];
+  const b = state.images[1];
+  const c = state.images[2];
+  if (!a?.path || !b?.path || !c?.path) {
+    showToast("Extract the Rule failed: missing image paths.", "error", 3200);
+    return;
+  }
+
+  const okEngine = await ensureEngineSpawned({ reason: "extract rule" });
+  if (!okEngine) return;
+
+  state.pendingExtractRule = { sourceIds: [a.id, b.id, c.id], startedAt: Date.now() };
+  state.lastAction = "Extract the Rule";
+  setStatus("Director: extract rule…");
+  setDirectorText("Extracting the rule…", { kind: "extract_rule", at: Date.now(), paths: [a.path, b.path, c.path] });
+  portraitWorking("Extract the Rule", { providerOverride: "openai", clearDirector: false });
+  showToast("Extracting the rule…", "info", 2200);
+  state.tripletRuleAnnotations.clear();
+  state.tripletOddOneOutId = null;
+  renderQuickActions();
+  requestRender();
+
+  try {
+    await invoke("write_pty", {
+      data: `/extract_rule ${quoteForPtyArg(a.path)} ${quoteForPtyArg(b.path)} ${quoteForPtyArg(c.path)}\n`,
+    });
+  } catch (err) {
+    console.error(err);
+    state.pendingExtractRule = null;
+    setStatus(`Director: extract rule failed (${err?.message || err})`, true);
+    showToast("Extract the Rule failed to start.", "error", 3200);
+    updatePortraitIdle();
+    renderQuickActions();
+  }
+}
+
+async function runOddOneOutTriplet({ fromQueue = false } = {}) {
+  bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || isMultiActionRunning() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Odd One Out",
+      key: "odd_one_out",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runOddOneOutTriplet({ fromQueue: true }),
+    });
+    return;
+  }
+  if (!state.runDir) {
+    await ensureRun();
+  }
+  if (state.images.length !== 3) {
+    showToast("Odd One Out needs exactly 3 photos in the run.", "error", 3200);
+    return;
+  }
+  const a = state.images[0];
+  const b = state.images[1];
+  const c = state.images[2];
+  if (!a?.path || !b?.path || !c?.path) {
+    showToast("Odd One Out failed: missing image paths.", "error", 3200);
+    return;
+  }
+
+  const okEngine = await ensureEngineSpawned({ reason: "odd one out" });
+  if (!okEngine) return;
+
+  state.pendingOddOneOut = { sourceIds: [a.id, b.id, c.id], startedAt: Date.now() };
+  state.lastAction = "Odd One Out";
+  setStatus("Director: odd one out…");
+  setDirectorText("Finding the odd one out…", { kind: "odd_one_out", at: Date.now(), paths: [a.path, b.path, c.path] });
+  portraitWorking("Odd One Out", { providerOverride: "openai", clearDirector: false });
+  showToast("Finding the odd one out…", "info", 2200);
+  state.tripletRuleAnnotations.clear();
+  state.tripletOddOneOutId = null;
+  renderQuickActions();
+  requestRender();
+
+  try {
+    await invoke("write_pty", {
+      data: `/odd_one_out ${quoteForPtyArg(a.path)} ${quoteForPtyArg(b.path)} ${quoteForPtyArg(c.path)}\n`,
+    });
+  } catch (err) {
+    console.error(err);
+    state.pendingOddOneOut = null;
+    setStatus(`Director: odd one out failed (${err?.message || err})`, true);
+    showToast("Odd One Out failed to start.", "error", 3200);
+    updatePortraitIdle();
+    renderQuickActions();
+  }
+}
+
+async function runTriforceTriplet({ fromQueue = false } = {}) {
+  bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || isMultiActionRunning() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Triforce",
+      key: "triforce",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runTriforceTriplet({ fromQueue: true }),
+    });
+    return;
+  }
+  if (!state.runDir) {
+    await ensureRun();
+  }
+  if (state.images.length !== 3) {
+    showToast("Triforce needs exactly 3 photos in the run.", "error", 3200);
+    return;
+  }
+  const okProvider = await ensureGeminiProImagePreviewForAction("Triforce");
+  if (!okProvider) {
+    showToast("Triforce requires a Gemini image model (multi-image).", "error", 3600);
+    return;
+  }
+
+  const active = getActiveImage();
+  const first = active || state.images[0];
+  const rest = state.images.filter((item) => item?.id && item.id !== first?.id);
+  const second = rest[0] || state.images[1];
+  const third = rest[1] || state.images[2];
+  if (!first?.path || !second?.path || !third?.path) {
+    showToast("Triforce failed: missing image paths.", "error", 3200);
+    return;
+  }
+
+  const okEngine = await ensureEngineSpawned({ reason: "triforce" });
+  if (!okEngine) return;
+  setImageFxActive(true, "Triforce");
+  state.expectingArtifacts = true;
+  state.pendingTriforce = { sourceIds: [first.id, second.id, third.id], startedAt: Date.now() };
+  state.lastAction = "Triforce";
+  setStatus("Engine: triforce…");
+  portraitWorking("Triforce", { providerOverride: "gemini" });
+  showToast("Generating centroid…", "info", 2200);
+  state.tripletRuleAnnotations.clear();
+  state.tripletOddOneOutId = null;
+  renderQuickActions();
+  requestRender();
+
+  try {
+    await invoke("write_pty", {
+      data: `/triforce ${quoteForPtyArg(first.path)} ${quoteForPtyArg(second.path)} ${quoteForPtyArg(third.path)}\n`,
+    });
+  } catch (err) {
+    console.error(err);
+    state.expectingArtifacts = false;
+    state.pendingTriforce = null;
+    setStatus(`Engine: triforce failed (${err?.message || err})`, true);
+    showToast("Triforce failed to start.", "error", 3200);
+    setImageFxActive(false);
+    updatePortraitIdle();
+    renderQuickActions();
+  }
+}
+
 async function runDiagnose({ fromQueue = false } = {}) {
   bumpInteraction();
   if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
@@ -5147,10 +5362,15 @@ async function createRun() {
   state.pendingSwapDna = null;
   state.pendingBridge = null;
   state.pendingArgue = null;
+  state.pendingExtractRule = null;
+  state.pendingOddOneOut = null;
+  state.pendingTriforce = null;
   state.pendingRecast = null;
   state.pendingDiagnose = null;
   state.pendingRecreate = null;
   resetActionQueue();
+  state.tripletRuleAnnotations.clear();
+  state.tripletOddOneOutId = null;
   clearImageCache();
   state.selection = null;
   state.lassoDraft = [];
@@ -5201,10 +5421,15 @@ async function openExistingRun() {
   state.pendingSwapDna = null;
   state.pendingBridge = null;
   state.pendingArgue = null;
+  state.pendingExtractRule = null;
+  state.pendingOddOneOut = null;
+  state.pendingTriforce = null;
   state.pendingRecast = null;
   state.pendingDiagnose = null;
   state.pendingRecreate = null;
   resetActionQueue();
+  state.tripletRuleAnnotations.clear();
+  state.tripletOddOneOutId = null;
   renderFilmstrip();
   clearImageCache();
   state.selection = null;
@@ -5409,14 +5634,16 @@ async function handleEvent(event) {
     const blend = state.pendingBlend;
     const swapDna = state.pendingSwapDna;
     const bridge = state.pendingBridge;
+    const triforce = state.pendingTriforce;
     const recast = state.pendingRecast;
     const pending = state.pendingReplace;
 
     const wasBlend = Boolean(blend);
     const wasSwapDna = Boolean(swapDna);
     const wasBridge = Boolean(bridge);
+    const wasTriforce = Boolean(triforce);
     const wasRecast = Boolean(recast);
-    const wasPairAction = wasBlend || wasSwapDna || wasBridge;
+    const wasMultiGenAction = wasBlend || wasSwapDna || wasBridge || wasTriforce;
 
     // Timeline metadata for this newly created artifact.
     let timelineAction = state.lastAction || null;
@@ -5432,6 +5659,9 @@ async function handleEvent(event) {
     } else if (bridge?.sourceIds?.length) {
       timelineAction = "Bridge";
       timelineParents = bridge.sourceIds.map((src) => state.imagesById.get(src)?.timelineNodeId).filter(Boolean);
+    } else if (triforce?.sourceIds?.length) {
+      timelineAction = "Triforce";
+      timelineParents = triforce.sourceIds.map((src) => state.imagesById.get(src)?.timelineNodeId).filter(Boolean);
     } else if (recast?.sourceId) {
       timelineAction = "Recast";
       const parent = state.imagesById.get(recast.sourceId)?.timelineNodeId || null;
@@ -5440,7 +5670,6 @@ async function handleEvent(event) {
       const activeParent = getActiveImage()?.timelineNodeId || null;
       timelineParents = activeParent ? [activeParent] : [];
     }
-
     if (wasBlend) {
       state.pendingBlend = null;
       setTip("Combine complete. Output selected.");
@@ -5455,6 +5684,11 @@ async function handleEvent(event) {
       state.pendingBridge = null;
       setTip("Bridge complete. Output selected.");
       showToast("Bridge complete.", "tip", 2400);
+    }
+    if (wasTriforce) {
+      state.pendingTriforce = null;
+      setTip("Triforce complete. Output selected.");
+      showToast("Triforce complete.", "tip", 2400);
     }
     if (wasRecast) {
       state.pendingRecast = null;
@@ -5514,9 +5748,9 @@ async function handleEvent(event) {
       );
     }
 
-    // After 2-photo quick actions (Combine / Swap DNA / Bridge), show only the output
+    // After multi-image generations (Combine / Swap DNA / Bridge / Triforce), show only the output
     // image on the canvas. The filmstrip retains sources for now (lineage TBD).
-    if (wasPairAction) {
+    if (wasMultiGenAction) {
       setCanvasMode("single");
     }
     state.expectingArtifacts = false;
@@ -5536,10 +5770,14 @@ async function handleEvent(event) {
     state.pendingBlend = null;
     state.pendingSwapDna = null;
     state.pendingBridge = null;
+    state.pendingTriforce = null;
     state.pendingRecast = null;
     state.pendingDiagnose = null;
     state.pendingArgue = null;
-    state.pendingRecreate = null;
+    state.pendingExtractRule = null;
+    state.pendingOddOneOut = null;
+    state.tripletRuleAnnotations.clear();
+    state.tripletOddOneOutId = null;
     resetActionQueue();
     clearPendingReplace();
     restoreEngineImageModelIfNeeded();
@@ -5699,6 +5937,136 @@ async function handleEvent(event) {
     updatePortraitIdle();
     renderQuickActions();
     processActionQueue().catch(() => {});
+  } else if (event.type === "triplet_rule") {
+    state.pendingExtractRule = null;
+    const paths = Array.isArray(event.image_paths) ? event.image_paths : [];
+    const principle = typeof event.principle === "string" ? event.principle.trim() : "";
+    const evidence = Array.isArray(event.evidence) ? event.evidence : [];
+    const textRaw = typeof event.text === "string" ? event.text.trim() : "";
+    let text = textRaw;
+    if (!text) {
+      const lines = [];
+      if (principle) {
+        lines.push("RULE:");
+        lines.push(principle);
+      }
+      if (evidence.length) {
+        if (lines.length) lines.push("");
+        lines.push("EVIDENCE:");
+        for (const item of evidence.slice(0, 6)) {
+          const img = item?.image ? String(item.image).trim() : "";
+          const note = item?.note ? String(item.note).trim() : "";
+          if (!note) continue;
+          lines.push(`- ${img ? `${img}: ` : ""}${note}`);
+        }
+      }
+      text = lines.join("\n").trim();
+    }
+
+    state.tripletRuleAnnotations.clear();
+    state.tripletOddOneOutId = null;
+    const annotations = Array.isArray(event.annotations) ? event.annotations : [];
+    if (paths.length === 3 && annotations.length) {
+      for (const ann of annotations) {
+        const tag = String(ann?.image || "").trim().toUpperCase();
+        const idx = tag === "A" ? 0 : tag === "B" ? 1 : tag === "C" ? 2 : -1;
+        if (idx < 0) continue;
+        const x = Number(ann?.x);
+        const y = Number(ann?.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const label = ann?.label ? String(ann.label).trim() : "";
+        const targetPath = paths[idx];
+        const imgItem = state.images.find((it) => it?.path === targetPath) || null;
+        if (!imgItem?.id) continue;
+        const points = state.tripletRuleAnnotations.get(imgItem.id) || [];
+        points.push({ x: clamp(x, 0, 1), y: clamp(y, 0, 1), label: clampText(label, 64) });
+        state.tripletRuleAnnotations.set(imgItem.id, points);
+      }
+    }
+
+    if (text) {
+      setDirectorText(text, {
+        kind: "extract_rule",
+        source: event.source || null,
+        model: event.model || null,
+        at: Date.now(),
+        paths,
+      });
+    }
+    setStatus("Director: rule ready");
+    showToast("Extract the Rule ready.", "tip", 2400);
+    updatePortraitIdle();
+    renderQuickActions();
+    requestRender();
+    processActionQueue().catch(() => {});
+  } else if (event.type === "triplet_rule_failed") {
+    state.pendingExtractRule = null;
+    const msg = event.error ? `Extract the Rule failed: ${event.error}` : "Extract the Rule failed.";
+    setStatus(`Director: ${msg}`, true);
+    showToast(msg, "error", 3200);
+    updatePortraitIdle();
+    renderQuickActions();
+    processActionQueue().catch(() => {});
+  } else if (event.type === "triplet_odd_one_out") {
+    state.pendingOddOneOut = null;
+    const paths = Array.isArray(event.image_paths) ? event.image_paths : [];
+    const oddIndex = typeof event.odd_index === "number" ? event.odd_index : null;
+    const oddTag = typeof event.odd_image === "string" ? event.odd_image.trim().toUpperCase() : "";
+    let oddPath = null;
+    if (oddIndex !== null && oddIndex >= 0 && oddIndex < paths.length) {
+      oddPath = paths[oddIndex];
+    } else if (paths.length === 3) {
+      if (oddTag === "A") oddPath = paths[0];
+      if (oddTag === "B") oddPath = paths[1];
+      if (oddTag === "C") oddPath = paths[2];
+    }
+    const oddItem = oddPath ? state.images.find((it) => it?.path === oddPath) || null : null;
+    state.tripletOddOneOutId = oddItem?.id || null;
+    state.tripletRuleAnnotations.clear();
+
+    const textRaw = typeof event.text === "string" ? event.text.trim() : "";
+    let text = textRaw;
+    if (!text) {
+      const pattern = typeof event.pattern === "string" ? event.pattern.trim() : "";
+      const why = typeof event.explanation === "string" ? event.explanation.trim() : "";
+      const lines = [];
+      if (oddTag || oddIndex !== null) lines.push(`ODD ONE OUT: ${oddTag || String(oddIndex + 1)}`);
+      if (pattern) {
+        if (lines.length) lines.push("");
+        lines.push("THE SHARED PATTERN:");
+        lines.push(pattern);
+      }
+      if (why) {
+        if (lines.length) lines.push("");
+        lines.push("WHY IT BREAKS:");
+        lines.push(why);
+      }
+      text = lines.join("\n").trim();
+    }
+
+    if (text) {
+      setDirectorText(text, {
+        kind: "odd_one_out",
+        source: event.source || null,
+        model: event.model || null,
+        at: Date.now(),
+        paths,
+      });
+    }
+    setStatus("Director: odd one out ready");
+    showToast("Odd One Out ready.", "tip", 2400);
+    updatePortraitIdle();
+    renderQuickActions();
+    requestRender();
+    processActionQueue().catch(() => {});
+  } else if (event.type === "triplet_odd_one_out_failed") {
+    state.pendingOddOneOut = null;
+    const msg = event.error ? `Odd One Out failed: ${event.error}` : "Odd One Out failed.";
+    setStatus(`Director: ${msg}`, true);
+    showToast(msg, "error", 3200);
+    updatePortraitIdle();
+    renderQuickActions();
+    processActionQueue().catch(() => {});
   } else if (event.type === "recreate_prompt_inferred") {
     const prompt = event.prompt;
     if (typeof prompt === "string") {
@@ -5796,6 +6164,75 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
       activeRect.h * ms + 4
     );
     octx.restore();
+  }
+
+  // Triplet insights overlays (Extract the Rule / Odd One Out).
+  if (items.length === 3) {
+    const oddId = state.tripletOddOneOutId;
+    if (oddId) {
+      const rect = state.multiRects.get(oddId) || null;
+      if (rect) {
+        octx.save();
+        octx.lineWidth = Math.max(1, Math.round(2.5 * dpr));
+        octx.setLineDash([Math.round(10 * dpr), Math.round(8 * dpr)]);
+        octx.strokeStyle = "rgba(255, 72, 72, 0.86)";
+        octx.shadowColor = "rgba(255, 72, 72, 0.18)";
+        octx.shadowBlur = Math.round(18 * dpr);
+        octx.strokeRect(rect.x + mox - 3, rect.y + moy - 3, rect.w + 6, rect.h + 6);
+        octx.setLineDash([]);
+        octx.restore();
+      }
+    }
+
+    if (state.tripletRuleAnnotations && state.tripletRuleAnnotations.size) {
+      octx.save();
+      octx.lineWidth = Math.max(1, Math.round(2 * dpr));
+      octx.font = `${Math.max(10, Math.round(11 * dpr))}px IBM Plex Mono`;
+      const dotR = Math.max(3, Math.round(5 * dpr));
+      for (const item of items) {
+        if (!item?.id) continue;
+        const rect = state.multiRects.get(item.id) || null;
+        if (!rect) continue;
+        const points = state.tripletRuleAnnotations.get(item.id) || [];
+        for (const pt of points.slice(0, 6)) {
+          const xRaw = Number(pt?.x);
+          const yRaw = Number(pt?.y);
+          if (!Number.isFinite(xRaw) || !Number.isFinite(yRaw)) continue;
+          const x = clamp(xRaw, 0, 1);
+          const y = clamp(yRaw, 0, 1);
+          const cx = rect.x + mox + rect.w * x;
+          const cy = rect.y + moy + rect.h * y;
+          octx.save();
+          octx.shadowColor = "rgba(0, 221, 255, 0.20)";
+          octx.shadowBlur = Math.round(14 * dpr);
+          octx.beginPath();
+          octx.arc(cx, cy, dotR, 0, Math.PI * 2);
+          octx.fillStyle = "rgba(0, 221, 255, 0.14)";
+          octx.strokeStyle = "rgba(0, 221, 255, 0.92)";
+          octx.fill();
+          octx.stroke();
+
+          const label = pt?.label ? clampText(pt.label, 28) : "";
+          if (label) {
+            const padX = Math.round(7 * dpr);
+            const padY = Math.round(5 * dpr);
+            const textW = octx.measureText(label).width;
+            const boxW = Math.round(textW + padX * 2);
+            const boxH = Math.round(20 * dpr);
+            const boxX = Math.round(cx + 10 * dpr);
+            const boxY = Math.round(cy - boxH / 2);
+            octx.fillStyle = "rgba(8, 10, 14, 0.78)";
+            octx.fillRect(boxX, boxY, boxW, boxH);
+            octx.strokeStyle = "rgba(0, 221, 255, 0.34)";
+            octx.strokeRect(boxX, boxY, boxW, boxH);
+            octx.fillStyle = "rgba(0, 221, 255, 0.92)";
+            octx.fillText(label, boxX + padX, boxY + boxH - padY);
+          }
+          octx.restore();
+        }
+      }
+      octx.restore();
+    }
   }
 }
 
