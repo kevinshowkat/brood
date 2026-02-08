@@ -2,6 +2,10 @@
 
 Brood is an image-first desktop canvas for steering AI image edits and generations using reference images.
 
+<p align="left">
+  <img src="media/brood_demo_v5_20260208.gif" alt="Brood demo">
+</p>
+
 - 1 image in: `Diagnose` (creative-direction critique), `Recast` (reimagine in a new medium/context)
 - 2 images in: `Combine`, `Swap DNA`, `Bridge`, `Argue`
 - Provider/model switching is a first-class concept (OpenAI, Gemini, Imagen, Flux, SDXL)
