@@ -119,6 +119,7 @@ const state = {
   },
   // Multi-mode doesn't use the single-image view transform, but users still expect panning.
   multiView: {
+    scale: 1,
     offsetX: 0,
     offsetY: 0,
   },
@@ -270,10 +271,11 @@ function renderHudReadout() {
   if (!els.hud) return;
   const img = getActiveImage();
   const hasImage = Boolean(img);
+  const zoomScale = state.canvasMode === "multi" ? state.multiView.scale || 1 : state.view.scale || 1;
   // HUD is always visible; show placeholders when no image is loaded.
   if (!hasImage) {
     const sel = state.selection?.points?.length >= 3 ? `${state.selection.points.length} pts` : "none";
-    const zoomPct = Math.round((state.view.scale || 1) * 100);
+    const zoomPct = Math.round(zoomScale * 100);
     if (els.hudUnitName) els.hudUnitName.textContent = "NO IMAGE";
     if (els.hudUnitDesc) els.hudUnitDesc.textContent = "Tap or drag to add photos";
     if (els.hudUnitSel) els.hudUnitSel.textContent = `${sel} · ${state.tool} · ${zoomPct}%`;
@@ -311,7 +313,7 @@ function renderHudReadout() {
   if (els.hudUnitDesc) els.hudUnitDesc.textContent = desc || "—";
 
   const sel = state.selection?.points?.length >= 3 ? `${state.selection.points.length} pts` : "none";
-  const zoomPct = Math.round((state.view.scale || 1) * 100);
+  const zoomPct = Math.round(zoomScale * 100);
   if (els.hudUnitSel) els.hudUnitSel.textContent = `${sel} · ${state.tool} · ${zoomPct}%`;
 
   const meta = img?.receiptMeta || null;
@@ -1312,15 +1314,18 @@ function canvasToImage(pt) {
   const img = getActiveImage();
   if (!img) return { x: 0, y: 0 };
   if (state.canvasMode === "multi") {
+    const ms = state.multiView?.scale || 1;
     const mx = state.multiView?.offsetX || 0;
     const my = state.multiView?.offsetY || 0;
     const rect = img?.id ? state.multiRects.get(img.id) : null;
     if (rect) {
       const iw = img?.img?.naturalWidth || img?.width || rect.w || 1;
       const ih = img?.img?.naturalHeight || img?.height || rect.h || 1;
+      const lx = (pt.x - mx) / Math.max(ms, 0.0001);
+      const ly = (pt.y - my) / Math.max(ms, 0.0001);
       return {
-        x: ((pt.x - mx - rect.x) * iw) / Math.max(1, rect.w),
-        y: ((pt.y - my - rect.y) * ih) / Math.max(1, rect.h),
+        x: ((lx - rect.x) * iw) / Math.max(1, rect.w),
+        y: ((ly - rect.y) * ih) / Math.max(1, rect.h),
       };
     }
   }
@@ -1333,15 +1338,18 @@ function canvasToImage(pt) {
 function imageToCanvas(pt) {
   if (state.canvasMode === "multi") {
     const img = getActiveImage();
+    const ms = state.multiView?.scale || 1;
     const mx = state.multiView?.offsetX || 0;
     const my = state.multiView?.offsetY || 0;
     const rect = img?.id ? state.multiRects.get(img.id) : null;
     if (img && rect) {
       const iw = img?.img?.naturalWidth || img?.width || rect.w || 1;
       const ih = img?.img?.naturalHeight || img?.height || rect.h || 1;
+      const lx = rect.x + (pt.x * rect.w) / Math.max(1, iw);
+      const ly = rect.y + (pt.y * rect.h) / Math.max(1, ih);
       return {
-        x: mx + rect.x + (pt.x * rect.w) / Math.max(1, iw),
-        y: my + rect.y + (pt.y * rect.h) / Math.max(1, ih),
+        x: mx + lx * ms,
+        y: my + ly * ms,
       };
     }
   }
@@ -1428,6 +1436,7 @@ function setCanvasMode(mode) {
   state.canvasMode = next;
   state.multiRects.clear();
   if (next === "multi") {
+    state.multiView.scale = 1;
     state.multiView.offsetX = 0;
     state.multiView.offsetY = 0;
   }
@@ -1524,10 +1533,11 @@ function computeMultiRects(items, canvasW, canvasH) {
 
 function hitTestMulti(pt) {
   if (!pt) return null;
+  const ms = state.multiView?.scale || 1;
   const mx = state.multiView?.offsetX || 0;
   const my = state.multiView?.offsetY || 0;
-  const x = pt.x - mx;
-  const y = pt.y - my;
+  const x = (pt.x - mx) / Math.max(ms, 0.0001);
+  const y = (pt.y - my) / Math.max(ms, 0.0001);
   const entries = Array.from(state.multiRects.entries());
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const [id, rect] = entries[i];
@@ -1574,15 +1584,16 @@ function resetViewToFit() {
 function getActiveImageRectCss() {
   const dpr = getDpr();
   if (state.canvasMode === "multi") {
+    const ms = state.multiView?.scale || 1;
     const mx = state.multiView?.offsetX || 0;
     const my = state.multiView?.offsetY || 0;
     const rect = state.activeId ? state.multiRects.get(state.activeId) : null;
     if (!rect) return null;
     return {
-      left: (mx + rect.x) / dpr,
-      top: (my + rect.y) / dpr,
-      width: rect.w / dpr,
-      height: rect.h / dpr,
+      left: (mx + rect.x * ms) / dpr,
+      top: (my + rect.y * ms) / dpr,
+      width: (rect.w * ms) / dpr,
+      height: (rect.h * ms) / dpr,
     };
   }
   if (state.canvasMode !== "single") return null;
@@ -1603,15 +1614,16 @@ function getImageRectCss(imageId) {
   if (!imageId) return null;
   if (state.canvasMode === "multi") {
     const dpr = getDpr();
+    const ms = state.multiView?.scale || 1;
     const mx = state.multiView?.offsetX || 0;
     const my = state.multiView?.offsetY || 0;
     const rect = state.multiRects.get(imageId) || null;
     if (!rect) return null;
     return {
-      left: (mx + rect.x) / dpr,
-      top: (my + rect.y) / dpr,
-      width: rect.w / dpr,
-      height: rect.h / dpr,
+      left: (mx + rect.x * ms) / dpr,
+      top: (my + rect.y * ms) / dpr,
+      width: (rect.w * ms) / dpr,
+      height: (rect.h * ms) / dpr,
     };
   }
   if (state.canvasMode !== "single") return null;
@@ -3277,6 +3289,7 @@ function buildVisualPrompt() {
         offset_y: Number(state.view?.offsetY) || 0,
       },
       multi_view: {
+        scale: Number(state.multiView?.scale) || 1,
         offset_x: Number(state.multiView?.offsetX) || 0,
         offset_y: Number(state.multiView?.offsetY) || 0,
       },
@@ -4549,6 +4562,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   }
 
   state.multiRects = computeMultiRects(items, canvasW, canvasH);
+  const ms = state.multiView?.scale || 1;
   const mox = state.multiView?.offsetX || 0;
   const moy = state.multiView?.offsetY || 0;
 
@@ -4560,10 +4574,10 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   for (const item of items) {
     const rect = item?.id ? state.multiRects.get(item.id) : null;
     if (!rect) continue;
-    const x = rect.x + mox;
-    const y = rect.y + moy;
-    const w = rect.w;
-    const h = rect.h;
+    const x = rect.x * ms + mox;
+    const y = rect.y * ms + moy;
+    const w = rect.w * ms;
+    const h = rect.h * ms;
     if (item?.img) {
       wctx.drawImage(item.img, x, y, w, h);
     } else {
@@ -4597,10 +4611,10 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     octx.shadowColor = "rgba(255, 212, 0, 0.20)";
     octx.shadowBlur = Math.round(22 * dpr);
     octx.strokeRect(
-      activeRect.x + mox - 2,
-      activeRect.y + moy - 2,
-      activeRect.w + 4,
-      activeRect.h + 4
+      activeRect.x * ms + mox - 2,
+      activeRect.y * ms + moy - 2,
+      activeRect.w * ms + 4,
+      activeRect.h * ms + 4
     );
     octx.restore();
   }
@@ -5023,24 +5037,25 @@ function installCanvasHandlers() {
 	      requestRender();
 	      return;
 	    }
-    if (state.tool === "lasso") {
-      const imgPt = canvasToImage(p);
-      const last = state.lassoDraft[state.lassoDraft.length - 1];
-      const dist2 = (imgPt.x - last.x) ** 2 + (imgPt.y - last.y) ** 2;
-      let scale = state.view.scale;
-      if (state.canvasMode === "multi") {
-        const img = getActiveImage();
-        const rect = img?.id ? state.multiRects.get(img.id) : null;
-        if (img && rect) {
-          const iw = img?.img?.naturalWidth || img?.width || rect.w || 1;
-          const ih = img?.img?.naturalHeight || img?.height || rect.h || 1;
-          const sx = rect.w / Math.max(1, iw);
-          const sy = rect.h / Math.max(1, ih);
-          scale = Math.min(sx, sy);
-        } else {
-          scale = 1;
-        }
-      }
+	    if (state.tool === "lasso") {
+	      const imgPt = canvasToImage(p);
+	      const last = state.lassoDraft[state.lassoDraft.length - 1];
+	      const dist2 = (imgPt.x - last.x) ** 2 + (imgPt.y - last.y) ** 2;
+	      let scale = state.view.scale;
+	      if (state.canvasMode === "multi") {
+	        const ms = state.multiView?.scale || 1;
+	        const img = getActiveImage();
+	        const rect = img?.id ? state.multiRects.get(img.id) : null;
+	        if (img && rect) {
+	          const iw = img?.img?.naturalWidth || img?.width || rect.w || 1;
+	          const ih = img?.img?.naturalHeight || img?.height || rect.h || 1;
+	          const sx = rect.w / Math.max(1, iw);
+	          const sy = rect.h / Math.max(1, ih);
+	          scale = Math.min(sx, sy) * ms;
+	        } else {
+	          scale = ms;
+	        }
+	      }
       const minDist = 4 / Math.max(scale, 0.02);
       if (dist2 >= minDist * minDist) {
         state.lassoDraft.push(imgPt);
@@ -5125,24 +5140,31 @@ function installCanvasHandlers() {
     (event) => {
       bumpInteraction();
       if (!getActiveImage()) return;
-      if (state.canvasMode === "multi") {
-        event.preventDefault();
-        return;
-      }
       event.preventDefault();
       const p = canvasPointFromEvent(event);
-      const before = canvasToImage(p);
       const factor = Math.exp(-event.deltaY * 0.0012);
-      const next = clamp(state.view.scale * factor, 0.05, 40);
-	      state.view.scale = next;
-	      state.view.offsetX = p.x - before.x * state.view.scale;
-	      state.view.offsetY = p.y - before.y * state.view.scale;
-	      renderHudReadout();
-        scheduleVisualPromptWrite();
-	      requestRender();
-	    },
-	    { passive: false }
-	  );
+      if (state.canvasMode === "multi") {
+        const before = {
+          x: (p.x - (state.multiView?.offsetX || 0)) / Math.max(state.multiView?.scale || 1, 0.0001),
+          y: (p.y - (state.multiView?.offsetY || 0)) / Math.max(state.multiView?.scale || 1, 0.0001),
+        };
+        const next = clamp((state.multiView?.scale || 1) * factor, 0.05, 40);
+        state.multiView.scale = next;
+        state.multiView.offsetX = p.x - before.x * state.multiView.scale;
+        state.multiView.offsetY = p.y - before.y * state.multiView.scale;
+      } else {
+        const before = canvasToImage(p);
+        const next = clamp(state.view.scale * factor, 0.05, 40);
+        state.view.scale = next;
+        state.view.offsetX = p.x - before.x * state.view.scale;
+        state.view.offsetY = p.y - before.y * state.view.scale;
+      }
+      renderHudReadout();
+      scheduleVisualPromptWrite();
+      requestRender();
+    },
+    { passive: false }
+  );
 	}
 
 function installDnD() {
