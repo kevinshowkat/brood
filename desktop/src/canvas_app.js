@@ -1040,6 +1040,51 @@ function portraitAgentFromProvider(provider) {
   return "dryrun";
 }
 
+function looksLikePortraitClipName(name) {
+  const lower = String(name || "").toLowerCase();
+  return Boolean(lower.match(/^(dryrun|openai|gemini|imagen|flux|stability)_(idle|working).+\\.mp4$/));
+}
+
+async function dirHasPortraitClips(dir) {
+  if (!dir) return false;
+  try {
+    const entries = await readDir(dir, { recursive: false });
+    for (const entry of entries || []) {
+      const path = entry?.path;
+      if (!path) continue;
+      if (extname(path) !== ".mp4") continue;
+      const name = entry?.name || basename(path);
+      if (looksLikePortraitClipName(name)) return true;
+    }
+  } catch (_) {
+    // ignore
+  }
+  return false;
+}
+
+async function deriveMainRepoRootFromWorktree(repoRoot) {
+  if (!repoRoot) return null;
+  try {
+    const gitPath = await join(repoRoot, ".git");
+    const content = await readTextFile(gitPath);
+    const firstLine = String(content || "").split(/\r?\n/)[0] || "";
+    const match = firstLine.match(/^gitdir:\\s*(.+)\\s*$/i);
+    if (!match) return null;
+    const gitdir = String(match[1] || "").trim();
+    if (!gitdir) return null;
+
+    const needlePosix = "/.git/worktrees/";
+    const needleWin = "\\\\.git\\\\worktrees\\\\";
+    let idx = gitdir.indexOf(needlePosix);
+    if (idx !== -1) return gitdir.slice(0, idx) || null;
+    idx = gitdir.indexOf(needleWin);
+    if (idx !== -1) return gitdir.slice(0, idx) || null;
+  } catch (_) {
+    // ignore
+  }
+  return null;
+}
+
 async function resolvePortraitsDir() {
   if (state.portraitMedia.dirChecked) return state.portraitMedia.dir;
   if (state.portraitMedia.dirPromise) return await state.portraitMedia.dirPromise;
@@ -1051,7 +1096,17 @@ async function resolvePortraitsDir() {
     // Dev convenience: use repo-local outputs if we can locate the repo root.
     try {
       const repoRoot = await invoke("get_repo_root");
-      if (repoRoot) candidates.push(await join(repoRoot, "outputs", "sora_portraits"));
+      if (repoRoot) {
+        candidates.push(await join(repoRoot, "outputs", "sora_portraits"));
+
+        // If we're running inside a git worktree checkout, `.git` is a file that points
+        // at the main repo's `.git/worktrees/...`. The portrait MP4s are often generated
+        // in the main repo's `outputs/` (and are usually untracked), so prefer that if present.
+        const mainRoot = await deriveMainRepoRootFromWorktree(repoRoot);
+        if (mainRoot && mainRoot !== repoRoot) {
+          candidates.push(await join(mainRoot, "outputs", "sora_portraits"));
+        }
+      }
     } catch (_) {}
 
     // Default persisted location (recommended for packaged builds).
@@ -1065,7 +1120,8 @@ async function resolvePortraitsDir() {
 
     for (const dir of candidates) {
       try {
-        if (await exists(dir)) return dir;
+        if (!(await exists(dir))) continue;
+        if (await dirHasPortraitClips(dir)) return dir;
       } catch (_) {}
     }
     return null;
