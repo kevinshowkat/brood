@@ -1541,6 +1541,18 @@ button.ghost:hover {
   pointer-events: auto;
 }
 
+.designate-menu.image-menu {
+  border-color: rgba(255, 95, 95, 0.26);
+}
+
+.designate-menu.image-menu button[data-action="remove"] {
+  border-color: rgba(255, 95, 95, 0.42);
+}
+
+.designate-menu.image-menu button[data-action="remove"]:hover {
+  border-color: rgba(255, 95, 95, 0.78);
+}
+
 .designate-menu button {
   width: 100%;
   background: rgba(18, 26, 37, 0.85);
