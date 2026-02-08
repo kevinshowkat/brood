@@ -1,10 +1,13 @@
-# Build aesthetic (desktop)
+# Aesthetic Capture (Planned)
 
-The desktop app includes a Build aesthetic wizard to capture brand reference images for later scoring.
+Note: The "Build aesthetic" wizard described below is **not currently present** in the desktop UI.
+This doc is retained as a product/design note for a future feature.
 
-## Workflow
+For current desktop workflows, import images into a run via **Import Photos** (or drag-drop) and use Quick Actions.
 
-1. In the top bar, click **Build aesthetic**.
+## Intended workflow (future)
+
+1. In the UI, click **Build aesthetic**.
 2. Step 1 (Select): choose a folder or select multiple files.
    - Supported types: .png, .jpg, .jpeg, .webp, .heic
    - Folder scans are non-recursive.
@@ -16,7 +19,7 @@ Re-importing replaces the existing aesthetic set. Use **Clear** in the top bar t
 
 ## What gets written
 
-All data lives inside the current run directory:
+All data would live inside the current run directory:
 
 - `run_dir/aesthetic/` contains the copied reference images.
 - `run_dir/aesthetic/annotations/` contains placeholders for future pairwise scoring:

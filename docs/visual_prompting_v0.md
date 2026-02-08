@@ -9,7 +9,7 @@ This doc proposes a minimal "visual grammar v0" and the first thin-slice impleme
 
 ### 1) Layout Rules (implicit semantics)
 - **Side-by-side (2-up)**: "blend / combine A + B"
-  - In Brood today: multi-canvas + `Combine` spawn action (`/blend`) is the canonical behavior.
+  - In Brood today: multi-canvas + `Combine` quick action (`/blend`) is the canonical behavior.
 - **Vertical stack**: "sequential states" (A -> B -> C)
   - Interpretation: treat as a timeline; compare deltas; generate next state.
 - **Grid (2x2 / 3x3)**: "variants / compare"
@@ -82,4 +82,3 @@ Notes:
      - Convert circle -> normalized region coords
      - Compose edit prompt from circle label + region
      - Call engine edit path end-to-end
-

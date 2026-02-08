@@ -1,5 +1,7 @@
 # First Light: Creative Desire Map (PRD Draft)
 
+Status: PRD draft (not implemented).
+
 ## Summary
 First Light is a 90-second onboarding scan that produces a "desire map": an aggregated, local-first read of a creator's aesthetic fixation and aspiration. The goal is to make Brood feel personal on day one, without feeling invasive.
 
@@ -380,4 +382,3 @@ Write 3-5 sentences addressed directly to the user.
 - If the models are ambiguous, frame it as synthesis instead of forcing a single lineage.
 - Never be sycophantic.
 ```
-
