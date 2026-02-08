@@ -195,6 +195,8 @@ const state = {
     lastRunAt: 0,
     lastText: null,
     lastMeta: null, // { source, model, at, image_path }
+    rtState: settings.alwaysOnVision ? "connecting" : "off", // "off" | "connecting" | "ready" | "failed"
+    disabledReason: null, // string|null (set when auto-disabled due to a fatal realtime error)
   },
   imageFx: {
     active: false,
@@ -656,8 +658,30 @@ function updateAlwaysOnVisionReadout() {
   const el = els.alwaysOnVisionReadout;
   if (!el) return;
   const aov = state.alwaysOnVision;
+  const meta = aov?.lastMeta || null;
+  if (meta && (meta.source || meta.model)) {
+    const parts = [];
+    if (meta.source) parts.push(meta.source);
+    if (meta.model) parts.push(meta.model);
+    el.title = parts.join(" · ");
+  } else {
+    el.title = "";
+  }
   if (!aov?.enabled) {
+    if (aov?.disabledReason) {
+      const cleaned = String(aov.disabledReason || "").trim();
+      el.textContent = cleaned.length > 1400 ? `${cleaned.slice(0, 1399).trimEnd()}\n…` : cleaned;
+      return;
+    }
     el.textContent = "Off";
+    return;
+  }
+  if (
+    aov.rtState === "connecting" &&
+    !aov.pending &&
+    !(typeof aov.lastText === "string" && aov.lastText.trim())
+  ) {
+    el.textContent = "Connecting…";
     return;
   }
   if (aov.pending) {
@@ -677,9 +701,9 @@ function allowAlwaysOnVision() {
   if (!state.alwaysOnVision?.enabled) return false;
   if (!state.images.length) return false;
   if (!state.runDir) return false;
-  // Must have at least one vision-capable key; engine will emit a failure otherwise.
+  // Realtime canvas context requires an OpenAI key; fail fast before dispatch.
   if (state.keyStatus) {
-    if (!state.keyStatus.openai && !state.keyStatus.gemini) return false;
+    if (!state.keyStatus.openai) return false;
   }
   return true;
 }
@@ -856,7 +880,14 @@ async function runAlwaysOnVisionOnce() {
     updateAlwaysOnVisionReadout();
   }, ALWAYS_ON_VISION_TIMEOUT_MS);
 
-  await invoke("write_pty", { data: `/canvas_context ${quoteForPtyArg(snapshotPath)}\n` }).catch((err) => {
+  if (aov.rtState === "off") aov.rtState = "connecting";
+
+  // Ensure the realtime session is running before dispatching snapshot work.
+  await invoke("write_pty", { data: `/canvas_context_rt_start\n` }).catch((err) => {
+    console.warn("Always-on vision realtime start failed:", err);
+  });
+
+  await invoke("write_pty", { data: `/canvas_context_rt ${quoteForPtyArg(snapshotPath)}\n` }).catch((err) => {
     console.warn("Always-on vision dispatch failed:", err);
     aov.pending = false;
     aov.pendingPath = null;
@@ -5887,6 +5918,10 @@ async function handleEvent(event) {
         at: Date.now(),
         image_path: event.image_path || null,
       };
+      if (String(event.source || "") === "openai_realtime") {
+        aov.rtState = "ready";
+        aov.disabledReason = null;
+      }
     }
     clearTimeout(alwaysOnVisionTimeout);
     alwaysOnVisionTimeout = null;
@@ -5905,6 +5940,23 @@ async function handleEvent(event) {
         at: Date.now(),
         image_path: event.image_path || null,
       };
+      if (event.fatal && String(event.source || "") === "openai_realtime") {
+        aov.enabled = false;
+        aov.rtState = "failed";
+        aov.disabledReason = event.error
+          ? `Always-on vision disabled: ${event.error}`
+          : "Always-on vision disabled (realtime error).";
+        settings.alwaysOnVision = false;
+        localStorage.setItem("brood.alwaysOnVision", "0");
+        if (els.alwaysOnVisionToggle) els.alwaysOnVisionToggle.checked = false;
+
+        clearTimeout(alwaysOnVisionTimer);
+        alwaysOnVisionTimer = null;
+
+        // Best-effort shutdown; the engine will ignore if not running.
+        if (state.ptySpawned) invoke("write_pty", { data: `/canvas_context_rt_stop\n` }).catch(() => {});
+        setStatus("Engine: always-on vision disabled (realtime failure)", true);
+      }
     }
     clearTimeout(alwaysOnVisionTimeout);
     alwaysOnVisionTimeout = null;
@@ -7026,14 +7078,25 @@ function installUi() {
         state.alwaysOnVision.pending = false;
         state.alwaysOnVision.pendingPath = null;
         state.alwaysOnVision.pendingAt = 0;
+        state.alwaysOnVision.disabledReason = null;
+        state.alwaysOnVision.rtState = settings.alwaysOnVision ? "connecting" : "off";
         if (!settings.alwaysOnVision) state.alwaysOnVision.lastText = null;
       }
       updateAlwaysOnVisionReadout();
       if (settings.alwaysOnVision) {
         setStatus("Engine: always-on vision enabled");
+        ensureEngineSpawned({ reason: "always-on vision" })
+          .then((ok) => {
+            if (!ok) return;
+            return invoke("write_pty", { data: `/canvas_context_rt_start\n` }).catch(() => {});
+          })
+          .catch(() => {});
         scheduleAlwaysOnVision({ immediate: true });
       } else {
         setStatus("Engine: always-on vision disabled");
+        if (state.ptySpawned) {
+          invoke("write_pty", { data: `/canvas_context_rt_stop\n` }).catch(() => {});
+        }
       }
     });
   }

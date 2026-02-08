@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -11,6 +12,7 @@ from .chat.intent_parser import parse_intent
 from .chat.refine import extract_model_directive, detect_edit_model, is_edit_request, is_refinement, is_repeat_request
 from .cli_progress import progress_once, ProgressTicker, elapsed_line
 from .engine import BroodEngine
+from .realtime.openai_realtime import CanvasContextRealtimeSession
 from .recreate.caption import infer_description, infer_diagnosis, infer_argument, infer_canvas_context
 from .recreate.triplet import infer_triplet_rule, infer_triplet_odd_one_out
 from .runs.export import export_html
@@ -108,6 +110,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
     }
     last_prompt: str | None = None
     last_artifact_path: str | None = None
+    canvas_context_rt: CanvasContextRealtimeSession | None = None
 
     print("Brood chat started. Type /help for commands.")
     while True:
@@ -122,6 +125,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
             print(
                 "Commands: /profile /text_model /image_model /fast /quality /cheaper "
                 "/better /optimize /recreate /describe /canvas_context /diagnose /recast /use "
+                "/canvas_context_rt_start /canvas_context_rt_stop /canvas_context_rt "
                 "/blend /swap_dna /argue /bridge /extract_rule /odd_one_out /triforce /export"
             )
             continue
@@ -207,6 +211,92 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 model=inference.model,
             )
             print(inference.text)
+            continue
+        if intent.action == "canvas_context_rt_start":
+            if canvas_context_rt is None:
+                canvas_context_rt = CanvasContextRealtimeSession(engine.events)
+            ok, err = canvas_context_rt.start()
+            if not ok:
+                model = (
+                    os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_MODEL")
+                    or os.getenv("OPENAI_CANVAS_CONTEXT_REALTIME_MODEL")
+                    or "gpt-realtime-mini"
+                )
+                engine.events.emit(
+                    "canvas_context_failed",
+                    image_path=None,
+                    error=err or "Realtime start failed.",
+                    source="openai_realtime",
+                    model=model,
+                    fatal=True,
+                )
+                print(f"Canvas context realtime start failed: {err}")
+                # Drop state so future updates fail loudly (avoids silent thrash).
+                canvas_context_rt = None
+                continue
+            print("Canvas context realtime started.")
+            continue
+        if intent.action == "canvas_context_rt_stop":
+            if canvas_context_rt is not None:
+                canvas_context_rt.stop()
+                canvas_context_rt = None
+            print("Canvas context realtime stopped.")
+            continue
+        if intent.action == "canvas_context_rt":
+            raw_path = intent.command_args.get("path") or last_artifact_path
+            if not raw_path:
+                msg = "/canvas_context_rt requires a path (or set an active image with /use)"
+                engine.events.emit(
+                    "canvas_context_failed",
+                    image_path=None,
+                    error=msg,
+                    source="openai_realtime",
+                    model=os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_MODEL") or "gpt-realtime-mini",
+                    fatal=True,
+                )
+                print(msg)
+                continue
+            path = Path(str(raw_path))
+            if not path.exists():
+                msg = f"Canvas context realtime failed: file not found ({path})"
+                engine.events.emit(
+                    "canvas_context_failed",
+                    image_path=str(path),
+                    error=msg,
+                    source="openai_realtime",
+                    model=os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_MODEL") or "gpt-realtime-mini",
+                    fatal=True,
+                )
+                print(msg)
+                continue
+            if canvas_context_rt is None:
+                msg = "Realtime session not started. Run /canvas_context_rt_start first."
+                engine.events.emit(
+                    "canvas_context_failed",
+                    image_path=str(path),
+                    error=msg,
+                    source="openai_realtime",
+                    model=os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_MODEL") or "gpt-realtime-mini",
+                    fatal=True,
+                )
+                print(msg)
+                continue
+            ok, err = canvas_context_rt.submit_snapshot(path)
+            if not ok:
+                engine.events.emit(
+                    "canvas_context_failed",
+                    image_path=str(path),
+                    error=err or "Realtime submit failed.",
+                    source="openai_realtime",
+                    model=os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_MODEL") or "gpt-realtime-mini",
+                    fatal=True,
+                )
+                print(f"Canvas context realtime submit failed: {err}")
+                # Ensure we stop to avoid any background thrash.
+                canvas_context_rt.stop()
+                canvas_context_rt = None
+                continue
+            # No blocking here. Results stream via `canvas_context` events.
             continue
         if intent.action == "diagnose":
             raw_path = intent.command_args.get("path") or last_artifact_path
@@ -936,6 +1026,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 print("Generation complete.")
             continue
 
+    if canvas_context_rt is not None:
+        canvas_context_rt.stop()
     engine.finish()
     return 0
 
