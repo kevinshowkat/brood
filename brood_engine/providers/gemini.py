@@ -84,6 +84,8 @@ class GeminiProvider:
         candidates = getattr(response, "candidates", []) or []
         raw_response = {"model": model, "candidates": len(candidates)}
         image_blobs = _extract_image_bytes(candidates)
+        # Gemini can return multiple image parts per candidate; cap to the requested count.
+        image_blobs = image_blobs[: max(1, int(request.n))]
         for idx, blob in enumerate(image_blobs):
             image_path = build_image_path(request.out_dir, idx, output_format)
             image_path.write_bytes(blob["bytes"])
