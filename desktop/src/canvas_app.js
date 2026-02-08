@@ -3351,20 +3351,15 @@ async function importPhotos() {
   if (ok > 0) {
     const suffix = failed ? ` (${failed} failed)` : "";
     setStatus(`Engine: imported ${ok} photo${ok === 1 ? "" : "s"}${suffix}`, failed > 0);
-    if (state.images.length > 1) {
-      setCanvasMode("multi");
-      setTip("Multiple photos loaded. Click a photo to select it. Use L to lasso or D to designate.");
-    }
-    const importedOnly = state.images.length === 2 && state.images.every((item) => item?.kind === "import");
-    if (importedOnly) {
-      setTip("Suggested: Combine the two photos into a single image.");
-      showToast("Suggested action: Combine", "tip", 2600);
-    }
-  } else {
-    const msg = lastErr?.message || String(lastErr || "unknown error");
-    setStatus(`Engine: import failed (${msg})`, true);
-  }
-}
+	    if (state.images.length > 1) {
+	      setCanvasMode("multi");
+	      setTip("Multiple photos loaded. Click a photo to select it. Use L to lasso or D to designate.");
+	    }
+	  } else {
+	    const msg = lastErr?.message || String(lastErr || "unknown error");
+	    setStatus(`Engine: import failed (${msg})`, true);
+	  }
+	}
 
 async function cropSquare() {
   bumpInteraction();
@@ -4609,62 +4604,6 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     );
     octx.restore();
   }
-
-  const canSuggestBlend = items.length === 2 && !isMultiActionRunning();
-  if (!canSuggestBlend) return;
-  const aRect = items[0]?.id ? state.multiRects.get(items[0].id) : null;
-  const bRect = items[1]?.id ? state.multiRects.get(items[1].id) : null;
-  if (!aRect || !bRect) return;
-
-  const ax = aRect.x + mox + aRect.w;
-  const ay = aRect.y + moy + aRect.h * 0.5;
-  const bx = bRect.x + mox;
-  const by = bRect.y + moy + bRect.h * 0.5;
-  const midX = (ax + bx) * 0.5;
-  const midY = (ay + by) * 0.5;
-
-  octx.save();
-  octx.lineWidth = Math.max(1, Math.round(2 * dpr));
-  octx.setLineDash([Math.round(10 * dpr), Math.round(8 * dpr)]);
-  octx.strokeStyle = "rgba(255, 212, 0, 0.28)";
-  octx.shadowColor = "rgba(255, 212, 0, 0.12)";
-  octx.shadowBlur = Math.round(14 * dpr);
-  octx.beginPath();
-  octx.moveTo(ax + Math.round(8 * dpr), ay);
-  octx.lineTo(bx - Math.round(8 * dpr), by);
-  octx.stroke();
-  octx.setLineDash([]);
-
-  // Small tag that reads like a "system suggestion" connecting the two tiles.
-  const label = "SUGGESTED: COMBINE";
-  octx.font = `${Math.max(10, Math.round(11.5 * dpr))}px IBM Plex Mono`;
-  const textW = octx.measureText(label).width;
-  const padX = Math.round(10 * dpr);
-  const padY = Math.round(6 * dpr);
-  const tagW = Math.round(textW + padX * 2);
-  const tagH = Math.round(22 * dpr);
-  const tagX = Math.round(midX - tagW / 2);
-  const tagY = Math.round(midY - tagH / 2);
-  const r = Math.round(9 * dpr);
-  const roundRect = (ctx, x, y, w, h, radius) => {
-    const rr = Math.max(0, Math.min(radius, Math.min(w, h) / 2));
-    ctx.beginPath();
-    ctx.moveTo(x + rr, y);
-    ctx.arcTo(x + w, y, x + w, y + h, rr);
-    ctx.arcTo(x + w, y + h, x, y + h, rr);
-    ctx.arcTo(x, y + h, x, y, rr);
-    ctx.arcTo(x, y, x + w, y, rr);
-    ctx.closePath();
-  };
-  roundRect(octx, tagX, tagY, tagW, tagH, r);
-  octx.fillStyle = "rgba(8, 10, 14, 0.76)";
-  octx.fill();
-  octx.lineWidth = Math.max(1, Math.round(1 * dpr));
-  octx.strokeStyle = "rgba(255, 212, 0, 0.32)";
-  octx.stroke();
-  octx.fillStyle = "rgba(255, 212, 0, 0.86)";
-  octx.fillText(label, tagX + padX, tagY + tagH - padY);
-  octx.restore();
 }
 
 function render() {
@@ -5251,17 +5190,12 @@ function installDnD() {
       );
     }
     setStatus(`Engine: imported ${paths.length} dropped file${paths.length === 1 ? "" : "s"}`);
-    if (state.images.length > 1) {
-      setCanvasMode("multi");
-      setTip("Multiple photos loaded. Click a photo to focus it.");
-    }
-    const importedOnly = state.images.length === 2 && state.images.every((item) => item?.kind === "import");
-    if (importedOnly) {
-      setTip("Suggested: Combine the two photos into a single image.");
-      showToast("Suggested action: Combine", "tip", 2600);
-    }
-  });
-}
+	    if (state.images.length > 1) {
+	      setCanvasMode("multi");
+	      setTip("Multiple photos loaded. Click a photo to focus it.");
+	    }
+	  });
+	}
 
 function installUi() {
   if (els.newRun) els.newRun.addEventListener("click", () => createRun().catch((e) => console.error(e)));
