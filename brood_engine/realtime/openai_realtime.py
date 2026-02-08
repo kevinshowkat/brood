@@ -134,9 +134,12 @@ class CanvasContextRealtimeSession:
                             "type": "session.update",
                             "session": {
                                 "instructions": _canvas_context_instruction(),
-                                "output_modalities": ["text"],
-                                "temperature": 0.2,
-                                "max_output_tokens": 520,
+                                # Realtime sessions use `modalities` (not `output_modalities`).
+                                # Setting ["text"] disables audio outputs.
+                                "modalities": ["text"],
+                                # Temperature is clamped by the API; keep at the minimum for consistent context.
+                                "temperature": 0.6,
+                                "max_response_output_tokens": 520,
                             },
                         }
                     )
@@ -173,27 +176,21 @@ class CanvasContextRealtimeSession:
 
     async def _run_job(self, ws: Any, job: CanvasContextJob) -> None:
         data_url = _read_image_as_data_url(Path(job.image_path))
-        await ws.send(json.dumps({"type": "conversation.clear"}))
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "conversation.item.create",
-                    "item": {
-                        "type": "message",
-                        "role": "user",
-                        "content": [
-                            {"type": "input_image", "image_url": data_url},
-                        ],
-                    },
-                }
-            )
-        )
         await ws.send(
             json.dumps(
                 {
                     "type": "response.create",
                     "response": {
+                        # Out-of-band: avoid growing conversation state inside the persistent session.
+                        "conversation": "none",
                         "output_modalities": ["text"],
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_image", "image_url": data_url}],
+                            }
+                        ],
                         "max_output_tokens": 520,
                     },
                 }
