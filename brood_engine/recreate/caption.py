@@ -673,11 +673,12 @@ def _canvas_context_with_openai(reference_path: Path) -> TextInference | None:
     api_key = _openai_api_key()
     if not api_key:
         return None
-    requested_model = (
-        os.getenv("BROOD_CANVAS_CONTEXT_MODEL")
-        or os.getenv("OPENAI_CANVAS_CONTEXT_MODEL")
-        or "gpt-realtime-mini"
-    )
+    requested_model = os.getenv("BROOD_CANVAS_CONTEXT_MODEL") or os.getenv("OPENAI_CANVAS_CONTEXT_MODEL") or "gpt-4o-mini"
+    requested_model = str(requested_model or "").strip() or "gpt-4o-mini"
+    # Realtime models require the Realtime API (WebRTC/WebSocket). This path uses
+    # the standard Responses endpoint, so avoid attempting to call realtime models.
+    if "realtime" in requested_model.lower():
+        requested_model = "gpt-4o-mini"
     image_bytes, mime = _prepare_vision_image(reference_path, max_dim=768)
     data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode('ascii')}"
 
