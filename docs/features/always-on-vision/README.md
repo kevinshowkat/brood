@@ -34,12 +34,12 @@ Primary files:
   - `canvas_context` with `{ image_path, text, source, model }`
   - `canvas_context_failed` with `{ image_path, error }`
 - Inference implementation lives in `brood_engine/recreate/caption.py` as `infer_canvas_context(...)`.
-  - Defaults to `gpt-realtime-mini` via the OpenAI Responses API (override with `BROOD_CANVAS_CONTEXT_MODEL` / `OPENAI_CANVAS_CONTEXT_MODEL`).
-  - Falls back to `gpt-4o-mini` if the requested model fails.
+  - Defaults to `gpt-4o-mini` via the OpenAI Responses API (override with `BROOD_CANVAS_CONTEXT_MODEL` / `OPENAI_CANVAS_CONTEXT_MODEL`).
+  - Falls back to `gpt-4o-mini` if the requested model fails (and ignores `*realtime*` models on this path).
   - Optional Gemini fallback if keys + dependency are present.
 
-### Notes On "gpt-realtime-mini"
-This branch uses `gpt-realtime-mini` through the standard Responses endpoint. It does not yet create a persistent Realtime session (WebRTC/WebSocket). The code is structured so a future iteration can swap the backend implementation to a true realtime session without changing the desktop UX contract.
+### Notes On Realtime Models
+Realtime models require the Realtime API (WebRTC/WebSocket). This feature currently uses the standard Responses API, so realtime models are intentionally not used here.
 
 ## Testing
 Standard regression set:
@@ -50,4 +50,3 @@ Standard regression set:
 - Add a dedicated `canvas_context` HUD surface and/or action recommendations UI.
 - Route always-on vision through the hardened action queue (low priority) so it never competes with user clicks.
 - Optionally store context artifacts as receipts to make runs reproducible.
-
