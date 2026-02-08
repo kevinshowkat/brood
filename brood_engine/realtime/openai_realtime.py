@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import inspect
 import json
 import mimetypes
 import os
@@ -114,10 +115,19 @@ class CanvasContextRealtimeSession:
         ]
 
         try:
-            # websockets>=15 uses `additional_headers` (older versions used `extra_headers`).
-            async with websockets.connect(
-                ws_url, additional_headers=headers, ping_interval=20, ping_timeout=20
-            ) as ws:
+            # websockets renamed `extra_headers` -> `additional_headers` (>=14). Avoid passing
+            # an unknown kwarg because websockets forwards it to `loop.create_connection()`.
+            connect_kwargs: dict[str, Any] = {"ping_interval": 20, "ping_timeout": 20}
+            try:
+                sig = inspect.signature(websockets.connect)
+                if "additional_headers" in sig.parameters:
+                    connect_kwargs["additional_headers"] = headers
+                else:
+                    connect_kwargs["extra_headers"] = headers
+            except Exception:
+                connect_kwargs["additional_headers"] = headers
+
+            async with websockets.connect(ws_url, **connect_kwargs) as ws:
                 await ws.send(
                     json.dumps(
                         {
