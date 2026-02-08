@@ -21,6 +21,7 @@ from typing import Any
 from urllib.parse import quote, urlparse
 
 from ..runs.events import EventWriter
+from ..utils import sanitize_payload
 
 _REALTIME_BETA_HEADER = ("OpenAI-Beta", "realtime=v1")
 _SOURCE = "openai_realtime"
@@ -235,13 +236,18 @@ class CanvasContextRealtimeSession:
                 continue
 
             if event_type == "response.output_text.delta":
-                delta = event.get("delta")
+                delta = event.get("delta") or event.get("text")
                 if isinstance(delta, str) and delta:
                     buffer += delta
                 now_s = time.monotonic()
                 if buffer.strip() and now_s - last_emit_s >= 0.25:
                     last_emit_s = now_s
                     self._emit_canvas_context(job.image_path, buffer, partial=True)
+                continue
+            if event_type == "response.output_text.done":
+                text = event.get("text") or event.get("output_text")
+                if isinstance(text, str) and text:
+                    buffer += text
                 continue
 
             if event_type == "response.done":
@@ -252,7 +258,10 @@ class CanvasContextRealtimeSession:
                         continue
                 cleaned = buffer.strip()
                 if not cleaned:
-                    msg = "Empty realtime canvas context response."
+                    cleaned = _extract_realtime_output_text(resp)
+                if not cleaned:
+                    meta = _summarize_realtime_response(resp)
+                    msg = f"Empty realtime canvas context response.{meta}"
                     self._emit_failed(job.image_path, msg, fatal=True)
                     self._set_fatal_error(msg)
                     self._stop.set()
@@ -336,6 +345,64 @@ def _format_realtime_error(event: dict[str, Any]) -> str:
         if isinstance(message, str) and message.strip():
             return f"{prefix}: {message.strip()}" if prefix else message.strip()
     return "Realtime API error."
+
+def _extract_realtime_output_text(response: Any) -> str:
+    """Best-effort extraction of assistant text from a Realtime `response` object."""
+    if not isinstance(response, dict):
+        return ""
+    direct = response.get("output_text")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    parts: list[str] = []
+    out = response.get("output")
+    if isinstance(out, list):
+        for item in out:
+            if not isinstance(item, dict):
+                continue
+            if isinstance(item.get("text"), str) and item.get("type") in {"output_text", "text"}:
+                parts.append(str(item["text"]))
+            if isinstance(item.get("refusal"), str) and str(item.get("refusal")).strip():
+                parts.append(str(item["refusal"]))
+            content = item.get("content")
+            if isinstance(content, list):
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    if isinstance(part.get("text"), str) and part.get("type") in {"output_text", "text"}:
+                        parts.append(str(part["text"]))
+                    if isinstance(part.get("refusal"), str) and str(part.get("refusal")).strip():
+                        parts.append(str(part["refusal"]))
+    joined = "\n".join(p.strip() for p in parts if isinstance(p, str) and p.strip()).strip()
+    if joined:
+        return joined
+    # Fallback: look for any text-ish fields in sanitized response.
+    sanitized = sanitize_payload(response)
+    if not isinstance(sanitized, dict):
+        return ""
+    for key in ("text", "message", "content"):
+        val = sanitized.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
+def _summarize_realtime_response(response: Any) -> str:
+    if not isinstance(response, dict):
+        return ""
+    status = response.get("status")
+    rid = response.get("id")
+    reason = response.get("status_details")
+    out = response.get("output")
+    n_out = len(out) if isinstance(out, list) else 0
+    bits: list[str] = []
+    if isinstance(status, str) and status:
+        bits.append(f"status={status}")
+    if isinstance(rid, str) and rid:
+        bits.append(f"id={rid}")
+    if reason is not None:
+        bits.append(f"details={sanitize_payload(reason)}")
+    bits.append(f"output_items={n_out}")
+    return f" ({', '.join(bits)})" if bits else ""
 
 
 def _canvas_context_instruction() -> str:
