@@ -685,6 +685,24 @@ function pickGeminiImageModel() {
   return "gemini-3-pro-image-preview";
 }
 
+function pickGeminiFastImageModel() {
+  const desired = "gemini-2.5-flash-image";
+  if (!els.imageModel) return desired;
+  const hasDesired = Array.from(els.imageModel.options || []).some((opt) => opt?.value === desired);
+  return hasDesired ? desired : pickGeminiImageModel();
+}
+
+// Action-specific model routing (quick actions / tools that drive the engine).
+const ACTION_IMAGE_MODEL = {
+  bg_replace: "gemini-2.5-flash-image",
+  surprise: "gemini-2.5-flash-image",
+  combine: "gemini-3-pro-image-preview",
+  swap_dna: "gemini-3-pro-image-preview",
+  bridge: "gemini-3-pro-image-preview",
+  recast: "gemini-3-pro-image-preview",
+  remove_people: "gemini-3-pro-image-preview",
+};
+
 async function ensureGeminiForBlend() {
   const provider = providerFromModel(settings.imageModel);
   if (provider === "gemini") return true;
@@ -3102,6 +3120,16 @@ function restoreEngineImageModelIfNeeded() {
   invoke("write_pty", { data: `/image_model ${restore}\n` }).catch(() => {});
 }
 
+async function maybeOverrideEngineImageModel(desiredModel) {
+  const desired = String(desiredModel || "").trim();
+  if (!desired) return false;
+  if (!state.ptySpawned) return false;
+  if (desired === settings.imageModel) return false;
+  state.engineImageModelRestore = settings.imageModel;
+  await invoke("write_pty", { data: `/image_model ${desired}\n` }).catch(() => {});
+  return true;
+}
+
 async function writeLocalReceipt({ artifactId, imagePath, operation, meta = {} }) {
   if (!state.runDir) return null;
   const receiptPath = `${state.runDir}/receipt-${artifactId}.json`;
@@ -3415,12 +3443,13 @@ async function aiReplaceBackground(style) {
   await ensureRun();
   const label = style === "sweep" ? "Soft Sweep" : "Studio White";
   setImageFxActive(true, label);
-  portraitWorking(label);
+  portraitWorking(label, { providerOverride: providerFromModel(ACTION_IMAGE_MODEL.bg_replace) });
   beginPendingReplace(imgItem.id, label);
   try {
     const ok = await ensureEngineSpawned({ reason: label });
     if (!ok) throw new Error("Engine unavailable");
     await setEngineActiveImage(imgItem.path);
+    await maybeOverrideEngineImageModel(ACTION_IMAGE_MODEL.bg_replace);
     state.expectingArtifacts = true;
     state.lastAction = label;
     setStatus(`Engine: ${label}…`);
@@ -3451,7 +3480,7 @@ async function aiRemovePeople() {
   const label = "Remove People";
   await ensureRun();
   setImageFxActive(true, label);
-  portraitWorking(label, { providerOverride: "gemini" });
+  portraitWorking(label, { providerOverride: providerFromModel(ACTION_IMAGE_MODEL.remove_people) || "gemini" });
   beginPendingReplace(imgItem.id, label);
   try {
     const ok = await ensureEngineSpawned({ reason: label });
@@ -3462,11 +3491,7 @@ async function aiRemovePeople() {
     setStatus(`Engine: ${label}…`);
     showToast("Removing people…", "info", 2200);
 
-    const gemModel = pickGeminiImageModel();
-    if (state.ptySpawned && gemModel && gemModel !== settings.imageModel) {
-      state.engineImageModelRestore = settings.imageModel;
-      await invoke("write_pty", { data: `/image_model ${gemModel}\n` }).catch(() => {});
-    }
+    await maybeOverrideEngineImageModel(ACTION_IMAGE_MODEL.remove_people || pickGeminiImageModel());
 
     // Must start with "edit" or "replace" for Brood's edit detection.
     const prompt =
@@ -3495,7 +3520,7 @@ async function aiSurpriseMe() {
   const label = "Surprise Me";
   await ensureRun();
   setImageFxActive(true, label);
-  portraitWorking(label, { providerOverride: "gemini" });
+  portraitWorking(label, { providerOverride: providerFromModel(ACTION_IMAGE_MODEL.surprise) || "gemini" });
   beginPendingReplace(imgItem.id, label);
   try {
     const ok = await ensureEngineSpawned({ reason: label });
@@ -3506,11 +3531,7 @@ async function aiSurpriseMe() {
     setStatus(`Engine: ${label}…`);
     showToast("Surprising you…", "info", 2200);
 
-    const gemModel = pickGeminiImageModel();
-    if (state.ptySpawned && gemModel && gemModel !== settings.imageModel) {
-      state.engineImageModelRestore = settings.imageModel;
-      await invoke("write_pty", { data: `/image_model ${gemModel}\n` }).catch(() => {});
-    }
+    await maybeOverrideEngineImageModel(ACTION_IMAGE_MODEL.surprise || pickGeminiFastImageModel());
 
     const surprises = [
       "replace the background with a bold but clean gradient (no patterns) and add a subtle soft shadow under the product.",
@@ -3792,11 +3813,6 @@ async function runBlendPair() {
     showToast("Combine needs exactly 2 photos in the run.", "error", 3200);
     return;
   }
-  const okProvider = await ensureGeminiForBlend();
-  if (!okProvider) {
-    showToast("Combine requires a Gemini image model (multi-image).", "error", 3600);
-    return;
-  }
   const a = state.images[0];
   const b = state.images[1];
   if (!a?.path || !b?.path) {
@@ -3806,12 +3822,13 @@ async function runBlendPair() {
 
   const okEngine = await ensureEngineSpawned({ reason: "combine" });
   if (!okEngine) return;
+  await maybeOverrideEngineImageModel(ACTION_IMAGE_MODEL.combine);
   setImageFxActive(true, "Combine");
   state.expectingArtifacts = true;
   state.pendingBlend = { sourceIds: [a.id, b.id], startedAt: Date.now() };
   state.lastAction = "Combine";
   setStatus("Engine: combine…");
-  portraitWorking("Combine");
+  portraitWorking("Combine", { providerOverride: providerFromModel(ACTION_IMAGE_MODEL.combine) });
   showToast("Combining photos…", "info", 2200);
   renderQuickActions();
   requestRender();
@@ -3845,11 +3862,6 @@ async function runSwapDnaPair({ invert = false } = {}) {
     showToast("Swap DNA needs exactly 2 photos in the run.", "error", 3200);
     return;
   }
-  const okProvider = await ensureGeminiProImagePreviewForSwapDna();
-  if (!okProvider) {
-    showToast("Swap DNA requires a Gemini image model (multi-image).", "error", 3600);
-    return;
-  }
 
   const active = getActiveImage();
   const first = active || state.images[0];
@@ -3867,12 +3879,13 @@ async function runSwapDnaPair({ invert = false } = {}) {
 
   const okEngine = await ensureEngineSpawned({ reason: "swap dna" });
   if (!okEngine) return;
+  await maybeOverrideEngineImageModel(ACTION_IMAGE_MODEL.swap_dna);
   setImageFxActive(true, "Swap DNA");
   state.expectingArtifacts = true;
   state.pendingSwapDna = { structureId: structure.id, surfaceId: surface.id, startedAt: Date.now() };
   state.lastAction = "Swap DNA";
   setStatus("Engine: swap dna…");
-  portraitWorking("Swap DNA");
+  portraitWorking("Swap DNA", { providerOverride: providerFromModel(ACTION_IMAGE_MODEL.swap_dna) });
   const structureLabel = structure.label || basename(structure.path) || "Image A";
   const surfaceLabel = surface.label || basename(surface.path) || "Image B";
   const invertNote = invert ? " (inverted)" : "";
@@ -3909,11 +3922,6 @@ async function runBridgePair() {
     showToast("Bridge needs exactly 2 photos in the run.", "error", 3200);
     return;
   }
-  const okProvider = await ensureGeminiProImagePreviewForAction("Bridge");
-  if (!okProvider) {
-    showToast("Bridge requires a Gemini image model (multi-image).", "error", 3600);
-    return;
-  }
 
   const active = getActiveImage();
   const first = active || state.images[0];
@@ -3925,12 +3933,13 @@ async function runBridgePair() {
 
   const okEngine = await ensureEngineSpawned({ reason: "bridge" });
   if (!okEngine) return;
+  await maybeOverrideEngineImageModel(ACTION_IMAGE_MODEL.bridge);
   setImageFxActive(true, "Bridge");
   state.expectingArtifacts = true;
   state.pendingBridge = { sourceIds: [first.id, second.id], startedAt: Date.now() };
   state.lastAction = "Bridge";
   setStatus("Engine: bridge…");
-  portraitWorking("Bridge");
+  portraitWorking("Bridge", { providerOverride: providerFromModel(ACTION_IMAGE_MODEL.bridge) });
   const aLabel = first.label || basename(first.path) || "Image A";
   const bLabel = second.label || basename(second.path) || "Image B";
   showToast(`Bridging: ${aLabel} ↔ ${bLabel}`, "info", 3200);
