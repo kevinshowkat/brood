@@ -4024,14 +4024,6 @@ async function aiAnnotateEdit({
   }
 }
 
-async function writeCanvasPngToPath(canvas, outPath) {
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-  if (!blob) throw new Error("Failed to encode PNG");
-  const buf = new Uint8Array(await blob.arrayBuffer());
-  await writeBinaryFile(outPath, buf);
-  return outPath;
-}
-
 async function compositeAnnotateBoxEdit(targetId, editedCropPath, { box, instruction = null } = {}) {
   if (!targetId || !editedCropPath || !box) return false;
   const item = state.imagesById.get(targetId) || null;
