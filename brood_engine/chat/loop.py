@@ -26,6 +26,7 @@ from ..utils import (
     is_flux_model,
 )
 from ..recreate.caption import infer_description, infer_diagnosis, infer_argument
+from ..recreate.triplet import infer_triplet_rule, infer_triplet_odd_one_out
 
 
 def _maybe_warn_missing_flux_key(model: str | None) -> None:
@@ -69,7 +70,7 @@ class ChatLoop:
                     print(
                         "Commands: /profile /text_model /image_model /fast /quality /cheaper "
                         "/better /optimize /recreate /describe /diagnose /recast /use "
-                        "/blend /swap_dna /argue /bridge /export"
+                        "/blend /swap_dna /argue /bridge /extract_rule /odd_one_out /triforce /export"
                     )
                 continue
             if intent.action == "set_profile":
@@ -277,6 +278,153 @@ class ChatLoop:
                     model=inference.model,
                 )
                 print(inference.text)
+                continue
+            if intent.action == "extract_rule":
+                paths = intent.command_args.get("paths") or []
+                if not isinstance(paths, list) or len(paths) < 3:
+                    print("Usage: /extract_rule <image_a> <image_b> <image_c>")
+                    continue
+                path_a = Path(str(paths[0]))
+                path_b = Path(str(paths[1]))
+                path_c = Path(str(paths[2]))
+                if not path_a.exists():
+                    print(f"Extract the Rule failed: file not found ({path_a})")
+                    continue
+                if not path_b.exists():
+                    print(f"Extract the Rule failed: file not found ({path_b})")
+                    continue
+                if not path_c.exists():
+                    print(f"Extract the Rule failed: file not found ({path_c})")
+                    continue
+                inference = None
+                try:
+                    inference = infer_triplet_rule(path_a, path_b, path_c)
+                except Exception:
+                    inference = None
+                if inference is None or not inference.principle:
+                    msg = "Extract the Rule unavailable (missing keys or vision client)."
+                    self.engine.events.emit(
+                        "triplet_rule_failed",
+                        image_paths=[str(path_a), str(path_b), str(path_c)],
+                        error=msg,
+                    )
+                    print(msg)
+                    continue
+                self.engine.events.emit(
+                    "triplet_rule",
+                    image_paths=[str(path_a), str(path_b), str(path_c)],
+                    principle=inference.principle,
+                    evidence=inference.evidence,
+                    annotations=inference.annotations,
+                    source=inference.source,
+                    model=inference.model,
+                    confidence=inference.confidence,
+                )
+                print(f"RULE:\n{inference.principle}")
+                if inference.evidence:
+                    print("\nEVIDENCE:")
+                    for item in inference.evidence:
+                        print(f"- {item.get('image', '')}: {item.get('note', '')}")
+                continue
+            if intent.action == "odd_one_out":
+                paths = intent.command_args.get("paths") or []
+                if not isinstance(paths, list) or len(paths) < 3:
+                    print("Usage: /odd_one_out <image_a> <image_b> <image_c>")
+                    continue
+                path_a = Path(str(paths[0]))
+                path_b = Path(str(paths[1]))
+                path_c = Path(str(paths[2]))
+                if not path_a.exists():
+                    print(f"Odd One Out failed: file not found ({path_a})")
+                    continue
+                if not path_b.exists():
+                    print(f"Odd One Out failed: file not found ({path_b})")
+                    continue
+                if not path_c.exists():
+                    print(f"Odd One Out failed: file not found ({path_c})")
+                    continue
+                inference = None
+                try:
+                    inference = infer_triplet_odd_one_out(path_a, path_b, path_c)
+                except Exception:
+                    inference = None
+                if inference is None or not inference.odd_image:
+                    msg = "Odd One Out unavailable (missing keys or vision client)."
+                    self.engine.events.emit(
+                        "triplet_odd_one_out_failed",
+                        image_paths=[str(path_a), str(path_b), str(path_c)],
+                        error=msg,
+                    )
+                    print(msg)
+                    continue
+                self.engine.events.emit(
+                    "triplet_odd_one_out",
+                    image_paths=[str(path_a), str(path_b), str(path_c)],
+                    odd_image=inference.odd_image,
+                    odd_index=inference.odd_index,
+                    pattern=inference.pattern,
+                    explanation=inference.explanation,
+                    source=inference.source,
+                    model=inference.model,
+                    confidence=inference.confidence,
+                )
+                print(f"ODD ONE OUT: {inference.odd_image}")
+                if inference.pattern:
+                    print(f"\nPATTERN:\n{inference.pattern}")
+                if inference.explanation:
+                    print(f"\nWHY:\n{inference.explanation}")
+                continue
+            if intent.action == "triforce":
+                paths = intent.command_args.get("paths") or []
+                if not isinstance(paths, list) or len(paths) < 3:
+                    print("Usage: /triforce <image_a> <image_b> <image_c>")
+                    continue
+                path_a = Path(str(paths[0]))
+                path_b = Path(str(paths[1]))
+                path_c = Path(str(paths[2]))
+                if not path_a.exists():
+                    print(f"Triforce failed: file not found ({path_a})")
+                    continue
+                if not path_b.exists():
+                    print(f"Triforce failed: file not found ({path_b})")
+                    continue
+                if not path_c.exists():
+                    print(f"Triforce failed: file not found ({path_c})")
+                    continue
+                prompt = (
+                    "Take the three provided images as vertices of a creative space and generate the centroid: "
+                    "ONE new image that sits equidistant from all three references. "
+                    "This is mood board distillation, not a collage. "
+                    "Find the shared design language (composition, lighting logic, color story, material palette, and mood), "
+                    "then output one coherent image that could plausibly sit between all three."
+                )
+                settings = self._settings()
+                settings["n"] = 1
+                settings["init_image"] = str(path_a)
+                settings["reference_images"] = [str(path_b), str(path_c)]
+                ticker = ProgressTicker("Triforcing images")
+                ticker.start_ticking()
+                start_reasoning_summary(prompt, self.engine.text_model, ticker)
+                error: Exception | None = None
+                artifacts: list[dict[str, object]] = []
+                try:
+                    artifacts = self.engine.generate(
+                        prompt,
+                        settings,
+                        {"action": "triforce", "source_images": [str(path_a), str(path_b), str(path_c)]},
+                    )
+                except Exception as exc:
+                    error = exc
+                finally:
+                    ticker.stop(done=True)
+                if error:
+                    print(f"Triforce failed: {error}")
+                    continue
+                if artifacts:
+                    self.last_artifact_path = str(
+                        artifacts[-1].get("image_path") or self.last_artifact_path or ""
+                    )
+                print("Triforce complete.")
                 continue
             if intent.action == "bridge":
                 paths = intent.command_args.get("paths") or []

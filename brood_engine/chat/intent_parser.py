@@ -132,6 +132,12 @@ def parse_intent(text: str) -> Intent:
             return Intent(action="argue", raw=text, command_args={"paths": _parse_path_args(arg)})
         if command == "bridge":
             return Intent(action="bridge", raw=text, command_args={"paths": _parse_path_args(arg)})
+        if command == "extract_rule":
+            return Intent(action="extract_rule", raw=text, command_args={"paths": _parse_path_args(arg)})
+        if command == "odd_one_out":
+            return Intent(action="odd_one_out", raw=text, command_args={"paths": _parse_path_args(arg)})
+        if command == "triforce":
+            return Intent(action="triforce", raw=text, command_args={"paths": _parse_path_args(arg)})
         if command == "export":
             return Intent(action="export", raw=text, command_args={"format": arg or "html"})
         if command == "help":
