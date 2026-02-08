@@ -27,6 +27,8 @@ const els = {
   settingsDrawer: document.getElementById("settings-drawer"),
   settingsClose: document.getElementById("settings-close"),
   memoryToggle: document.getElementById("memory-toggle"),
+  alwaysOnVisionToggle: document.getElementById("always-on-vision-toggle"),
+  alwaysOnVisionReadout: document.getElementById("always-on-vision-readout"),
   textModel: document.getElementById("text-model"),
   imageModel: document.getElementById("image-model"),
   keyStatus: document.getElementById("key-status"),
@@ -83,6 +85,7 @@ const els = {
 
 const settings = {
   memory: localStorage.getItem("brood.memory") === "1",
+  alwaysOnVision: localStorage.getItem("brood.alwaysOnVision") === "1",
   textModel: localStorage.getItem("brood.textModel") || "gpt-5.2",
   imageModel: localStorage.getItem("brood.imageModel") || "gemini-2.5-flash-image",
 };
@@ -158,6 +161,16 @@ const state = {
   lastCostLatency: null, // { provider, model, cost_total_usd, cost_per_1k_images_usd, latency_per_image_s, at }
   fallbackToFullRead: false,
   keyStatus: null, // { openai, gemini, imagen, flux, anthropic }
+  alwaysOnVision: {
+    enabled: settings.alwaysOnVision,
+    pending: false,
+    pendingPath: null,
+    pendingAt: 0,
+    lastSignature: null,
+    lastRunAt: 0,
+    lastText: null,
+    lastMeta: null, // { source, model, at, image_path }
+  },
   imageFx: {
     active: false,
     label: null,
@@ -599,6 +612,220 @@ function scheduleVisionDescribeAll() {
     if (active?.path && item.path === active.path) continue;
     scheduleVisionDescribe(item.path);
   }
+}
+
+const ALWAYS_ON_VISION_DEBOUNCE_MS = 900;
+const ALWAYS_ON_VISION_THROTTLE_MS = 12000;
+const ALWAYS_ON_VISION_IDLE_MS = 900;
+const ALWAYS_ON_VISION_TIMEOUT_MS = 45000;
+
+let alwaysOnVisionTimer = null;
+let alwaysOnVisionTimeout = null;
+
+function updateAlwaysOnVisionReadout() {
+  const el = els.alwaysOnVisionReadout;
+  if (!el) return;
+  const aov = state.alwaysOnVision;
+  if (!aov?.enabled) {
+    el.textContent = "Off";
+    return;
+  }
+  if (aov.pending) {
+    el.textContent = "SCANNING…";
+    return;
+  }
+  if (typeof aov.lastText === "string" && aov.lastText.trim()) {
+    // Keep it readable in the settings drawer (but preserve newlines).
+    const cleaned = aov.lastText.trim();
+    el.textContent = cleaned.length > 1400 ? `${cleaned.slice(0, 1399).trimEnd()}\n…` : cleaned;
+    return;
+  }
+  el.textContent = state.images.length ? "On (waiting…)" : "On (no images loaded)";
+}
+
+function allowAlwaysOnVision() {
+  if (!state.alwaysOnVision?.enabled) return false;
+  if (!state.images.length) return false;
+  if (!state.runDir) return false;
+  // Must have at least one vision-capable key; engine will emit a failure otherwise.
+  if (state.keyStatus) {
+    if (!state.keyStatus.openai && !state.keyStatus.gemini) return false;
+  }
+  return true;
+}
+
+function isForegroundActionRunning() {
+  return Boolean(
+    state.pendingBlend ||
+      state.pendingSwapDna ||
+      state.pendingBridge ||
+      state.pendingArgue ||
+      state.pendingRecast ||
+      state.pendingDiagnose ||
+      state.expectingArtifacts ||
+      state.pendingReplace ||
+      state.ptySpawning
+  );
+}
+
+function computeCanvasSignature() {
+  const parts = [];
+  parts.push(`mode=${state.canvasMode}`);
+  parts.push(`active=${state.activeId || ""}`);
+  for (const item of state.images) {
+    if (item?.path) parts.push(item.path);
+  }
+  return parts.join("|");
+}
+
+function scheduleAlwaysOnVision({ immediate = false } = {}) {
+  if (!allowAlwaysOnVision()) {
+    updateAlwaysOnVisionReadout();
+    return;
+  }
+  clearTimeout(alwaysOnVisionTimer);
+  const delay = immediate ? 0 : ALWAYS_ON_VISION_DEBOUNCE_MS;
+  alwaysOnVisionTimer = setTimeout(() => {
+    alwaysOnVisionTimer = null;
+    if ("requestIdleCallback" in window) {
+      window.requestIdleCallback(
+        () => {
+          runAlwaysOnVisionOnce().catch((err) => console.warn("Always-on vision failed:", err));
+        },
+        { timeout: 1200 }
+      );
+    } else {
+      runAlwaysOnVisionOnce().catch((err) => console.warn("Always-on vision failed:", err));
+    }
+  }, delay);
+}
+
+async function writeAlwaysOnVisionSnapshot(outPath, { maxDim = 768 } = {}) {
+  const items = state.images.filter((it) => it?.path).slice(0, 6);
+  for (const item of items) ensureCanvasImageLoaded(item);
+  const n = items.length;
+  if (!n) return null;
+
+  const cols = n <= 1 ? 1 : n === 2 ? 2 : n <= 4 ? 2 : 3;
+  const rows = Math.ceil(n / cols);
+  const pad = 14;
+  const gap = 10;
+  const w = Math.max(128, Math.round(maxDim));
+  const h = w;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, w, h);
+
+  const cellW = (w - pad * 2 - gap * (cols - 1)) / cols;
+  const cellH = (h - pad * 2 - gap * (rows - 1)) / rows;
+
+  const drawContain = (img, x, y, cw, ch) => {
+    const iw = img?.naturalWidth || 1;
+    const ih = img?.naturalHeight || 1;
+    const scale = Math.min(cw / iw, ch / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    const dx = x + (cw - dw) * 0.5;
+    const dy = y + (ch - dh) * 0.5;
+    ctx.drawImage(img, dx, dy, dw, dh);
+  };
+
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    const cx = i % cols;
+    const cy = Math.floor(i / cols);
+    const x = pad + cx * (cellW + gap);
+    const y = pad + cy * (cellH + gap);
+
+    // Card background + frame.
+    ctx.fillStyle = "rgba(13, 18, 25, 0.06)";
+    ctx.fillRect(x, y, cellW, cellH);
+    ctx.strokeStyle = "rgba(53, 71, 96, 0.25)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, cellW - 2, cellH - 2);
+
+    if (item?.img) {
+      drawContain(item.img, x + 6, y + 6, cellW - 12, cellH - 12);
+    } else {
+      ctx.fillStyle = "rgba(13, 18, 25, 0.08)";
+      ctx.fillRect(x + 6, y + 6, cellW - 12, cellH - 12);
+      ctx.fillStyle = "rgba(13, 18, 25, 0.55)";
+      ctx.font = "12px IBM Plex Mono";
+      ctx.fillText("LOADING…", x + 14, y + 26);
+    }
+  }
+
+  let blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.82));
+  if (!blob) blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error("Failed to encode always-on snapshot");
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  await writeBinaryFile(outPath, buf);
+  return { path: outPath, images: n, width: w, height: h };
+}
+
+async function runAlwaysOnVisionOnce() {
+  if (!allowAlwaysOnVision()) {
+    updateAlwaysOnVisionReadout();
+    return;
+  }
+  const aov = state.alwaysOnVision;
+  if (aov.pending) return;
+
+  const now = Date.now();
+  const quietFor = now - (state.lastInteractionAt || 0);
+  if (quietFor < ALWAYS_ON_VISION_IDLE_MS) {
+    scheduleAlwaysOnVision();
+    return;
+  }
+  if (isForegroundActionRunning()) {
+    scheduleAlwaysOnVision();
+    return;
+  }
+
+  const since = now - (aov.lastRunAt || 0);
+  if (since < ALWAYS_ON_VISION_THROTTLE_MS) {
+    scheduleAlwaysOnVision();
+    return;
+  }
+
+  const signature = computeCanvasSignature();
+  if (signature && aov.lastSignature === signature && aov.lastText) return;
+
+  await ensureRun();
+  const stamp = Date.now();
+  const snapshotPath = `${state.runDir}/alwayson-${stamp}.jpg`;
+  await writeAlwaysOnVisionSnapshot(snapshotPath, { maxDim: 768 });
+
+  const ok = await ensureEngineSpawned({ reason: "always-on vision" });
+  if (!ok) return;
+
+  aov.pending = true;
+  aov.pendingPath = snapshotPath;
+  aov.pendingAt = now;
+  aov.lastRunAt = now;
+  aov.lastSignature = signature;
+  updateAlwaysOnVisionReadout();
+
+  clearTimeout(alwaysOnVisionTimeout);
+  alwaysOnVisionTimeout = setTimeout(() => {
+    if (!state.alwaysOnVision?.pending) return;
+    state.alwaysOnVision.pending = false;
+    state.alwaysOnVision.pendingPath = null;
+    updateAlwaysOnVisionReadout();
+  }, ALWAYS_ON_VISION_TIMEOUT_MS);
+
+  await invoke("write_pty", { data: `/canvas_context ${quoteForPtyArg(snapshotPath)}\n` }).catch((err) => {
+    console.warn("Always-on vision dispatch failed:", err);
+    aov.pending = false;
+    aov.pendingPath = null;
+    updateAlwaysOnVisionReadout();
+  });
 }
 
 let thumbObserver = null;
@@ -1108,6 +1335,8 @@ async function refreshKeyStatus() {
     console.warn("Key detection failed:", err);
     state.keyStatus = null;
     renderKeyStatus(null);
+  } finally {
+    updateAlwaysOnVisionReadout();
   }
 }
 
@@ -1448,6 +1677,7 @@ function setCanvasMode(mode) {
   }
   renderSelectionMeta();
   scheduleVisualPromptWrite();
+  scheduleAlwaysOnVision();
   requestRender();
 }
 
@@ -2986,6 +3216,7 @@ async function setActiveImage(id) {
   renderHudReadout();
   resetViewToFit();
   requestRender();
+  scheduleAlwaysOnVision();
 }
 
 function addImage(item, { select = false } = {}) {
@@ -3003,6 +3234,7 @@ function addImage(item, { select = false } = {}) {
   }
   showDropHint(state.images.length === 0);
   scheduleVisualPromptWrite();
+  scheduleAlwaysOnVision();
   if (select || !state.activeId) {
     setActiveImage(item.id).catch(() => {});
   }
@@ -3068,8 +3300,9 @@ async function replaceImageInPlace(
 	    requestRender();
 	  }
     scheduleVisualPromptWrite();
-	  return true;
-	}
+    scheduleAlwaysOnVision();
+		  return true;
+		}
 
 async function setEngineActiveImage(path) {
   if (!path) return;
@@ -4447,6 +4680,44 @@ function handleEvent(event) {
       at: Date.now(),
     };
     renderHudReadout();
+  } else if (event.type === "canvas_context") {
+    const text = event.text;
+    const aov = state.alwaysOnVision;
+    if (aov) {
+      aov.pending = false;
+      aov.pendingPath = null;
+      aov.pendingAt = 0;
+      if (typeof text === "string" && text.trim()) {
+        aov.lastText = text.trim();
+      }
+      aov.lastMeta = {
+        source: event.source || null,
+        model: event.model || null,
+        at: Date.now(),
+        image_path: event.image_path || null,
+      };
+    }
+    clearTimeout(alwaysOnVisionTimeout);
+    alwaysOnVisionTimeout = null;
+    updateAlwaysOnVisionReadout();
+  } else if (event.type === "canvas_context_failed") {
+    const aov = state.alwaysOnVision;
+    if (aov) {
+      aov.pending = false;
+      aov.pendingPath = null;
+      aov.pendingAt = 0;
+      const msg = event.error ? `Canvas context failed: ${event.error}` : "Canvas context failed.";
+      aov.lastText = msg;
+      aov.lastMeta = {
+        source: event.source || null,
+        model: event.model || null,
+        at: Date.now(),
+        image_path: event.image_path || null,
+      };
+    }
+    clearTimeout(alwaysOnVisionTimeout);
+    alwaysOnVisionTimeout = null;
+    updateAlwaysOnVisionReadout();
   } else if (event.type === "image_description") {
     const path = event.image_path;
     const desc = event.description;
@@ -5308,6 +5579,28 @@ function installUi() {
       setStatus("Engine: memory applies next run");
     });
   }
+  if (els.alwaysOnVisionToggle) {
+    els.alwaysOnVisionToggle.checked = settings.alwaysOnVision;
+    els.alwaysOnVisionToggle.addEventListener("change", () => {
+      bumpInteraction();
+      settings.alwaysOnVision = els.alwaysOnVisionToggle.checked;
+      localStorage.setItem("brood.alwaysOnVision", settings.alwaysOnVision ? "1" : "0");
+      if (state.alwaysOnVision) {
+        state.alwaysOnVision.enabled = settings.alwaysOnVision;
+        state.alwaysOnVision.pending = false;
+        state.alwaysOnVision.pendingPath = null;
+        state.alwaysOnVision.pendingAt = 0;
+        if (!settings.alwaysOnVision) state.alwaysOnVision.lastText = null;
+      }
+      updateAlwaysOnVisionReadout();
+      if (settings.alwaysOnVision) {
+        setStatus("Engine: always-on vision enabled");
+        scheduleAlwaysOnVision({ immediate: true });
+      } else {
+        setStatus("Engine: always-on vision disabled");
+      }
+    });
+  }
   if (els.textModel) {
     els.textModel.value = settings.textModel;
     els.textModel.addEventListener("change", () => {
@@ -5580,6 +5873,7 @@ async function boot() {
   setStatus("Engine: booting…");
   setRunInfo("No run");
   refreshKeyStatus().catch(() => {});
+  updateAlwaysOnVisionReadout();
   ensurePortraitIndex().catch(() => {});
   showDropHint(true);
   renderSelectionMeta();
