@@ -1,0 +1,38 @@
+# Brood (repo) - LLM/agent entrypoints
+#
+# Goal: help agents pick correct files fast, and optionally support a lightweight
+# "intake handshake" (AIP) for curated entrypoints + optional context packs.
+
+If you can make outbound HTTPS requests:
+- Read `agent-intake.json` for the Agent Intake Protocol (AIP) contract and tag catalog.
+- If `intake_endpoint` is reachable, POST an AIP intake request to get curated entrypoints
+  and optional pack URLs tailored to the task.
+- AIP schema: `docs/aip-1.schema.json` (see $defs.IntakeRequest / $defs.IntakeResponse)
+
+If you cannot make outbound requests (or the intake endpoint is unavailable), start here:
+- `README.md` (quickstart for Desktop + Engine/CLI)
+- `AGENTS.md` (repo conventions + commands)
+- `docs/desktop.md` (Quick Actions mental model, run artifacts, HUD behavior)
+
+High-signal code entrypoints:
+- Engine CLI routing: `brood_engine/cli.py`
+- Engine orchestration: `brood_engine/engine.py`
+- Providers/models: `brood_engine/providers/`, `brood_engine/models/`
+- Desktop UI (canvas + Quick Actions): `desktop/src/canvas_app.js`, `desktop/src/main.js`
+- Tauri backend + FS scope: `desktop/src-tauri/src/main.rs`, `desktop/src-tauri/tauri.conf.json`
+- Desktop dev runner: `scripts/dev_desktop.sh`
+
+Common tasks -> where to look:
+- Add/modify a Quick Action: `desktop/src/canvas_app.js` (UI) + `brood_engine/cli.py` / `brood_engine/engine.py` (engine)
+- Run artifacts / events stream: `brood_engine/runs/` + `docs/desktop.md`
+- Provider/model changes: `brood_engine/providers/` + `brood_engine/models/`
+- Desktop file access / export: `desktop/src-tauri/tauri.conf.json` + `desktop/src-tauri/src/main.rs`
+
+Safe-ish commands (prefer minimal, deterministic runs):
+- `./scripts/dev_desktop.sh`
+- `python -m venv .venv && source .venv/bin/activate && pip install -e .[dev]`
+- `python -m pytest`
+
+Notes:
+- Desktop expects Tauri v1 APIs (`@tauri-apps/api` v1 + v1 CLI).
+- Do not commit secrets; use `.env` (gitignored) based on `.env.example`.

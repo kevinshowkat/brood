@@ -1,0 +1,21 @@
+---
+description: "Brood repo: entrypoints + optional Agent Intake Protocol (AIP)"
+alwaysApply: true
+globs: ["**/*", "*"]
+---
+
+Follow `AGENTS.md` for repo conventions, commands, and style.
+
+## Intake / Discovery (Preferred)
+- Read `llms.txt` first.
+- If outbound HTTPS is allowed, call the AIP endpoint described in `agent-intake.json` to get curated entrypoints and optional context packs.
+- Use coarse `task.tags[]` from `agent-intake.json` (avoid raw prompts). Never send secrets.
+- If AIP is unavailable, use `agent-intake.json` -> `fallback_entrypoints`.
+
+## High-Signal Entry Points
+- Engine CLI routing: `brood_engine/cli.py`
+- Desktop canvas + Quick Actions: `desktop/src/canvas_app.js`
+- Tauri backend + FS scope: `desktop/src-tauri/src/main.rs`, `desktop/src-tauri/tauri.conf.json`
+
+## Generated Artifacts
+- Do not commit generated packs/logs under `outputs/aip_packs/` or `outputs/aip_server/`.
