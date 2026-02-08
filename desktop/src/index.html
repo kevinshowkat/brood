@@ -475,6 +475,10 @@
             <input id="memory-toggle" type="checkbox" />
           </label>
           <label class="field">
+            <div class="field-label">Always-On Vision</div>
+            <input id="always-on-vision-toggle" type="checkbox" />
+          </label>
+          <label class="field">
             <div class="field-label">Text Model</div>
             <select id="text-model">
               <option value="dryrun-text-1">dryrun-text-1</option>
@@ -509,6 +513,10 @@
           <div class="key-status-card">
             <div class="key-status-title">API Keys</div>
             <div id="key-status" class="key-status-list muted">Detecting local keys…</div>
+          </div>
+          <div class="key-status-card">
+            <div class="key-status-title">Canvas Context</div>
+            <div id="always-on-vision-readout" class="key-status-list muted">Off</div>
           </div>
           <div class="drawer-footnote muted">
             For image-to-image edits and recreate, prefer a model that accepts image inputs (Gemini).

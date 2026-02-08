@@ -11,7 +11,7 @@ from .chat.intent_parser import parse_intent
 from .chat.refine import extract_model_directive, detect_edit_model, is_edit_request, is_refinement, is_repeat_request
 from .cli_progress import progress_once, ProgressTicker, elapsed_line
 from .engine import BroodEngine
-from .recreate.caption import infer_description, infer_diagnosis, infer_argument
+from .recreate.caption import infer_description, infer_diagnosis, infer_argument, infer_canvas_context
 from .runs.export import export_html
 from .reasoning import (
     start_reasoning_summary,
@@ -120,7 +120,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
         if intent.action == "help":
             print(
                 "Commands: /profile /text_model /image_model /fast /quality /cheaper "
-                "/better /optimize /recreate /describe /diagnose /recast /use "
+                "/better /optimize /recreate /describe /canvas_context /diagnose /recast /use "
                 "/blend /swap_dna /argue /bridge /export"
             )
             continue
@@ -178,6 +178,34 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 meta.append(str(inference.model))
             suffix = f" ({', '.join(meta)})" if meta else ""
             print(f"Description{suffix}: {inference.description}")
+            continue
+        if intent.action == "canvas_context":
+            raw_path = intent.command_args.get("path") or last_artifact_path
+            if not raw_path:
+                print("/canvas_context requires a path (or set an active image with /use)")
+                continue
+            path = Path(str(raw_path))
+            if not path.exists():
+                print(f"Canvas context failed: file not found ({path})")
+                continue
+            inference = None
+            try:
+                inference = infer_canvas_context(path)
+            except Exception:
+                inference = None
+            if inference is None or not inference.text:
+                msg = "Canvas context unavailable (missing keys or vision client)."
+                engine.events.emit("canvas_context_failed", image_path=str(path), error=msg)
+                print(msg)
+                continue
+            engine.events.emit(
+                "canvas_context",
+                image_path=str(path),
+                text=inference.text,
+                source=inference.source,
+                model=inference.model,
+            )
+            print(inference.text)
             continue
         if intent.action == "diagnose":
             raw_path = intent.command_args.get("path") or last_artifact_path
