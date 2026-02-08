@@ -1,0 +1,218 @@
+{
+  "schema_version": "aip-1",
+  "schema": {
+    "url": "https://brood.sh/spec/aip-1.schema.json",
+    "local_path": "docs/aip-1.schema.json",
+    "request_def": "#/$defs/IntakeRequest",
+    "response_def": "#/$defs/IntakeResponse"
+  },
+  "intake_endpoint": "https://6yq5plinssvsog2ozyhnfnscya0qwdzp.lambda-url.us-east-1.on.aws/aip/intake",
+  "notes": [
+    "This file is repo-side only. AIP requires operating the intake_endpoint on infrastructure you control.",
+    "Replace brood.sh URLs with your actual domain/paths (or leave AIP unused and follow llms.txt fallback entrypoints)."
+  ],
+  "privacy": {
+    "purpose": "Return curated entrypoints (files/scripts) and optional context pack URLs; optionally log coarse task tags for aggregate usage.",
+    "expected_logs": [
+      "timestamp",
+      "agent.tool",
+      "agent.tool_version",
+      "task.tags",
+      "repo.ref (if provided)",
+      "response.packs[].id (if any)"
+    ],
+    "do_not_send": [
+      "raw prompts (unless the user explicitly chooses to share them)",
+      "API keys or secrets",
+      "source images / binary artifacts"
+    ],
+    "opt_out": {
+      "request_field": "telemetry.opt_out",
+      "header": "X-Brood-Opt-Out",
+      "header_value": "1"
+    }
+  },
+  "tags": [
+    "desktop-dev",
+    "desktop-quick-actions",
+    "desktop-canvas",
+    "desktop-tauri",
+    "engine-cli",
+    "engine-providers",
+    "engine-recreate",
+    "engine-memory",
+    "engine-events",
+    "tests",
+    "docs"
+  ],
+  "fallback_entrypoints": [
+    {
+      "path": "README.md",
+      "kind": "doc",
+      "why": "Quickstart for desktop + engine/CLI, plus troubleshooting and layout overview.",
+      "priority": 1
+    },
+    {
+      "path": "AGENTS.md",
+      "kind": "doc",
+      "why": "Repo guidelines: structure, build commands, testing, and coding style.",
+      "priority": 1
+    },
+    {
+      "path": "docs/desktop.md",
+      "kind": "doc",
+      "why": "Desktop concepts (Run/Unit/Views), Quick Actions list, HUD behavior, and run artifacts.",
+      "priority": 2
+    },
+    {
+      "path": "brood_engine/cli.py",
+      "kind": "source",
+      "why": "Primary CLI entry: chat/run/recreate/export handlers and argument plumbing.",
+      "priority": 2
+    },
+    {
+      "path": "brood_engine/engine.py",
+      "kind": "source",
+      "why": "Engine orchestration and core execution loop.",
+      "priority": 3
+    },
+    {
+      "path": "desktop/src/canvas_app.js",
+      "kind": "source",
+      "why": "Desktop UI: canvas behaviors and Quick Actions rendering/dispatch.",
+      "priority": 2
+    },
+    {
+      "path": "desktop/src-tauri/src/main.rs",
+      "kind": "source",
+      "why": "Tauri backend glue (commands, app wiring).",
+      "priority": 3
+    },
+    {
+      "path": "desktop/src-tauri/tauri.conf.json",
+      "kind": "config",
+      "why": "FS scope and app configuration (common cause of import/export issues).",
+      "priority": 3
+    },
+    {
+      "path": "scripts/dev_desktop.sh",
+      "kind": "script",
+      "why": "Dev runner that starts the Tauri app and spawns the Python engine.",
+      "priority": 2
+    }
+  ],
+  "tag_catalog": {
+    "desktop-dev": {
+      "description": "Run the desktop app locally; fix build/startup issues.",
+      "entrypoints": [
+        "README.md",
+        "scripts/dev_desktop.sh",
+        "desktop/package.json",
+        "desktop/src-tauri/Cargo.toml",
+        "desktop/src-tauri/src/main.rs"
+      ]
+    },
+    "desktop-quick-actions": {
+      "description": "Change Quick Actions UI/behavior (buttons, dispatch, HUD output).",
+      "entrypoints": [
+        "docs/desktop.md",
+        "desktop/src/canvas_app.js",
+        "desktop/src/index.html",
+        "desktop/src/styles.css",
+        "brood_engine/cli.py",
+        "brood_engine/engine.py"
+      ]
+    },
+    "desktop-canvas": {
+      "description": "Canvas interactions, selections, tools, layout, filmstrip behavior.",
+      "entrypoints": [
+        "desktop/src/canvas_app.js",
+        "desktop/src/styles.css",
+        "docs/desktop.md"
+      ]
+    },
+    "desktop-tauri": {
+      "description": "Tauri backend, FS scope, command wiring, native build issues.",
+      "entrypoints": [
+        "desktop/src-tauri/src/main.rs",
+        "desktop/src-tauri/tauri.conf.json",
+        "README.md"
+      ]
+    },
+    "engine-cli": {
+      "description": "Brood CLI commands and flags (chat/run/recreate/export).",
+      "entrypoints": [
+        "brood_engine/cli.py",
+        "brood_engine/engine.py",
+        "README.md"
+      ]
+    },
+    "engine-providers": {
+      "description": "Provider integrations (OpenAI/Gemini/etc), model routing, API key handling.",
+      "entrypoints": [
+        "brood_engine/providers/",
+        "brood_engine/models/",
+        "README.md",
+        ".env.example"
+      ]
+    },
+    "engine-recreate": {
+      "description": "Recreate flow (reference image in, similarities/edits out).",
+      "entrypoints": [
+        "brood_engine/recreate/",
+        "brood_engine/cli.py"
+      ]
+    },
+    "engine-memory": {
+      "description": "Opt-in memory system, storage, and retrieval logic.",
+      "entrypoints": [
+        "brood_engine/memory/",
+        "README.md"
+      ]
+    },
+    "engine-events": {
+      "description": "Run artifacts + events.jsonl format; stability of event stream consumed by desktop.",
+      "entrypoints": [
+        "brood_engine/runs/",
+        "docs/desktop.md"
+      ]
+    },
+    "tests": {
+      "description": "Pytest coverage for engine components.",
+      "entrypoints": [
+        "tests/",
+        "pyproject.toml"
+      ]
+    },
+    "docs": {
+      "description": "Docs updates (desktop usage, specs, reference notes).",
+      "entrypoints": [
+        "docs/README.md",
+        "docs/desktop.md",
+        "docs/param_forge_reference.md"
+      ]
+    }
+  },
+  "example_request": {
+    "schema_version": "aip-1",
+    "agent": {
+      "tool": "codex",
+      "tool_version": "0.0",
+      "git_user_agent": "git/2.x"
+    },
+    "repo": {
+      "url": "https://github.com/<org-or-user>/brood",
+      "ref": "main"
+    },
+    "task": {
+      "tags": [
+        "desktop-quick-actions",
+        "engine-events"
+      ],
+      "notes": "Need to add a new Quick Action and ensure events.jsonl stays stable."
+    },
+    "telemetry": {
+      "opt_out": false
+    }
+  }
+}

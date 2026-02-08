@@ -86,3 +86,10 @@ Edit `~/.brood/pricing_overrides.json` to override pricing or latency values.
 - `tests/` pytest suite
 - `docs/param_forge_reference.md` Param Forge reference notes
 - `docs/desktop.md` Desktop UI notes (quick actions + workflows)
+
+## Agent/LLM entrypoints
+
+- `llms.txt` high-signal entrypoints and task routing for LLM agents.
+- `agent-intake.json` optional Agent Intake Protocol (AIP) contract (curated entrypoints + optional context packs).
+- `scripts/aip_build_packs.py` builds JSON context packs to host and return via AIP (writes to `outputs/aip_packs/`, gitignored).
+- `scripts/aip_server.py` stdlib-only local stub AIP server for testing the contract + pack downloads.
