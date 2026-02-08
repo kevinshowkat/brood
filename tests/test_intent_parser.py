@@ -95,3 +95,25 @@ def test_parse_intent_triforce_quoted_paths():
     intent = parse_intent('/triforce "/tmp/a b.png" "/tmp/c d.png" "/tmp/e f.png"')
     assert intent.action == "triforce"
     assert intent.command_args["paths"] == ["/tmp/a b.png", "/tmp/c d.png", "/tmp/e f.png"]
+
+
+def test_parse_intent_canvas_context_rt_start():
+    intent = parse_intent("/canvas_context_rt_start")
+    assert intent.action == "canvas_context_rt_start"
+
+
+def test_parse_intent_canvas_context_rt_stop():
+    intent = parse_intent("/canvas_context_rt_stop")
+    assert intent.action == "canvas_context_rt_stop"
+
+
+def test_parse_intent_canvas_context_rt_path():
+    intent = parse_intent("/canvas_context_rt a.png")
+    assert intent.action == "canvas_context_rt"
+    assert intent.command_args["path"] == "a.png"
+
+
+def test_parse_intent_canvas_context_rt_quoted_path():
+    intent = parse_intent('/canvas_context_rt "/tmp/a b.png"')
+    assert intent.action == "canvas_context_rt"
+    assert intent.command_args["path"] == "/tmp/a b.png"

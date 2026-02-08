@@ -8,6 +8,7 @@ license = "MIT"
 authors = [{name = "Brood"}]
 dependencies = [
   "Pillow>=10.0.0",
+  "websockets>=12.0",
 ]
 
 [project.scripts]

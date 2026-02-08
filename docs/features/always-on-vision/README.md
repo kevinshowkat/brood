@@ -1,4 +1,4 @@
-# Always-On Vision (Background Canvas Context Foundation)
+# Always-On Vision (Background Canvas Context)
 
 ## Problem
 Brood can feel reactive: the user edits the canvas, then decides what to do next. For a "desktop Image IDE", we want Brood to be one step ahead by continuously extracting lightweight context from the current canvas without slowing UX.
@@ -16,6 +16,7 @@ Primary files:
 - `brood_engine/chat/intent_parser.py`
 - `brood_engine/cli.py`
 - `brood_engine/recreate/caption.py`
+- `brood_engine/realtime/openai_realtime.py` (realtime backend)
 
 ### Desktop (Scheduler + Snapshot)
 - Toggle state is persisted via `localStorage` key `brood.alwaysOnVision`.
@@ -26,20 +27,30 @@ Primary files:
 - Snapshot generation:
   - Builds a small collage (up to 6 images) on a temporary canvas.
   - Encodes to JPEG and writes to the current `runDir` as `alwayson-<timestamp>.jpg`.
-  - Dispatches `/canvas_context <snapshotPath>` to the engine PTY.
+  - Dispatches realtime commands to the engine PTY:
+    - `/canvas_context_rt_start`
+    - `/canvas_context_rt <snapshotPath>`
+    - `/canvas_context_rt_stop`
 
-### Engine (New Slash Command + Inference)
-- New intent: `/canvas_context <path>`
-- CLI emits:
-  - `canvas_context` with `{ image_path, text, source, model }`
-  - `canvas_context_failed` with `{ image_path, error }`
-- Inference implementation lives in `brood_engine/recreate/caption.py` as `infer_canvas_context(...)`.
-  - Defaults to `gpt-4o-mini` via the OpenAI Responses API (override with `BROOD_CANVAS_CONTEXT_MODEL` / `OPENAI_CANVAS_CONTEXT_MODEL`).
-  - Falls back to `gpt-4o-mini` if the requested model fails (and ignores `*realtime*` models on this path).
+### Engine (Batch + Realtime)
+Batch (Responses API):
+- Slash command: `/canvas_context <path>`
+- Inference: `brood_engine/recreate/caption.py::infer_canvas_context(...)`
+  - Defaults to `gpt-4o-mini` via the OpenAI Responses API.
+  - Explicitly avoids `*realtime*` models on this path.
   - Optional Gemini fallback if keys + dependency are present.
 
+Realtime (OpenAI Realtime API):
+- Slash commands:
+  - `/canvas_context_rt_start`
+  - `/canvas_context_rt_stop`
+  - `/canvas_context_rt <path>`
+- Implementation: `brood_engine/realtime/openai_realtime.py`
+  - Spawns a background websocket worker and streams `canvas_context` events as text deltas arrive.
+
 ### Notes On Realtime Models
-Realtime models require the Realtime API (WebRTC/WebSocket). This feature currently uses the standard Responses API, so realtime models are intentionally not used here.
+Realtime models require the Realtime API (WebRTC/WebSocket) and must not be called via the Responses endpoint.
+See `docs/features/always-on-vision-realtime/README.md` for the persistent-session implementation details.
 
 ## Testing
 Standard regression set:
