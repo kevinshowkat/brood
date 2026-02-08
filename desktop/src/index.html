@@ -38,11 +38,15 @@
 		            <canvas id="overlay-canvas"></canvas>
 		            <div class="canvas-bumper canvas-bumper--left" aria-hidden="true"></div>
 		            <div class="canvas-bumper canvas-bumper--right" aria-hidden="true"></div>
-		            <div id="designate-menu" class="designate-menu hidden" role="menu" aria-label="Designate">
-	              <button type="button" data-kind="subject">Subject</button>
-	              <button type="button" data-kind="reference">Reference</button>
-	              <button type="button" data-kind="object">Object</button>
+            <div id="designate-menu" class="designate-menu hidden" role="menu" aria-label="Designate">
+              <button type="button" data-kind="subject">Subject</button>
+              <button type="button" data-kind="reference">Reference</button>
+              <button type="button" data-kind="object">Object</button>
               <button class="ghost" type="button" data-kind="clear">Clear</button>
+            </div>
+            <div id="image-menu" class="designate-menu hidden image-menu" role="menu" aria-label="Image menu">
+              <button type="button" data-action="remove">Remove from canvas</button>
+              <button class="ghost" type="button" data-action="cancel">Cancel</button>
             </div>
             <div id="annotate-panel" class="annotate-panel hidden" role="dialog" aria-label="Annotate">
               <div class="annotate-header">

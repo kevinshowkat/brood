@@ -77,6 +77,7 @@ const els = {
   selectionMeta: document.getElementById("selection-meta"),
   tipsText: document.getElementById("tips-text"),
   designateMenu: document.getElementById("designate-menu"),
+  imageMenu: document.getElementById("image-menu"),
   quickActions: document.getElementById("quick-actions"),
   toolButtons: Array.from(document.querySelectorAll(".tool[data-tool]")),
 };
@@ -103,6 +104,7 @@ const state = {
   thumbsById: new Map(), // artifactId -> { rootEl, imgEl, labelEl }
   designationsByImageId: new Map(), // imageId -> [{ id, kind, x, y, at }]
   pendingDesignation: null, // { imageId, x, y, at } | null
+  imageMenuTargetId: null,
   canvasMode: "single", // "single" renders the active image; "multi" renders all images for pair actions (Combine demo).
   multiRects: new Map(), // imageId -> { x, y, w, h } in canvas device pixels (for hit-testing).
   pendingBlend: null, // { sourceIds: [string, string], startedAt: number }
@@ -1950,6 +1952,39 @@ function hideDesignateMenuAnimated({ animate = true } = {}) {
   }, 240);
 }
 
+function hideImageMenu() {
+  if (!els.imageMenu) return;
+  els.imageMenu.classList.add("hidden");
+  state.imageMenuTargetId = null;
+}
+
+function showImageMenuAt(ptCss, imageId) {
+  const menu = els.imageMenu;
+  const wrap = els.canvasWrap;
+  if (!menu || !wrap || !ptCss || !imageId) return;
+  state.imageMenuTargetId = String(imageId);
+  menu.classList.remove("hidden");
+
+  const dx = 12;
+  const dy = 12;
+  const x0 = (Number(ptCss.x) || 0) + dx;
+  const y0 = (Number(ptCss.y) || 0) + dy;
+
+  menu.style.left = `${x0}px`;
+  menu.style.top = `${y0}px`;
+
+  requestAnimationFrame(() => {
+    const mw = menu.offsetWidth || 0;
+    const mh = menu.offsetHeight || 0;
+    const maxX = Math.max(8, wrap.clientWidth - mw - 8);
+    const maxY = Math.max(8, wrap.clientHeight - mh - 8);
+    const x = clamp(x0, 8, maxX);
+    const y = clamp(y0, 8, maxY);
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+  });
+}
+
 function showDesignateMenuAtHudKey() {
   const menu = els.designateMenu;
   const wrap = els.canvasWrap;
@@ -3302,6 +3337,81 @@ function addImage(item, { select = false } = {}) {
   if (select || !state.activeId) {
     setActiveImage(item.id).catch(() => {});
   }
+}
+
+async function removeImageFromCanvas(imageId) {
+  const id = String(imageId || "");
+  if (!id) return false;
+  const item = state.imagesById.get(id) || null;
+  if (!item) return false;
+
+  hideImageMenu();
+  hideDesignateMenu();
+
+  if (item?.path) invalidateImageCache(item.path);
+
+  // Drop per-image marks.
+  state.designationsByImageId.delete(id);
+  state.circlesByImageId.delete(id);
+
+  // Remove from collections.
+  state.imagesById.delete(id);
+  state.images = (state.images || []).filter((item) => item?.id !== id);
+  state.multiRects.delete(id);
+
+  // Remove filmstrip thumb if present (filmstrip might be hidden in multi mode).
+  const thumb = state.thumbsById.get(id);
+  if (thumb?.rootEl && thumb.rootEl.parentNode) {
+    try {
+      thumb.rootEl.parentNode.removeChild(thumb.rootEl);
+    } catch {
+      // ignore
+    }
+  }
+  state.thumbsById.delete(id);
+
+  // If we removed the active image, select a sensible next.
+  if (state.activeId === id) {
+    state.activeId = null;
+    const next = state.images.length ? state.images[state.images.length - 1] : null;
+    if (next?.id) {
+      await setActiveImage(next.id);
+    }
+  }
+
+  if (state.images.length === 0) {
+    clearImageCache();
+    state.activeId = null;
+    state.canvasMode = "single";
+    state.multiRects.clear();
+    state.pendingBlend = null;
+    state.pendingSwapDna = null;
+    state.pendingBridge = null;
+    state.pendingArgue = null;
+    state.pendingRecast = null;
+    state.pendingDiagnose = null;
+    clearSelection();
+    showDropHint(true);
+    setTip(DEFAULT_TIP);
+    setDirectorText(null, null);
+    renderFilmstrip();
+    renderQuickActions();
+    renderHudReadout();
+    requestRender();
+    return true;
+  }
+
+  if (state.canvasMode === "multi" && state.images.length < 2) {
+    setCanvasMode("single");
+  } else {
+    renderFilmstrip();
+  }
+
+  scheduleVisualPromptWrite();
+  renderQuickActions();
+  renderHudReadout();
+  requestRender();
+  return true;
 }
 
 function invalidateImageCache(path) {
@@ -5365,6 +5475,25 @@ function startSpawnTimer() {
 function installCanvasHandlers() {
   if (!els.overlayCanvas) return;
 
+  els.overlayCanvas.addEventListener("contextmenu", (event) => {
+    bumpInteraction();
+    if (!getActiveImage()) return;
+    event.preventDefault();
+    hideDesignateMenu();
+
+    let hit = null;
+    if (state.canvasMode === "multi") {
+      const p = canvasPointFromEvent(event);
+      hit = hitTestMulti(p);
+    } else {
+      hit = state.activeId;
+    }
+    if (!hit) return;
+    showImageMenuAt(canvasCssPointFromEvent(event), hit);
+    // Prevent global "click outside" handlers from immediately closing the menu.
+    event.stopPropagation();
+  });
+
   els.overlayCanvas.addEventListener("pointerdown", (event) => {
     bumpInteraction();
 	    hideDesignateMenu();
@@ -5984,11 +6113,39 @@ function installUi() {
     });
   }
 
+  if (els.imageMenu) {
+    els.imageMenu.addEventListener("click", (event) => {
+      const btn = event?.target?.closest ? event.target.closest("button[data-action]") : null;
+      if (!btn || !els.imageMenu.contains(btn)) return;
+      bumpInteraction();
+      const action = btn.dataset?.action;
+      if (!action) return;
+      if (action === "cancel") {
+        hideImageMenu();
+        return;
+      }
+      if (action === "remove") {
+        const targetId = state.imageMenuTargetId;
+        hideImageMenu();
+        if (targetId) {
+          removeImageFromCanvas(targetId).catch((err) => console.error(err));
+        }
+      }
+    });
+  }
+
   document.addEventListener("pointerdown", (event) => {
     if (!els.designateMenu || els.designateMenu.classList.contains("hidden")) return;
     const hit = event?.target?.closest ? event.target.closest("#designate-menu") : null;
     if (hit) return;
     hideDesignateMenu();
+  });
+
+  document.addEventListener("pointerdown", (event) => {
+    if (!els.imageMenu || els.imageMenu.classList.contains("hidden")) return;
+    const hit = event?.target?.closest ? event.target.closest("#image-menu") : null;
+    if (hit) return;
+    hideImageMenu();
   });
 
   if (els.filmstrip) {
@@ -6016,24 +6173,28 @@ function installUi() {
     );
     const hasModifier = Boolean(event?.metaKey || event?.ctrlKey || event?.altKey);
 
-	    if (key === "escape") {
-	      if (els.settingsDrawer && !els.settingsDrawer.classList.contains("hidden")) {
-	        els.settingsDrawer.classList.add("hidden");
-	        return;
-	      }
-        if (els.markPanel && !els.markPanel.classList.contains("hidden")) {
-          hideMarkPanel();
-          requestRender();
-          return;
-        }
-	      if (els.annotatePanel && !els.annotatePanel.classList.contains("hidden")) {
-	        state.annotateDraft = null;
-	        state.annotateBox = null;
-	        hideAnnotatePanel();
-          scheduleVisualPromptWrite();
-	        requestRender();
-	        return;
-	      }
+		    if (key === "escape") {
+		      if (els.settingsDrawer && !els.settingsDrawer.classList.contains("hidden")) {
+		        els.settingsDrawer.classList.add("hidden");
+		        return;
+		      }
+	        if (els.markPanel && !els.markPanel.classList.contains("hidden")) {
+	          hideMarkPanel();
+	          requestRender();
+	          return;
+	        }
+	        if (els.imageMenu && !els.imageMenu.classList.contains("hidden")) {
+	          hideImageMenu();
+	          return;
+	        }
+		      if (els.annotatePanel && !els.annotatePanel.classList.contains("hidden")) {
+		        state.annotateDraft = null;
+		        state.annotateBox = null;
+		        hideAnnotatePanel();
+	          scheduleVisualPromptWrite();
+		        requestRender();
+		        return;
+		      }
 	      if (state.pendingDesignation || (els.designateMenu && !els.designateMenu.classList.contains("hidden"))) {
 	        state.pendingDesignation = null;
 	        hideDesignateMenuAnimated({ animate: false });
