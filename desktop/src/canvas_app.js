@@ -112,6 +112,10 @@ const state = {
   pendingRecast: null, // { sourceId: string, startedAt: number }
   pendingDiagnose: null, // { sourceId: string, startedAt: number }
   pendingGeneration: null, // { remaining: number, provider: string|null, model: string|null }
+  pendingRecreate: null, // { startedAt: number } | null
+  actionQueue: [],
+  actionQueueActive: null, // { id, label, key, priority, enqueuedAt, source } | null
+  actionQueueRunning: false,
   view: {
     scale: 1,
     offsetX: 0,
@@ -421,6 +425,8 @@ function resetDescribeQueue({ clearPending = false } = {}) {
 
 function processDescribeQueue() {
   if (describeInFlightPath) return;
+  // Treat describe as background work; don't compete with queued actions.
+  if (state.actionQueueActive || state.actionQueue.length || isEngineBusy()) return;
   if (!state.ptySpawned) {
     if (describeQueue.length > 0) {
       ensureEngineSpawned({ reason: "vision" })
@@ -2637,6 +2643,152 @@ function isMultiActionRunning() {
   return Boolean(state.pendingBlend || state.pendingSwapDna || state.pendingBridge || state.pendingArgue);
 }
 
+const ACTION_QUEUE_MAX = 32;
+const ACTION_QUEUE_PRIORITY = {
+  user: 100,
+  background: 10,
+};
+
+function isEngineBusy() {
+  return Boolean(
+    state.ptySpawning ||
+      state.pendingBlend ||
+      state.pendingSwapDna ||
+      state.pendingBridge ||
+      state.pendingArgue ||
+      state.pendingRecast ||
+      state.pendingDiagnose ||
+      state.pendingReplace ||
+      state.pendingRecreate ||
+      state.expectingArtifacts
+  );
+}
+
+function resetActionQueue() {
+  state.actionQueue = [];
+  state.actionQueueActive = null;
+  state.actionQueueRunning = false;
+}
+
+function _actionQueueMakeId() {
+  return `aq-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+}
+
+function enqueueAction({ label, key = null, priority = ACTION_QUEUE_PRIORITY.user, source = "user", run } = {}) {
+  const fn = typeof run === "function" ? run : null;
+  if (!label || !fn) return false;
+
+  if (key && state.actionQueueActive?.key && state.actionQueueActive.key === key) {
+    showToast(`${label} already running.`, "tip", 1800);
+    return false;
+  }
+
+  const now = Date.now();
+  if (key) {
+    // De-dupe repeated clicks; keep latest request.
+    state.actionQueue = state.actionQueue.filter((item) => item?.key !== key);
+  }
+
+  state.actionQueue.push({
+    id: _actionQueueMakeId(),
+    label: String(label),
+    key: key ? String(key) : null,
+    priority: typeof priority === "number" ? priority : ACTION_QUEUE_PRIORITY.user,
+    enqueuedAt: now,
+    source: source ? String(source) : "user",
+    run: fn,
+  });
+
+  // Keep queue bounded by dropping the lowest-priority oldest items.
+  while (state.actionQueue.length > ACTION_QUEUE_MAX) {
+    let dropIdx = 0;
+    for (let i = 1; i < state.actionQueue.length; i += 1) {
+      const a = state.actionQueue[i];
+      const b = state.actionQueue[dropIdx];
+      const ap = typeof a?.priority === "number" ? a.priority : 0;
+      const bp = typeof b?.priority === "number" ? b.priority : 0;
+      if (ap < bp) {
+        dropIdx = i;
+        continue;
+      }
+      if (ap === bp && (a?.enqueuedAt || 0) < (b?.enqueuedAt || 0)) {
+        dropIdx = i;
+      }
+    }
+    state.actionQueue.splice(dropIdx, 1);
+  }
+
+  showToast(`Queued: ${label}`, "tip", 1400);
+  renderQuickActions();
+  processActionQueue().catch(() => {});
+  return true;
+}
+
+function _pickNextQueuedActionIndex() {
+  if (!state.actionQueue.length) return -1;
+  let bestIdx = 0;
+  for (let i = 1; i < state.actionQueue.length; i += 1) {
+    const a = state.actionQueue[i];
+    const b = state.actionQueue[bestIdx];
+    const ap = typeof a?.priority === "number" ? a.priority : 0;
+    const bp = typeof b?.priority === "number" ? b.priority : 0;
+    if (ap > bp) {
+      bestIdx = i;
+      continue;
+    }
+    if (ap === bp && (a?.enqueuedAt || 0) < (b?.enqueuedAt || 0)) {
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
+async function processActionQueue() {
+  if (state.actionQueueRunning) return;
+  state.actionQueueRunning = true;
+  try {
+    if (state.actionQueueActive && !isEngineBusy()) {
+      state.actionQueueActive = null;
+      renderQuickActions();
+    }
+
+    while (!state.actionQueueActive && !isEngineBusy() && state.actionQueue.length) {
+      const idx = _pickNextQueuedActionIndex();
+      if (idx < 0) return;
+      const item = state.actionQueue.splice(idx, 1)[0];
+      if (!item) return;
+
+      state.actionQueueActive = {
+        id: item.id,
+        label: item.label,
+        key: item.key || null,
+        priority: item.priority,
+        enqueuedAt: item.enqueuedAt,
+        source: item.source || "user",
+      };
+      renderQuickActions();
+
+      try {
+        await Promise.resolve(item.run());
+      } catch (err) {
+        console.error("Queued action failed:", item?.label, err);
+        showToast(`${item?.label || "Action"} failed to start.`, "error", 3200);
+      }
+
+      if (isEngineBusy()) {
+        // Engine-driven action is in flight; completion events will resume the queue.
+        return;
+      }
+
+      // Completed immediately (local action or no-op); continue draining.
+      state.actionQueueActive = null;
+      renderQuickActions();
+    }
+  } finally {
+    state.actionQueueRunning = false;
+  }
+}
+
 function chooseSpawnNodes() {
   if (!ENABLE_SPAWN_ACTIONS) {
     state.spawnNodes = [];
@@ -2722,26 +2874,25 @@ function computeQuickActions() {
       onClick: () => setCanvasMode("single"),
     });
     if (state.images.length === 2) {
-      const runningMulti = isMultiActionRunning();
       actions.push({
         id: "combine",
         label: state.pendingBlend ? "Combine (running…)" : "Combine",
         title: "Blend the two loaded photos into one",
-        disabled: runningMulti,
+        disabled: false,
         onClick: () => runBlendPair().catch((err) => console.error(err)),
       });
       actions.push({
         id: "bridge",
         label: state.pendingBridge ? "Bridge (running…)" : "Bridge",
         title: "Find the aesthetic midpoint between the two images (not a collage)",
-        disabled: runningMulti,
+        disabled: false,
         onClick: () => runBridgePair().catch((err) => console.error(err)),
       });
       actions.push({
         id: "swap_dna",
         label: state.pendingSwapDna ? "Swap DNA (running…)" : "Swap DNA",
         title: "Use structure from the selected image and surface qualities from the other (Shift-click to invert)",
-        disabled: runningMulti,
+        disabled: false,
         onClick: (ev) =>
           runSwapDnaPair({ invert: Boolean(ev?.shiftKey) }).catch((err) => console.error(err)),
       });
@@ -2749,7 +2900,7 @@ function computeQuickActions() {
         id: "argue",
         label: state.pendingArgue ? "Argue (running…)" : "Argue",
         title: "Debate the two directions (why each is stronger, with visual evidence)",
-        disabled: runningMulti,
+        disabled: false,
         onClick: () => runArguePair().catch((err) => console.error(err)),
       });
       return actions;
@@ -2766,9 +2917,6 @@ function computeQuickActions() {
   const iw = active?.img?.naturalWidth || active?.width || null;
   const ih = active?.img?.naturalHeight || active?.height || null;
   const canCropSquare = Boolean(iw && ih && Math.abs(iw - ih) > 8);
-  const runningSingle = Boolean(
-    state.pendingDiagnose || state.pendingRecast || state.expectingArtifacts || state.pendingReplace
-  );
 
   if (state.canvasMode !== "multi" && state.images.length > 1) {
     actions.push({
@@ -2784,14 +2932,14 @@ function computeQuickActions() {
     id: "diagnose",
     label: state.pendingDiagnose ? "Diagnose (running…)" : "Diagnose",
     title: "Creative-director diagnosis: what's working, what isn't, and what to fix next",
-    disabled: runningSingle,
+    disabled: false,
     onClick: () => runDiagnose().catch((err) => console.error(err)),
   });
   actions.push({
     id: "recast",
     label: state.pendingRecast ? "Recast (running…)" : "Recast",
     title: "Reimagine the image in a totally different medium/context (lateral leap)",
-    disabled: runningSingle,
+    disabled: false,
     onClick: () => runRecast().catch((err) => console.error(err)),
   });
 
@@ -3410,8 +3558,17 @@ async function importPhotos() {
 	  }
 	}
 
-async function cropSquare() {
+async function cropSquare({ fromQueue = false } = {}) {
   bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Crop: Square",
+      key: "crop_square",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => cropSquare({ fromQueue: true }),
+    });
+    return;
+  }
   state.lastAction = "Square Crop";
   const imgItem = getActiveImage();
   if (!imgItem || !imgItem.img) return;
@@ -3477,8 +3634,17 @@ async function aiReplaceBackground(style) {
   }
 }
 
-async function aiRemovePeople() {
+async function aiRemovePeople({ fromQueue = false } = {}) {
   bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Remove People",
+      key: "remove_people",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => aiRemovePeople({ fromQueue: true }),
+    });
+    return;
+  }
   const imgItem = getActiveImage();
   if (!imgItem) {
     showToast("No image selected.", "error");
@@ -3517,8 +3683,17 @@ async function aiRemovePeople() {
   }
 }
 
-async function aiSurpriseMe() {
+async function aiSurpriseMe({ fromQueue = false } = {}) {
   bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Surprise Me",
+      key: "surprise_me",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => aiSurpriseMe({ fromQueue: true }),
+    });
+    return;
+  }
   const imgItem = getActiveImage();
   if (!imgItem) {
     showToast("No image selected.", "error");
@@ -3567,29 +3742,84 @@ async function aiSurpriseMe() {
   }
 }
 
-async function aiAnnotateEdit() {
+async function aiAnnotateEdit({
+  fromQueue = false,
+  targetId = null,
+  boxOverride = null,
+  instructionOverride = null,
+  requestedModelOverride = null,
+} = {}) {
   bumpInteraction();
-  const imgItem = getActiveImage();
+  const activeItem = getActiveImage();
+  const imgItem = targetId ? state.imagesById.get(targetId) || null : activeItem;
   if (!imgItem) {
     showToast("No image selected.", "error");
     return;
   }
-  const box = state.annotateBox;
+
+  const box = boxOverride || state.annotateBox;
   if (!box || box.imageId !== imgItem.id) {
     showToast("Annotate: draw a box first.", "tip", 2200);
     return;
   }
-  const instruction = String(els.annotateText?.value || "").trim();
+
+  const instruction =
+    typeof instructionOverride === "string"
+      ? instructionOverride.trim()
+      : String(els.annotateText?.value || "").trim();
   if (!instruction) {
     showToast("Annotate: enter an instruction.", "tip", 2200);
     return;
   }
 
-  const requestedModel = String(els.annotateModel?.value || settings.imageModel || "").trim();
+  const requestedModel =
+    typeof requestedModelOverride === "string"
+      ? requestedModelOverride.trim()
+      : String(els.annotateModel?.value || settings.imageModel || "").trim();
+
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    const captured = {
+      targetId: imgItem.id,
+      box: { ...box },
+      instruction,
+      requestedModel,
+    };
+
+    // Mirror the "send" UX: clear the box + prompt input immediately, even if queued.
+    if (els.annotateText) els.annotateText.value = "";
+    state.annotateBox = null;
+    state.annotateDraft = null;
+    hideAnnotatePanel();
+    scheduleVisualPromptWrite();
+    requestRender();
+
+    enqueueAction({
+      label: "Annotate",
+      key: `annotate:${captured.targetId}`,
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () =>
+        aiAnnotateEdit({
+          fromQueue: true,
+          targetId: captured.targetId,
+          boxOverride: captured.box,
+          instructionOverride: captured.instruction,
+          requestedModelOverride: captured.requestedModel,
+        }),
+    });
+    return;
+  }
+
+  // Keep the target image visible when replaying queued edits.
+  if (state.activeId !== imgItem.id) {
+    await setActiveImage(imgItem.id).catch(() => {});
+  }
+
   let effectiveModel = requestedModel || settings.imageModel;
   if (providerFromModel(effectiveModel) !== "gemini") {
     effectiveModel = pickGeminiImageModel();
-    showToast(`Annotate box edits currently require Gemini. Using ${effectiveModel}.`, "tip", 3200);
+    if (!fromQueue) {
+      showToast(`Annotate box edits currently require Gemini. Using ${effectiveModel}.`, "tip", 3200);
+    }
   }
   const provider = providerFromModel(effectiveModel);
   const label = "Annotate";
@@ -3740,8 +3970,18 @@ async function compositeAnnotateBoxEdit(targetId, editedCropPath, { box, instruc
   return true;
 }
 
-async function applyBackground(style) {
+async function applyBackground(style, { fromQueue = false } = {}) {
   bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    const label = style === "sweep" ? "Background: Sweep" : "Background: White";
+    enqueueAction({
+      label,
+      key: `bg:${String(style || "")}`,
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => applyBackground(style, { fromQueue: true }),
+    });
+    return;
+  }
   const imgItem = getActiveImage();
   if (!imgItem) {
     showToast("No image selected.", "error");
@@ -3875,8 +4115,17 @@ async function saveCanvasAsArtifact(canvas, { operation, label, meta = {}, repla
   setStatus("Engine: ready");
 }
 
-async function runVariations() {
+async function runVariations({ fromQueue = false } = {}) {
   bumpInteraction();
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Variations",
+      key: "variations",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runVariations({ fromQueue: true }),
+    });
+    return;
+  }
   state.lastAction = "Variations";
   const imgItem = getActiveImage();
   if (!imgItem) return;
@@ -3887,9 +4136,12 @@ async function runVariations() {
     const ok = await ensureEngineSpawned({ reason: "variations" });
     if (!ok) throw new Error("Engine unavailable");
     state.expectingArtifacts = true;
+    state.pendingRecreate = { startedAt: Date.now() };
     setStatus("Engine: variations…");
     await invoke("write_pty", { data: `/recreate ${imgItem.path}\n` });
   } catch (err) {
+    state.expectingArtifacts = false;
+    state.pendingRecreate = null;
     setImageFxActive(false);
     updatePortraitIdle();
     throw err;
@@ -3902,10 +4154,15 @@ function quoteForPtyArg(value) {
   return `"${escaped}"`;
 }
 
-async function runBlendPair() {
+async function runBlendPair({ fromQueue = false } = {}) {
   bumpInteraction();
-  if (isMultiActionRunning()) {
-    showToast("A multi-image action is already running.", "tip", 2600);
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Combine",
+      key: "combine",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runBlendPair({ fromQueue: true }),
+    });
     return;
   }
   if (!state.runDir) {
@@ -3951,10 +4208,15 @@ async function runBlendPair() {
   }
 }
 
-async function runSwapDnaPair({ invert = false } = {}) {
+async function runSwapDnaPair({ invert = false, fromQueue = false } = {}) {
   bumpInteraction();
-  if (isMultiActionRunning()) {
-    showToast("A multi-image action is already running.", "tip", 2600);
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Swap DNA",
+      key: `swap_dna:${invert ? "1" : "0"}`,
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runSwapDnaPair({ invert, fromQueue: true }),
+    });
     return;
   }
   if (!state.runDir) {
@@ -4011,10 +4273,15 @@ async function runSwapDnaPair({ invert = false } = {}) {
   }
 }
 
-async function runBridgePair() {
+async function runBridgePair({ fromQueue = false } = {}) {
   bumpInteraction();
-  if (isMultiActionRunning()) {
-    showToast("A multi-image action is already running.", "tip", 2600);
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Bridge",
+      key: "bridge",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runBridgePair({ fromQueue: true }),
+    });
     return;
   }
   if (!state.runDir) {
@@ -4064,10 +4331,15 @@ async function runBridgePair() {
   }
 }
 
-async function runArguePair() {
+async function runArguePair({ fromQueue = false } = {}) {
   bumpInteraction();
-  if (isMultiActionRunning()) {
-    showToast("A multi-image action is already running.", "tip", 2600);
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Argue",
+      key: "argue",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runArguePair({ fromQueue: true }),
+    });
     return;
   }
   if (!state.runDir) {
@@ -4113,10 +4385,15 @@ async function runArguePair() {
   }
 }
 
-async function runDiagnose() {
+async function runDiagnose({ fromQueue = false } = {}) {
   bumpInteraction();
-  if (state.pendingDiagnose || state.pendingRecast || state.expectingArtifacts || state.pendingReplace) {
-    showToast("An action is already running.", "tip", 2400);
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Diagnose",
+      key: "diagnose",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runDiagnose({ fromQueue: true }),
+    });
     return;
   }
   const imgItem = getActiveImage();
@@ -4147,10 +4424,15 @@ async function runDiagnose() {
   }
 }
 
-async function runRecast() {
+async function runRecast({ fromQueue = false } = {}) {
   bumpInteraction();
-  if (state.pendingDiagnose || state.pendingRecast || state.expectingArtifacts || state.pendingReplace) {
-    showToast("An action is already running.", "tip", 2400);
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Recast",
+      key: "recast",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runRecast({ fromQueue: true }),
+    });
     return;
   }
   const imgItem = getActiveImage();
@@ -4229,6 +4511,8 @@ async function createRun() {
   state.pendingArgue = null;
   state.pendingRecast = null;
   state.pendingDiagnose = null;
+  state.pendingRecreate = null;
+  resetActionQueue();
   clearImageCache();
   state.selection = null;
   state.lassoDraft = [];
@@ -4278,6 +4562,8 @@ async function openExistingRun() {
   state.pendingArgue = null;
   state.pendingRecast = null;
   state.pendingDiagnose = null;
+  state.pendingRecreate = null;
+  resetActionQueue();
   renderFilmstrip();
   clearImageCache();
   state.selection = null;
@@ -4407,6 +4693,7 @@ async function spawnEngine() {
     setStatus(`Engine: failed (${err?.message || err})`, true);
   } finally {
     state.ptySpawning = false;
+    processActionQueue().catch(() => {});
   }
 }
 
@@ -4550,17 +4837,21 @@ async function handleEvent(event) {
     setImageFxActive(false);
     renderQuickActions();
     renderHudReadout();
+    processActionQueue().catch(() => {});
   } else if (event.type === "generation_failed") {
     const msg = event.error ? `Generation failed: ${event.error}` : "Generation failed.";
     setStatus(`Engine: ${msg}`, true);
     showToast(msg, "error", 3200);
     state.expectingArtifacts = false;
+    state.pendingRecreate = null;
     state.pendingBlend = null;
     state.pendingSwapDna = null;
     state.pendingBridge = null;
     state.pendingRecast = null;
     state.pendingDiagnose = null;
     state.pendingArgue = null;
+    state.pendingRecreate = null;
+    resetActionQueue();
     clearPendingReplace();
     restoreEngineImageModelIfNeeded();
     updatePortraitIdle();
@@ -4569,6 +4860,7 @@ async function handleEvent(event) {
     renderHudReadout();
     chooseSpawnNodes();
     requestRender();
+    processActionQueue().catch(() => {});
   } else if (event.type === "cost_latency_update") {
     state.lastCostLatency = {
       provider: event.provider,
@@ -4621,6 +4913,7 @@ async function handleEvent(event) {
       showToast("Diagnose ready.", "tip", 2400);
       updatePortraitIdle();
       renderQuickActions();
+      processActionQueue().catch(() => {});
     }
   } else if (event.type === "image_diagnosis_failed") {
     state.pendingDiagnose = null;
@@ -4629,6 +4922,7 @@ async function handleEvent(event) {
     showToast(msg, "error", 3200);
     updatePortraitIdle();
     renderQuickActions();
+    processActionQueue().catch(() => {});
   } else if (event.type === "image_argument") {
     const text = event.text;
     if (typeof text === "string" && text.trim()) {
@@ -4644,6 +4938,7 @@ async function handleEvent(event) {
       showToast("Argue ready.", "tip", 2400);
       updatePortraitIdle();
       renderQuickActions();
+      processActionQueue().catch(() => {});
     }
   } else if (event.type === "image_argument_failed") {
     state.pendingArgue = null;
@@ -4652,6 +4947,7 @@ async function handleEvent(event) {
     showToast(msg, "error", 3200);
     updatePortraitIdle();
     renderQuickActions();
+    processActionQueue().catch(() => {});
   } else if (event.type === "recreate_prompt_inferred") {
     const prompt = event.prompt;
     if (typeof prompt === "string") {
@@ -4676,6 +4972,14 @@ async function handleEvent(event) {
       setStatus(`Engine: recreate iter ${iter} (best ${pct})`);
     }
     renderHudReadout();
+  } else if (event.type === "recreate_done") {
+    state.pendingRecreate = null;
+    setStatus("Engine: variations ready");
+    setTip("Variations complete.");
+    updatePortraitIdle();
+    renderQuickActions();
+    renderHudReadout();
+    processActionQueue().catch(() => {});
   }
 }
 
