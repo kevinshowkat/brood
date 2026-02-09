@@ -14,7 +14,7 @@
       "all": true,
       "fs": {
         "all": true,
-        "scope": ["$HOME/**"]
+        "scope": ["$HOME/**", "$DESKTOP/**"]
       },
       "protocol": {
         "asset": true,
