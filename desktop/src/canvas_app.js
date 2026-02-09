@@ -1001,7 +1001,7 @@ function renderCanvasContextSuggestion() {
 
   wrap.classList.add("is-visible");
   wrap.setAttribute("aria-hidden", "false");
-  btn.textContent = `SUGGESTED ABILITY: ${action}`;
+  btn.textContent = action;
   // Keep clickable for debugging; the click handler will surface errors as a toast.
   btn.disabled = false;
   btn.classList.toggle("is-unavailable", Boolean(disabledReason));
@@ -7095,16 +7095,32 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   const activeRect = state.activeId ? state.multiRects.get(state.activeId) : null;
   if (activeRect) {
     octx.save();
-    octx.lineWidth = Math.max(1, Math.round(2.0 * dpr));
-    octx.strokeStyle = "rgba(255, 212, 0, 0.88)";
-    octx.shadowColor = "rgba(255, 212, 0, 0.20)";
-    octx.shadowBlur = Math.round(22 * dpr);
-    octx.strokeRect(
-      activeRect.x * ms + mox - 2,
-      activeRect.y * ms + moy - 2,
-      activeRect.w * ms + 4,
-      activeRect.h * ms + 4
-    );
+    octx.lineJoin = "round";
+
+    const ax = activeRect.x * ms + mox;
+    const ay = activeRect.y * ms + moy;
+    const aw = activeRect.w * ms;
+    const ah = activeRect.h * ms;
+
+    // Outer glow stroke (wide + soft).
+    octx.strokeStyle = "rgba(255, 212, 0, 0.14)";
+    octx.lineWidth = Math.max(1, Math.round(10 * dpr));
+    octx.shadowColor = "rgba(255, 212, 0, 0.16)";
+    octx.shadowBlur = Math.round(44 * dpr);
+    octx.strokeRect(ax - 5, ay - 5, aw + 10, ah + 10);
+
+    // Main border stroke.
+    octx.strokeStyle = "rgba(255, 212, 0, 0.96)";
+    octx.lineWidth = Math.max(1, Math.round(3.4 * dpr));
+    octx.shadowColor = "rgba(255, 212, 0, 0.26)";
+    octx.shadowBlur = Math.round(28 * dpr);
+    octx.strokeRect(ax - 3, ay - 3, aw + 6, ah + 6);
+
+    // Inner crisp stroke for definition.
+    octx.shadowBlur = 0;
+    octx.strokeStyle = "rgba(255, 247, 210, 0.58)";
+    octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+    octx.strokeRect(ax - 1, ay - 1, aw + 2, ah + 2);
     octx.restore();
   }
 
