@@ -1802,6 +1802,8 @@ async function buildPortraitIndex(dir) {
   // OpenAI provider currently maps to the "stability" portrait agent (see portraitAgentFromProvider()).
   const DEFAULT_STABILITY_WORKING_CLIP =
     "stability_working_sora-2_720x1280_12s_20260205_231943.sq.mute.mp4";
+  const DEFAULT_STABILITY_IDLE_CLIP =
+    "stability_idle_sora-2_720x1280_12s_20260205_231943.sq.mute.mp4";
 
   const index = {
     dryrun: { idle: null, working: null },
@@ -1841,6 +1843,13 @@ async function buildPortraitIndex(dir) {
       agent === "stability" &&
       clipState === "working" &&
       name === String(DEFAULT_STABILITY_WORKING_CLIP).toLowerCase()
+    ) {
+      priority = 3;
+    }
+    if (
+      agent === "stability" &&
+      clipState === "idle" &&
+      name === String(DEFAULT_STABILITY_IDLE_CLIP).toLowerCase()
     ) {
       priority = 3;
     }
