@@ -489,61 +489,133 @@ button.ghost:hover {
 }
 
 .canvas-context-suggest {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(var(--control-surface-h) - 28px);
-  display: flex;
-  justify-content: center;
-  padding: 0 10px;
-  z-index: 7;
+  position: relative;
+  z-index: 1;
+  margin: 0 10px 0 10px;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateY(-6px);
   pointer-events: none;
+  transition:
+    max-height 260ms ease,
+    opacity 260ms ease,
+    transform 260ms ease,
+    margin 260ms ease;
+}
+
+.canvas-context-suggest.is-visible {
+  margin: 10px 10px 0 10px;
+  max-height: 86px;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+@keyframes suggested-ability-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 18px 28px rgba(0, 0, 0, 0.40),
+      0 0 0 1px rgba(100, 210, 255, 0.22),
+      0 0 22px rgba(100, 210, 255, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.18);
+    filter: saturate(1.02);
+  }
+  50% {
+    box-shadow:
+      0 18px 28px rgba(0, 0, 0, 0.40),
+      0 0 0 1px rgba(255, 212, 0, 0.18),
+      0 0 34px rgba(100, 210, 255, 0.34),
+      inset 0 1px 0 rgba(255, 255, 255, 0.22);
+    filter: saturate(1.15) brightness(1.02);
+  }
 }
 
 .canvas-context-suggest-btn {
-  pointer-events: auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  max-width: min(78vw, 820px);
-  min-height: 44px;
-  padding: 12px 18px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 212, 0, 0.88);
+  width: 100%;
+  position: relative;
+  text-align: left;
   background:
-    radial-gradient(240px 90px at 18% 20%, rgba(255, 255, 255, 0.36), transparent 72%),
-    radial-gradient(260px 110px at 78% 26%, rgba(100, 210, 255, 0.20), transparent 74%),
+    radial-gradient(180px 90px at 18% 18%, rgba(255, 255, 255, 0.55), transparent 70%),
+    radial-gradient(210px 110px at 86% 30%, rgba(255, 212, 0, 0.18), transparent 74%),
     repeating-linear-gradient(
       90deg,
-      rgba(12, 14, 20, 0.12) 0px,
-      rgba(12, 14, 20, 0.12) 1px,
+      rgba(6, 8, 12, 0.12) 0px,
+      rgba(6, 8, 12, 0.12) 1px,
       rgba(0, 0, 0, 0.0) 2px,
       rgba(0, 0, 0, 0.0) 10px
     ),
-    linear-gradient(180deg, rgba(255, 224, 84, 0.985), rgba(255, 170, 0, 0.96));
-  color: rgba(10, 14, 20, 0.93);
-  box-shadow:
-    0 22px 44px rgba(0, 0, 0, 0.45),
-    0 0 0 1px rgba(255, 212, 0, 0.18),
-    0 0 40px rgba(255, 179, 0, 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+    linear-gradient(180deg, rgba(120, 242, 255, 0.98), rgba(64, 210, 255, 0.95));
+  color: rgba(6, 8, 12, 0.92);
+  border: 1px solid rgba(100, 210, 255, 0.88);
+  border-bottom-color: rgba(0, 0, 0, 0.82);
+  border-radius: 12px;
+  clip-path: polygon(
+    0 10px,
+    10px 0,
+    calc(100% - 10px) 0,
+    100% 10px,
+    100% calc(100% - 12px),
+    calc(100% - 12px) 100%,
+    12px 100%,
+    0 calc(100% - 12px)
+  );
+  padding: 10px 12px 10px 48px;
+  min-height: 46px;
   font-family: "IBM Plex Mono", monospace;
-  font-size: 13px;
-  line-height: 1.1;
-  letter-spacing: 0.10em;
+  font-size: 12px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   cursor: pointer;
   user-select: none;
+  animation: suggested-ability-pulse 1.6s ease-in-out infinite;
+  transition:
+    transform 0.12s ease,
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.canvas-context-suggest-btn::before {
+  content: "AI";
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  width: 24px;
+  height: 24px;
+  transform: translateY(-50%);
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border: 1px solid rgba(6, 8, 12, 0.18);
+  background:
+    radial-gradient(18px 18px at 30% 25%, rgba(255, 255, 255, 0.35), transparent 70%),
+    linear-gradient(180deg, rgba(255, 212, 0, 0.82), rgba(255, 179, 0, 0.92));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -12px 16px rgba(0, 0, 0, 0.22);
+  color: rgba(6, 8, 12, 0.92);
+  opacity: 0.95;
+  pointer-events: none;
 }
 
 .canvas-context-suggest-btn:hover {
-  border-color: rgba(255, 212, 0, 0.98);
-  box-shadow:
-    0 22px 44px rgba(0, 0, 0, 0.45),
-    0 0 0 1px rgba(255, 212, 0, 0.24),
-    0 0 44px rgba(255, 179, 0, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 212, 0, 0.68);
+  background:
+    radial-gradient(180px 90px at 18% 18%, rgba(255, 255, 255, 0.62), transparent 70%),
+    radial-gradient(210px 110px at 86% 30%, rgba(255, 212, 0, 0.22), transparent 74%),
+    repeating-linear-gradient(
+      90deg,
+      rgba(6, 8, 12, 0.10) 0px,
+      rgba(6, 8, 12, 0.10) 1px,
+      rgba(0, 0, 0, 0.0) 2px,
+      rgba(0, 0, 0, 0.0) 10px
+    ),
+    linear-gradient(180deg, rgba(146, 246, 255, 0.99), rgba(70, 214, 255, 0.96));
 }
 
 .canvas-context-suggest-btn:active {
@@ -558,6 +630,7 @@ button.ghost:hover {
 .canvas-context-suggest-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+  animation: none;
 }
 
 .canvas-bumper {
@@ -1608,8 +1681,9 @@ button.ghost:hover {
 #tips-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  min-height: 128px;
-  max-height: clamp(128px, 22vh, 260px);
+  /* Keep Mother compact so Abilities can own the right rail. */
+  min-height: 64px;
+  max-height: clamp(64px, 11vh, 130px);
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 6px;
