@@ -126,6 +126,33 @@ body {
   text-align: left;
 }
 
+.canvas-context-hud {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.92);
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 10px;
+  max-width: 70vw;
+  width: clamp(260px, 44vw, 640px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background:
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.075) 0px,
+      rgba(255, 255, 255, 0.075) 1px,
+      rgba(0, 0, 0, 0.0) 2px,
+      rgba(0, 0, 0, 0.0) 7px
+    ),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.96), rgba(0, 0, 0, 0.88));
+  box-shadow:
+    0 18px 34px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
 .topbar {
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -459,6 +486,60 @@ button.ghost:hover {
 #overlay-canvas {
   pointer-events: auto;
   z-index: 3;
+}
+
+.canvas-context-suggest {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  pointer-events: none;
+}
+
+.canvas-context-suggest-btn {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  max-width: min(78vw, 820px);
+  padding: 9px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background:
+    repeating-linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.08) 0px,
+      rgba(255, 255, 255, 0.08) 1px,
+      rgba(0, 0, 0, 0.0) 2px,
+      rgba(0, 0, 0, 0.0) 9px
+    ),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.92), rgba(0, 0, 0, 0.78));
+  color: rgba(255, 255, 255, 0.95);
+  box-shadow:
+    0 22px 44px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+}
+
+.canvas-context-suggest-btn:hover {
+  border-color: rgba(255, 255, 255, 0.45);
+}
+
+.canvas-context-suggest-btn:active {
+  transform: translateY(1px);
+}
+
+.canvas-context-suggest-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .canvas-bumper {

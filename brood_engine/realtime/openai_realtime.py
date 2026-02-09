@@ -177,6 +177,11 @@ class CanvasContextRealtimeSession:
 
     async def _run_job(self, ws: Any, job: CanvasContextJob) -> None:
         data_url = _read_image_as_data_url(Path(job.image_path))
+        context_text = _read_canvas_context_envelope(Path(job.image_path))
+        content: list[dict[str, Any]] = []
+        if context_text:
+            content.append({"type": "input_text", "text": context_text})
+        content.append({"type": "input_image", "image_url": data_url})
         await ws.send(
             json.dumps(
                 {
@@ -189,7 +194,7 @@ class CanvasContextRealtimeSession:
                             {
                                 "type": "message",
                                 "role": "user",
-                                "content": [{"type": "input_image", "image_url": data_url}],
+                                "content": content,
                             }
                         ],
                         "max_output_tokens": 520,
@@ -410,6 +415,8 @@ def _canvas_context_instruction() -> str:
     return (
         "You are Brood's always-on background vision.\n"
         "Analyze the attached CANVAS SNAPSHOT (it may contain multiple photos arranged in a grid).\n"
+        "You may also receive a CONTEXT ENVELOPE (JSON) describing the current UI state, available actions,\n"
+        "and recent timeline. Use it to ground NEXT ACTIONS and avoid recommending unavailable actions.\n"
         "Output compact, machine-readable notes we can use for future action recommendations.\n\n"
         "Format (keep under ~170 words):\n"
         "CANVAS:\n"
@@ -420,8 +427,30 @@ def _canvas_context_instruction() -> str:
         "- <3-7 short tags>\n\n"
         "NEXT ACTIONS:\n"
         "- <Action>: <why>  (max 5)\n\n"
-        "Actions must be chosen from: Combine, Bridge, Swap DNA, Recast, Variations, Background: White, "
+        "Actions must be chosen from CONTEXT_ENVELOPE_JSON.quick_actions[].label (prefer enabled=true).\n"
+        "If CONTEXT_ENVELOPE_JSON is missing, choose from: Multi view, Single view, Combine, Bridge, Swap DNA, "
+        "Argue, Extract the Rule, Odd One Out, Triforce, Diagnose, Recast, Variations, Background: White, "
         "Background: Sweep, Crop: Square, Annotate.\n"
         "Rules: no fluff, no marketing language, be specific about composition, lighting, color, materials, "
         "and use case."
     )
+
+
+def _read_canvas_context_envelope(image_path: Path) -> str:
+    """Read a per-snapshot context envelope written by the desktop (best-effort)."""
+    try:
+        sidecar = image_path.with_suffix(".ctx.json")
+    except Exception:
+        sidecar = None
+    if not sidecar or not sidecar.exists():
+        return ""
+    try:
+        raw = sidecar.read_text(encoding="utf-8", errors="ignore").strip()
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    # Guard against accidental large payloads.
+    if len(raw) > 12_000:
+        raw = raw[:11_800].rstrip() + "..."
+    return f"CONTEXT_ENVELOPE_JSON:\n{raw}"

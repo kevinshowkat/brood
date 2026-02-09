@@ -7,6 +7,7 @@ import {
   exists,
   readTextFile,
   readBinaryFile,
+  removeFile,
   writeTextFile,
   writeBinaryFile,
   createDir,
@@ -29,6 +30,9 @@ const els = {
   memoryToggle: document.getElementById("memory-toggle"),
   alwaysOnVisionToggle: document.getElementById("always-on-vision-toggle"),
   alwaysOnVisionReadout: document.getElementById("always-on-vision-readout"),
+  canvasContextHud: document.getElementById("canvas-context-hud"),
+  canvasContextSuggest: document.getElementById("canvas-context-suggest"),
+  canvasContextSuggestBtn: document.getElementById("canvas-context-suggest-btn"),
   textModel: document.getElementById("text-model"),
   imageModel: document.getElementById("image-model"),
   portraitsDir: document.getElementById("portraits-dir"),
@@ -201,6 +205,7 @@ const state = {
     rtState: settings.alwaysOnVision ? "connecting" : "off", // "off" | "connecting" | "ready" | "failed"
     disabledReason: null, // string|null (set when auto-disabled due to a fatal realtime error)
   },
+  canvasContextSuggestion: null, // { action: string, why: string|null, at: number, source: string|null, model: string|null } | null
   imageFx: {
     active: false,
     label: null,
@@ -219,11 +224,18 @@ const state = {
     dir: null, // string|null
     dirChecked: false,
     dirPromise: null, // Promise<string|null>|null
+    diskDir: null, // string|null (persisted across dev/prod builds via ~/.brood)
+    diskDirChecked: false,
+    diskDirPromise: null, // Promise<string|null>|null
+    urlCache: new Map(), // path -> { url, urlPromise, imgPromise } (separate from canvas image cache)
     index: null, // { [agent: string]: { idle: string|null, working: string|null } }|null
     indexChecked: false,
     indexPromise: null, // Promise<object>|null
     activeKey1: null,
     activeKey2: null,
+    missingToastShown: false,
+    loadErrorToastShown: false,
+    lastResolveError: null, // string|null (debug aid shown in Settings readout)
   },
 };
 
@@ -657,47 +669,117 @@ const ALWAYS_ON_VISION_TIMEOUT_MS = 45000;
 let alwaysOnVisionTimer = null;
 let alwaysOnVisionTimeout = null;
 
+function _collapseWs(text) {
+  return String(text || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractCanvasContextSummary(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return "";
+  const lines = raw.split(/\r?\n/).map((line) => String(line || "").trim());
+  const headerRe = /^(CANVAS|SUBJECTS|STYLE|NEXT ACTIONS)\s*:/i;
+  let idx = lines.findIndex((line) => /^CANVAS\s*:/i.test(line));
+  if (idx >= 0) {
+    const line = lines[idx] || "";
+    const inline = line.replace(/^CANVAS\s*:\s*/i, "").trim();
+    if (inline) return inline;
+    for (let j = idx + 1; j < lines.length; j += 1) {
+      const next = lines[j] || "";
+      if (!next) continue;
+      if (headerRe.test(next)) break;
+      return next;
+    }
+  }
+  // Fallback: first non-header, non-empty line.
+  for (const line of lines) {
+    if (!line) continue;
+    if (headerRe.test(line)) continue;
+    return line;
+  }
+  return "";
+}
+
+function extractCanvasContextTopAction(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  const lines = raw.split(/\r?\n/);
+  let nextIdx = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = String(lines[i] || "").trim();
+    if (/^NEXT ACTIONS\s*:/i.test(line)) {
+      nextIdx = i;
+      break;
+    }
+  }
+  if (nextIdx < 0) return null;
+  for (let i = nextIdx + 1; i < lines.length; i += 1) {
+    const line = String(lines[i] || "").trim();
+    if (!line) continue;
+    if (!line.startsWith("-")) continue;
+    const rest = line.replace(/^\-\s*/, "").trim();
+    if (!rest) continue;
+    const parts = rest.split(":", 2);
+    const action = String(parts[0] || "").trim();
+    const why = parts.length >= 2 ? String(parts[1] || "").trim() : "";
+    if (!action) continue;
+    return { action, why: why || null };
+  }
+  return null;
+}
+
 function updateAlwaysOnVisionReadout() {
-  const el = els.alwaysOnVisionReadout;
-  if (!el) return;
   const aov = state.alwaysOnVision;
   const meta = aov?.lastMeta || null;
-  if (meta && (meta.source || meta.model)) {
-    const parts = [];
-    if (meta.source) parts.push(meta.source);
-    if (meta.model) parts.push(meta.model);
-    el.title = parts.join(" · ");
-  } else {
-    el.title = "";
-  }
+
+  const title =
+    meta && (meta.source || meta.model)
+      ? [meta.source, meta.model].filter(Boolean).join(" · ")
+      : "";
+
+  const hasOutput = typeof aov?.lastText === "string" && aov.lastText.trim();
+  let text = "";
+
   if (!aov?.enabled) {
     if (aov?.disabledReason) {
       const cleaned = String(aov.disabledReason || "").trim();
-      el.textContent = cleaned.length > 1400 ? `${cleaned.slice(0, 1399).trimEnd()}\n…` : cleaned;
-      return;
+      text = cleaned.length > 1400 ? `${cleaned.slice(0, 1399).trimEnd()}\n…` : cleaned;
+    } else {
+      text = "Off";
     }
-    el.textContent = "Off";
-    return;
-  }
-  if (
-    aov.rtState === "connecting" &&
-    !aov.pending &&
-    !(typeof aov.lastText === "string" && aov.lastText.trim())
-  ) {
-    el.textContent = "Connecting…";
-    return;
-  }
-  if (aov.pending) {
-    el.textContent = "SCANNING…";
-    return;
-  }
-  if (typeof aov.lastText === "string" && aov.lastText.trim()) {
-    // Keep it readable in the settings drawer (but preserve newlines).
+  } else if (aov.rtState === "connecting" && !aov.pending && !hasOutput) {
+    text = "Connecting…";
+  } else if (aov.pending) {
+    text = "SCANNING…";
+  } else if (hasOutput) {
     const cleaned = aov.lastText.trim();
-    el.textContent = cleaned.length > 1400 ? `${cleaned.slice(0, 1399).trimEnd()}\n…` : cleaned;
-    return;
+    text = cleaned.length > 1400 ? `${cleaned.slice(0, 1399).trimEnd()}\n…` : cleaned;
+  } else {
+    text = state.images.length ? "On (waiting…)" : "On (no images loaded)";
   }
-  el.textContent = state.images.length ? "On (waiting…)" : "On (no images loaded)";
+
+  if (els.alwaysOnVisionReadout) {
+    els.alwaysOnVisionReadout.title = title;
+    els.alwaysOnVisionReadout.textContent = text;
+  }
+
+  if (els.canvasContextHud) {
+    let hudText = "";
+    if (hasOutput) {
+      const summary = extractCanvasContextSummary(aov.lastText);
+      const top = extractCanvasContextTopAction(aov.lastText);
+      const bits = [];
+      if (summary) bits.push(summary);
+      if (top?.action) bits.push(`NEXT: ${top.action}`);
+      hudText = bits.length ? bits.join(" | ") : _collapseWs(aov.lastText);
+    } else {
+      hudText = text;
+    }
+    els.canvasContextHud.textContent = `CTX: ${hudText}`;
+    const full = hasOutput ? String(aov.lastText || "").trim() : String(text || "").trim();
+    els.canvasContextHud.title = [title, full].filter(Boolean).join("\n");
+  }
 }
 
 function allowAlwaysOnVision() {
@@ -709,6 +791,335 @@ function allowAlwaysOnVision() {
     if (!state.keyStatus.openai) return false;
   }
   return true;
+}
+
+const CANVAS_CONTEXT_ENVELOPE_VERSION = 1;
+const CANVAS_CONTEXT_ALLOWED_ACTIONS = [
+  "Multi view",
+  "Single view",
+  "Combine",
+  "Bridge",
+  "Swap DNA",
+  "Argue",
+  "Extract the Rule",
+  "Odd One Out",
+  "Triforce",
+  "Diagnose",
+  "Recast",
+  "Variations",
+  "Background: White",
+  "Background: Sweep",
+  "Crop: Square",
+  "Annotate",
+];
+
+const CANVAS_CONTEXT_ACTION_GLOSSARY = [
+  {
+    action: "Multi view",
+    what: "Show all loaded photos on the canvas (enables 2-photo and 3-photo actions when the right count is loaded).",
+    requires: "At least 2 photos loaded.",
+  },
+  {
+    action: "Single view",
+    what: "Show one image at a time (restores single-image actions).",
+    requires: "At least 1 photo loaded.",
+  },
+  {
+    action: "Combine",
+    what: "Blend the two loaded photos into one output image.",
+    requires: "Exactly 2 photos loaded (multi-image action).",
+  },
+  {
+    action: "Bridge",
+    what: "Generate the aesthetic midpoint between two images (not a collage).",
+    requires: "Exactly 2 photos loaded (multi-image action).",
+  },
+  {
+    action: "Swap DNA",
+    what: "Use structure from one image and surface qualities from the other.",
+    requires: "Exactly 2 photos loaded (multi-image action).",
+  },
+  {
+    action: "Argue",
+    what: "Debate the two directions (why each is stronger, with visual evidence).",
+    requires: "Exactly 2 photos loaded (multi-image action).",
+  },
+  {
+    action: "Extract the Rule",
+    what: "Extract the shared invisible rule/pattern across three images.",
+    requires: "Exactly 3 photos loaded (multi-image action).",
+  },
+  {
+    action: "Odd One Out",
+    what: "Identify which of three images breaks the shared pattern, and explain why.",
+    requires: "Exactly 3 photos loaded (multi-image action).",
+  },
+  {
+    action: "Triforce",
+    what: "Generate the centroid: one image equidistant from all three references.",
+    requires: "Exactly 3 photos loaded (multi-image action).",
+  },
+  {
+    action: "Diagnose",
+    what: "Creative-director diagnosis: what's working, what's not, and what to fix next.",
+    requires: "An active image.",
+  },
+  {
+    action: "Recast",
+    what: "Reimagine the image in a different medium/context.",
+    requires: "An active image.",
+  },
+  {
+    action: "Variations",
+    what: "Generate zero-prompt variations of the active image.",
+    requires: "An active image.",
+  },
+  {
+    action: "Background: White",
+    what: "Replace background with clean studio white (optionally uses lasso selection).",
+    requires: "An active image.",
+  },
+  {
+    action: "Background: Sweep",
+    what: "Replace background with a soft sweep gradient (optionally uses lasso selection).",
+    requires: "An active image.",
+  },
+  {
+    action: "Crop: Square",
+    what: "Crop the active image to a centered square.",
+    requires: "An active image that is not already square.",
+  },
+  {
+    action: "Annotate",
+    what: "Select the Annotate tool so the user can draw a box and type an instruction.",
+    requires: "An active image.",
+  },
+];
+
+function _canvasContextSidecarPath(snapshotPath) {
+  const raw = String(snapshotPath || "").trim();
+  if (!raw) return null;
+  const dot = raw.lastIndexOf(".");
+  if (dot <= 0) return `${raw}.ctx.json`;
+  return `${raw.slice(0, dot)}.ctx.json`;
+}
+
+function _stableQuickActionLabel(label) {
+  return String(label || "")
+    .replace(/\s*\(running\.\.\.\)\s*$/i, "")
+    .replace(/\s*\(running…\)\s*$/i, "")
+    .trim();
+}
+
+function buildCanvasContextEnvelope() {
+  const active = getActiveImage();
+  const imageFiles = (state.images || [])
+    .map((item) => basename(item?.path))
+    .filter(Boolean);
+
+  const quickActions = (computeQuickActions() || [])
+    .filter((action) => action && action.id && action.label)
+    .map((action) => ({
+      id: String(action.id),
+      label: _stableQuickActionLabel(action.label),
+      enabled: !action.disabled,
+      title: action.title ? String(action.title) : null,
+    }));
+
+  const nodes = Array.from(state.timelineNodes || []).sort((a, b) => (a?.createdAt || 0) - (b?.createdAt || 0));
+  const timelineRecent = nodes.slice(-12).map((node) => ({
+    at: node?.createdAt ? new Date(node.createdAt).toISOString() : null,
+    action: node?.action ? String(node.action) : null,
+    file: basename(node?.path),
+    label: node?.label ? String(node.label) : null,
+  }));
+
+  return {
+    schema_version: CANVAS_CONTEXT_ENVELOPE_VERSION,
+    generated_at: new Date().toISOString(),
+    canvas_mode: state.canvasMode,
+    tool: state.tool,
+    n_images: state.images.length,
+    active_image: active?.path ? basename(active.path) : null,
+    images: imageFiles,
+    allowed_actions: CANVAS_CONTEXT_ALLOWED_ACTIONS,
+    quick_actions: quickActions,
+    action_glossary: CANVAS_CONTEXT_ACTION_GLOSSARY,
+    timeline_recent: timelineRecent,
+  };
+}
+
+async function writeCanvasContextEnvelope(snapshotPath) {
+  if (!state.runDir) return null;
+  const ctxPath = _canvasContextSidecarPath(snapshotPath);
+  if (!ctxPath) return null;
+  const envelope = buildCanvasContextEnvelope();
+  const payload = JSON.stringify(envelope);
+  await writeTextFile(ctxPath, payload);
+  return ctxPath;
+}
+
+function normalizeSuggestedActionName(name) {
+  return String(name || "")
+    .trim()
+    .replace(/\.+\s*$/g, "")
+    .trim();
+}
+
+function renderCanvasContextSuggestion() {
+  const wrap = els.canvasContextSuggest;
+  const btn = els.canvasContextSuggestBtn;
+  if (!wrap || !btn) return;
+
+  const rec = state.canvasContextSuggestion;
+  if (!state.alwaysOnVision?.enabled || !rec?.action) {
+    wrap.classList.add("hidden");
+    btn.textContent = "";
+    btn.disabled = true;
+    btn.title = "";
+    return;
+  }
+
+  const action = normalizeSuggestedActionName(rec.action);
+  if (!action) {
+    wrap.classList.add("hidden");
+    btn.textContent = "";
+    btn.disabled = true;
+    btn.title = "";
+    return;
+  }
+
+  const n = state.images.length || 0;
+  let disabledReason = "";
+  if (action === "Multi view") {
+    if (n < 2) disabledReason = `Requires at least 2 images (you have ${n}).`;
+    else if (state.canvasMode === "multi") disabledReason = "Already in multi view.";
+  } else if (action === "Single view") {
+    if (n < 1) disabledReason = "No images loaded.";
+    else if (state.canvasMode !== "multi") disabledReason = "Already in single view.";
+  } else if (["Combine", "Bridge", "Swap DNA", "Argue"].includes(action)) {
+    if (n !== 2) disabledReason = `Requires exactly 2 images (you have ${n}).`;
+  } else if (["Extract the Rule", "Odd One Out", "Triforce"].includes(action)) {
+    if (n !== 3) disabledReason = `Requires exactly 3 images (you have ${n}).`;
+  } else if (!getActiveImage()) {
+    disabledReason = "No active image.";
+  } else if (action === "Crop: Square") {
+    const active = getActiveImage();
+    const iw = active?.img?.naturalWidth || active?.width || null;
+    const ih = active?.img?.naturalHeight || active?.height || null;
+    if (iw && ih && Math.abs(iw - ih) <= 8) disabledReason = "Already square.";
+  }
+
+  wrap.classList.remove("hidden");
+  btn.textContent = action;
+  btn.disabled = Boolean(disabledReason);
+  btn.title = [rec.why || "", disabledReason].filter(Boolean).join("\n");
+}
+
+async function triggerCanvasContextSuggestedAction(actionName) {
+  const action = normalizeSuggestedActionName(actionName);
+  if (!action) return;
+  const active = getActiveImage();
+
+  if (action === "Multi view") {
+    if (state.images.length < 2) throw new Error("Multi view requires at least 2 images.");
+    if (state.canvasMode !== "multi") setCanvasMode("multi");
+    return;
+  }
+  if (action === "Single view") {
+    if (state.images.length < 1) throw new Error("Single view requires at least 1 image.");
+    if (state.canvasMode !== "single") setCanvasMode("single");
+    return;
+  }
+  if (action === "Combine") {
+    if (state.images.length !== 2) throw new Error("Combine requires exactly 2 images.");
+    if (state.canvasMode !== "multi") setCanvasMode("multi");
+    await runBlendPair();
+    return;
+  }
+  if (action === "Bridge") {
+    if (state.images.length !== 2) throw new Error("Bridge requires exactly 2 images.");
+    if (state.canvasMode !== "multi") setCanvasMode("multi");
+    await runBridgePair();
+    return;
+  }
+  if (action === "Swap DNA") {
+    if (state.images.length !== 2) throw new Error("Swap DNA requires exactly 2 images.");
+    if (state.canvasMode !== "multi") setCanvasMode("multi");
+    await runSwapDnaPair({ invert: false });
+    return;
+  }
+  if (action === "Argue") {
+    if (state.images.length !== 2) throw new Error("Argue requires exactly 2 images.");
+    if (state.canvasMode !== "multi") setCanvasMode("multi");
+    await runArguePair();
+    return;
+  }
+  if (action === "Extract the Rule") {
+    if (state.images.length !== 3) throw new Error("Extract the Rule requires exactly 3 images.");
+    if (state.canvasMode !== "multi") setCanvasMode("multi");
+    await runExtractRuleTriplet();
+    return;
+  }
+  if (action === "Odd One Out") {
+    if (state.images.length !== 3) throw new Error("Odd One Out requires exactly 3 images.");
+    if (state.canvasMode !== "multi") setCanvasMode("multi");
+    await runOddOneOutTriplet();
+    return;
+  }
+  if (action === "Triforce") {
+    if (state.images.length !== 3) throw new Error("Triforce requires exactly 3 images.");
+    if (state.canvasMode !== "multi") setCanvasMode("multi");
+    await runTriforceTriplet();
+    return;
+  }
+  if (action === "Diagnose") {
+    if (!active) throw new Error("Diagnose requires an active image.");
+    await runDiagnose();
+    return;
+  }
+  if (action === "Recast") {
+    if (!active) throw new Error("Recast requires an active image.");
+    await runRecast();
+    return;
+  }
+  if (action === "Variations") {
+    if (!active) throw new Error("Variations requires an active image.");
+    await runVariations();
+    return;
+  }
+  if (action === "Background: White") {
+    if (!active) throw new Error("Background replace requires an active image.");
+    await applyBackground("white");
+    return;
+  }
+  if (action === "Background: Sweep") {
+    if (!active) throw new Error("Background replace requires an active image.");
+    await applyBackground("sweep");
+    return;
+  }
+  if (action === "Crop: Square") {
+    if (!active) throw new Error("Crop requires an active image.");
+    await cropSquare();
+    return;
+  }
+  if (action === "Annotate") {
+    if (!active) throw new Error("Annotate requires an active image.");
+    setTool("annotate");
+    showToast("Annotate tool selected.", "tip", 1800);
+    return;
+  }
+
+  // Fallback: attempt to route to an existing Quick Action by label.
+  const match = (computeQuickActions() || []).find((qa) => {
+    const label = _stableQuickActionLabel(qa?.label);
+    return label && label.toLowerCase() === action.toLowerCase();
+  });
+  if (match && !match.disabled && typeof match.onClick === "function") {
+    match.onClick();
+    return;
+  }
+  throw new Error(`Unknown suggested action: ${action}`);
 }
 
 function isForegroundActionRunning() {
@@ -864,6 +1275,9 @@ async function runAlwaysOnVisionOnce() {
   const stamp = Date.now();
   const snapshotPath = `${state.runDir}/alwayson-${stamp}.jpg`;
   await writeAlwaysOnVisionSnapshot(snapshotPath, { maxDim: 768 });
+  await writeCanvasContextEnvelope(snapshotPath).catch((err) => {
+    console.warn("Failed to write canvas context envelope:", err);
+  });
 
   const ok = await ensureEngineSpawned({ reason: "always-on vision" });
   if (!ok) return;
@@ -921,17 +1335,17 @@ function ensureThumbObserver() {
   );
 }
 
-function getOrCreateImageCacheRecord(path) {
-  const existing = state.imageCache.get(path);
+function getOrCreateImageCacheRecord(path, cache = state.imageCache) {
+  const existing = cache.get(path);
   if (existing) return existing;
   const rec = { url: null, urlPromise: null, imgPromise: null };
-  state.imageCache.set(path, rec);
+  cache.set(path, rec);
   return rec;
 }
 
-async function ensureImageUrl(path) {
+async function ensureImageUrl(path, cache = state.imageCache) {
   if (!path) return null;
-  const rec = getOrCreateImageCacheRecord(path);
+  const rec = getOrCreateImageCacheRecord(path, cache);
   if (rec.url) return rec.url;
   if (rec.urlPromise) return await rec.urlPromise;
   rec.urlPromise = (async () => {
@@ -1061,17 +1475,82 @@ function providerDisplay(provider) {
 }
 
 const PORTRAITS_DIR_LS_KEY = "brood.portraitsDir";
+const PORTRAITS_DIR_DISK_FILE = "portraits_dir.json";
+
+async function getPortraitsDirDiskPath() {
+  try {
+    const home = await homeDir();
+    if (!home) return null;
+    return await join(home, ".brood", PORTRAITS_DIR_DISK_FILE);
+  } catch (_) {
+    return null;
+  }
+}
+
+async function loadPortraitsDirFromDisk() {
+  if (state.portraitMedia.diskDirChecked) return state.portraitMedia.diskDir;
+  if (state.portraitMedia.diskDirPromise) return await state.portraitMedia.diskDirPromise;
+  state.portraitMedia.diskDirPromise = (async () => {
+    const path = await getPortraitsDirDiskPath();
+    if (!path) return null;
+    if (!(await exists(path).catch(() => false))) return null;
+    try {
+      const payload = JSON.parse(await readTextFile(path));
+      const dir = typeof payload?.dir === "string" ? payload.dir.trim() : "";
+      return dir ? dir : null;
+    } catch (_) {
+      return null;
+    }
+  })();
+  try {
+    state.portraitMedia.diskDir = await state.portraitMedia.diskDirPromise;
+    state.portraitMedia.diskDirChecked = true;
+    return state.portraitMedia.diskDir;
+  } finally {
+    state.portraitMedia.diskDirPromise = null;
+  }
+}
+
+async function persistPortraitsDirToDisk(dir) {
+  try {
+    const home = await homeDir();
+    if (!home) return;
+    const broodDir = await join(home, ".brood");
+    await createDir(broodDir, { recursive: true }).catch(() => {});
+    const path = await join(broodDir, PORTRAITS_DIR_DISK_FILE);
+    const payload = { dir: String(dir || "").trim() || null, updated_at: new Date().toISOString() };
+    await writeTextFile(path, JSON.stringify(payload, null, 2));
+    state.portraitMedia.diskDir = payload.dir;
+    state.portraitMedia.diskDirChecked = true;
+  } catch (_) {
+    // ignore
+  }
+}
+
+async function clearPortraitsDirOnDisk() {
+  try {
+    const path = await getPortraitsDirDiskPath();
+    if (path) await removeFile(path).catch(() => {});
+  } catch (_) {}
+  state.portraitMedia.diskDir = null;
+  state.portraitMedia.diskDirChecked = true;
+}
 
 function renderPortraitsDirReadout() {
   if (!els.portraitsDir) return;
   const custom = localStorage.getItem(PORTRAITS_DIR_LS_KEY);
+  const disk = state.portraitMedia.diskDirChecked ? state.portraitMedia.diskDir : null;
   const resolved = state.portraitMedia.dir;
   const lines = [];
-  if (custom) lines.push(`Custom: ${custom}`);
+  if (custom) lines.push(`Custom (this build): ${custom}`);
+  else if (disk) lines.push(`Custom (all builds): ${disk}`);
   if (resolved) {
     lines.push(`Using: ${resolved}`);
   } else if (state.portraitMedia.dirChecked) {
     lines.push("Using: (not found)");
+    if (state.portraitMedia.lastResolveError) {
+      lines.push(`Why: ${clampText(state.portraitMedia.lastResolveError, 180)}`);
+    }
   } else {
     lines.push("Using: (searching...)");
   }
@@ -1090,11 +1569,28 @@ function invalidatePortraitMediaCache() {
   state.portraitMedia.dir = null;
   state.portraitMedia.dirChecked = false;
   state.portraitMedia.dirPromise = null;
+  state.portraitMedia.lastResolveError = null;
   state.portraitMedia.index = null;
   state.portraitMedia.indexChecked = false;
   state.portraitMedia.indexPromise = null;
   state.portraitMedia.activeKey1 = null;
   state.portraitMedia.activeKey2 = null;
+  state.portraitMedia.missingToastShown = false;
+  state.portraitMedia.loadErrorToastShown = false;
+  if (state.portraitMedia.urlCache) {
+    for (const rec of state.portraitMedia.urlCache.values()) {
+      const url = rec?.url;
+      if (!url) continue;
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        // ignore
+      }
+    }
+    state.portraitMedia.urlCache.clear();
+  } else {
+    state.portraitMedia.urlCache = new Map();
+  }
 }
 
 async function pickPortraitsDir() {
@@ -1103,6 +1599,7 @@ async function pickPortraitsDir() {
   const dir = Array.isArray(picked) ? picked[0] : picked;
   if (!dir) return;
   localStorage.setItem(PORTRAITS_DIR_LS_KEY, String(dir));
+  persistPortraitsDirToDisk(String(dir)).catch(() => {});
   invalidatePortraitMediaCache();
   renderPortraitsDirReadout();
   ensurePortraitIndex().catch(() => {});
@@ -1123,24 +1620,30 @@ function portraitAgentFromProvider(provider) {
 
 function looksLikePortraitClipName(name) {
   const lower = String(name || "").toLowerCase();
-  return Boolean(lower.match(/^(dryrun|openai|gemini|imagen|flux|stability)_(idle|working).+\\.mp4$/));
+  // Stable: `gemini_idle.mp4`
+  if (lower.match(/^(dryrun|openai|gemini|imagen|flux|stability)_(idle|working)\.(mp4|mov|webm)$/)) {
+    return true;
+  }
+  // Variant/timestamped: `gemini_idle_20240201_010203....mp4`
+  return Boolean(lower.match(/^(dryrun|openai|gemini|imagen|flux|stability)_(idle|working)_.+\.(mp4|mov|webm)$/));
 }
 
-async function dirHasPortraitClips(dir) {
-  if (!dir) return false;
-  try {
-    const entries = await readDir(dir, { recursive: false });
-    for (const entry of entries || []) {
-      const path = entry?.path;
-      if (!path) continue;
-      if (extname(path) !== ".mp4") continue;
-      const name = entry?.name || basename(path);
-      if (looksLikePortraitClipName(name)) return true;
-    }
-  } catch (_) {
-    // ignore
+async function scanPortraitDir(dir) {
+  const result = { entries: 0, videos: 0, matches: 0, sampleVideos: [] };
+  if (!dir) return result;
+  const entries = await readDir(dir, { recursive: false });
+  for (const entry of entries || []) {
+    const path = entry?.path;
+    if (!path) continue;
+    result.entries += 1;
+    const ext = extname(path);
+    if (ext !== ".mp4" && ext !== ".mov" && ext !== ".webm") continue;
+    result.videos += 1;
+    const name = basename(path);
+    if (result.sampleVideos.length < 4 && name) result.sampleVideos.push(name);
+    if (looksLikePortraitClipName(name)) result.matches += 1;
   }
-  return false;
+  return result;
 }
 
 async function deriveMainRepoRootFromWorktree(repoRoot) {
@@ -1149,7 +1652,7 @@ async function deriveMainRepoRootFromWorktree(repoRoot) {
     const gitPath = await join(repoRoot, ".git");
     const content = await readTextFile(gitPath);
     const firstLine = String(content || "").split(/\r?\n/)[0] || "";
-    const match = firstLine.match(/^gitdir:\\s*(.+)\\s*$/i);
+    const match = firstLine.match(/^gitdir:\s*(.+)\s*$/i);
     if (!match) return null;
     const gitdir = String(match[1] || "").trim();
     if (!gitdir) return null;
@@ -1170,9 +1673,13 @@ async function resolvePortraitsDir() {
   if (state.portraitMedia.dirChecked) return state.portraitMedia.dir;
   if (state.portraitMedia.dirPromise) return await state.portraitMedia.dirPromise;
   state.portraitMedia.dirPromise = (async () => {
+    state.portraitMedia.lastResolveError = null;
     const candidates = [];
-    const fromLs = localStorage.getItem(PORTRAITS_DIR_LS_KEY);
-    if (fromLs) candidates.push(String(fromLs));
+    const fromLsRaw = localStorage.getItem(PORTRAITS_DIR_LS_KEY);
+    const fromLs = fromLsRaw ? String(fromLsRaw).trim() : "";
+    if (fromLs) candidates.push(fromLs);
+    const fromDisk = await loadPortraitsDirFromDisk();
+    if (fromDisk && (!fromLs || String(fromDisk) !== String(fromLs).trim())) candidates.push(String(fromDisk).trim());
 
     // Dev convenience: use repo-local outputs if we can locate the repo root.
     try {
@@ -1199,12 +1706,46 @@ async function resolvePortraitsDir() {
       }
     } catch (_) {}
 
+    const primaryCandidate = candidates.length > 0 ? String(candidates[0]) : "";
+    let primaryError = null;
+    let lastError = null;
+
     for (const dir of candidates) {
+      let dirError = null;
+      let ok = false;
       try {
-        if (!(await exists(dir))) continue;
-        if (await dirHasPortraitClips(dir)) return dir;
-      } catch (_) {}
+        ok = await exists(dir);
+      } catch (err) {
+        dirError = `Cannot access folder: ${err?.message || err}`;
+        if (dir === primaryCandidate) primaryError = primaryError || dirError;
+        lastError = dirError;
+        continue;
+      }
+      if (!ok) {
+        dirError = `Folder not found: ${dir}`;
+        if (dir === primaryCandidate) primaryError = primaryError || dirError;
+        lastError = dirError;
+        continue;
+      }
+      try {
+        const scan = await scanPortraitDir(dir);
+        if (scan.matches > 0) return dir;
+        if (scan.videos === 0) {
+          dirError = `No portrait clips found in: ${dir} (${scan.entries} entries, 0 videos)`;
+        } else {
+          const sample = scan.sampleVideos.length ? ` Sample: ${scan.sampleVideos.join(", ")}` : "";
+          dirError = `No portrait clips matched naming in: ${dir} (${scan.videos} videos, 0 matches).${sample}`;
+        }
+      } catch (err) {
+        dirError = `Cannot read folder: ${err?.message || err}`;
+      }
+      if (dirError) {
+        if (dir === primaryCandidate) primaryError = primaryError || dirError;
+        lastError = dirError;
+      }
     }
+
+    state.portraitMedia.lastResolveError = primaryError || lastError || null;
     return null;
   })();
   try {
@@ -1251,7 +1792,7 @@ async function buildPortraitIndex(dir) {
   }
 
   const candidates = entries
-    .map((e) => ({ path: e?.path, name: e?.name || basename(e?.path) }))
+    .map((e) => ({ path: e?.path, name: basename(e?.path) || e?.name }))
     .filter((e) => {
       if (!e.path) return false;
       const ext = extname(e.path);
@@ -1318,12 +1859,16 @@ async function refreshPortraitVideo() {
 }
 
 function secondaryProviderFor(primaryProvider, index = null) {
-  // For now: always show Flux as the secondary portrait when possible.
-  // If primary is already Flux or Flux clips are missing, fall back to any
-  // other available provider so the second portrait is never empty.
+  // Secondary portrait is UI-only. Prefer showing the *other* provider the user is
+  // actually configured to use (text vs image), rather than an arbitrary always-on
+  // mascot (Flux).
   const primary = String(primaryProvider || "").toLowerCase();
-  const candidates = ["flux", "gemini", "openai", "imagen", "sdxl", "dryrun"];
-  const ordered = ["flux", ...candidates.filter((p) => p !== "flux")];
+  const textProvider = providerFromModel(settings.textModel);
+  const preferred = [];
+  if (textProvider) preferred.push(textProvider);
+  // Sensible fallbacks if the text provider doesn't have clips.
+  preferred.push("gemini", "openai", "imagen", "flux", "sdxl", "dryrun");
+  const ordered = Array.from(new Set(preferred.map((p) => String(p || "").toLowerCase()).filter(Boolean)));
 
   function hasIdle(provider) {
     if (!index) return true; // optimistic until the index loads
@@ -1365,16 +1910,33 @@ async function refreshPortraitVideoSlot({ videoEl, provider, busy, activeKeyFiel
     try {
       videoEl.pause();
     } catch (_) {}
+    try {
+      videoEl.removeAttribute("src");
+      videoEl.load();
+    } catch (_) {}
     videoEl.classList.add("hidden");
     state.portraitMedia[activeKeyField] = null;
+    if (
+      !state.portraitMedia.missingToastShown &&
+      state.portraitMedia.dirChecked &&
+      !state.portraitMedia.dir
+    ) {
+      state.portraitMedia.missingToastShown = true;
+      showToast("Portrait clips not found. Settings -> Portraits Folder -> Choose…", "tip", 5200);
+    }
     return;
   }
 
   let url = null;
   try {
-    url = await ensureImageUrl(clipPath);
-  } catch (_) {
+    url = await ensureImageUrl(clipPath, state.portraitMedia.urlCache);
+  } catch (err) {
     url = null;
+    if (!state.portraitMedia.loadErrorToastShown) {
+      state.portraitMedia.loadErrorToastShown = true;
+      console.warn("Portrait clip load failed:", clipPath, err);
+      showToast("Portrait clip failed to load. Check Portraits Folder in Settings.", "tip", 5200);
+    }
   }
   if (!url) {
     videoEl.classList.add("hidden");
@@ -1383,7 +1945,9 @@ async function refreshPortraitVideoSlot({ videoEl, provider, busy, activeKeyFiel
   }
 
   const key = `${clipPath}:${clipState}`;
-  if (state.portraitMedia[activeKeyField] !== key) {
+  const currentSrc = String(videoEl.currentSrc || videoEl.src || "");
+  const needsSrcUpdate = Boolean(url && currentSrc !== String(url));
+  if (state.portraitMedia[activeKeyField] !== key || needsSrcUpdate) {
     state.portraitMedia[activeKeyField] = key;
     videoEl.classList.remove("hidden");
     videoEl.src = url;
@@ -3595,6 +4159,7 @@ function renderQuickActions() {
   }
 
   root.appendChild(frag);
+  renderCanvasContextSuggestion();
 }
 
 async function handleSpawnNode(node) {
@@ -3908,7 +4473,6 @@ async function setActiveImage(id) {
   showDropHint(false);
   renderSelectionMeta();
   chooseSpawnNodes();
-  updatePortraitIdle();
   await setEngineActiveImage(item.path);
   if (!item.visionDesc) {
     scheduleVisionDescribe(item.path, { priority: true });
@@ -5640,7 +6204,7 @@ async function loadExistingArtifacts() {
     }
     const imagePath = payload?.artifacts?.image_path;
     if (typeof imagePath !== "string" || !imagePath) continue;
-    const artifactId = entry.name.slice("receipt-".length).replace(/\\.json$/, "");
+    const artifactId = entry.name.slice("receipt-".length).replace(/\.json$/, "");
     addImage(
       {
         id: artifactId,
@@ -5970,6 +6534,7 @@ async function handleEvent(event) {
     renderHudReadout();
   } else if (event.type === "canvas_context") {
     const text = event.text;
+    const isPartial = Boolean(event.partial);
     const aov = state.alwaysOnVision;
     if (aov) {
       aov.pending = false;
@@ -5992,6 +6557,19 @@ async function handleEvent(event) {
     clearTimeout(alwaysOnVisionTimeout);
     alwaysOnVisionTimeout = null;
     updateAlwaysOnVisionReadout();
+    if (!isPartial && typeof text === "string" && text.trim()) {
+      const top = extractCanvasContextTopAction(text);
+      state.canvasContextSuggestion = top?.action
+        ? {
+            action: top.action,
+            why: top.why || null,
+            at: Date.now(),
+            source: event.source || null,
+            model: event.model || null,
+          }
+        : null;
+      renderCanvasContextSuggestion();
+    }
   } else if (event.type === "canvas_context_failed") {
     const aov = state.alwaysOnVision;
     if (aov) {
@@ -6024,9 +6602,11 @@ async function handleEvent(event) {
         setStatus("Engine: always-on vision disabled (realtime failure)", true);
       }
     }
+    state.canvasContextSuggestion = null;
     clearTimeout(alwaysOnVisionTimeout);
     alwaysOnVisionTimeout = null;
     updateAlwaysOnVisionReadout();
+    renderCanvasContextSuggestion();
   } else if (event.type === "image_description") {
     const path = event.image_path;
     const desc = event.description;
@@ -7052,6 +7632,18 @@ function installUi() {
   if (els.import) els.import.addEventListener("click", () => importPhotos().catch((e) => console.error(e)));
   if (els.export) els.export.addEventListener("click", () => exportRun().catch((e) => console.error(e)));
 
+  if (els.canvasContextSuggestBtn) {
+    els.canvasContextSuggestBtn.addEventListener("click", () => {
+      bumpInteraction();
+      const rec = state.canvasContextSuggestion;
+      if (!rec?.action) return;
+      triggerCanvasContextSuggestedAction(rec.action).catch((err) => {
+        const msg = err?.message || String(err);
+        showToast(msg, "error", 2600);
+      });
+    });
+  }
+
   if (els.dropHint) {
     const openPicker = (event) => {
       if (els.dropHint.classList.contains("hidden")) return;
@@ -7092,6 +7684,7 @@ function installUi() {
     els.portraitsDirClear.addEventListener("click", () => {
       bumpInteraction();
       localStorage.removeItem(PORTRAITS_DIR_LS_KEY);
+      clearPortraitsDirOnDisk().catch(() => {});
       invalidatePortraitMediaCache();
       renderPortraitsDirReadout();
       ensurePortraitIndex().catch(() => {});
@@ -7165,7 +7758,9 @@ function installUi() {
         state.alwaysOnVision.rtState = settings.alwaysOnVision ? "connecting" : "off";
         if (!settings.alwaysOnVision) state.alwaysOnVision.lastText = null;
       }
+      state.canvasContextSuggestion = null;
       updateAlwaysOnVisionReadout();
+      renderCanvasContextSuggestion();
       if (settings.alwaysOnVision) {
         setStatus("Engine: always-on vision enabled");
         ensureEngineSpawned({ reason: "always-on vision" })
@@ -7189,6 +7784,7 @@ function installUi() {
       bumpInteraction();
       settings.textModel = els.textModel.value;
       localStorage.setItem("brood.textModel", settings.textModel);
+      updatePortraitIdle({ fromSettings: true });
       if (state.ptySpawned) {
         invoke("write_pty", { data: `/text_model ${settings.textModel}\n` }).catch(() => {});
       }
@@ -7488,6 +8084,7 @@ async function boot() {
   setRunInfo("No run");
   refreshKeyStatus().catch(() => {});
   updateAlwaysOnVisionReadout();
+  renderCanvasContextSuggestion();
   ensurePortraitIndex().catch(() => {});
   updatePortraitIdle({ fromSettings: true });
   showDropHint(true);
