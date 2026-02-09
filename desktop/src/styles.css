@@ -423,6 +423,8 @@ button.ghost:hover {
   --control-surface-h: 250px;
   /* HUD height is measured in JS; used to size decorative canvas bumpers. */
   --hud-h: var(--control-surface-h);
+  /* Keep the HUD readout shell at a stable height to avoid distracting layout shifts. */
+  --hud-shell-h: 220px;
   /* Keep bumper width aligned to the HUD gutter so it never overlaps the HUD or action grid. */
   --hud-w: 80%;
   background:
@@ -815,7 +817,9 @@ button.ghost:hover {
   z-index: 1;
   flex: 1;
   min-width: 0;
-  min-height: 124px;
+  height: var(--hud-shell-h);
+  min-height: var(--hud-shell-h);
+  max-height: var(--hud-shell-h);
   padding: 26px 18px 18px;
   border-radius: 14px;
   border: 3px solid rgba(8, 10, 14, 0.92);
@@ -2534,6 +2538,7 @@ button.ghost:hover {
   .canvas-wrap {
     order: 0;
     --control-surface-h: 210px;
+    --hud-shell-h: 190px;
   }
   .filmstrip {
     order: 1;
