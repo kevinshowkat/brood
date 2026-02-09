@@ -423,8 +423,13 @@ button.ghost:hover {
   --control-surface-h: 250px;
   /* HUD height is measured in JS; used to size decorative canvas bumpers. */
   --hud-h: var(--control-surface-h);
-  /* Keep the HUD readout shell at a stable height to avoid distracting layout shifts. */
-  --hud-shell-h: 220px;
+  /* Action grid (tools) geometry. */
+  --hud-tool-size: 62px;
+  --hud-tool-gap: 6px;
+  --hud-tool-pad: 10px;
+  /* Keep the HUD readout shell at 85% of the action grid height. */
+  --hud-keybar-h: calc(var(--hud-tool-pad) * 2 + var(--hud-tool-size) * 3 + var(--hud-tool-gap) * 2);
+  --hud-shell-h: calc(var(--hud-keybar-h) * 0.85);
   /* Keep bumper width aligned to the HUD gutter so it never overlaps the HUD or action grid. */
   --hud-w: 80%;
   background:
@@ -493,19 +498,22 @@ button.ghost:hover {
   0%,
   100% {
     box-shadow:
-      0 18px 28px rgba(0, 0, 0, 0.40),
-      0 0 0 1px rgba(100, 210, 255, 0.22),
-      0 0 22px rgba(100, 210, 255, 0.18),
-      inset 0 1px 0 rgba(255, 255, 255, 0.18);
-    filter: saturate(1.02);
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      inset 0 -18px 24px rgba(0, 0, 0, 0.68),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+      0 14px 22px rgba(0, 0, 0, 0.38),
+      0 0 0 1px rgba(255, 94, 190, 0.14);
+    filter: saturate(1.01);
   }
   50% {
     box-shadow:
-      0 18px 28px rgba(0, 0, 0, 0.40),
-      0 0 0 1px rgba(255, 212, 0, 0.18),
-      0 0 34px rgba(100, 210, 255, 0.34),
-      inset 0 1px 0 rgba(255, 255, 255, 0.22);
-    filter: saturate(1.15) brightness(1.02);
+      inset 0 1px 0 rgba(255, 255, 255, 0.18),
+      inset 0 -18px 26px rgba(0, 0, 0, 0.72),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+      0 18px 26px rgba(0, 0, 0, 0.40),
+      0 0 18px rgba(255, 94, 190, 0.18),
+      0 0 0 1px rgba(255, 94, 190, 0.30);
+    filter: saturate(1.06);
   }
 }
 
@@ -514,18 +522,11 @@ button.ghost:hover {
   position: relative;
   text-align: left;
   background:
-    radial-gradient(180px 90px at 18% 18%, rgba(255, 255, 255, 0.55), transparent 70%),
-    radial-gradient(210px 110px at 86% 30%, rgba(255, 212, 0, 0.18), transparent 74%),
-    repeating-linear-gradient(
-      90deg,
-      rgba(6, 8, 12, 0.12) 0px,
-      rgba(6, 8, 12, 0.12) 1px,
-      rgba(0, 0, 0, 0.0) 2px,
-      rgba(0, 0, 0, 0.0) 10px
-    ),
-    linear-gradient(180deg, rgba(120, 242, 255, 0.98), rgba(64, 210, 255, 0.95));
-  color: rgba(6, 8, 12, 0.92);
-  border: 1px solid rgba(100, 210, 255, 0.88);
+    radial-gradient(140px 70px at 26% 18%, rgba(255, 212, 0, 0.10), transparent 58%),
+    radial-gradient(180px 90px at 82% 28%, rgba(255, 94, 190, 0.10), transparent 62%),
+    linear-gradient(180deg, rgba(54, 18, 34, 0.98), rgba(6, 8, 12, 0.96));
+  color: rgba(255, 212, 0, 0.86);
+  border: 1px solid rgba(36, 48, 65, 0.95);
   border-bottom-color: rgba(0, 0, 0, 0.82);
   border-radius: 12px;
   clip-path: polygon(
@@ -538,12 +539,11 @@ button.ghost:hover {
     12px 100%,
     0 calc(100% - 12px)
   );
-  padding: 10px 12px 10px 48px;
-  min-height: 46px;
+  padding: 10px 12px 10px 44px;
+  min-height: 44px;
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
   line-height: 1.2;
   cursor: pointer;
   user-select: none;
@@ -554,49 +554,39 @@ button.ghost:hover {
   transition:
     transform 0.12s ease,
     border-color 0.12s ease,
+    box-shadow 0.12s ease,
+    color 0.12s ease,
     background 0.12s ease;
 }
 
 .canvas-context-suggest-btn::before {
-  content: "AI";
+  content: "";
   position: absolute;
   left: 12px;
   top: 50%;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   transform: translateY(-50%);
-  border-radius: 9px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  border: 1px solid rgba(6, 8, 12, 0.18);
+  border-radius: 8px;
+  border: 1px solid rgba(100, 210, 255, 0.26);
   background:
-    radial-gradient(18px 18px at 30% 25%, rgba(255, 255, 255, 0.35), transparent 70%),
-    linear-gradient(180deg, rgba(255, 212, 0, 0.82), rgba(255, 179, 0, 0.92));
+    radial-gradient(16px 16px at 32% 28%, rgba(255, 255, 255, 0.14), transparent 70%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.0), rgba(0, 0, 0, 0.62)),
+    linear-gradient(135deg, rgba(18, 26, 37, 0.95), rgba(9, 12, 16, 0.92));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    inset 0 -12px 16px rgba(0, 0, 0, 0.22);
-  color: rgba(6, 8, 12, 0.92);
+    inset 0 -10px 14px rgba(0, 0, 0, 0.55);
   opacity: 0.95;
   pointer-events: none;
 }
 
 .canvas-context-suggest-btn:hover {
   border-color: rgba(255, 212, 0, 0.68);
+  color: var(--sc-yellow);
   background:
-    radial-gradient(180px 90px at 18% 18%, rgba(255, 255, 255, 0.62), transparent 70%),
-    radial-gradient(210px 110px at 86% 30%, rgba(255, 212, 0, 0.22), transparent 74%),
-    repeating-linear-gradient(
-      90deg,
-      rgba(6, 8, 12, 0.10) 0px,
-      rgba(6, 8, 12, 0.10) 1px,
-      rgba(0, 0, 0, 0.0) 2px,
-      rgba(0, 0, 0, 0.0) 10px
-    ),
-    linear-gradient(180deg, rgba(146, 246, 255, 0.99), rgba(70, 214, 255, 0.96));
+    radial-gradient(140px 70px at 26% 18%, rgba(255, 212, 0, 0.12), transparent 58%),
+    radial-gradient(180px 90px at 82% 28%, rgba(255, 94, 190, 0.12), transparent 62%),
+    linear-gradient(180deg, rgba(72, 24, 44, 0.98), rgba(6, 8, 12, 0.96));
 }
 
 .canvas-context-suggest-btn:active {
@@ -772,10 +762,10 @@ button.ghost:hover {
 .hud-keybar {
   z-index: 2;
   display: grid;
-  grid-template-columns: repeat(3, 62px);
-  grid-auto-rows: 62px;
-  gap: 6px;
-  padding: 10px;
+  grid-template-columns: repeat(3, var(--hud-tool-size));
+  grid-auto-rows: var(--hud-tool-size);
+  gap: var(--hud-tool-gap);
+  padding: var(--hud-tool-pad);
   border-radius: 14px;
   border: 1px solid rgba(54, 76, 106, 0.62);
   border-bottom-color: rgba(0, 0, 0, 0.72);
@@ -816,6 +806,8 @@ button.ghost:hover {
   position: relative;
   z-index: 1;
   flex: 1;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   height: var(--hud-shell-h);
   min-height: var(--hud-shell-h);
@@ -909,6 +901,10 @@ button.ghost:hover {
 
 .hud-screen {
   position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   border-radius: 12px;
   padding: 10px 12px;
   border: 1px solid rgba(82, 255, 148, 0.22);
@@ -946,6 +942,8 @@ button.ghost:hover {
   display: flex;
   flex-direction: column;
   gap: 7px;
+  flex: 1 1 auto;
+  min-height: 0;
   min-width: 0;
   padding: 2px 0;
   font-family: "IBM Plex Mono", monospace;
@@ -988,15 +986,22 @@ button.ghost:hover {
 }
 
 .hud-director-line {
-  align-items: flex-start;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .hud-v.hud-director {
   font-size: 12.5px;
   line-height: 1.25;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
-  max-height: 96px;
   padding-right: 6px;
   pointer-events: auto;
   overscroll-behavior: contain;
@@ -2538,7 +2543,8 @@ button.ghost:hover {
   .canvas-wrap {
     order: 0;
     --control-surface-h: 210px;
-    --hud-shell-h: 190px;
+    /* Keep the action grid slightly more compact on small screens. */
+    --hud-tool-size: 56px;
   }
   .filmstrip {
     order: 1;
