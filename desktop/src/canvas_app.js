@@ -1873,6 +1873,7 @@ function secondaryProviderFor(primaryProvider, index = null) {
   // Sensible fallbacks if the text provider doesn't have clips.
   preferred.push("gemini", "openai", "imagen", "flux", "sdxl", "dryrun");
   const ordered = Array.from(new Set(preferred.map((p) => String(p || "").toLowerCase()).filter(Boolean)));
+  const candidates = ordered.filter((p) => p !== primary);
 
   function hasIdle(provider) {
     if (!index) return true; // optimistic until the index loads
@@ -1880,11 +1881,15 @@ function secondaryProviderFor(primaryProvider, index = null) {
     return Boolean(index?.[agent]?.idle || index?.[agent]?.working);
   }
 
-  for (const provider of ordered) {
-    if (provider === primary) continue;
+  for (const provider of candidates) {
     if (hasIdle(provider)) return provider;
   }
-  return primary || "dryrun";
+
+  // Even if we have no clips for any other provider, keep the secondary portrait
+  // label different (the video loader will fall back to dryrun clips if needed).
+  if (candidates.length) return candidates[0];
+  if (primary && primary !== "dryrun") return "dryrun";
+  return "gemini";
 }
 
 async function refreshPortraitVideoSlot({ videoEl, provider, busy, activeKeyField }) {
@@ -2038,7 +2043,10 @@ function updatePortraitIdle({ fromSettings = false } = {}) {
   const hasImage = Boolean(state.activeId);
   const index = state.portraitMedia.index;
   const provider2Default = secondaryProviderFor(provider, index);
-  const provider2 = fromSettings ? provider2Default : state.portrait2.provider || provider2Default;
+  let provider2 = fromSettings ? provider2Default : state.portrait2.provider || provider2Default;
+  if (provider2 && provider && String(provider2).toLowerCase() === String(provider).toLowerCase()) {
+    provider2 = secondaryProviderFor(provider, index);
+  }
   setPortrait({
     visible: hasImage,
     busy: false,
@@ -2067,20 +2075,18 @@ function portraitWorking(_actionLabel, { providerOverride = null, clearDirector 
     title: providerDisplay(provider),
   });
   // Secondary portrait is display-only for now (idle loop).
-  if (!state.portrait2.provider) {
-    const provider2 = secondaryProviderFor(provider, state.portraitMedia.index);
-    setPortrait2({
-      visible: Boolean(state.activeId),
-      busy: false,
-      provider: provider2,
-      title: providerDisplay(provider2),
-    });
-  } else {
-    setPortrait2({
-      visible: Boolean(state.activeId),
-      busy: false,
-    });
-  }
+  const provider2Existing = state.portrait2.provider;
+  const needsSecondaryRefresh =
+    !provider2Existing || String(provider2Existing).toLowerCase() === String(provider).toLowerCase();
+  const provider2 = needsSecondaryRefresh
+    ? secondaryProviderFor(provider, state.portraitMedia.index)
+    : provider2Existing;
+  setPortrait2({
+    visible: Boolean(state.activeId),
+    busy: false,
+    provider: provider2,
+    title: providerDisplay(provider2),
+  });
   renderHudReadout();
 }
 
