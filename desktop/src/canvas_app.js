@@ -2198,6 +2198,7 @@ function getDpr() {
 }
 
 let lastHudHeightCssPx = null;
+let lastHudTotalHeightCssPx = null;
 let hudResizeObserver = null;
 function syncHudHeightVar() {
   if (!els.canvasWrap || !els.hud) return;
@@ -2208,9 +2209,18 @@ function syncHudHeightVar() {
   // Avoid setting 0px during early boot/layout churn; it would hide bumpers.
   if (!h) return;
   const next = `${h}px`;
-  if (next === lastHudHeightCssPx) return;
-  lastHudHeightCssPx = next;
-  els.canvasWrap.style.setProperty("--hud-h", next);
+  if (next !== lastHudHeightCssPx) {
+    lastHudHeightCssPx = next;
+    els.canvasWrap.style.setProperty("--hud-h", next);
+  }
+
+  const hudRect = els.hud.getBoundingClientRect();
+  const totalH = Math.max(0, Math.round(hudRect.height));
+  if (!totalH) return;
+  const totalNext = `${totalH}px`;
+  if (totalNext === lastHudTotalHeightCssPx) return;
+  lastHudTotalHeightCssPx = totalNext;
+  els.canvasWrap.style.setProperty("--hud-total-h", totalNext);
 }
 
 function ensureCanvasSize() {

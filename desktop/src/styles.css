@@ -490,9 +490,12 @@ button.ghost:hover {
 
 .canvas-context-suggest {
   position: absolute;
-  top: 14px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  bottom: calc(var(--control-surface-h) - 28px);
+  display: flex;
+  justify-content: center;
+  padding: 0 10px;
   z-index: 7;
   pointer-events: none;
 }
@@ -504,25 +507,29 @@ button.ghost:hover {
   justify-content: center;
   gap: 10px;
   max-width: min(78vw, 820px);
-  padding: 9px 14px;
+  padding: 6px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.24);
+  border: 1px solid rgba(255, 212, 0, 0.88);
   background:
+    radial-gradient(240px 90px at 18% 20%, rgba(255, 255, 255, 0.36), transparent 72%),
+    radial-gradient(260px 110px at 78% 26%, rgba(100, 210, 255, 0.20), transparent 74%),
     repeating-linear-gradient(
       90deg,
-      rgba(255, 255, 255, 0.08) 0px,
-      rgba(255, 255, 255, 0.08) 1px,
+      rgba(12, 14, 20, 0.12) 0px,
+      rgba(12, 14, 20, 0.12) 1px,
       rgba(0, 0, 0, 0.0) 2px,
-      rgba(0, 0, 0, 0.0) 9px
+      rgba(0, 0, 0, 0.0) 10px
     ),
-    linear-gradient(180deg, rgba(0, 0, 0, 0.92), rgba(0, 0, 0, 0.78));
-  color: rgba(255, 255, 255, 0.95);
+    linear-gradient(180deg, rgba(255, 224, 84, 0.985), rgba(255, 170, 0, 0.96));
+  color: rgba(10, 14, 20, 0.93);
   box-shadow:
     0 22px 44px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(255, 212, 0, 0.18),
+    0 0 40px rgba(255, 179, 0, 0.18),
     inset 0 1px 0 rgba(255, 255, 255, 0.10);
   font-family: "IBM Plex Mono", monospace;
-  font-size: 12px;
-  line-height: 1;
+  font-size: 11px;
+  line-height: 1.1;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   cursor: pointer;
@@ -530,7 +537,12 @@ button.ghost:hover {
 }
 
 .canvas-context-suggest-btn:hover {
-  border-color: rgba(255, 255, 255, 0.45);
+  border-color: rgba(255, 212, 0, 0.98);
+  box-shadow:
+    0 22px 44px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(255, 212, 0, 0.24),
+    0 0 44px rgba(255, 179, 0, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .canvas-context-suggest-btn:active {
@@ -538,8 +550,8 @@ button.ghost:hover {
 }
 
 .canvas-context-suggest-btn.is-unavailable {
-  opacity: 0.72;
-  border-color: rgba(255, 255, 255, 0.14);
+  opacity: 0.78;
+  filter: saturate(0.35) brightness(0.92);
 }
 
 .canvas-context-suggest-btn:disabled {
