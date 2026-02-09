@@ -373,7 +373,7 @@ button.ghost:hover {
 
 .tool-hint {
   font-family: "IBM Plex Mono", monospace;
-  font-size: 15px;
+  font-size: 10px;
   font-weight: 800;
   line-height: 1;
   letter-spacing: 0.10em;
