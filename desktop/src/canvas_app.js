@@ -1118,7 +1118,6 @@ function isForegroundActionRunning() {
   return Boolean(
     state.ptySpawning ||
       state.actionQueueActive ||
-      state.actionQueue.length ||
       state.pendingBlend ||
       state.pendingSwapDna ||
       state.pendingBridge ||
@@ -1238,30 +1237,30 @@ async function writeAlwaysOnVisionSnapshot(outPath, { maxDim = 768 } = {}) {
 async function runAlwaysOnVisionOnce() {
   if (!allowAlwaysOnVision()) {
     updateAlwaysOnVisionReadout();
-    return;
+    return false;
   }
   const aov = state.alwaysOnVision;
-  if (aov.pending) return;
+  if (aov.pending) return false;
 
   const now = Date.now();
   const quietFor = now - (state.lastInteractionAt || 0);
   if (quietFor < ALWAYS_ON_VISION_IDLE_MS) {
     scheduleAlwaysOnVision();
-    return;
+    return false;
   }
   if (isForegroundActionRunning()) {
     scheduleAlwaysOnVision();
-    return;
+    return false;
   }
 
   const since = now - (aov.lastRunAt || 0);
   if (since < ALWAYS_ON_VISION_THROTTLE_MS) {
     scheduleAlwaysOnVision();
-    return;
+    return false;
   }
 
   const signature = computeCanvasSignature();
-  if (signature && aov.lastSignature === signature && aov.lastText) return;
+  if (signature && aov.lastSignature === signature && aov.lastText) return false;
 
   await ensureRun();
   const stamp = Date.now();
@@ -1272,7 +1271,7 @@ async function runAlwaysOnVisionOnce() {
   });
 
   const ok = await ensureEngineSpawned({ reason: "always-on vision" });
-  if (!ok) return;
+  if (!ok) return false;
 
   aov.pending = true;
   aov.pendingPath = snapshotPath;
@@ -1287,6 +1286,7 @@ async function runAlwaysOnVisionOnce() {
     state.alwaysOnVision.pending = false;
     state.alwaysOnVision.pendingPath = null;
     updateAlwaysOnVisionReadout();
+    processActionQueue().catch(() => {});
   }, ALWAYS_ON_VISION_TIMEOUT_MS);
 
   if (aov.rtState === "off") aov.rtState = "connecting";
@@ -1296,12 +1296,17 @@ async function runAlwaysOnVisionOnce() {
     console.warn("Always-on vision realtime start failed:", err);
   });
 
-  await invoke("write_pty", { data: `/canvas_context_rt ${quoteForPtyArg(snapshotPath)}\n` }).catch((err) => {
+  try {
+    await invoke("write_pty", { data: `/canvas_context_rt ${quoteForPtyArg(snapshotPath)}\n` });
+  } catch (err) {
     console.warn("Always-on vision dispatch failed:", err);
     aov.pending = false;
     aov.pendingPath = null;
     updateAlwaysOnVisionReadout();
-  });
+    processActionQueue().catch(() => {});
+    return false;
+  }
+  return true;
 }
 
 let thumbObserver = null;
@@ -3905,6 +3910,7 @@ const ACTION_QUEUE_PRIORITY = {
 function isEngineBusy() {
   return Boolean(
     state.ptySpawning ||
+      state.alwaysOnVision?.pending ||
       state.pendingBlend ||
       state.pendingSwapDna ||
       state.pendingBridge ||
@@ -4010,6 +4016,15 @@ async function processActionQueue() {
     }
 
     while (!state.actionQueueActive && !isEngineBusy() && state.actionQueue.length) {
+      // Realtime canvas context drives Suggested Ability; when it's due, run it ahead of
+      // other queued API work so the UI stays responsive.
+      try {
+        const started = await runAlwaysOnVisionOnce();
+        if (started && isEngineBusy()) return;
+      } catch (err) {
+        console.warn("Always-on vision priority dispatch failed:", err);
+      }
+
       const idx = _pickNextQueuedActionIndex();
       if (idx < 0) return;
       const item = state.actionQueue.splice(idx, 1)[0];
@@ -6572,10 +6587,20 @@ async function handleEvent(event) {
       const parentNodeId = state.imagesById.get(targetId)?.timelineNodeId || null;
       clearPendingReplace();
       if (mode === "annotate_box") {
+        const cropPath = pending.cropPath || null;
         const ok = await compositeAnnotateBoxEdit(targetId, path, { box, instruction }).catch((err) => {
           console.error(err);
           return false;
         });
+        // Clean up intermediate artifacts so they don't surface as "weird" partial images
+        // in the filmstrip when the run is reopened.
+        if (cropPath) {
+          removeFile(cropPath).catch(() => {});
+        }
+        if (ok) {
+          removeFile(path).catch(() => {});
+          if (event.receipt_path) removeFile(event.receipt_path).catch(() => {});
+        }
         if (!ok) {
           showToast("Annotate failed to apply the box edit.", "error", 3600);
         }
@@ -6666,42 +6691,45 @@ async function handleEvent(event) {
       at: Date.now(),
     };
     renderHudReadout();
-	  } else if (event.type === "canvas_context") {
-	    const text = event.text;
-	    const isPartial = Boolean(event.partial);
-	    const aov = state.alwaysOnVision;
-	    if (aov) {
-	      if (isPartial) {
-	        // Keep the "pending" state while the realtime session is streaming partial text.
-	        aov.pending = true;
-	      } else {
-	        aov.pending = false;
-	        aov.pendingPath = null;
-	        aov.pendingAt = 0;
-	      }
-	      if (typeof text === "string" && text.trim()) {
-	        aov.lastText = text.trim();
-	      }
-	      aov.lastMeta = {
-	        source: event.source || null,
-	        model: event.model || null,
-	        at: Date.now(),
-	        image_path: event.image_path || null,
-	        partial: isPartial,
-	      };
-	      if (String(event.source || "") === "openai_realtime") {
-	        aov.rtState = "ready";
-	        aov.disabledReason = null;
-	      }
-	    }
-	    if (!isPartial) {
-	      clearTimeout(alwaysOnVisionTimeout);
-	      alwaysOnVisionTimeout = null;
-	    }
-	    updateAlwaysOnVisionReadout();
-	    if (!isPartial && typeof text === "string" && text.trim()) {
-	      const top = extractCanvasContextTopAction(text);
-	      state.canvasContextSuggestion = top?.action
+  } else if (event.type === "canvas_context") {
+    const text = event.text;
+    const isPartial = Boolean(event.partial);
+    const aov = state.alwaysOnVision;
+    if (aov) {
+      if (isPartial) {
+        // Keep the "pending" state while the realtime session is streaming partial text.
+        aov.pending = true;
+      } else {
+        aov.pending = false;
+        aov.pendingPath = null;
+        aov.pendingAt = 0;
+      }
+      if (typeof text === "string" && text.trim()) {
+        aov.lastText = text.trim();
+      }
+      aov.lastMeta = {
+        source: event.source || null,
+        model: event.model || null,
+        at: Date.now(),
+        image_path: event.image_path || null,
+        partial: isPartial,
+      };
+      if (String(event.source || "") === "openai_realtime") {
+        aov.rtState = "ready";
+        aov.disabledReason = null;
+      }
+    }
+    if (!isPartial) {
+      clearTimeout(alwaysOnVisionTimeout);
+      alwaysOnVisionTimeout = null;
+    }
+    updateAlwaysOnVisionReadout();
+    if (!isPartial) {
+      processActionQueue().catch(() => {});
+    }
+    if (!isPartial && typeof text === "string" && text.trim()) {
+      const top = extractCanvasContextTopAction(text);
+      state.canvasContextSuggestion = top?.action
         ? {
             action: top.action,
             why: top.why || null,
@@ -6749,6 +6777,7 @@ async function handleEvent(event) {
     alwaysOnVisionTimeout = null;
     updateAlwaysOnVisionReadout();
     renderQuickActions();
+    processActionQueue().catch(() => {});
   } else if (event.type === "image_description") {
     const path = event.image_path;
     const desc = event.description;
