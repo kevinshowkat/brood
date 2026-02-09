@@ -502,8 +502,9 @@ button.ghost:hover {
       inset 0 -18px 24px rgba(0, 0, 0, 0.68),
       inset 0 0 0 1px rgba(255, 255, 255, 0.05),
       0 14px 22px rgba(0, 0, 0, 0.38),
-      0 0 0 1px rgba(255, 94, 190, 0.14);
-    filter: saturate(1.01);
+      0 0 0 1px rgba(74, 111, 227, 0.22),
+      0 0 12px rgba(59, 125, 216, 0.12);
+    filter: saturate(1.02);
   }
   50% {
     box-shadow:
@@ -511,9 +512,10 @@ button.ghost:hover {
       inset 0 -18px 26px rgba(0, 0, 0, 0.72),
       inset 0 0 0 1px rgba(255, 255, 255, 0.06),
       0 18px 26px rgba(0, 0, 0, 0.40),
-      0 0 18px rgba(255, 94, 190, 0.18),
-      0 0 0 1px rgba(255, 94, 190, 0.30);
-    filter: saturate(1.06);
+      0 0 20px rgba(74, 111, 227, 0.22),
+      0 0 38px rgba(134, 93, 255, 0.12),
+      0 0 0 1px rgba(134, 93, 255, 0.34);
+    filter: saturate(1.10);
   }
 }
 
@@ -522,11 +524,11 @@ button.ghost:hover {
   position: relative;
   text-align: left;
   background:
-    radial-gradient(140px 70px at 26% 18%, rgba(255, 212, 0, 0.10), transparent 58%),
-    radial-gradient(180px 90px at 82% 28%, rgba(255, 94, 190, 0.10), transparent 62%),
-    linear-gradient(180deg, rgba(54, 18, 34, 0.98), rgba(6, 8, 12, 0.96));
-  color: rgba(255, 212, 0, 0.86);
-  border: 1px solid rgba(36, 48, 65, 0.95);
+    radial-gradient(220px 110px at 50% 38%, rgba(165, 220, 255, 0.26), transparent 68%),
+    radial-gradient(220px 110px at 85% 22%, rgba(134, 93, 255, 0.16), transparent 70%),
+    linear-gradient(180deg, rgba(74, 111, 227, 0.90), rgba(59, 125, 216, 0.62) 34%, rgba(6, 8, 12, 0.96));
+  color: rgba(235, 247, 255, 0.92);
+  border: 1px solid rgba(74, 111, 227, 0.52);
   border-bottom-color: rgba(0, 0, 0, 0.82);
   border-radius: 12px;
   clip-path: polygon(
@@ -568,25 +570,27 @@ button.ghost:hover {
   height: 22px;
   transform: translateY(-50%);
   border-radius: 8px;
-  border: 1px solid rgba(100, 210, 255, 0.26);
+  border: 1px solid rgba(165, 220, 255, 0.32);
   background:
-    radial-gradient(16px 16px at 32% 28%, rgba(255, 255, 255, 0.14), transparent 70%),
+    radial-gradient(16px 16px at 32% 28%, rgba(255, 255, 255, 0.18), transparent 70%),
+    radial-gradient(18px 18px at 58% 40%, rgba(165, 220, 255, 0.22), transparent 72%),
     linear-gradient(180deg, rgba(0, 0, 0, 0.0), rgba(0, 0, 0, 0.62)),
     linear-gradient(135deg, rgba(18, 26, 37, 0.95), rgba(9, 12, 16, 0.92));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    inset 0 -10px 14px rgba(0, 0, 0, 0.55);
+    inset 0 -10px 14px rgba(0, 0, 0, 0.55),
+    0 0 12px rgba(74, 111, 227, 0.16);
   opacity: 0.95;
   pointer-events: none;
 }
 
 .canvas-context-suggest-btn:hover {
-  border-color: rgba(255, 212, 0, 0.68);
-  color: var(--sc-yellow);
+  border-color: rgba(165, 220, 255, 0.58);
+  color: rgba(246, 252, 255, 0.96);
   background:
-    radial-gradient(140px 70px at 26% 18%, rgba(255, 212, 0, 0.12), transparent 58%),
-    radial-gradient(180px 90px at 82% 28%, rgba(255, 94, 190, 0.12), transparent 62%),
-    linear-gradient(180deg, rgba(72, 24, 44, 0.98), rgba(6, 8, 12, 0.96));
+    radial-gradient(240px 120px at 50% 40%, rgba(165, 220, 255, 0.30), transparent 68%),
+    radial-gradient(240px 120px at 85% 22%, rgba(134, 93, 255, 0.18), transparent 70%),
+    linear-gradient(180deg, rgba(74, 111, 227, 0.94), rgba(59, 125, 216, 0.68) 34%, rgba(6, 8, 12, 0.96));
 }
 
 .canvas-context-suggest-btn:active {
