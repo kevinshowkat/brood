@@ -722,6 +722,24 @@ function extractCanvasContextTopAction(text) {
   }
   if (nextIdx < 0) return null;
 
+  const extractListItemRest = (lineRaw) => {
+    const line = String(lineRaw || "").trim();
+    if (!line) return null;
+    // Bullets: "- Foo", "* Foo", "• Foo"
+    let match = line.match(/^(?:[-*•])\s+(.*)$/);
+    if (match) return String(match[1] || "").trim() || null;
+    // Numbered: "1. Foo", "2) Foo"
+    match = line.match(/^\d+\s*[\.\)]\s+(.*)$/);
+    if (match) return String(match[1] || "").trim() || null;
+    // Numbered: "1: Foo"
+    match = line.match(/^\d+\s*:\s+(.*)$/);
+    if (match) return String(match[1] || "").trim() || null;
+    // Numbered: "1 - Foo" / "1 — Foo"
+    match = line.match(/^\d+\s*[-—–]\s+(.*)$/);
+    if (match) return String(match[1] || "").trim() || null;
+    return null;
+  };
+
   const parseActionLine = (restRaw) => {
     const rest = String(restRaw || "").trim();
     if (!rest) return null;
@@ -758,10 +776,7 @@ function extractCanvasContextTopAction(text) {
   };
 
   for (let i = nextIdx + 1; i < lines.length; i += 1) {
-    const line = String(lines[i] || "").trim();
-    if (!line) continue;
-    if (!line.startsWith("-")) continue;
-    const rest = line.replace(/^\-\s*/, "").trim();
+    const rest = extractListItemRest(lines[i]);
     if (!rest) continue;
     const parsed = parseActionLine(rest);
     if (!parsed?.action) continue;
