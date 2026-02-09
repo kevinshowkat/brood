@@ -248,7 +248,7 @@ const VISUAL_GRAMMAR_VERSION = "v0";
 // Keep the implementation in place so we can re-enable later.
 const ENABLE_LARVA_SPAWN = false;
 // Spawnbar actions (Studio White, Variations, etc) sit on the canvas "control surface".
-// Disable by default; the inspector still contains Quick Actions.
+// Disable by default; the inspector still contains Abilities.
 const ENABLE_SPAWN_ACTIONS = false;
 
 let visualPromptWriteTimer = null;
@@ -942,9 +942,9 @@ function buildCanvasContextEnvelope() {
     n_images: state.images.length,
     active_image: active?.path ? basename(active.path) : null,
     images: imageFiles,
-    allowed_actions: CANVAS_CONTEXT_ALLOWED_ACTIONS,
-    quick_actions: quickActions,
-    action_glossary: CANVAS_CONTEXT_ACTION_GLOSSARY,
+    allowed_abilities: CANVAS_CONTEXT_ALLOWED_ACTIONS,
+    abilities: quickActions,
+    ability_glossary: CANVAS_CONTEXT_ACTION_GLOSSARY,
     timeline_recent: timelineRecent,
   };
 }
@@ -1114,7 +1114,7 @@ async function triggerCanvasContextSuggestedAction(actionName) {
     return;
   }
 
-  // Fallback: attempt to route to an existing Quick Action by label.
+  // Fallback: attempt to route to an existing Ability by label.
   const match = (computeQuickActions() || []).find((qa) => {
     const label = _stableQuickActionLabel(qa?.label);
     return label && label.toLowerCase() === action.toLowerCase();
@@ -3994,19 +3994,19 @@ function computeQuickActions() {
   if (!active) {
     actions.push({
       id: "no_image",
-      label: "Import photos to unlock actions",
+      label: "Import photos to unlock abilities",
       disabled: true,
     });
     return actions;
   }
 
-  // When the canvas itself is multi-image, prefer multi-image actions and hide
-  // single-image actions to reduce ambiguity.
+  // When the canvas itself is multi-image, prefer multi-image abilities and hide
+  // single-image abilities to reduce ambiguity.
   if (state.canvasMode === "multi") {
     actions.push({
       id: "single_view",
       label: "Single view",
-      title: "Show one image at a time (restores single-image actions)",
+      title: "Show one image at a time (restores single-image abilities)",
       disabled: false,
       onClick: () => setCanvasMode("single"),
     });
@@ -4073,8 +4073,8 @@ function computeQuickActions() {
     const n = state.images.length || 0;
     const hint =
       n <= 1
-        ? "Multi-image actions need 2 photos in the run."
-        : `Multi-image actions need exactly 2 photos (you have ${n}).`;
+        ? "Multi-image abilities need 2 photos in the run."
+        : `Multi-image abilities need exactly 2 photos (you have ${n}).`;
     actions.push({ id: "multi_hint", label: hint, disabled: true });
     // Fall through to single-image actions for the active image.
   }
@@ -4087,7 +4087,7 @@ function computeQuickActions() {
     actions.push({
       id: "multi_view",
       label: "Multi view",
-      title: "Show all loaded photos (enables 2-photo actions when exactly 2 photos are loaded)",
+      title: "Show all loaded photos (enables 2-photo abilities when exactly 2 photos are loaded)",
       disabled: false,
       onClick: () => setCanvasMode("multi"),
     });

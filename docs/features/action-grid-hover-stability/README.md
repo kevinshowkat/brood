@@ -1,12 +1,12 @@
 # Action Grid Hover Stability
 
 ## Problem
-On macOS (WKWebView), the Action Grid (Quick Actions) buttons had a subtle hover “shimmer” where the button/text looked like it slightly tweaked when the mouse entered/exited.
+On macOS (WKWebView), the Action Grid (Abilities) buttons had a subtle hover “shimmer” where the button/text looked like it slightly tweaked when the mouse entered/exited.
 
 Root cause: the hover state used CSS `filter: drop-shadow(...)`. Toggling `filter` on/off can change compositing/rasterization and cause a perceptible jitter.
 
 ## UX
-- Hovering Quick Action buttons should feel stable.
+- Hovering Ability buttons should feel stable.
 - Keep the same “lift + glow” intent, but without the hover jitter.
 
 ## Implementation

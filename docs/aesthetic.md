@@ -3,7 +3,7 @@
 Note: The "Build aesthetic" wizard described below is **not currently present** in the desktop UI.
 This doc is retained as a product/design note for a future feature.
 
-For current desktop workflows, import images into a run via **Import Photos** (or drag-drop) and use Quick Actions.
+For current desktop workflows, import images into a run via **Import Photos** (or drag-drop) and use Abilities.
 
 ## Intended workflow (future)
 

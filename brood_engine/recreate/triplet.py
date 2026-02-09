@@ -1,6 +1,6 @@
 """Three-image ("triplet") inference helpers.
 
-These are used by the desktop app's 3-image Quick Actions:
+These are used by the desktop app's 3-image Abilities:
 - Extract the Rule
 - Odd One Out
 

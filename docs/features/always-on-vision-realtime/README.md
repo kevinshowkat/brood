@@ -76,7 +76,7 @@ Threading:
 4. Confirm:
    - Readout goes `Connecting…` then `SCANNING…` then fills with text.
    - Updates after canvas changes (within throttle).
-   - No noticeable UI lag while using Quick Actions / queue.
+   - No noticeable UI lag while using Abilities / queue.
    - Disabling the toggle stops updates.
 5. Inspect `events.jsonl` for `canvas_context` lines with `source=openai_realtime`.
 

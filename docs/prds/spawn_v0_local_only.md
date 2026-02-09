@@ -48,7 +48,7 @@ Spawn is the cold-start hook: Brood proves it understands the user's visual iden
   - Depressed-active tool behavior
 - No larvae visuals.
 - No UI layout shifting when selecting tools.
-- Session controls remain minimal/distinct from Quick Actions.
+- Session controls remain minimal/distinct from Abilities.
 
 ## Non-Goals (v0)
 - No URL crawling; no Instagram handling.
@@ -152,7 +152,7 @@ Add a "Fingerprint" entry in the AGENTS area:
 
 ## Remove Respawn Entirely
 - Remove the action-grid button `9`'s old behavior and any timers/UI that exist solely to "respawn" on-canvas actions.
-- Spawnbar/on-canvas quick actions remain hidden/removed.
+- Spawnbar/on-canvas abilities remain hidden/removed.
 
 ## Testing
 - Engine/unit:
