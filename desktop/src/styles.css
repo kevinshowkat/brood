@@ -507,7 +507,8 @@ button.ghost:hover {
   justify-content: center;
   gap: 10px;
   max-width: min(78vw, 820px);
-  padding: 6px 12px;
+  min-height: 44px;
+  padding: 12px 18px;
   border-radius: 999px;
   border: 1px solid rgba(255, 212, 0, 0.88);
   background:
@@ -528,9 +529,9 @@ button.ghost:hover {
     0 0 40px rgba(255, 179, 0, 0.18),
     inset 0 1px 0 rgba(255, 255, 255, 0.10);
   font-family: "IBM Plex Mono", monospace;
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.1;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.10em;
   text-transform: uppercase;
   cursor: pointer;
   user-select: none;
