@@ -188,6 +188,7 @@ const state = {
   pendingReplace: null, // { targetId, startedAt, label }
   lastRecreatePrompt: null,
   lastAction: null,
+  lastTipText: null,
   lastDirectorText: null,
   lastDirectorMeta: null, // { kind, source, model, at, paths }
   lastCostLatency: null, // { provider, model, cost_total_usd, cost_per_1k_images_usd, latency_per_image_s, at }
@@ -780,6 +781,8 @@ function updateAlwaysOnVisionReadout() {
     const full = hasOutput ? String(aov.lastText || "").trim() : String(text || "").trim();
     els.canvasContextHud.title = [title, full].filter(Boolean).join("\n");
   }
+
+  renderMotherReadout();
 }
 
 function allowAlwaysOnVision() {
@@ -2152,9 +2155,57 @@ function showToast(message, kind = "info", timeoutMs = 2400) {
   }
 }
 
-function setTip(message) {
+let lastMotherRenderedText = null;
+
+function buildMotherText() {
+  const aov = state.alwaysOnVision;
+  const raw = typeof aov?.lastText === "string" ? aov.lastText.trim() : "";
+  const hasOutput = Boolean(raw);
+
+  if (aov?.enabled) {
+    if (aov.rtState === "connecting" && !aov.pending && !hasOutput) return "CTX: Connecting…";
+    if (aov.pending) return "CTX: SCANNING…";
+    if (hasOutput) {
+      const summary = extractCanvasContextSummary(raw);
+      const top = extractCanvasContextTopAction(raw);
+      const bits = [];
+      if (summary) bits.push(summary);
+      if (top?.action) bits.push(`NEXT: ${top.action}`);
+      const hudText = bits.length ? bits.join(" | ") : _collapseWs(raw);
+      return `CTX: ${hudText}\n\n${raw}`;
+    }
+    return state.images.length ? "CTX: On (waiting…)" : "CTX: On (no images loaded)";
+  }
+
+  const fallback = typeof state.lastTipText === "string" ? state.lastTipText.trim() : "";
+  return fallback || DEFAULT_TIP;
+}
+
+function renderMotherReadout() {
   if (!els.tipsText) return;
-  els.tipsText.textContent = String(message || "");
+  const next = buildMotherText();
+  const changed = next !== lastMotherRenderedText;
+  if (changed) {
+    lastMotherRenderedText = next;
+    els.tipsText.textContent = next;
+  }
+  // Keep newest context visible while debugging.
+  if (state.alwaysOnVision?.enabled && (changed || state.alwaysOnVision?.pending)) {
+    try {
+      els.tipsText.scrollTop = els.tipsText.scrollHeight;
+    } catch (_) {
+      // ignore
+    }
+  }
+}
+
+function setTip(message) {
+  state.lastTipText = String(message || "");
+  if (state.alwaysOnVision?.enabled) {
+    // Mother panel is reserved for CTX output while always-on vision is enabled.
+    return;
+  }
+  renderMotherReadout();
 }
 
 function setDirectorText(text, meta = null) {

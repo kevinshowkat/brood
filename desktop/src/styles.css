@@ -1606,8 +1606,10 @@ button.ghost:hover {
 }
 
 #tips-text {
-  min-height: 64px;
-  max-height: 64px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-height: 128px;
+  max-height: clamp(128px, 22vh, 260px);
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 6px;
