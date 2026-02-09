@@ -2198,7 +2198,6 @@ function getDpr() {
 }
 
 let lastHudHeightCssPx = null;
-let lastHudTotalHeightCssPx = null;
 let hudResizeObserver = null;
 function syncHudHeightVar() {
   if (!els.canvasWrap || !els.hud) return;
@@ -2213,14 +2212,6 @@ function syncHudHeightVar() {
     lastHudHeightCssPx = next;
     els.canvasWrap.style.setProperty("--hud-h", next);
   }
-
-  const hudRect = els.hud.getBoundingClientRect();
-  const totalH = Math.max(0, Math.round(hudRect.height));
-  if (!totalH) return;
-  const totalNext = `${totalH}px`;
-  if (totalNext === lastHudTotalHeightCssPx) return;
-  lastHudTotalHeightCssPx = totalNext;
-  els.canvasWrap.style.setProperty("--hud-total-h", totalNext);
 }
 
 function ensureCanvasSize() {
