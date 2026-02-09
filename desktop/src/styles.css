@@ -789,30 +789,47 @@ button.ghost:hover {
 
 .hud-keybar {
   z-index: 2;
+  position: relative;
+  isolation: isolate;
   display: grid;
   grid-template-columns: repeat(3, var(--hud-tool-size));
   grid-auto-rows: var(--hud-tool-size);
   gap: var(--hud-tool-gap);
   padding: var(--hud-tool-pad);
   border-radius: 14px;
-  border: 1px solid rgba(54, 76, 106, 0.62);
-  border-bottom-color: rgba(0, 0, 0, 0.72);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.20), rgba(0, 0, 0, 0.58)) 0 0 / 100% 16px no-repeat,
-    repeating-linear-gradient(
-        135deg,
-        rgba(255, 197, 0, 0.82) 0px,
-        rgba(255, 197, 0, 0.82) 7px,
-        rgba(0, 0, 0, 0.82) 7px,
-        rgba(0, 0, 0, 0.82) 14px
-      )
-      0 0 / 100% 16px no-repeat,
-    rgba(8, 10, 14, 0.58);
+  border: 1px solid rgba(0, 0, 0, 0.78);
+  background: rgba(8, 10, 14, 0.58);
   box-shadow:
     0 20px 34px rgba(0, 0, 0, 0.52),
     inset 0 1px 0 rgba(255, 255, 255, 0.10);
   pointer-events: auto;
   margin: 0;
+  overflow: hidden;
+}
+
+.hud-keybar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  padding: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(0, 0, 0, 0.70)),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 197, 0, 0.86) 0px,
+      rgba(255, 197, 0, 0.86) 7px,
+      rgba(0, 0, 0, 0.86) 7px,
+      rgba(0, 0, 0, 0.86) 14px
+    );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.96;
 }
 
 .hud-keybar .tool {
@@ -1720,9 +1737,9 @@ button.ghost:hover {
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
   line-height: 1.45;
-  /* Keep Mother compact so Abilities can own the right rail. */
-  min-height: 64px;
-  max-height: clamp(64px, 11vh, 130px);
+  /* Fixed height: keep the right rail stable as CTX responses stream in. */
+  box-sizing: border-box;
+  height: clamp(64px, 11vh, 130px);
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 6px;
