@@ -1,5 +1,7 @@
 # Desktop App (Tauri)
 
+Supported platform: **macOS only** (Desktop app). There is no web app, and Windows/Linux builds are not supported yet.
+
 The desktop app is image-first: import images, run Abilities, and inspect results in the bottom HUD.
 
 ## Core Concepts
@@ -48,4 +50,3 @@ Notes:
 - `run_dir/receipt-*.json`: generation/edit receipts
 - `run_dir/events.jsonl`: event stream consumed by the desktop UI
 - `run_dir/visual_prompt.json`: serialized canvas marks/layout (see `docs/visual_prompting_v0.md`)
-

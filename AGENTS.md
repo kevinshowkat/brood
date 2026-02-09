@@ -1,5 +1,7 @@
 # Repository Guidelines
 
+Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
+
 ## Project Structure & Module Organization
 - `brood_engine/`: core Python engine and CLI (providers, runs, memory, pricing, recreate, chat).
 - `desktop/`: Tauri desktop app (canvas + Abilities UI). Frontend lives in `desktop/src/`, Rust backend in `desktop/src-tauri/`.
