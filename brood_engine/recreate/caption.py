@@ -204,9 +204,11 @@ def _canvas_context_instruction() -> str:
         "You are Brood's always-on background vision.\n"
         "Analyze the attached CANVAS SNAPSHOT (it may contain multiple photos arranged in a grid).\n"
         "Output compact, machine-readable notes we can use for future action recommendations.\n\n"
-        "Format (keep under ~170 words):\n"
+        "Format (keep under ~210 words):\n"
         "CANVAS:\n"
         "<one sentence summary>\n\n"
+        "USE CASE (guess):\n"
+        "<one short line: what the user is likely trying to do (e.g., product listing, ad creative, editorial still, UI screenshot, moodboard)>\n\n"
         "SUBJECTS:\n"
         "- <2-6 bullets>\n\n"
         "STYLE:\n"
@@ -214,7 +216,8 @@ def _canvas_context_instruction() -> str:
         "NEXT ACTIONS:\n"
         "- <Action>: <why>  (max 5)\n\n"
         "Actions must be chosen from: Combine, Bridge, Swap DNA, Recast, Variations, Background: White, Background: Sweep, Crop: Square, Annotate.\n"
-        "Rules: no fluff, no marketing language, be specific about composition, lighting, color, materials, and use case."
+        "Rules: infer the use case from both the image and any recent edits. No fluff, no marketing language. "
+        "Be specific about composition, lighting, color, materials. NEXT ACTIONS should serve the hypothesized use case."
     )
 
 
