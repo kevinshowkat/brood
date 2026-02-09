@@ -1788,6 +1788,76 @@ button.ghost:hover {
   padding-right: 6px;
   scrollbar-color: rgba(82, 255, 148, 0.22) rgba(6, 8, 12, 0.18);
   scrollbar-width: thin;
+  position: relative;
+  isolation: isolate;
+}
+
+/* Mother panel "cosmic storm" glitches (subtle + infrequent). */
+#tips-text::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background:
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.0) 0px,
+      rgba(255, 255, 255, 0.0) 2px,
+      rgba(255, 255, 255, 0.05) 3px
+    ),
+    radial-gradient(220px 120px at 18% 12%, rgba(100, 210, 255, 0.10), transparent 72%),
+    radial-gradient(240px 140px at 82% 58%, rgba(197, 107, 255, 0.06), transparent 74%);
+  mix-blend-mode: screen;
+  transform: translate3d(0, 0, 0);
+}
+
+@keyframes mother-glitch-jitter {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  20% {
+    transform: translate3d(1px, -1px, 0);
+  }
+  40% {
+    transform: translate3d(-1px, 1px, 0);
+  }
+  60% {
+    transform: translate3d(2px, 0, 0);
+  }
+  80% {
+    transform: translate3d(0, -2px, 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes mother-glitch-scan {
+  0% {
+    transform: translate3d(0, -6px, 0);
+  }
+  50% {
+    transform: translate3d(0, 6px, 0);
+  }
+  100% {
+    transform: translate3d(0, -4px, 0);
+  }
+}
+
+#tips-text.mother-glitch {
+  animation: mother-glitch-jitter 220ms steps(2, end) infinite;
+  text-shadow:
+    1px 0 rgba(100, 210, 255, 0.22),
+    -1px 0 rgba(255, 94, 190, 0.16),
+    0 0 14px rgba(59, 125, 216, 0.12);
+  filter: saturate(1.25) contrast(1.06) brightness(1.05);
+  will-change: transform, filter;
+}
+
+#tips-text.mother-glitch::before {
+  opacity: 0.58;
+  animation: mother-glitch-scan 220ms steps(2, end) infinite;
 }
 
 @keyframes mother-cursor-blink {

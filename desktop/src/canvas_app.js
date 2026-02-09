@@ -116,6 +116,9 @@ const state = {
   activeId: null,
   imageCache: new Map(), // path -> { url: string|null, urlPromise: Promise<string>|null, imgPromise: Promise<HTMLImageElement>|null }
   thumbsById: new Map(), // artifactId -> { rootEl, imgEl, labelEl }
+  // Hide the filmstrip by default (keeps the UI focused on the canvas). The feature remains
+  // implemented; set `localStorage.brood.showFilmstrip = "1"` to re-enable in dev.
+  filmstripVisible: localStorage.getItem("brood.showFilmstrip") === "1",
   timelineNodes: [], // [{ nodeId, imageId, path, receiptPath, label, action, parents, createdAt }]
   timelineNodesById: new Map(), // nodeId -> node
   timelineOpen: false,
@@ -2270,6 +2273,61 @@ let lastMotherRenderedText = null;
 let motherTypeoutTimer = null;
 let motherTypeoutTarget = "";
 let motherTypeoutIndex = 0;
+let motherGlitchTimer = null;
+
+function stopMotherGlitchLoop() {
+  clearTimeout(motherGlitchTimer);
+  motherGlitchTimer = null;
+  if (els.tipsText) els.tipsText.classList.remove("mother-glitch");
+}
+
+function _triggerMotherGlitchBurst() {
+  if (!els.tipsText) return;
+  // Keep it subtle and infrequent: brief "cosmic storm" interference.
+  const durationMs = 140 + Math.floor(Math.random() * 240);
+  els.tipsText.classList.add("mother-glitch");
+  setTimeout(() => {
+    if (!els.tipsText) return;
+    els.tipsText.classList.remove("mother-glitch");
+  }, durationMs);
+}
+
+function _scheduleNextMotherGlitch() {
+  clearTimeout(motherGlitchTimer);
+  // Infrequent by design.
+  const delayMs = 22000 + Math.floor(Math.random() * 52000); // 22s - 74s
+  motherGlitchTimer = setTimeout(() => {
+    _triggerMotherGlitchBurst();
+    // Occasionally double-tap the glitch for a more "stormy" feel.
+    if (Math.random() < 0.22) {
+      setTimeout(() => _triggerMotherGlitchBurst(), 140 + Math.floor(Math.random() * 260));
+    }
+    _scheduleNextMotherGlitch();
+  }, delayMs);
+}
+
+function startMotherGlitchLoop() {
+  if (motherGlitchTimer) return;
+  _scheduleNextMotherGlitch();
+}
+
+function _motherIsPinnedToBottom(el, { thresholdPx = 14 } = {}) {
+  if (!el) return true;
+  const scrollTop = Number(el.scrollTop) || 0;
+  const clientH = Number(el.clientHeight) || 0;
+  const scrollH = Number(el.scrollHeight) || 0;
+  if (scrollH <= clientH + 2) return true;
+  return scrollTop + clientH >= scrollH - thresholdPx;
+}
+
+function _motherScrollToBottom(el) {
+  if (!el) return;
+  try {
+    el.scrollTop = el.scrollHeight;
+  } catch {
+    // ignore
+  }
+}
 
 function stopMotherTypeout() {
   clearTimeout(motherTypeoutTimer);
@@ -2281,6 +2339,7 @@ function stopMotherTypeout() {
 
 function motherTypeoutTick() {
   if (!els.tipsText) return;
+  const shouldFollow = _motherIsPinnedToBottom(els.tipsText);
   const remaining = motherTypeoutTarget.length - motherTypeoutIndex;
   if (remaining <= 0) {
     els.tipsText.classList.remove("mother-typing");
@@ -2295,12 +2354,8 @@ function motherTypeoutTick() {
 
   motherTypeoutIndex = Math.min(motherTypeoutTarget.length, motherTypeoutIndex + step);
   els.tipsText.textContent = motherTypeoutTarget.slice(0, motherTypeoutIndex);
-  try {
-    els.tipsText.scrollTop = els.tipsText.scrollHeight;
-  } catch {
-    // ignore
-  }
-  motherTypeoutTimer = setTimeout(motherTypeoutTick, 60);
+  if (shouldFollow) _motherScrollToBottom(els.tipsText);
+  motherTypeoutTimer = setTimeout(motherTypeoutTick, 90);
 }
 
 function startMotherTypeout(text) {
@@ -2339,6 +2394,7 @@ function buildMotherText() {
 
 function renderMotherReadout() {
   if (!els.tipsText) return;
+  const shouldFollow = _motherIsPinnedToBottom(els.tipsText);
   const next = buildMotherText();
   const changed = next !== lastMotherRenderedText;
   const aov = state.alwaysOnVision;
@@ -2349,13 +2405,7 @@ function renderMotherReadout() {
   els.tipsText.classList.toggle("mother-cursor", Boolean(aov?.enabled));
 
   if (!changed) {
-    if (aov?.enabled && aov?.pending) {
-      try {
-        els.tipsText.scrollTop = els.tipsText.scrollHeight;
-      } catch {
-        // ignore
-      }
-    }
+    if (aov?.enabled && aov?.pending && shouldFollow) _motherScrollToBottom(els.tipsText);
     return;
   }
 
@@ -2367,13 +2417,7 @@ function renderMotherReadout() {
 
   stopMotherTypeout();
   els.tipsText.textContent = next;
-  if (aov?.enabled) {
-    try {
-      els.tipsText.scrollTop = els.tipsText.scrollHeight;
-    } catch {
-      // ignore
-    }
-  }
+  if (aov?.enabled && shouldFollow) _motherScrollToBottom(els.tipsText);
 }
 
 function setTip(message) {
@@ -4469,7 +4513,7 @@ async function handleSpawnNode(node) {
 
 function renderFilmstrip() {
   if (!els.filmstrip) return;
-  if (state.canvasMode === "multi") {
+  if (!state.filmstripVisible || state.canvasMode === "multi") {
     els.filmstrip.classList.add("hidden");
     // Avoid accumulating observed nodes when we teardown/rebuild the filmstrip.
     if (thumbObserver) {
@@ -4529,6 +4573,7 @@ function renderFilmstrip() {
 
 function appendFilmstripThumb(item) {
   if (!els.filmstrip || !item?.id || !item?.path) return;
+  if (!state.filmstripVisible) return;
   if (state.canvasMode === "multi") return;
   if (state.thumbsById.has(item.id)) return;
   ensureThumbObserver();
@@ -8485,8 +8530,10 @@ async function boot() {
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
       stopLarvaAnimator();
+      stopMotherGlitchLoop();
     } else {
       ensureLarvaAnimator();
+      startMotherGlitchLoop();
     }
   });
 
@@ -8499,6 +8546,7 @@ async function boot() {
   installCanvasHandlers();
   installDnD();
   installUi();
+  startMotherGlitchLoop();
   startSpawnTimer();
 
   await listen("pty-exit", () => {
