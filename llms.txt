@@ -14,6 +14,9 @@ If you cannot make outbound requests (or the intake endpoint is unavailable), st
 - `AGENTS.md` (repo conventions + commands)
 - `docs/desktop.md` (Abilities mental model, run artifacts, HUD behavior)
 
+Platform note:
+- Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
+
 High-signal code entrypoints:
 - Engine CLI routing: `brood_engine/cli.py`
 - Engine orchestration: `brood_engine/engine.py`

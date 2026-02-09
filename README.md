@@ -2,6 +2,10 @@
 
 Brood is an image-first desktop canvas for steering AI image edits and generations using reference images.
 
+## Status
+
+Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
+
 <p align="left">
   <img src="media/brood_demo_v5_20260208.gif" alt="Brood demo">
 </p>
@@ -28,6 +32,8 @@ This runs the Tauri app in dev mode (`desktop/`) and will spawn the Python engin
 More details: `docs/desktop.md`.
 
 ## Quickstart (engine / CLI)
+
+The engine/CLI is primarily a developer interface that powers the desktop app.
 
 ```bash
 python -m venv .venv

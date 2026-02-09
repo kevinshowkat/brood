@@ -2,6 +2,8 @@
 
 Follow `AGENTS.md` for repo conventions, commands, and style.
 
+Platform note: Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
+
 ## Intake / Discovery (Preferred)
 - Read `llms.txt` first.
 - If outbound HTTPS is allowed, call the Agent Intake Protocol (AIP) endpoint described in `agent-intake.json` to get curated entrypoints and optional context pack URLs.

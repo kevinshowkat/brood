@@ -30,7 +30,6 @@ const els = {
   memoryToggle: document.getElementById("memory-toggle"),
   alwaysOnVisionToggle: document.getElementById("always-on-vision-toggle"),
   alwaysOnVisionReadout: document.getElementById("always-on-vision-readout"),
-  canvasContextHud: document.getElementById("canvas-context-hud"),
   canvasContextSuggest: document.getElementById("canvas-context-suggest"),
   canvasContextSuggestBtn: document.getElementById("canvas-context-suggest-btn"),
   textModel: document.getElementById("text-model"),
@@ -763,23 +762,6 @@ function updateAlwaysOnVisionReadout() {
   if (els.alwaysOnVisionReadout) {
     els.alwaysOnVisionReadout.title = title;
     els.alwaysOnVisionReadout.textContent = text;
-  }
-
-  if (els.canvasContextHud) {
-    let hudText = "";
-    if (hasOutput) {
-      const summary = extractCanvasContextSummary(aov.lastText);
-      const top = extractCanvasContextTopAction(aov.lastText);
-      const bits = [];
-      if (summary) bits.push(summary);
-      if (top?.action) bits.push(`NEXT: ${top.action}`);
-      hudText = bits.length ? bits.join(" | ") : _collapseWs(aov.lastText);
-    } else {
-      hudText = text;
-    }
-    els.canvasContextHud.textContent = `CTX: ${hudText}`;
-    const full = hasOutput ? String(aov.lastText || "").trim() : String(text || "").trim();
-    els.canvasContextHud.title = [title, full].filter(Boolean).join("\n");
   }
 
   renderMotherReadout();
@@ -2159,6 +2141,51 @@ function showToast(message, kind = "info", timeoutMs = 2400) {
 }
 
 let lastMotherRenderedText = null;
+let motherTypeoutTimer = null;
+let motherTypeoutTarget = "";
+let motherTypeoutIndex = 0;
+
+function stopMotherTypeout() {
+  clearTimeout(motherTypeoutTimer);
+  motherTypeoutTimer = null;
+  motherTypeoutTarget = "";
+  motherTypeoutIndex = 0;
+  if (els.tipsText) els.tipsText.classList.remove("mother-typing");
+}
+
+function motherTypeoutTick() {
+  if (!els.tipsText) return;
+  const remaining = motherTypeoutTarget.length - motherTypeoutIndex;
+  if (remaining <= 0) {
+    els.tipsText.classList.remove("mother-typing");
+    motherTypeoutTimer = null;
+    return;
+  }
+  let step = 1;
+  if (remaining > 900) step = 6;
+  else if (remaining > 600) step = 4;
+  else if (remaining > 300) step = 3;
+  else if (remaining > 140) step = 2;
+
+  motherTypeoutIndex = Math.min(motherTypeoutTarget.length, motherTypeoutIndex + step);
+  els.tipsText.textContent = motherTypeoutTarget.slice(0, motherTypeoutIndex);
+  try {
+    els.tipsText.scrollTop = els.tipsText.scrollHeight;
+  } catch {
+    // ignore
+  }
+  motherTypeoutTimer = setTimeout(motherTypeoutTick, 28);
+}
+
+function startMotherTypeout(text) {
+  if (!els.tipsText) return;
+  stopMotherTypeout();
+  motherTypeoutTarget = String(text || "");
+  motherTypeoutIndex = 0;
+  els.tipsText.textContent = "";
+  els.tipsText.classList.add("mother-typing");
+  motherTypeoutTick();
+}
 
 function buildMotherText() {
   const aov = state.alwaysOnVision;
@@ -2188,15 +2215,36 @@ function renderMotherReadout() {
   if (!els.tipsText) return;
   const next = buildMotherText();
   const changed = next !== lastMotherRenderedText;
-  if (changed) {
-    lastMotherRenderedText = next;
-    els.tipsText.textContent = next;
+  const aov = state.alwaysOnVision;
+  const isRealtime = String(aov?.lastMeta?.source || "") === "openai_realtime";
+  const hasOutput = typeof aov?.lastText === "string" && aov.lastText.trim();
+  const shouldTypeout = Boolean(aov?.enabled && isRealtime && hasOutput && !aov.pending);
+
+  els.tipsText.classList.toggle("mother-cursor", Boolean(aov?.enabled));
+
+  if (!changed) {
+    if (aov?.enabled && aov?.pending) {
+      try {
+        els.tipsText.scrollTop = els.tipsText.scrollHeight;
+      } catch {
+        // ignore
+      }
+    }
+    return;
   }
-  // Keep newest context visible while debugging.
-  if (state.alwaysOnVision?.enabled && (changed || state.alwaysOnVision?.pending)) {
+
+  lastMotherRenderedText = next;
+  if (shouldTypeout) {
+    startMotherTypeout(next);
+    return;
+  }
+
+  stopMotherTypeout();
+  els.tipsText.textContent = next;
+  if (aov?.enabled) {
     try {
       els.tipsText.scrollTop = els.tipsText.scrollHeight;
-    } catch (_) {
+    } catch {
       // ignore
     }
   }
@@ -4215,7 +4263,17 @@ function computeQuickActions() {
 function renderQuickActions() {
   const root = els.quickActions;
   if (!root) return;
-  const actions = computeQuickActions();
+  let actions = computeQuickActions();
+  const rec = state.canvasContextSuggestion;
+  if (state.alwaysOnVision?.enabled && rec?.action) {
+    const suggested = normalizeSuggestedActionName(rec.action).toLowerCase();
+    if (suggested) {
+      actions = actions.filter((action) => {
+        if (!action?.label) return true;
+        return normalizeSuggestedActionName(action.label).toLowerCase() !== suggested;
+      });
+    }
+  }
   root.innerHTML = "";
   const frag = document.createDocumentFragment();
 
@@ -6608,34 +6666,42 @@ async function handleEvent(event) {
       at: Date.now(),
     };
     renderHudReadout();
-  } else if (event.type === "canvas_context") {
-    const text = event.text;
-    const isPartial = Boolean(event.partial);
-    const aov = state.alwaysOnVision;
-    if (aov) {
-      aov.pending = false;
-      aov.pendingPath = null;
-      aov.pendingAt = 0;
-      if (typeof text === "string" && text.trim()) {
-        aov.lastText = text.trim();
-      }
-      aov.lastMeta = {
-        source: event.source || null,
-        model: event.model || null,
-        at: Date.now(),
-        image_path: event.image_path || null,
-      };
-      if (String(event.source || "") === "openai_realtime") {
-        aov.rtState = "ready";
-        aov.disabledReason = null;
-      }
-    }
-    clearTimeout(alwaysOnVisionTimeout);
-    alwaysOnVisionTimeout = null;
-    updateAlwaysOnVisionReadout();
-    if (!isPartial && typeof text === "string" && text.trim()) {
-      const top = extractCanvasContextTopAction(text);
-      state.canvasContextSuggestion = top?.action
+	  } else if (event.type === "canvas_context") {
+	    const text = event.text;
+	    const isPartial = Boolean(event.partial);
+	    const aov = state.alwaysOnVision;
+	    if (aov) {
+	      if (isPartial) {
+	        // Keep the "pending" state while the realtime session is streaming partial text.
+	        aov.pending = true;
+	      } else {
+	        aov.pending = false;
+	        aov.pendingPath = null;
+	        aov.pendingAt = 0;
+	      }
+	      if (typeof text === "string" && text.trim()) {
+	        aov.lastText = text.trim();
+	      }
+	      aov.lastMeta = {
+	        source: event.source || null,
+	        model: event.model || null,
+	        at: Date.now(),
+	        image_path: event.image_path || null,
+	        partial: isPartial,
+	      };
+	      if (String(event.source || "") === "openai_realtime") {
+	        aov.rtState = "ready";
+	        aov.disabledReason = null;
+	      }
+	    }
+	    if (!isPartial) {
+	      clearTimeout(alwaysOnVisionTimeout);
+	      alwaysOnVisionTimeout = null;
+	    }
+	    updateAlwaysOnVisionReadout();
+	    if (!isPartial && typeof text === "string" && text.trim()) {
+	      const top = extractCanvasContextTopAction(text);
+	      state.canvasContextSuggestion = top?.action
         ? {
             action: top.action,
             why: top.why || null,
@@ -6644,7 +6710,7 @@ async function handleEvent(event) {
             model: event.model || null,
           }
         : null;
-      renderCanvasContextSuggestion();
+      renderQuickActions();
     }
   } else if (event.type === "canvas_context_failed") {
     const aov = state.alwaysOnVision;
@@ -6682,7 +6748,7 @@ async function handleEvent(event) {
     clearTimeout(alwaysOnVisionTimeout);
     alwaysOnVisionTimeout = null;
     updateAlwaysOnVisionReadout();
-    renderCanvasContextSuggestion();
+    renderQuickActions();
   } else if (event.type === "image_description") {
     const path = event.image_path;
     const desc = event.description;
@@ -7835,7 +7901,7 @@ function installUi() {
       }
       state.canvasContextSuggestion = null;
       updateAlwaysOnVisionReadout();
-      renderCanvasContextSuggestion();
+      renderQuickActions();
       if (settings.alwaysOnVision) {
         setStatus("Engine: always-on vision enabled");
         ensureEngineSpawned({ reason: "always-on vision" })
@@ -8170,7 +8236,7 @@ async function boot() {
   setRunInfo("No run");
   refreshKeyStatus().catch(() => {});
   updateAlwaysOnVisionReadout();
-  renderCanvasContextSuggestion();
+  renderQuickActions();
   ensurePortraitIndex().catch(() => {});
   updatePortraitIdle({ fromSettings: true });
   showDropHint(true);
