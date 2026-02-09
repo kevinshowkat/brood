@@ -1,14 +1,14 @@
 # Brood
 
+<p align="left">
+  <img src="media/brood_demo_v7_20260209.gif" alt="Brood demo">
+</p>
+
 Brood is an image-first desktop canvas for steering AI image edits and generations using reference images.
 
 ## Status
 
 Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
-
-<p align="left">
-  <img src="media/brood_demo_v6_20260209.gif" alt="Brood demo">
-</p>
 
 - 1 image in: `Diagnose` (creative-direction critique), `Recast` (reimagine in a new medium/context)
 - 2 images in: `Combine`, `Swap DNA`, `Bridge`, `Argue`
