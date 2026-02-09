@@ -718,17 +718,51 @@ function extractCanvasContextTopAction(text) {
     }
   }
   if (nextIdx < 0) return null;
+
+  const parseActionLine = (restRaw) => {
+    const rest = String(restRaw || "").trim();
+    if (!rest) return null;
+
+    // Prefer matching exact action names (including ones with colons like "Background: White").
+    try {
+      const allowed = Array.isArray(CANVAS_CONTEXT_ALLOWED_ACTIONS) ? CANVAS_CONTEXT_ALLOWED_ACTIONS : [];
+      const sorted = allowed
+        .map((s) => String(s || ""))
+        .filter(Boolean)
+        .sort((a, b) => b.length - a.length);
+      const lower = rest.toLowerCase();
+      for (const candidate of sorted) {
+        const candLower = candidate.toLowerCase();
+        if (!lower.startsWith(candLower)) continue;
+        const boundary = rest.slice(candidate.length, candidate.length + 1);
+        // Reject partial-word matches (ex: "Bridgework" shouldn't match "Bridge").
+        if (boundary && /[a-z0-9]/i.test(boundary)) continue;
+
+        let remainder = rest.slice(candidate.length).trim();
+        remainder = remainder.replace(/^[\s:—–-]+/, "").trim();
+        return { action: candidate, why: remainder || null };
+      }
+    } catch (_) {
+      // ignore
+    }
+
+    // Fallback: treat "Action: why" as a hint, but don't over-parse (actions can contain colons).
+    const parts = rest.split(":", 2);
+    const action = String(parts[0] || "").trim();
+    const why = parts.length >= 2 ? String(parts[1] || "").trim() : "";
+    if (!action) return null;
+    return { action, why: why || null };
+  };
+
   for (let i = nextIdx + 1; i < lines.length; i += 1) {
     const line = String(lines[i] || "").trim();
     if (!line) continue;
     if (!line.startsWith("-")) continue;
     const rest = line.replace(/^\-\s*/, "").trim();
     if (!rest) continue;
-    const parts = rest.split(":", 2);
-    const action = String(parts[0] || "").trim();
-    const why = parts.length >= 2 ? String(parts[1] || "").trim() : "";
-    if (!action) continue;
-    return { action, why: why || null };
+    const parsed = parseActionLine(rest);
+    if (!parsed?.action) continue;
+    return parsed;
   }
   return null;
 }
@@ -964,6 +998,52 @@ function normalizeSuggestedActionName(name) {
     .trim();
 }
 
+function canvasContextAllowedActions() {
+  // Always-on realtime canvas context acts as a continual Diagnose; avoid exposing it as a suggestion.
+  if (state.alwaysOnVision?.enabled) {
+    return CANVAS_CONTEXT_ALLOWED_ACTIONS.filter((name) => name !== "Diagnose");
+  }
+  return CANVAS_CONTEXT_ALLOWED_ACTIONS;
+}
+
+function isCanvasContextAllowedAction(actionName) {
+  const cleaned = normalizeSuggestedActionName(actionName).toLowerCase();
+  if (!cleaned) return false;
+  return canvasContextAllowedActions().some((cand) => String(cand || "").toLowerCase() === cleaned);
+}
+
+function canonicalizeCanvasContextAction(actionName, whyHint = null) {
+  let cleaned = normalizeSuggestedActionName(actionName);
+  if (!cleaned) return "";
+  cleaned = cleaned.replace(/\s*:\s*/g, ": ").trim();
+
+  const why = typeof whyHint === "string" ? whyHint.trim() : "";
+  const lower = cleaned.toLowerCase();
+  const whyLower = why.toLowerCase();
+
+  // Common truncations: our action names include colons ("Background: White", "Crop: Square"),
+  // but the realtime text often uses "Action: Variant: ..." which can get parsed as "Background".
+  if (lower === "background" || lower === "background replace" || lower === "bg") {
+    if (whyLower.includes("sweep") || whyLower.includes("gradient")) return "Background: Sweep";
+    return "Background: White";
+  }
+  if (lower === "studio white") return "Background: White";
+  if (lower === "studio sweep") return "Background: Sweep";
+
+  if (lower === "crop" || lower === "crop square" || lower === "square crop") return "Crop: Square";
+
+  const compact = lower.replace(/\s+/g, " ").trim();
+  if (compact === "extract rule" || compact === "extract the rule") return "Extract the Rule";
+  if (compact === "odd one out") return "Odd One Out";
+  if (compact === "swap dna" || compact.replace(/\s+/g, "") === "swapdna") return "Swap DNA";
+
+  // Preserve canonical casing when the action is in our allowlist.
+  const allow = CANVAS_CONTEXT_ALLOWED_ACTIONS.find((cand) => String(cand || "").toLowerCase() === lower);
+  if (allow) return allow;
+
+  return cleaned;
+}
+
 function renderCanvasContextSuggestion() {
   const wrap = els.canvasContextSuggest;
   const btn = els.canvasContextSuggestBtn;
@@ -980,19 +1060,8 @@ function renderCanvasContextSuggestion() {
     return;
   }
 
-  const action = normalizeSuggestedActionName(rec.action);
-  if (!action) {
-    wrap.classList.remove("is-visible");
-    wrap.setAttribute("aria-hidden", "true");
-    btn.textContent = "";
-    btn.disabled = true;
-    btn.classList.remove("is-unavailable");
-    btn.title = "";
-    return;
-  }
-
-  // Always-on realtime context replaces Diagnose; hide it if we ever receive a stale/rogue recommendation.
-  if (state.alwaysOnVision?.enabled && action === "Diagnose") {
+  const action = canonicalizeCanvasContextAction(rec.action, rec.why);
+  if (!action || !isCanvasContextAllowedAction(action)) {
     wrap.classList.remove("is-visible");
     wrap.setAttribute("aria-hidden", "true");
     btn.textContent = "";
@@ -1631,12 +1700,14 @@ async function pickPortraitsDir() {
 
 function portraitAgentFromProvider(provider) {
   const p = String(provider || "").toLowerCase();
-  // Requested swap: OpenAI uses Stability clips; Stability (SDXL) uses OpenAI clips.
+  // Requested swaps:
+  // - OpenAI uses Stability clips; Stability (SDXL) uses OpenAI clips.
+  // - Gemini uses Flux clips; Flux uses Gemini clips.
   if (p === "openai") return "stability";
   if (p === "sdxl" || p === "stability") return "openai";
-  if (p === "gemini") return "gemini";
+  if (p === "gemini") return "flux";
   if (p === "imagen") return "imagen";
-  if (p === "flux") return "flux";
+  if (p === "flux") return "gemini";
   if (p === "dryrun") return "dryrun";
   return "dryrun";
 }
@@ -4340,7 +4411,7 @@ function renderQuickActions() {
   let actions = computeQuickActions();
   const rec = state.canvasContextSuggestion;
   if (state.alwaysOnVision?.enabled && rec?.action) {
-    const suggested = normalizeSuggestedActionName(rec.action).toLowerCase();
+    const suggested = canonicalizeCanvasContextAction(rec.action, rec.why).toLowerCase();
     if (suggested) {
       actions = actions.filter((action) => {
         if (!action?.label) return true;
@@ -6588,6 +6659,7 @@ async function handleEvent(event) {
     const bridge = state.pendingBridge;
     const triforce = state.pendingTriforce;
     const recast = state.pendingRecast;
+    const recreate = state.pendingRecreate;
     const pending = state.pendingReplace;
 
     const wasBlend = Boolean(blend);
@@ -6595,6 +6667,7 @@ async function handleEvent(event) {
     const wasBridge = Boolean(bridge);
     const wasTriforce = Boolean(triforce);
     const wasRecast = Boolean(recast);
+    const wasRecreate = Boolean(recreate);
     const wasMultiGenAction = wasBlend || wasSwapDna || wasBridge || wasTriforce;
 
     // Timeline metadata for this newly created artifact.
@@ -6724,6 +6797,29 @@ async function handleEvent(event) {
       for (const srcId of Array.from(new Set(sourceIds.map((v) => String(v || "").trim())))) {
         if (!srcId || srcId === outputId) continue;
         await removeImageFromCanvas(srcId).catch(() => {});
+      }
+      setCanvasMode("single");
+    }
+
+    // For Recast, the desired workflow is to treat the output as the new run: keep only the
+    // newly-created artifact visible on the canvas and close out the source image(s).
+    if (wasRecast) {
+      const outputId = String(id);
+      const removeIds = Array.from(new Set((state.images || []).map((item) => String(item?.id || "")).filter(Boolean)))
+        .filter((imageId) => imageId !== outputId);
+      for (const imageId of removeIds) {
+        await removeImageFromCanvas(imageId).catch(() => {});
+      }
+      setCanvasMode("single");
+    }
+
+    // Same workflow for Variations/Recreate: treat each new artifact as the new "current" image.
+    if (wasRecreate) {
+      const outputId = String(id);
+      const removeIds = Array.from(new Set((state.images || []).map((item) => String(item?.id || "")).filter(Boolean)))
+        .filter((imageId) => imageId !== outputId);
+      for (const imageId of removeIds) {
+        await removeImageFromCanvas(imageId).catch(() => {});
       }
       setCanvasMode("single");
     }
