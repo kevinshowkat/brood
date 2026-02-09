@@ -1013,7 +1013,7 @@ function renderCanvasContextSuggestion() {
   }
 
   wrap.classList.remove("hidden");
-  btn.textContent = action;
+  btn.textContent = `SUGGESTED ABILITY: ${action}`;
   // Keep clickable for debugging; the click handler will surface errors as a toast.
   btn.disabled = false;
   btn.classList.toggle("is-unavailable", Boolean(disabledReason));
