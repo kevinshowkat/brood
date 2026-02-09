@@ -4018,73 +4018,98 @@ function computeQuickActions() {
     return actions;
   }
 
-  const n = state.images.length || 0;
-  if (n === 2) {
+  // When the canvas itself is multi-image, prefer multi-image abilities and hide
+  // single-image abilities to reduce ambiguity.
+  if (state.canvasMode === "multi") {
     actions.push({
-      id: "combine",
-      label: state.pendingBlend ? "Combine (running…)" : "Combine",
-      title: "Blend the two loaded photos into one",
+      id: "single_view",
+      label: "Single view",
+      title: "Show one image at a time (restores single-image abilities)",
       disabled: false,
-      onClick: () => runBlendPair().catch((err) => console.error(err)),
+      onClick: () => setCanvasMode("single"),
     });
-    actions.push({
-      id: "bridge",
-      label: state.pendingBridge ? "Bridge (running…)" : "Bridge",
-      title: "Find the aesthetic midpoint between the two images (not a collage)",
-      disabled: false,
-      onClick: () => runBridgePair().catch((err) => console.error(err)),
-    });
-    actions.push({
-      id: "swap_dna",
-      label: state.pendingSwapDna ? "Swap DNA (running…)" : "Swap DNA",
-      title: "Use structure from the selected image and surface qualities from the other (Shift-click to invert)",
-      disabled: false,
-      onClick: (ev) => runSwapDnaPair({ invert: Boolean(ev?.shiftKey) }).catch((err) => console.error(err)),
-    });
-    actions.push({
-      id: "argue",
-      label: state.pendingArgue ? "Argue (running…)" : "Argue",
-      title: "Debate the two directions (why each is stronger, with visual evidence)",
-      disabled: false,
-      onClick: () => runArguePair().catch((err) => console.error(err)),
-    });
-  } else if (n === 3) {
-    const runningMulti = isMultiActionRunning();
-    actions.push({
-      id: "extract_rule",
-      label: state.pendingExtractRule ? "Extract the Rule (running…)" : "Extract the Rule",
-      title:
-        "Three images is the minimum for pattern recognition. Extract the invisible rule you're applying.",
-      disabled: runningMulti,
-      onClick: () => runExtractRuleTriplet().catch((err) => console.error(err)),
-    });
-    actions.push({
-      id: "odd_one_out",
-      label: state.pendingOddOneOut ? "Odd One Out (running…)" : "Odd One Out",
-      title:
-        "Identify which of the three breaks the shared pattern, and explain why (brutal but useful).",
-      disabled: runningMulti,
-      onClick: () => runOddOneOutTriplet().catch((err) => console.error(err)),
-    });
-    actions.push({
-      id: "triforce",
-      label: state.pendingTriforce ? "Triforce (running…)" : "Triforce",
-      title:
-        "Generate the centroid: a single image equidistant from all three references (mood board distillation).",
-      disabled: runningMulti,
-      onClick: () => runTriforceTriplet().catch((err) => console.error(err)),
-    });
-  } else if (n > 1) {
-    actions.push({
-      id: "multi_hint",
-      label: `Multi-image abilities need exactly 2 or 3 photos (you have ${n}).`,
-      disabled: true,
-    });
+    if (state.images.length === 2) {
+      actions.push({
+        id: "combine",
+        label: state.pendingBlend ? "Combine (running…)" : "Combine",
+        title: "Blend the two loaded photos into one",
+        disabled: false,
+        onClick: () => runBlendPair().catch((err) => console.error(err)),
+      });
+      actions.push({
+        id: "bridge",
+        label: state.pendingBridge ? "Bridge (running…)" : "Bridge",
+        title: "Find the aesthetic midpoint between the two images (not a collage)",
+        disabled: false,
+        onClick: () => runBridgePair().catch((err) => console.error(err)),
+      });
+      actions.push({
+        id: "swap_dna",
+        label: state.pendingSwapDna ? "Swap DNA (running…)" : "Swap DNA",
+        title: "Use structure from the selected image and surface qualities from the other (Shift-click to invert)",
+        disabled: false,
+        onClick: (ev) =>
+          runSwapDnaPair({ invert: Boolean(ev?.shiftKey) }).catch((err) => console.error(err)),
+      });
+      actions.push({
+        id: "argue",
+        label: state.pendingArgue ? "Argue (running…)" : "Argue",
+        title: "Debate the two directions (why each is stronger, with visual evidence)",
+        disabled: false,
+        onClick: () => runArguePair().catch((err) => console.error(err)),
+      });
+      return actions;
+    }
+    if (state.images.length === 3) {
+      const runningMulti = isMultiActionRunning();
+      actions.push({
+        id: "extract_rule",
+        label: state.pendingExtractRule ? "Extract the Rule (running…)" : "Extract the Rule",
+        title:
+          "Three images is the minimum for pattern recognition. Extract the invisible rule you're applying.",
+        disabled: runningMulti,
+        onClick: () => runExtractRuleTriplet().catch((err) => console.error(err)),
+      });
+      actions.push({
+        id: "odd_one_out",
+        label: state.pendingOddOneOut ? "Odd One Out (running…)" : "Odd One Out",
+        title:
+          "Identify which of the three breaks the shared pattern, and explain why (brutal but useful).",
+        disabled: runningMulti,
+        onClick: () => runOddOneOutTriplet().catch((err) => console.error(err)),
+      });
+      actions.push({
+        id: "triforce",
+        label: state.pendingTriforce ? "Triforce (running…)" : "Triforce",
+        title:
+          "Generate the centroid: a single image equidistant from all three references (mood board distillation).",
+        disabled: runningMulti,
+        onClick: () => runTriforceTriplet().catch((err) => console.error(err)),
+      });
+      return actions;
+    }
+    const n = state.images.length || 0;
+    const hint =
+      n <= 1
+        ? "Multi-image abilities need 2 photos in the run."
+        : `Multi-image abilities need exactly 2 photos (you have ${n}).`;
+    actions.push({ id: "multi_hint", label: hint, disabled: true });
+    // Fall through to single-image actions for the active image.
   }
 
   const iw = active?.img?.naturalWidth || active?.width || null;
   const ih = active?.img?.naturalHeight || active?.height || null;
   const canCropSquare = Boolean(iw && ih && Math.abs(iw - ih) > 8);
+
+  if (state.canvasMode !== "multi" && state.images.length > 1) {
+    actions.push({
+      id: "multi_view",
+      label: "Multi view",
+      title: "Show all loaded photos (enables 2-photo abilities when exactly 2 photos are loaded)",
+      disabled: false,
+      onClick: () => setCanvasMode("multi"),
+    });
+  }
 
   actions.push({
     id: "diagnose",
