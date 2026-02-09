@@ -12,18 +12,18 @@ If you can make outbound HTTPS requests:
 If you cannot make outbound requests (or the intake endpoint is unavailable), start here:
 - `README.md` (quickstart for Desktop + Engine/CLI)
 - `AGENTS.md` (repo conventions + commands)
-- `docs/desktop.md` (Quick Actions mental model, run artifacts, HUD behavior)
+- `docs/desktop.md` (Abilities mental model, run artifacts, HUD behavior)
 
 High-signal code entrypoints:
 - Engine CLI routing: `brood_engine/cli.py`
 - Engine orchestration: `brood_engine/engine.py`
 - Providers/models: `brood_engine/providers/`, `brood_engine/models/`
-- Desktop UI (canvas + Quick Actions): `desktop/src/canvas_app.js`, `desktop/src/main.js`
+- Desktop UI (canvas + Abilities): `desktop/src/canvas_app.js`, `desktop/src/main.js`
 - Tauri backend + FS scope: `desktop/src-tauri/src/main.rs`, `desktop/src-tauri/tauri.conf.json`
 - Desktop dev runner: `scripts/dev_desktop.sh`
 
 Common tasks -> where to look:
-- Add/modify a Quick Action: `desktop/src/canvas_app.js` (UI) + `brood_engine/cli.py` / `brood_engine/engine.py` (engine)
+- Add/modify an Ability: `desktop/src/canvas_app.js` (UI) + `brood_engine/cli.py` / `brood_engine/engine.py` (engine)
 - Run artifacts / events stream: `brood_engine/runs/` + `docs/desktop.md`
 - Provider/model changes: `brood_engine/providers/` + `brood_engine/models/`
 - Desktop file access / export: `desktop/src-tauri/tauri.conf.json` + `desktop/src-tauri/src/main.rs`

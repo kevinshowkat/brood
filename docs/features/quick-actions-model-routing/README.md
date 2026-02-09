@@ -1,13 +1,13 @@
-# Quick Actions Model Routing
+# Abilities Model Routing
 
 ## Problem
-Brood previously relied on the user's global `Image Model` setting for most engine-driven Quick Actions, with a few ad-hoc overrides. This leads to:
+Brood previously relied on the user's global `Image Model` setting for most engine-driven Abilities, with a few ad-hoc overrides. This leads to:
 - Poor UX when the global model doesn't support image-to-image edits (many providers ignore `init_image`).
 - Unnecessary cost/latency when a high-end model is used for simple, iterative edits.
 - Inconsistent quality for multi-image actions if a weaker model is selected.
 
 ## Goals
-Assign models per Quick Action based on practical tradeoffs:
+Assign models per Ability based on practical tradeoffs:
 - Multi-image coherence and hard edits: prefer higher quality models.
 - Simple iterative edits: prefer faster/cheaper models.
 - Keep user settings intact: actions can temporarily override the engine model and then restore it.
@@ -26,7 +26,7 @@ Costs in `brood_engine/pricing/default_pricing.json` suggest `gemini-3-pro-image
 ## Implementation
 - Added an `ACTION_IMAGE_MODEL` mapping in `desktop/src/canvas_app.js`.
 - Added `maybeOverrideEngineImageModel()` which temporarily sets `/image_model <desired>` on the engine and records a restore target.
-- Updated engine-driven Quick Actions to use action-specific model overrides and to set `portraitWorking()` with a provider override that matches the routed model.
+- Updated engine-driven Abilities to use action-specific model overrides and to set `portraitWorking()` with a provider override that matches the routed model.
 
 Files:
 - `desktop/src/canvas_app.js`

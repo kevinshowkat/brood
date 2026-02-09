@@ -1,7 +1,7 @@
 # Action Queue (Hardened Queue Foundation)
 
 ## Problem
-Brood currently rejects or overlaps user actions when the engine is busy (e.g. rapid clicks on Quick Actions or the HUD action grid). This causes:
+Brood currently rejects or overlaps user actions when the engine is busy (e.g. rapid clicks on Abilities or the HUD action grid). This causes:
 
 - Lost intent: clicks are ignored with "already running" toasts.
 - Accidental concurrency: some actions can be triggered while other engine work is in-flight.
@@ -10,7 +10,7 @@ Brood currently rejects or overlaps user actions when the engine is busy (e.g. r
 ## UX
 - Actions are now *queueable*. If the engine is busy, clicking an action enqueues it instead of rejecting it.
 - A toast confirms enqueue: `Queued: <Action>`.
-- Quick Actions remain clickable even while an action is running (they enqueue).
+- Abilities remain clickable even while an action is running (they enqueue).
 - The queue executes actions sequentially (one at a time) and resumes automatically on completion/failure events.
 
 Notes:

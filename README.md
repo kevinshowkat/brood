@@ -20,7 +20,7 @@ This runs the Tauri app in dev mode (`desktop/`) and will spawn the Python engin
 
 ## Desktop usage
 - Click **Import Photos** (or drag files onto the canvas).
-- Use **Quick Actions** in the right panel.
+- Use **Abilities** in the right panel.
 - Use `Multi view` to run 2-photo actions (when exactly 2 photos are loaded). After a 2-photo action completes, Brood switches back to single-image view (output-only).
 - `Diagnose` / `Argue` output appears in the bottom HUD as `DIAG` / `ARG`.
 - Hotkeys: `L` lasso, `D` designate, `F` fit-to-view, `Esc` clears selection, `1`-`9` activate tools in the HUD keybar
@@ -85,7 +85,7 @@ Edit `~/.brood/pricing_overrides.json` to override pricing or latency values.
 - `desktop/` Tauri desktop app
 - `tests/` pytest suite
 - `docs/param_forge_reference.md` Param Forge reference notes
-- `docs/desktop.md` Desktop UI notes (quick actions + workflows)
+- `docs/desktop.md` Desktop UI notes (abilities + workflows)
 
 ## Agent/LLM entrypoints
 

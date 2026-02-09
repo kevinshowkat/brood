@@ -109,7 +109,7 @@
               "desktop-quick-actions",
               "engine-events"
             ],
-            "notes": "Add a new Quick Action; keep events.jsonl stable."
+            "notes": "Add a new Ability; keep events.jsonl stable."
           }
         }
       ]
@@ -266,19 +266,19 @@
             {
               "path": "docs/desktop.md",
               "kind": "doc",
-              "why": "Quick Actions mental model and HUD output semantics.",
+              "why": "Abilities mental model and HUD output semantics.",
               "priority": 1
             },
             {
               "path": "desktop/src/canvas_app.js",
               "kind": "source",
-              "why": "Quick Actions rendering and action dispatch.",
+              "why": "Abilities rendering and action dispatch.",
               "priority": 1
             },
             {
               "path": "brood_engine/cli.py",
               "kind": "source",
-              "why": "Engine command wiring used by Quick Actions.",
+              "why": "Engine command wiring used by Abilities.",
               "priority": 2
             }
           ],
@@ -291,7 +291,7 @@
               "id": "desktop-quick-actions",
               "url": "https://brood.sh/aip/packs/desktop-quick-actions@<ref>.json",
               "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-              "purpose": "Curated excerpts for Quick Actions + event stream expectations."
+              "purpose": "Curated excerpts for Abilities + event stream expectations."
             }
           ],
           "notes": [

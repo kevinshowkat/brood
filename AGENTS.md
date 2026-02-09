@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 - `brood_engine/`: core Python engine and CLI (providers, runs, memory, pricing, recreate, chat).
-- `desktop/`: Tauri desktop app (canvas + Quick Actions UI). Frontend lives in `desktop/src/`, Rust backend in `desktop/src-tauri/`.
+- `desktop/`: Tauri desktop app (canvas + Abilities UI). Frontend lives in `desktop/src/`, Rust backend in `desktop/src-tauri/`.
 - `tests/`: pytest suite for engine components.
 - `docs/`: project docs and Param Forge reference notes.
 - `scripts/`: helper scripts for packaging (`build_engine.sh`, `dev_desktop.sh`).
@@ -21,7 +21,7 @@ Desktop:
 - `npm run tauri build` — build the app bundle.
 
 Desktop usage:
-- Import photos (button or drag-drop onto the canvas), then run **Quick Actions** from the right panel.
+- Import photos (button or drag-drop onto the canvas), then run **Abilities** from the right panel.
 - Use `Multi view` for 2-photo actions (Combine / Swap DNA / Bridge / Argue).
 - `Diagnose` / `Argue` output prints in the bottom HUD as `DIAG` / `ARG`.
 

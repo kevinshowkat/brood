@@ -1,7 +1,7 @@
-# Three-Image Quick Actions
+# Three-Image Abilities
 
 ## Problem
-Brood previously only had multi-image Quick Actions for exactly two images (Combine / Bridge / Swap DNA / Argue). When users import three images, the UI had no purpose-built actions even though three references is the minimum for pattern recognition.
+Brood previously only had multi-image Abilities for exactly two images (Combine / Bridge / Swap DNA / Argue). When users import three images, the UI had no purpose-built actions even though three references is the minimum for pattern recognition.
 
 This feature adds a 3-image action set that turns a 3-up canvas into a first-class input:
 - **Extract the Rule** (pattern recognition, text + lightweight visual annotation)
@@ -9,7 +9,7 @@ This feature adds a 3-image action set that turns a 3-up canvas into a first-cla
 - **Triforce** (generate the centroid image across 3 references)
 
 ## UX
-- When `canvasMode === "multi"` and exactly **3** images are loaded, the Quick Actions list shows:
+- When `canvasMode === "multi"` and exactly **3** images are loaded, the Abilities list shows:
   - `Extract the Rule`
   - `Odd One Out`
   - `Triforce`

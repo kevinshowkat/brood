@@ -1226,7 +1226,7 @@ button.ghost:hover {
 }
 
 .panel-quick-actions {
-  /* Let Quick Actions expand/shrink to fit the available vertical space; its body scrolls. */
+  /* Let Abilities expand/shrink to fit the available vertical space; its body scrolls. */
   flex: 1 1 auto !important;
   min-height: 0;
   display: flex;

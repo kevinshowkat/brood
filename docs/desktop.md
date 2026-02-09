@@ -1,6 +1,6 @@
 # Desktop App (Tauri)
 
-The desktop app is image-first: import images, run Quick Actions, and inspect results in the bottom HUD.
+The desktop app is image-first: import images, run Abilities, and inspect results in the bottom HUD.
 
 ## Core Concepts
 - **Run**: a folder on disk (created under `~/brood_runs/`) that stores inputs, artifacts, receipts, and `events.jsonl`.
@@ -12,10 +12,10 @@ The desktop app is image-first: import images, run Quick Actions, and inspect re
 ## Basic Workflow
 1. Click **New Run** (creates a run directory and starts the engine).
 2. Click **Import Photos** or drag-drop onto the canvas (copies files into `run_dir/inputs/`).
-3. Use **Quick Actions** (right panel) to generate edits/variants.
+3. Use **Abilities** (right panel) to generate edits/variants.
 4. Use **Export** to write `run_dir/export.html` for a lightweight shareable viewer.
 
-## Quick Actions
+## Abilities
 
 Single-image actions (work in `Single view`):
 - `Diagnose`: creative-director critique. Output appears in the HUD as `DIAG`.
