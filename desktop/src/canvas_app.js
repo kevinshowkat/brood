@@ -2311,24 +2311,6 @@ function startMotherGlitchLoop() {
   _scheduleNextMotherGlitch();
 }
 
-function _motherIsPinnedToBottom(el, { thresholdPx = 14 } = {}) {
-  if (!el) return true;
-  const scrollTop = Number(el.scrollTop) || 0;
-  const clientH = Number(el.clientHeight) || 0;
-  const scrollH = Number(el.scrollHeight) || 0;
-  if (scrollH <= clientH + 2) return true;
-  return scrollTop + clientH >= scrollH - thresholdPx;
-}
-
-function _motherScrollToBottom(el) {
-  if (!el) return;
-  try {
-    el.scrollTop = el.scrollHeight;
-  } catch {
-    // ignore
-  }
-}
-
 function stopMotherTypeout() {
   clearTimeout(motherTypeoutTimer);
   motherTypeoutTimer = null;
@@ -2339,7 +2321,6 @@ function stopMotherTypeout() {
 
 function motherTypeoutTick() {
   if (!els.tipsText) return;
-  const shouldFollow = _motherIsPinnedToBottom(els.tipsText);
   const remaining = motherTypeoutTarget.length - motherTypeoutIndex;
   if (remaining <= 0) {
     els.tipsText.classList.remove("mother-typing");
@@ -2354,7 +2335,6 @@ function motherTypeoutTick() {
 
   motherTypeoutIndex = Math.min(motherTypeoutTarget.length, motherTypeoutIndex + step);
   els.tipsText.textContent = motherTypeoutTarget.slice(0, motherTypeoutIndex);
-  if (shouldFollow) _motherScrollToBottom(els.tipsText);
   motherTypeoutTimer = setTimeout(motherTypeoutTick, 90);
 }
 
@@ -2394,7 +2374,6 @@ function buildMotherText() {
 
 function renderMotherReadout() {
   if (!els.tipsText) return;
-  const shouldFollow = _motherIsPinnedToBottom(els.tipsText);
   const next = buildMotherText();
   const changed = next !== lastMotherRenderedText;
   const aov = state.alwaysOnVision;
@@ -2405,7 +2384,6 @@ function renderMotherReadout() {
   els.tipsText.classList.toggle("mother-cursor", Boolean(aov?.enabled));
 
   if (!changed) {
-    if (aov?.enabled && aov?.pending && shouldFollow) _motherScrollToBottom(els.tipsText);
     return;
   }
 
@@ -2417,7 +2395,6 @@ function renderMotherReadout() {
 
   stopMotherTypeout();
   els.tipsText.textContent = next;
-  if (aov?.enabled && shouldFollow) _motherScrollToBottom(els.tipsText);
 }
 
 function setTip(message) {
