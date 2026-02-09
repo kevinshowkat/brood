@@ -780,6 +780,19 @@ function updateAlwaysOnVisionReadout() {
     const full = hasOutput ? String(aov.lastText || "").trim() : String(text || "").trim();
     els.canvasContextHud.title = [title, full].filter(Boolean).join("\n");
   }
+
+  // While always-on vision is running, keep the secondary agent portrait pinned
+  // to OpenAI (working clip when pending).
+  if (aov?.enabled) {
+    const desiredBusy = Boolean(aov.pending);
+    const desiredTitle = providerDisplay("openai");
+    if (state.portrait2.provider !== "openai" || state.portrait2.title !== desiredTitle || state.portrait2.busy !== desiredBusy) {
+      setPortrait2({ provider: "openai", title: desiredTitle, busy: desiredBusy });
+    } else {
+      // Ensure the video slot reflects pending state even if other UI code touched it.
+      refreshAgentPortraitVideos().catch(() => {});
+    }
+  }
 }
 
 function allowAlwaysOnVision() {
@@ -1987,6 +2000,11 @@ async function refreshPortraitVideoSlot({ videoEl, provider, busy, activeKeyFiel
 }
 
 async function refreshAgentPortraitVideos() {
+  const aov = state.alwaysOnVision;
+  const aovEnabled = Boolean(aov?.enabled);
+  const aovPending = Boolean(aovEnabled && aov?.pending);
+  const provider2 = aovEnabled ? "openai" : state.portrait2.provider;
+  const busy2 = aovPending ? true : state.portrait2.busy;
   await Promise.all([
     refreshPortraitVideoSlot({
       videoEl: els.portraitVideo,
@@ -1996,8 +2014,8 @@ async function refreshAgentPortraitVideos() {
     }),
     refreshPortraitVideoSlot({
       videoEl: els.portraitVideo2,
-      provider: state.portrait2.provider,
-      busy: state.portrait2.busy,
+      provider: provider2,
+      busy: busy2,
       activeKeyField: "activeKey2",
     }),
   ]);
@@ -2054,9 +2072,11 @@ function updatePortraitIdle({ fromSettings = false } = {}) {
   const provider = fromSettings ? providerDefault : state.portrait.provider || providerDefault;
   const hasImage = Boolean(state.activeId);
   const index = state.portraitMedia.index;
-  const provider2Default = secondaryProviderFor(provider, index);
-  let provider2 = fromSettings ? provider2Default : state.portrait2.provider || provider2Default;
-  if (provider2 && provider && String(provider2).toLowerCase() === String(provider).toLowerCase()) {
+  const aov = state.alwaysOnVision;
+  const pinSecondaryToOpenAi = Boolean(aov?.enabled);
+  const provider2Default = pinSecondaryToOpenAi ? "openai" : secondaryProviderFor(provider, index);
+  let provider2 = pinSecondaryToOpenAi ? "openai" : fromSettings ? provider2Default : state.portrait2.provider || provider2Default;
+  if (!pinSecondaryToOpenAi && provider2 && provider && String(provider2).toLowerCase() === String(provider).toLowerCase()) {
     provider2 = secondaryProviderFor(provider, index);
   }
   setPortrait({
@@ -2067,7 +2087,7 @@ function updatePortraitIdle({ fromSettings = false } = {}) {
   });
   setPortrait2({
     visible: hasImage,
-    busy: false,
+    busy: pinSecondaryToOpenAi ? Boolean(aov?.pending) : false,
     provider: provider2,
     title: providerDisplay(provider2),
   });
@@ -7784,6 +7804,8 @@ function installUi() {
       renderCanvasContextSuggestion();
       if (settings.alwaysOnVision) {
         setStatus("Engine: always-on vision enabled");
+        // Pin the secondary portrait to OpenAI immediately (idle clip until pending).
+        setPortrait2({ provider: "openai", title: providerDisplay("openai"), busy: false });
         ensureEngineSpawned({ reason: "always-on vision" })
           .then((ok) => {
             if (!ok) return;
@@ -7793,6 +7815,7 @@ function installUi() {
         scheduleAlwaysOnVision({ immediate: true });
       } else {
         setStatus("Engine: always-on vision disabled");
+        updatePortraitIdle({ fromSettings: true });
         if (state.ptySpawned) {
           invoke("write_pty", { data: `/canvas_context_rt_stop\n` }).catch(() => {});
         }
