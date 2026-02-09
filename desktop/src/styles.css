@@ -1239,7 +1239,7 @@ button.ghost:hover {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 0 14px 22px;
+  padding: 0 14px 14px;
 }
 
 .inspector-footer > .panel {
@@ -1249,19 +1249,23 @@ button.ghost:hover {
 .session-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .session-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: clamp(180px, 28vh, 260px);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  max-height: clamp(112px, 18vh, 160px);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding-right: 6px; /* breathing room for the scrollbar */
+  padding-right: 0;
   scrollbar-color: rgba(100, 210, 255, 0.26) rgba(6, 8, 12, 0.18);
   scrollbar-width: thin;
+}
+
+.session-panel .panel-body.session-card {
+  padding: 8px;
 }
 
 .session-controls::-webkit-scrollbar {
@@ -1284,8 +1288,8 @@ button.ghost:hover {
 
 .session-controls button {
   width: 100%;
-  min-height: 34px;
-  padding: 8px 10px;
+  min-height: 28px;
+  padding: 6px 10px;
   border-radius: 10px;
   border: 1px solid rgba(54, 76, 106, 0.65);
   border-bottom-color: rgba(0, 0, 0, 0.78);
