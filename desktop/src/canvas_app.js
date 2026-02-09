@@ -30,6 +30,7 @@ const els = {
   memoryToggle: document.getElementById("memory-toggle"),
   alwaysOnVisionToggle: document.getElementById("always-on-vision-toggle"),
   alwaysOnVisionReadout: document.getElementById("always-on-vision-readout"),
+  autoAcceptSuggestedAbilityToggle: document.getElementById("auto-accept-suggested-ability-toggle"),
   canvasContextSuggest: document.getElementById("canvas-context-suggest"),
   canvasContextSuggestBtn: document.getElementById("canvas-context-suggest-btn"),
   textModel: document.getElementById("text-model"),
@@ -98,6 +99,7 @@ const els = {
 const settings = {
   memory: localStorage.getItem("brood.memory") === "1",
   alwaysOnVision: localStorage.getItem("brood.alwaysOnVision") === "1",
+  autoAcceptSuggestedAbility: localStorage.getItem("brood.autoAcceptSuggestedAbility") === "1",
   textModel: localStorage.getItem("brood.textModel") || "gpt-5.2",
   imageModel: localStorage.getItem("brood.imageModel") || "gemini-2.5-flash-image",
 };
@@ -212,6 +214,12 @@ const state = {
     disabledReason: null, // string|null (set when auto-disabled due to a fatal realtime error)
   },
   canvasContextSuggestion: null, // { action: string, why: string|null, at: number, source: string|null, model: string|null } | null
+  autoAcceptSuggestedAbility: {
+    enabled: settings.autoAcceptSuggestedAbility,
+    passes: 0,
+    lastAcceptedAt: 0, // rec.at of the most recently auto-accepted suggestion
+    inFlight: false,
+  },
   imageFx: {
     active: false,
     label: null,
@@ -854,6 +862,8 @@ const CANVAS_CONTEXT_ALLOWED_ACTIONS = [
   "Annotate",
 ];
 
+const AUTO_ACCEPT_SUGGESTED_MAX_PASSES = 3;
+
 const CANVAS_CONTEXT_ACTION_GLOSSARY = [
   {
     action: "Multi view",
@@ -1062,6 +1072,86 @@ function canonicalizeCanvasContextAction(actionName, whyHint = null) {
   return cleaned;
 }
 
+function _hideCanvasContextSuggestion(wrap, btn) {
+  wrap.classList.remove("is-visible");
+  wrap.setAttribute("aria-hidden", "true");
+  btn.textContent = "";
+  btn.disabled = true;
+  btn.classList.remove("is-unavailable");
+  btn.title = "";
+}
+
+function _canvasContextDisabledReason(action) {
+  const n = state.images.length || 0;
+  if (action === "Multi view") {
+    if (n < 2) return `Requires at least 2 images (you have ${n}).`;
+    if (state.canvasMode === "multi") return "Already in multi view.";
+    return "";
+  }
+  if (action === "Single view") {
+    if (n < 1) return "No images loaded.";
+    if (state.canvasMode !== "multi") return "Already in single view.";
+    return "";
+  }
+  if (["Combine", "Bridge", "Swap DNA", "Argue"].includes(action)) {
+    if (n !== 2) return `Requires exactly 2 images (you have ${n}).`;
+    return "";
+  }
+  if (["Extract the Rule", "Odd One Out", "Triforce"].includes(action)) {
+    if (n !== 3) return `Requires exactly 3 images (you have ${n}).`;
+    return "";
+  }
+  if (!getActiveImage()) return "No active image.";
+  if (action === "Crop: Square") {
+    const active = getActiveImage();
+    const iw = active?.img?.naturalWidth || active?.width || null;
+    const ih = active?.img?.naturalHeight || active?.height || null;
+    if (iw && ih && Math.abs(iw - ih) <= 8) return "Already square.";
+  }
+  return "";
+}
+
+function disableAutoAcceptSuggestedAbility(message = "") {
+  settings.autoAcceptSuggestedAbility = false;
+  localStorage.setItem("brood.autoAcceptSuggestedAbility", "0");
+  if (state.autoAcceptSuggestedAbility) {
+    state.autoAcceptSuggestedAbility.enabled = false;
+  }
+  if (els.autoAcceptSuggestedAbilityToggle) {
+    els.autoAcceptSuggestedAbilityToggle.checked = false;
+  }
+  if (message) showToast(message, "tip", 2400);
+}
+
+function maybeAutoAcceptCanvasContextSuggestion(action, rec) {
+  const auto = state.autoAcceptSuggestedAbility;
+  if (!auto?.enabled) return;
+  if (!rec?.at || !action) return;
+  if (auto.inFlight) return;
+  if (auto.passes >= AUTO_ACCEPT_SUGGESTED_MAX_PASSES) {
+    disableAutoAcceptSuggestedAbility("Auto-accept: cap reached (3).");
+    return;
+  }
+  if (auto.lastAcceptedAt === rec.at) return;
+
+  auto.inFlight = true;
+  auto.lastAcceptedAt = rec.at;
+  auto.passes += 1;
+  if (auto.passes >= AUTO_ACCEPT_SUGGESTED_MAX_PASSES) {
+    // Disable after this pass to prevent runaway loops.
+    disableAutoAcceptSuggestedAbility("Auto-accept: cap reached (3).");
+  }
+
+  triggerCanvasContextSuggestedAction(action)
+    .catch((err) => {
+      const msg = err?.message || String(err);
+      showToast(msg, "error", 2600);
+    })
+    .finally(() => {
+      auto.inFlight = false;
+    });
+}
+
 function renderCanvasContextSuggestion() {
   const wrap = els.canvasContextSuggest;
   const btn = els.canvasContextSuggestBtn;
@@ -1069,54 +1159,32 @@ function renderCanvasContextSuggestion() {
 
   const rec = state.canvasContextSuggestion;
   if (!state.alwaysOnVision?.enabled || !rec?.action) {
-    wrap.classList.remove("is-visible");
-    wrap.setAttribute("aria-hidden", "true");
-    btn.textContent = "";
-    btn.disabled = true;
-    btn.classList.remove("is-unavailable");
-    btn.title = "";
+    _hideCanvasContextSuggestion(wrap, btn);
     return;
   }
 
   const action = canonicalizeCanvasContextAction(rec.action, rec.why);
   if (!action || !isCanvasContextAllowedAction(action)) {
-    wrap.classList.remove("is-visible");
-    wrap.setAttribute("aria-hidden", "true");
-    btn.textContent = "";
-    btn.disabled = true;
-    btn.classList.remove("is-unavailable");
-    btn.title = "";
+    _hideCanvasContextSuggestion(wrap, btn);
     return;
   }
 
-  const n = state.images.length || 0;
-  let disabledReason = "";
-  if (action === "Multi view") {
-    if (n < 2) disabledReason = `Requires at least 2 images (you have ${n}).`;
-    else if (state.canvasMode === "multi") disabledReason = "Already in multi view.";
-  } else if (action === "Single view") {
-    if (n < 1) disabledReason = "No images loaded.";
-    else if (state.canvasMode !== "multi") disabledReason = "Already in single view.";
-  } else if (["Combine", "Bridge", "Swap DNA", "Argue"].includes(action)) {
-    if (n !== 2) disabledReason = `Requires exactly 2 images (you have ${n}).`;
-  } else if (["Extract the Rule", "Odd One Out", "Triforce"].includes(action)) {
-    if (n !== 3) disabledReason = `Requires exactly 3 images (you have ${n}).`;
-  } else if (!getActiveImage()) {
-    disabledReason = "No active image.";
-  } else if (action === "Crop: Square") {
-    const active = getActiveImage();
-    const iw = active?.img?.naturalWidth || active?.width || null;
-    const ih = active?.img?.naturalHeight || active?.height || null;
-    if (iw && ih && Math.abs(iw - ih) <= 8) disabledReason = "Already square.";
+  // Only show enabled suggestions. If it's not currently usable (wrong image count, already in that mode),
+  // hide it entirely so the Abilities panel stays clean.
+  const disabledReason = _canvasContextDisabledReason(action);
+  if (disabledReason) {
+    _hideCanvasContextSuggestion(wrap, btn);
+    return;
   }
 
   wrap.classList.add("is-visible");
   wrap.setAttribute("aria-hidden", "false");
   btn.textContent = action;
-  // Keep clickable for debugging; the click handler will surface errors as a toast.
   btn.disabled = false;
-  btn.classList.toggle("is-unavailable", Boolean(disabledReason));
-  btn.title = [rec.why || "", disabledReason].filter(Boolean).join("\n");
+  btn.classList.remove("is-unavailable");
+  btn.title = String(rec.why || "").trim();
+
+  maybeAutoAcceptCanvasContextSuggestion(action, rec);
 }
 
 async function triggerCanvasContextSuggestedAction(actionName) {
@@ -4346,7 +4414,7 @@ function computeQuickActions() {
         label: state.pendingExtractRule ? "Extract the Rule (running…)" : "Extract the Rule",
         title:
           "Three images is the minimum for pattern recognition. Extract the invisible rule you're applying.",
-        disabled: runningMulti,
+        disabled: Boolean(runningMulti && !state.pendingExtractRule),
         onClick: () => runExtractRuleTriplet().catch((err) => console.error(err)),
       });
       actions.push({
@@ -4354,7 +4422,7 @@ function computeQuickActions() {
         label: state.pendingOddOneOut ? "Odd One Out (running…)" : "Odd One Out",
         title:
           "Identify which of the three breaks the shared pattern, and explain why (brutal but useful).",
-        disabled: runningMulti,
+        disabled: Boolean(runningMulti && !state.pendingOddOneOut),
         onClick: () => runOddOneOutTriplet().catch((err) => console.error(err)),
       });
       actions.push({
@@ -4362,7 +4430,7 @@ function computeQuickActions() {
         label: state.pendingTriforce ? "Triforce (running…)" : "Triforce",
         title:
           "Generate the centroid: a single image equidistant from all three references (mood board distillation).",
-        disabled: runningMulti,
+        disabled: Boolean(runningMulti && !state.pendingTriforce),
         onClick: () => runTriforceTriplet().catch((err) => console.error(err)),
       });
       return actions;
@@ -4458,21 +4526,30 @@ function renderQuickActions() {
   }
   root.innerHTML = "";
   const frag = document.createDocumentFragment();
+  let rendered = 0;
 
   for (const action of actions) {
     if (!action?.id || !action?.label) continue;
+    if (action.disabled) continue;
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = String(action.label);
     if (action.title) btn.title = String(action.title);
-    if (action.disabled) btn.setAttribute("disabled", "disabled");
-    if (!action.disabled && typeof action.onClick === "function") {
+    if (typeof action.onClick === "function") {
       btn.addEventListener("click", (ev) => {
         bumpInteraction();
         action.onClick(ev);
       });
     }
     frag.appendChild(btn);
+    rendered += 1;
+  }
+
+  if (!rendered) {
+    const empty = document.createElement("div");
+    empty.className = "actions-empty";
+    empty.textContent = state.images.length ? "Select an image to unlock abilities." : "Import photos to unlock abilities.";
+    frag.appendChild(empty);
   }
 
   root.appendChild(frag);
@@ -8177,6 +8254,22 @@ function installUi() {
           invoke("write_pty", { data: `/canvas_context_rt_stop\n` }).catch(() => {});
         }
       }
+    });
+  }
+  if (els.autoAcceptSuggestedAbilityToggle) {
+    els.autoAcceptSuggestedAbilityToggle.checked = settings.autoAcceptSuggestedAbility;
+    els.autoAcceptSuggestedAbilityToggle.addEventListener("change", () => {
+      bumpInteraction();
+      settings.autoAcceptSuggestedAbility = els.autoAcceptSuggestedAbilityToggle.checked;
+      localStorage.setItem("brood.autoAcceptSuggestedAbility", settings.autoAcceptSuggestedAbility ? "1" : "0");
+      if (state.autoAcceptSuggestedAbility) {
+        state.autoAcceptSuggestedAbility.enabled = settings.autoAcceptSuggestedAbility;
+        state.autoAcceptSuggestedAbility.passes = 0;
+        state.autoAcceptSuggestedAbility.lastAcceptedAt = 0;
+        state.autoAcceptSuggestedAbility.inFlight = false;
+      }
+      // If there's already a suggestion visible, the next render will auto-accept.
+      renderCanvasContextSuggestion();
     });
   }
   if (els.textModel) {

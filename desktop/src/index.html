@@ -401,12 +401,23 @@
 	        </section>
         <aside class="inspector" aria-label="Inspector">
 	          <div class="inspector-scroll">
-		            <div class="panel panel-quick-actions">
-		              <div class="panel-title">Abilities</div>
-		              <div
-		                id="canvas-context-suggest"
-		                class="canvas-context-suggest"
-		                aria-label="Canvas Context Suggestion"
+			            <div class="panel panel-quick-actions">
+			              <div class="panel-title panel-title--row">
+			                <span class="panel-title-text">Abilities</span>
+			                <label class="panel-title-toggle" title="Auto-accept Suggested Ability (max 3)">
+			                  <span class="panel-title-toggle-text" aria-hidden="true">AUTO</span>
+			                  <input
+			                    id="auto-accept-suggested-ability-toggle"
+			                    class="toggle-switch"
+			                    type="checkbox"
+			                    aria-label="Auto-accept suggested ability"
+			                  />
+			                </label>
+			              </div>
+			              <div
+			                id="canvas-context-suggest"
+			                class="canvas-context-suggest"
+			                aria-label="Canvas Context Suggestion"
 		                aria-hidden="true"
 		              >
 		                <button id="canvas-context-suggest-btn" class="canvas-context-suggest-btn" type="button"></button>
