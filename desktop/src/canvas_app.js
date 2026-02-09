@@ -976,6 +976,7 @@ function renderCanvasContextSuggestion() {
     wrap.classList.add("hidden");
     btn.textContent = "";
     btn.disabled = true;
+    btn.classList.remove("is-unavailable");
     btn.title = "";
     return;
   }
@@ -985,6 +986,7 @@ function renderCanvasContextSuggestion() {
     wrap.classList.add("hidden");
     btn.textContent = "";
     btn.disabled = true;
+    btn.classList.remove("is-unavailable");
     btn.title = "";
     return;
   }
@@ -1012,7 +1014,9 @@ function renderCanvasContextSuggestion() {
 
   wrap.classList.remove("hidden");
   btn.textContent = action;
-  btn.disabled = Boolean(disabledReason);
+  // Keep clickable for debugging; the click handler will surface errors as a toast.
+  btn.disabled = false;
+  btn.classList.toggle("is-unavailable", Boolean(disabledReason));
   btn.title = [rec.why || "", disabledReason].filter(Boolean).join("\n");
 }
 

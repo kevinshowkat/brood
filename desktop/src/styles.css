@@ -537,6 +537,11 @@ button.ghost:hover {
   transform: translateY(1px);
 }
 
+.canvas-context-suggest-btn.is-unavailable {
+  opacity: 0.72;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
 .canvas-context-suggest-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
