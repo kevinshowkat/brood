@@ -906,6 +906,7 @@ function buildCanvasContextEnvelope() {
     .map((item) => basename(item?.path))
     .filter(Boolean);
 
+  const realtimeEnabled = Boolean(state.alwaysOnVision?.enabled);
   const quickActions = (computeQuickActions() || [])
     .filter((action) => action && action.id && action.label)
     .map((action) => ({
@@ -914,6 +915,14 @@ function buildCanvasContextEnvelope() {
       enabled: !action.disabled,
       title: action.title ? String(action.title) : null,
     }));
+
+  // Always-on realtime canvas context acts as a continual Diagnose; avoid recommending it when enabled.
+  const allowedAbilities = realtimeEnabled
+    ? CANVAS_CONTEXT_ALLOWED_ACTIONS.filter((name) => name !== "Diagnose")
+    : CANVAS_CONTEXT_ALLOWED_ACTIONS;
+  const glossary = realtimeEnabled
+    ? CANVAS_CONTEXT_ACTION_GLOSSARY.filter((entry) => entry?.action !== "Diagnose")
+    : CANVAS_CONTEXT_ACTION_GLOSSARY;
 
   const nodes = Array.from(state.timelineNodes || []).sort((a, b) => (a?.createdAt || 0) - (b?.createdAt || 0));
   const timelineRecent = nodes.slice(-12).map((node) => ({
@@ -931,9 +940,9 @@ function buildCanvasContextEnvelope() {
     n_images: state.images.length,
     active_image: active?.path ? basename(active.path) : null,
     images: imageFiles,
-    allowed_abilities: CANVAS_CONTEXT_ALLOWED_ACTIONS,
+    allowed_abilities: allowedAbilities,
     abilities: quickActions,
-    ability_glossary: CANVAS_CONTEXT_ACTION_GLOSSARY,
+    ability_glossary: glossary,
     timeline_recent: timelineRecent,
   };
 }
@@ -973,6 +982,17 @@ function renderCanvasContextSuggestion() {
 
   const action = normalizeSuggestedActionName(rec.action);
   if (!action) {
+    wrap.classList.remove("is-visible");
+    wrap.setAttribute("aria-hidden", "true");
+    btn.textContent = "";
+    btn.disabled = true;
+    btn.classList.remove("is-unavailable");
+    btn.title = "";
+    return;
+  }
+
+  // Always-on realtime context replaces Diagnose; hide it if we ever receive a stale/rogue recommendation.
+  if (state.alwaysOnVision?.enabled && action === "Diagnose") {
     wrap.classList.remove("is-visible");
     wrap.setAttribute("aria-hidden", "true");
     btn.textContent = "";
@@ -1406,7 +1426,8 @@ function pickGeminiFastImageModel() {
 // Action-specific model routing (quick actions / tools that drive the engine).
 const ACTION_IMAGE_MODEL = {
   bg_replace: "gemini-2.5-flash-image",
-  surprise: "gemini-2.5-flash-image",
+  // Niche action: route to FLUX by default for testing; the global Image Model setting remains unchanged.
+  surprise: "flux-2-pro",
   combine: "gemini-3-pro-image-preview",
   swap_dna: "gemini-3-pro-image-preview",
   bridge: "gemini-3-pro-image-preview",
@@ -4253,13 +4274,17 @@ function computeQuickActions() {
     });
   }
 
-  actions.push({
-    id: "diagnose",
-    label: state.pendingDiagnose ? "Diagnose (running…)" : "Diagnose",
-    title: "Creative-director diagnosis: what's working, what isn't, and what to fix next",
-    disabled: false,
-    onClick: () => runDiagnose().catch((err) => console.error(err)),
-  });
+  // Realtime canvas context effectively performs continuous diagnosis; hide the explicit Diagnose action
+  // when Always-On Vision is enabled so the system recommends other next steps.
+  if (!state.alwaysOnVision?.enabled) {
+    actions.push({
+      id: "diagnose",
+      label: state.pendingDiagnose ? "Diagnose (running…)" : "Diagnose",
+      title: "Creative-director diagnosis: what's working, what isn't, and what to fix next",
+      disabled: false,
+      onClick: () => runDiagnose().catch((err) => console.error(err)),
+    });
+  }
   actions.push({
     id: "recast",
     label: state.pendingRecast ? "Recast (running…)" : "Recast",
@@ -4310,7 +4335,8 @@ function renderQuickActions() {
     if (suggested) {
       actions = actions.filter((action) => {
         if (!action?.label) return true;
-        return normalizeSuggestedActionName(action.label).toLowerCase() !== suggested;
+        const stable = _stableQuickActionLabel(action.label);
+        return normalizeSuggestedActionName(stable).toLowerCase() !== suggested;
       });
     }
   }
@@ -6676,8 +6702,20 @@ async function handleEvent(event) {
     }
 
     // After multi-image generations (Combine / Swap DNA / Bridge / Triforce), show only the output
-    // image on the canvas. The filmstrip retains sources for now (lineage TBD).
+    // image on the canvas and collapse the run to the output (source images removed from the filmstrip).
     if (wasMultiGenAction) {
+      const sourceIds = [];
+      if (blend?.sourceIds?.length) sourceIds.push(...blend.sourceIds);
+      if (swapDna?.structureId) sourceIds.push(swapDna.structureId);
+      if (swapDna?.surfaceId) sourceIds.push(swapDna.surfaceId);
+      if (bridge?.sourceIds?.length) sourceIds.push(...bridge.sourceIds);
+      if (triforce?.sourceIds?.length) sourceIds.push(...triforce.sourceIds);
+
+      const outputId = String(id);
+      for (const srcId of Array.from(new Set(sourceIds.map((v) => String(v || "").trim())))) {
+        if (!srcId || srcId === outputId) continue;
+        await removeImageFromCanvas(srcId).catch(() => {});
+      }
       setCanvasMode("single");
     }
     state.expectingArtifacts = false;
