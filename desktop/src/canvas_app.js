@@ -212,6 +212,7 @@ const state = {
     lastMeta: null, // { source, model, at, image_path }
     rtState: settings.alwaysOnVision ? "connecting" : "off", // "off" | "connecting" | "ready" | "failed"
     disabledReason: null, // string|null (set when auto-disabled due to a fatal realtime error)
+    portraitOverride: null, // { slot: "primary"|"secondary", provider, title, busy } | null
   },
   canvasContextSuggestion: null, // { action: string, why: string|null, at: number, source: string|null, model: string|null } | null
   autoAcceptSuggestedAbility: {
@@ -829,6 +830,77 @@ function updateAlwaysOnVisionReadout() {
   }
 
   renderMotherReadout();
+  syncAlwaysOnVisionPortrait();
+}
+
+function syncAlwaysOnVisionPortrait() {
+  const aov = state.alwaysOnVision;
+  if (!aov) return;
+
+  const wantBusy = Boolean(aov.enabled && aov.pending);
+  const currentOverride = aov.portraitOverride;
+
+  const restore = (override) => {
+    if (!override) return;
+    if (override.slot === "primary") {
+      setPortrait({ provider: override.provider, title: override.title, busy: override.busy });
+    } else {
+      setPortrait2({ provider: override.provider, title: override.title, busy: override.busy });
+    }
+  };
+
+  if (!wantBusy) {
+    if (currentOverride) {
+      restore(currentOverride);
+      aov.portraitOverride = null;
+    }
+    return;
+  }
+
+  const provider1 = String(state.portrait.provider || "").toLowerCase();
+  const provider2 = String(state.portrait2.provider || "").toLowerCase();
+  // Prefer lighting up an existing OpenAI portrait (avoid swapping the provider label mid-scan).
+  // Otherwise, use the secondary portrait slot to show OpenAI working.
+  const targetSlot = provider2 === "openai" ? "secondary" : provider1 === "openai" ? "primary" : "secondary";
+
+  if (currentOverride && currentOverride.slot !== targetSlot) {
+    restore(currentOverride);
+    aov.portraitOverride = null;
+  }
+
+  if (!aov.portraitOverride) {
+    if (targetSlot === "primary") {
+      aov.portraitOverride = {
+        slot: "primary",
+        provider: state.portrait.provider,
+        title: state.portrait.title,
+        busy: state.portrait.busy,
+      };
+    } else {
+      aov.portraitOverride = {
+        slot: "secondary",
+        provider: state.portrait2.provider,
+        title: state.portrait2.title,
+        busy: state.portrait2.busy,
+      };
+    }
+  }
+
+  if (targetSlot === "primary") {
+    if (String(state.portrait.provider || "").toLowerCase() !== "openai" || !state.portrait.busy) {
+      setPortrait({ provider: "openai", title: providerDisplay("openai"), busy: true });
+    }
+    return;
+  }
+
+  // Secondary slot: show OpenAI working while the canvas-context realtime call is pending.
+  if (
+    String(state.portrait2.provider || "").toLowerCase() !== "openai" ||
+    !state.portrait2.busy ||
+    state.portrait2.title !== providerDisplay("openai")
+  ) {
+    setPortrait2({ provider: "openai", title: providerDisplay("openai"), busy: true });
+  }
 }
 
 function allowAlwaysOnVision() {
