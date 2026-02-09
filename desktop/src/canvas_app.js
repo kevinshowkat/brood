@@ -191,6 +191,9 @@ const state = {
   lastDirectorText: null,
   lastDirectorMeta: null, // { kind, source, model, at, paths }
   lastCostLatency: null, // { provider, model, cost_total_usd, cost_per_1k_images_usd, latency_per_image_s, at }
+  sessionApiCalls: 0,
+  lastStatusText: "Engine: idle",
+  lastStatusError: false,
   fallbackToFullRead: false,
   keyStatus: null, // { openai, gemini, imagen, flux, anthropic }
   alwaysOnVision: {
@@ -516,6 +519,7 @@ function processDescribeQueue() {
 
     // NOTE: do not quote paths here. `/describe` uses a raw arg string (not shlex-split),
     // so adding quotes would become part of the path and fail to resolve.
+    bumpSessionApiCalls();
     invoke("write_pty", { data: `/describe ${path}\n` }).catch(() => {
       // Backend PTY might have exited; re-spawn and continue.
       state.ptySpawned = false;
@@ -1306,6 +1310,7 @@ async function runAlwaysOnVisionOnce() {
     processActionQueue().catch(() => {});
     return false;
   }
+  bumpSessionApiCalls();
   return true;
 }
 
@@ -2125,9 +2130,24 @@ async function refreshKeyStatus() {
 }
 
 function setStatus(message, isError = false) {
+  state.lastStatusText = String(message || "");
+  state.lastStatusError = Boolean(isError);
+  renderSessionApiCallsReadout();
+}
+
+function renderSessionApiCallsReadout() {
   if (!els.engineStatus) return;
-  els.engineStatus.textContent = message;
-  els.engineStatus.classList.toggle("error", isError);
+  const n = Math.max(0, Number(state.sessionApiCalls) || 0);
+  els.engineStatus.textContent = `API calls: ${n}`;
+  els.engineStatus.title = state.lastStatusText ? String(state.lastStatusText) : `API calls: ${n}`;
+  els.engineStatus.classList.toggle("error", Boolean(state.lastStatusError));
+}
+
+function bumpSessionApiCalls({ n = 1 } = {}) {
+  const delta = Number(n) || 0;
+  if (!Number.isFinite(delta) || delta <= 0) return;
+  state.sessionApiCalls = (Number(state.sessionApiCalls) || 0) + delta;
+  renderSessionApiCallsReadout();
 }
 
 let toastTimer = null;
@@ -2179,7 +2199,7 @@ function motherTypeoutTick() {
   } catch {
     // ignore
   }
-  motherTypeoutTimer = setTimeout(motherTypeoutTick, 28);
+  motherTypeoutTimer = setTimeout(motherTypeoutTick, 60);
 }
 
 function startMotherTypeout(text) {
@@ -2726,7 +2746,12 @@ async function runAutoCanvasDiagnose(signature) {
   state.pendingCanvasDiagnose = { signature, startedAt: Date.now(), imagePath: outPath };
   state.autoCanvasDiagnosePath = outPath;
   setStatus("Director: canvas diagnose…");
-  await invoke("write_pty", { data: `/diagnose ${quoteForPtyArg(outPath)}\n` }).catch(() => {});
+  try {
+    await invoke("write_pty", { data: `/diagnose ${quoteForPtyArg(outPath)}\n` });
+    bumpSessionApiCalls();
+  } catch (_) {
+    // Best-effort; if the engine drops, we'll retry on the next debounce.
+  }
 }
 
 async function renderCanvasSnapshotForDiagnose({ maxDimPx = 1200 } = {}) {
@@ -5936,6 +5961,7 @@ async function runArguePair({ fromQueue = false } = {}) {
     await invoke("write_pty", {
       data: `/argue ${quoteForPtyArg(first.path)} ${quoteForPtyArg(second.path)}\n`,
     });
+    bumpSessionApiCalls();
   } catch (err) {
     console.error(err);
     state.pendingArgue = null;
@@ -5990,6 +6016,7 @@ async function runExtractRuleTriplet({ fromQueue = false } = {}) {
     await invoke("write_pty", {
       data: `/extract_rule ${quoteForPtyArg(a.path)} ${quoteForPtyArg(b.path)} ${quoteForPtyArg(c.path)}\n`,
     });
+    bumpSessionApiCalls();
   } catch (err) {
     console.error(err);
     state.pendingExtractRule = null;
@@ -6044,6 +6071,7 @@ async function runOddOneOutTriplet({ fromQueue = false } = {}) {
     await invoke("write_pty", {
       data: `/odd_one_out ${quoteForPtyArg(a.path)} ${quoteForPtyArg(b.path)} ${quoteForPtyArg(c.path)}\n`,
     });
+    bumpSessionApiCalls();
   } catch (err) {
     console.error(err);
     state.pendingOddOneOut = null;
@@ -6147,6 +6175,7 @@ async function runDiagnose({ fromQueue = false } = {}) {
 
   try {
     await invoke("write_pty", { data: `/diagnose ${quoteForPtyArg(imgItem.path)}\n` });
+    bumpSessionApiCalls();
   } catch (err) {
     console.error(err);
     state.pendingDiagnose = null;
@@ -6510,6 +6539,11 @@ async function pollEventsFallback() {
 
 async function handleEvent(event) {
   if (!event || typeof event !== "object") return;
+  if (event.type === "plan_preview") {
+    const cached = Boolean(event?.plan && event.plan.cached);
+    if (!cached) bumpSessionApiCalls();
+    return;
+  }
   if (event.type === "artifact_created") {
     const id = event.artifact_id;
     const path = event.image_path;
