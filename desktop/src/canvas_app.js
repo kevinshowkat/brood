@@ -976,7 +976,8 @@ function renderCanvasContextSuggestion() {
 
   const rec = state.canvasContextSuggestion;
   if (!state.alwaysOnVision?.enabled || !rec?.action) {
-    wrap.classList.add("hidden");
+    wrap.classList.remove("is-visible");
+    wrap.setAttribute("aria-hidden", "true");
     btn.textContent = "";
     btn.disabled = true;
     btn.classList.remove("is-unavailable");
@@ -986,7 +987,8 @@ function renderCanvasContextSuggestion() {
 
   const action = normalizeSuggestedActionName(rec.action);
   if (!action) {
-    wrap.classList.add("hidden");
+    wrap.classList.remove("is-visible");
+    wrap.setAttribute("aria-hidden", "true");
     btn.textContent = "";
     btn.disabled = true;
     btn.classList.remove("is-unavailable");
@@ -1015,7 +1017,8 @@ function renderCanvasContextSuggestion() {
     if (iw && ih && Math.abs(iw - ih) <= 8) disabledReason = "Already square.";
   }
 
-  wrap.classList.remove("hidden");
+  wrap.classList.add("is-visible");
+  wrap.setAttribute("aria-hidden", "false");
   btn.textContent = `SUGGESTED ABILITY: ${action}`;
   // Keep clickable for debugging; the click handler will surface errors as a toast.
   btn.disabled = false;

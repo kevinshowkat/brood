@@ -33,17 +33,14 @@
                   <div class="drop-hint-title">Tap or drag to add photos</div>
                 </div>
               </div>
-		            <canvas id="work-canvas"></canvas>
-		            <div id="image-fx" class="image-fx hidden" aria-hidden="true"></div>
-		            <div id="image-fx-2" class="image-fx hidden" aria-hidden="true"></div>
-		            <canvas id="overlay-canvas"></canvas>
-                <div id="canvas-context-suggest" class="canvas-context-suggest hidden" aria-label="Canvas Context Suggestion">
-                  <button id="canvas-context-suggest-btn" class="canvas-context-suggest-btn" type="button"></button>
-                </div>
-		            <div class="canvas-bumper canvas-bumper--left" aria-hidden="true"></div>
-		            <div class="canvas-bumper canvas-bumper--right" aria-hidden="true"></div>
-            <div id="designate-menu" class="designate-menu hidden" role="menu" aria-label="Designate">
-              <button type="button" data-kind="subject">Subject</button>
+			            <canvas id="work-canvas"></canvas>
+			            <div id="image-fx" class="image-fx hidden" aria-hidden="true"></div>
+			            <div id="image-fx-2" class="image-fx hidden" aria-hidden="true"></div>
+			            <canvas id="overlay-canvas"></canvas>
+			            <div class="canvas-bumper canvas-bumper--left" aria-hidden="true"></div>
+			            <div class="canvas-bumper canvas-bumper--right" aria-hidden="true"></div>
+	            <div id="designate-menu" class="designate-menu hidden" role="menu" aria-label="Designate">
+	              <button type="button" data-kind="subject">Subject</button>
               <button type="button" data-kind="reference">Reference</button>
               <button type="button" data-kind="object">Object</button>
               <button class="ghost" type="button" data-kind="clear">Clear</button>
@@ -404,14 +401,22 @@
           <div id="filmstrip" class="filmstrip" aria-label="Filmstrip"></div>
         </section>
         <aside class="inspector" aria-label="Inspector">
-          <div class="inspector-scroll">
-	            <div class="panel panel-quick-actions">
-	              <div class="panel-title">Abilities</div>
-		              <div id="quick-actions" class="panel-body actions" aria-label="Abilities"></div>
-		            </div>
-	            <div class="panel agent-panel">
-	              <div class="panel-title">Agents</div>
-		              <div id="portrait-dock" class="panel-body portrait-dock">
+	          <div class="inspector-scroll">
+		            <div class="panel panel-quick-actions">
+		              <div class="panel-title">Abilities</div>
+		              <div
+		                id="canvas-context-suggest"
+		                class="canvas-context-suggest"
+		                aria-label="Canvas Context Suggestion"
+		                aria-hidden="true"
+		              >
+		                <button id="canvas-context-suggest-btn" class="canvas-context-suggest-btn" type="button"></button>
+		              </div>
+			              <div id="quick-actions" class="panel-body actions" aria-label="Abilities"></div>
+			            </div>
+		            <div class="panel agent-panel">
+		              <div class="panel-title">Agents</div>
+			              <div id="portrait-dock" class="panel-body portrait-dock">
 		                <div class="agent-portraits">
 	                  <div id="agent-slot-primary" class="agent-slot">
 	                    <div class="portrait-readout">
