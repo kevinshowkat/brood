@@ -18,6 +18,50 @@ fn find_repo_root(start: &Path) -> Option<PathBuf> {
     None
 }
 
+fn find_repo_root_best_effort() -> Option<PathBuf> {
+    // Explicit override wins (useful for packaged apps).
+    if let Ok(root) = std::env::var("BROOD_REPO_ROOT") {
+        let path = PathBuf::from(root);
+        if let Some(repo_root) = find_repo_root(&path) {
+            return Some(repo_root);
+        }
+    }
+
+    // Usual dev path: run from somewhere under the repo.
+    if let Ok(current_dir) = std::env::current_dir() {
+        if let Some(repo_root) = find_repo_root(&current_dir) {
+            return Some(repo_root);
+        }
+    }
+
+    // When launched from Finder, current_dir may be `/`; fall back to the executable's location.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            if let Some(repo_root) = find_repo_root(parent) {
+                return Some(repo_root);
+            }
+        }
+    }
+
+    // Some shells provide PWD even when current_dir is surprising.
+    if let Ok(pwd) = std::env::var("PWD") {
+        let path = PathBuf::from(pwd);
+        if let Some(repo_root) = find_repo_root(&path) {
+            return Some(repo_root);
+        }
+    }
+
+    // Cargo sets this in dev; harmless elsewhere.
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        let path = PathBuf::from(manifest_dir);
+        if let Some(repo_root) = find_repo_root(&path) {
+            return Some(repo_root);
+        }
+    }
+
+    None
+}
+
 fn parse_dotenv(path: &Path) -> HashMap<String, String> {
     let content = std::fs::read_to_string(path).unwrap_or_default();
     let mut vars = HashMap::new();
@@ -78,10 +122,8 @@ fn collect_brood_env_snapshot() -> HashMap<String, String> {
     }
 
     // Repo-local .env is useful in development.
-    if let Ok(current_dir) = std::env::current_dir() {
-        if let Some(repo_root) = find_repo_root(&current_dir) {
-            merge_dotenv_vars(&mut vars, &repo_root.join(".env"));
-        }
+    if let Some(repo_root) = find_repo_root_best_effort() {
+        merge_dotenv_vars(&mut vars, &repo_root.join(".env"));
     }
 
     vars
@@ -138,12 +180,10 @@ fn spawn_pty(
     if let Some(home) = tauri::api::path::home_dir() {
         merge_dotenv_vars(&mut merged_env, &home.join(".brood").join(".env"));
     }
-    if let Ok(current_dir) = std::env::current_dir() {
-        if let Some(repo_root) = find_repo_root(&current_dir) {
-            let env_path = repo_root.join(".env");
-            if env_path.exists() {
-                merge_dotenv_vars(&mut merged_env, &env_path);
-            }
+    if let Some(repo_root) = find_repo_root_best_effort() {
+        let env_path = repo_root.join(".env");
+        if env_path.exists() {
+            merge_dotenv_vars(&mut merged_env, &env_path);
         }
     }
     for (key, value) in merged_env {
@@ -228,8 +268,7 @@ fn create_run_dir() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 fn get_repo_root() -> Result<String, String> {
-    let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
-    if let Some(repo_root) = find_repo_root(&current_dir) {
+    if let Some(repo_root) = find_repo_root_best_effort() {
         Ok(repo_root.to_string_lossy().to_string())
     } else {
         Err("repo root not found".to_string())
