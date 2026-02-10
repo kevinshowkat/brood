@@ -9756,7 +9756,7 @@ function startSpawnTimer() {
   }, 5000);
 }
 
-function installCanvasHandlers() {
+  function installCanvasHandlers() {
   if (!els.overlayCanvas) return;
 
   els.overlayCanvas.addEventListener("keydown", (event) => {
@@ -9764,7 +9764,25 @@ function installCanvasHandlers() {
     if (key !== "Enter" && key !== " ") return;
     bumpInteraction();
     event.preventDefault();
-    // Keyboard-accessible click-to-upload: import at a sensible default point (center).
+    // Keyboard-accessible primary action.
+    // - Normal mode: import at a sensible default point (center).
+    // - Forced-choice intent gate: do NOT allow importing (it bypasses the gate). Treat Enter/Space
+    //   as "Lock Intent" (YES_TOKEN) on the current focus branch.
+    if (intentModeActive()) {
+      const intent = state.intent;
+      const total = Math.max(1, Number(intent?.totalRounds) || 3);
+      const round = Math.max(1, Number(intent?.round) || 1);
+      const lockGate = Boolean(intent?.forceChoice) || round >= total;
+      if (lockGate) {
+        if (!intent?.iconState) {
+          showToast("Intent updating...", "tip", 1600);
+          requestRender();
+          return;
+        }
+        applyIntentSelection(intent?.focusBranchId || "", "YES_TOKEN");
+        return;
+      }
+    }
     importPhotosAtCanvasPoint(_defaultImportPointCss()).catch((err) => console.error(err));
   });
 

@@ -1088,6 +1088,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 print("Generation complete.")
             continue
 
+    if intent_rt is not None:
+        intent_rt.stop()
     if canvas_context_rt is not None:
         canvas_context_rt.stop()
     engine.finish()
