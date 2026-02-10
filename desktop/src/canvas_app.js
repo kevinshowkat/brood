@@ -9119,18 +9119,19 @@ function renderIntentOverlay(octx, canvasW, canvasH) {
     return;
   }
 
-  const dpr = getDpr();
-  const now = Date.now();
-  const remainingMs = intent.startedAt ? intentRemainingMs(now) : INTENT_DEADLINE_MS;
-  const totalRounds = Math.max(1, Number(intent.totalRounds) || 3);
-  const round = Math.max(1, Math.min(totalRounds, Number(intent.round) || 1));
+	  const dpr = getDpr();
+	  const now = Date.now();
+	  const remainingMs = intent.startedAt ? intentRemainingMs(now) : INTENT_DEADLINE_MS;
+	  const totalRounds = Math.max(1, Number(intent.totalRounds) || 3);
+	  const round = Math.max(1, Math.min(totalRounds, Number(intent.round) || 1));
 
-  const hits = [];
+	  const hits = [];
+	  const marginX = Math.round(18 * dpr);
 
-  if (intent.forceChoice) {
-    octx.save();
-    octx.fillStyle = "rgba(0, 0, 0, 0.42)";
-    octx.fillRect(0, 0, canvasW, canvasH);
+	  if (intent.forceChoice) {
+	    octx.save();
+	    octx.fillStyle = "rgba(0, 0, 0, 0.42)";
+	    octx.fillRect(0, 0, canvasW, canvasH);
     octx.restore();
   }
 
@@ -9179,17 +9180,92 @@ function renderIntentOverlay(octx, canvasW, canvasH) {
     const onDot = i === round;
     octx.fillStyle = onDot ? on : "rgba(230, 237, 243, 0.22)";
     octx.fill();
-  }
-  octx.restore();
+	  }
+	  octx.restore();
 
-  // No icon state yet: draw a tiny "connecting" pulse under the timer.
-  if (!intent.iconState) {
-    const pulse = 0.4 + 0.6 * Math.abs(Math.sin(now / 260));
-    const y = plateY + plateH + Math.round(18 * dpr);
-    octx.save();
-    octx.globalAlpha = 0.65 * pulse;
-    octx.fillStyle = "rgba(82, 255, 148, 0.75)";
-    const w = Math.max(60, Math.round(90 * dpr));
+	  let iconState = null;
+	  let branches = [];
+	  let intentIcons = [];
+	  let focusId = "__primary__";
+	  if (intent.iconState) {
+	    iconState = ensureIntentFallbackIconState("render");
+	    branches = Array.isArray(iconState?.branches) ? iconState.branches : [];
+	    intentIcons = Array.isArray(iconState?.intent_icons) ? iconState.intent_icons : [];
+	    focusId = String(pickDefaultIntentFocusBranchId(iconState) || "__primary__");
+	    intent.focusBranchId = focusId;
+	  }
+
+	  // "Lock Intent" button (always visible; shows the latest focused intent path).
+	  const lockY = plateY + plateH + Math.round(10 * dpr);
+	  const lockPadX = Math.round(14 * dpr);
+	  const lockW = Math.round(Math.min(canvasW - marginX * 2, 820 * dpr));
+	  const lockH = Math.max(22, Math.round(34 * dpr));
+	  const lockX = Math.round((canvasW - lockW) / 2);
+	  const lockRect = { x: lockX, y: lockY, w: lockW, h: lockH };
+	  const lockFinal = Boolean(intent.forceChoice) || round >= totalRounds;
+	  const lockEnabled = Boolean(iconState);
+
+	  let lockPreview = "—";
+	  if (lockEnabled) {
+	    if (focusId === "__primary__") {
+	      lockPreview = intentIcons
+	        .slice()
+	        .sort((a, b) => (Number(b?.confidence) || 0) - (Number(a?.confidence) || 0))
+	        .slice(0, 3)
+	        .map((it) => String(it?.icon_id || "").trim())
+	        .filter(Boolean)
+	        .join(" / ");
+	    } else {
+	      const b = branches.find((v) => String(v?.branch_id || "") === focusId) || null;
+	      lockPreview = (Array.isArray(b?.icons) ? b.icons : [])
+	        .slice(0, 3)
+	        .map((v) => String(v || "").trim())
+	        .filter(Boolean)
+	        .join(" / ");
+	    }
+	    if (!lockPreview) lockPreview = "—";
+	  }
+
+	  octx.save();
+	  octx.shadowColor = "rgba(0, 0, 0, 0.62)";
+	  octx.shadowBlur = Math.round(16 * dpr);
+	  octx.fillStyle = "rgba(8, 10, 14, 0.72)";
+	  octx.strokeStyle = lockEnabled
+	    ? lockFinal
+	      ? "rgba(255, 212, 0, 0.88)"
+	      : "rgba(82, 255, 148, 0.34)"
+	    : "rgba(54, 76, 106, 0.38)";
+	  octx.lineWidth = Math.max(1, Math.round(1.4 * dpr));
+	  _drawRoundedRect(octx, lockRect.x, lockRect.y, lockRect.w, lockRect.h, Math.round(14 * dpr));
+	  octx.fill();
+	  octx.stroke();
+
+	  octx.shadowBlur = 0;
+	  octx.font = `${Math.max(10, Math.round(11 * dpr))}px IBM Plex Mono`;
+	  octx.textBaseline = "middle";
+	  octx.textAlign = "left";
+	  octx.fillStyle = lockEnabled
+	    ? lockFinal
+	      ? "rgba(255, 212, 0, 0.92)"
+	      : "rgba(82, 255, 148, 0.92)"
+	    : "rgba(230, 237, 243, 0.45)";
+	  octx.fillText("LOCK INTENT", lockRect.x + lockPadX, lockRect.y + Math.round(lockRect.h / 2));
+
+	  octx.textAlign = "right";
+	  octx.fillStyle = lockEnabled ? "rgba(230, 237, 243, 0.82)" : "rgba(230, 237, 243, 0.35)";
+	  octx.fillText(lockPreview, lockRect.x + lockRect.w - lockPadX, lockRect.y + Math.round(lockRect.h / 2));
+	  octx.restore();
+
+	  if (lockEnabled) hits.push({ kind: "intent_lock", id: "lock", rect: lockRect });
+
+	  // No icon state yet: draw a tiny "connecting" pulse under the timer.
+	  if (!iconState) {
+	    const pulse = 0.4 + 0.6 * Math.abs(Math.sin(now / 260));
+	    const y = lockRect.y + lockRect.h + Math.round(12 * dpr);
+	    octx.save();
+	    octx.globalAlpha = 0.65 * pulse;
+	    octx.fillStyle = "rgba(82, 255, 148, 0.75)";
+	    const w = Math.max(60, Math.round(90 * dpr));
     const h = Math.max(4, Math.round(6 * dpr));
     _drawRoundedRect(octx, Math.round((canvasW - w) / 2), y, w, h, Math.round(6 * dpr));
     octx.fill();
@@ -9198,28 +9274,24 @@ function renderIntentOverlay(octx, canvasW, canvasH) {
     return;
   }
 
-  const iconState = ensureIntentFallbackIconState("render");
-  const branches = Array.isArray(iconState?.branches) ? iconState.branches : [];
-  const intentIcons = Array.isArray(iconState?.intent_icons) ? iconState.intent_icons : [];
-
-  const focusId = String(pickDefaultIntentFocusBranchId(iconState) || "__primary__");
-  intent.focusBranchId = focusId;
-
-  // Lane geometry.
-  const marginX = Math.round(18 * dpr);
-  const laneW = Math.round(Math.min(canvasW * 0.34, 520 * dpr));
-  const leftX = marginX;
-  const rightX = Math.round(canvasW - marginX - laneW);
-  const centerX = Math.round((canvasW - laneW) / 2);
-  const lanesY = plateY + plateH + Math.round(24 * dpr);
-  const clusterGapY = Math.round(14 * dpr);
-  const clusterPad = Math.round(10 * dpr);
-  const badgeFontPx = Math.max(10, Math.round(11 * dpr));
-  const badgePadX = Math.round(9 * dpr);
+	  // Layout geometry.
+	  const contentW = Math.round(Math.min(canvasW - marginX * 2, 980 * dpr));
+	  const contentX = Math.round((canvasW - contentW) / 2);
+	  const lanesY = lockRect.y + lockRect.h + Math.round(20 * dpr);
+	  const clusterGapY = Math.round(14 * dpr);
+	  const clusterPad = Math.round(10 * dpr);
+	  const badgeFontPx = Math.max(10, Math.round(11 * dpr));
+	  const badgePadX = Math.round(9 * dpr);
   const badgePadY = Math.round(6 * dpr);
-  const badgeGapX = Math.round(8 * dpr);
-  const badgeGapY = Math.round(8 * dpr);
-  const badgeH = Math.round(badgeFontPx + badgePadY * 2);
+	  const badgeGapX = Math.round(8 * dpr);
+	  const badgeGapY = Math.round(8 * dpr);
+	  const badgeH = Math.round(badgeFontPx + badgePadY * 2);
+	  const tokGapTop = Math.round(10 * dpr);
+	  const tokPadX = Math.round(11 * dpr);
+	  const tokPadY = Math.round(7 * dpr);
+	  const tokFont = Math.max(10, Math.round(11 * dpr));
+	  const tokH = Math.round(tokFont + tokPadY * 2);
+	  const focusExtraY = tokGapTop + tokH;
 
   const layoutBadges = (items, x0, y0, maxInnerW) => {
     const out = [];
@@ -9273,11 +9345,12 @@ function renderIntentOverlay(octx, canvasW, canvasH) {
     octx.restore();
   };
 
-  const drawCluster = ({ branchId, x, y, items, focused }) => {
-    const innerW = Math.max(1, laneW - clusterPad * 2);
-    const laid = layoutBadges(items, x + clusterPad, y + clusterPad, innerW);
-    const h = Math.max(44 * dpr, laid.height + clusterPad * 2);
-    const rect = { x: Math.round(x), y: Math.round(y), w: Math.round(laneW), h: Math.round(h) };
+	  const drawCluster = ({ branchId, x, y, w, items, focused }) => {
+	    const cw = Math.max(1, Number(w) || 1);
+	    const innerW = Math.max(1, cw - clusterPad * 2);
+	    const laid = layoutBadges(items, x + clusterPad, y + clusterPad, innerW);
+	    const h = Math.max(44 * dpr, laid.height + clusterPad * 2);
+	    const rect = { x: Math.round(x), y: Math.round(y), w: Math.round(cw), h: Math.round(h) };
 
     // Cluster plate.
     octx.save();
@@ -9343,9 +9416,9 @@ function renderIntentOverlay(octx, canvasW, canvasH) {
       octx.restore();
     }
 
-    hits.push({ kind: "intent_branch", id: String(branchId), rect });
-    return rect;
-  };
+	    hits.push({ kind: "intent_branch", id: String(branchId), rect });
+	    return rect;
+	  };
 
   // Build lane cluster lists.
   const left = [];
@@ -9356,75 +9429,101 @@ function renderIntentOverlay(octx, canvasW, canvasH) {
     else left.push(b);
   }
 
-  // Center cluster derived from intent_icons (primary/secondary/emerging).
-  let yCenter = lanesY;
-  if (intentIcons.length) {
-    const sorted = intentIcons
-      .slice()
-      .sort((a, b) => (Number(b?.confidence) || 0) - (Number(a?.confidence) || 0))
-      .slice(0, 12)
-      .map((it) => ({
-        text: String(it?.icon_id || "").trim(),
-        hint: String(it?.position_hint || "secondary").trim(),
-        alpha: 0.55 + 0.45 * clamp(Number(it?.confidence) || 0, 0, 1),
-      }))
-      .filter((it) => Boolean(it.text));
-    if (sorted.length) {
-      const rect = drawCluster({
-        branchId: "__primary__",
-        x: centerX,
-        y: yCenter,
-        items: sorted,
-        focused: focusId === "__primary__",
-      });
-      yCenter = rect.y + rect.h + clusterGapY;
-    }
-  }
+	  let yCursor = lanesY;
 
-  let yLeft = lanesY;
-  for (const b of left.slice(0, 3)) {
-    const items = (Array.isArray(b?.icons) ? b.icons : []).slice(0, 10).map((icon) => ({ text: String(icon), hint: "" }));
-    const rect = drawCluster({
-      branchId: String(b.branch_id),
-      x: leftX,
-      y: yLeft,
-      items,
-      focused: focusId === String(b.branch_id),
-    });
-    yLeft = rect.y + rect.h + clusterGapY;
-  }
+	  // Primary cluster derived from intent_icons (primary/secondary/emerging). Give it a full-width row
+	  // so badges never overlap the branch lanes on narrow canvases.
+	  if (intentIcons.length) {
+	    const sorted = intentIcons
+	      .slice()
+	      .sort((a, b) => (Number(b?.confidence) || 0) - (Number(a?.confidence) || 0))
+	      .slice(0, 12)
+	      .map((it) => ({
+	        text: String(it?.icon_id || "").trim(),
+	        hint: String(it?.position_hint || "secondary").trim(),
+	        alpha: 0.55 + 0.45 * clamp(Number(it?.confidence) || 0, 0, 1),
+	      }))
+	      .filter((it) => Boolean(it.text));
+	    if (sorted.length) {
+	      const rect = drawCluster({
+	        branchId: "__primary__",
+	        x: contentX,
+	        y: yCursor,
+	        w: contentW,
+	        items: sorted,
+	        focused: focusId === "__primary__",
+	      });
+	      yCursor = rect.y + rect.h + clusterGapY + (focusId === "__primary__" ? focusExtraY : 0);
+	    }
+	  }
 
-  let yRight = lanesY;
-  for (const b of right.slice(0, 3)) {
-    const items = (Array.isArray(b?.icons) ? b.icons : []).slice(0, 10).map((icon) => ({ text: String(icon), hint: "" }));
-    const rect = drawCluster({
-      branchId: String(b.branch_id),
-      x: rightX,
-      y: yRight,
-      items,
-      focused: focusId === String(b.branch_id),
-    });
-    yRight = rect.y + rect.h + clusterGapY;
-  }
+	  const colGapX = Math.round(18 * dpr);
+	  const colW = Math.round((contentW - colGapX) / 2);
+	  const useTwoCol = colW >= Math.round(260 * dpr);
+
+	  if (useTwoCol) {
+	    const leftColX = contentX;
+	    const rightColX = contentX + colW + colGapX;
+	    let yLeft = yCursor;
+	    for (const b of left.slice(0, 3)) {
+	      const branchId = String(b.branch_id);
+	      const items = (Array.isArray(b?.icons) ? b.icons : []).slice(0, 10).map((icon) => ({ text: String(icon), hint: "" }));
+	      const rect = drawCluster({
+	        branchId,
+	        x: leftColX,
+	        y: yLeft,
+	        w: colW,
+	        items,
+	        focused: focusId === branchId,
+	      });
+	      yLeft = rect.y + rect.h + clusterGapY + (focusId === branchId ? focusExtraY : 0);
+	    }
+
+	    let yRight = yCursor;
+	    for (const b of right.slice(0, 3)) {
+	      const branchId = String(b.branch_id);
+	      const items = (Array.isArray(b?.icons) ? b.icons : []).slice(0, 10).map((icon) => ({ text: String(icon), hint: "" }));
+	      const rect = drawCluster({
+	        branchId,
+	        x: rightColX,
+	        y: yRight,
+	        w: colW,
+	        items,
+	        focused: focusId === branchId,
+	      });
+	      yRight = rect.y + rect.h + clusterGapY + (focusId === branchId ? focusExtraY : 0);
+	    }
+	  } else {
+	    let y = yCursor;
+	    for (const b of left.slice(0, 3).concat(right.slice(0, 3))) {
+	      const branchId = String(b.branch_id);
+	      const items = (Array.isArray(b?.icons) ? b.icons : []).slice(0, 10).map((icon) => ({ text: String(icon), hint: "" }));
+	      const rect = drawCluster({
+	        branchId,
+	        x: contentX,
+	        y,
+	        w: contentW,
+	        items,
+	        focused: focusId === branchId,
+	      });
+	      y = rect.y + rect.h + clusterGapY + (focusId === branchId ? focusExtraY : 0);
+	    }
+	  }
 
   // Checkpoint tokens (draw below the focused branch cluster).
-  const tokenIdsRaw = Array.isArray(iconState?.checkpoint?.icons) ? iconState.checkpoint.icons : [];
-  const tokenIds = tokenIdsRaw.length ? tokenIdsRaw : ["YES_TOKEN", "NO_TOKEN", "MAYBE_TOKEN"];
-  const focusHit = hits.find((h) => h?.kind === "intent_branch" && String(h?.id || "") === focusId) || null;
-  if (focusHit && focusHit.rect) {
-    const rect = focusHit.rect;
-    const tokY = rect.y + rect.h + Math.round(10 * dpr);
-    const tokPadX = Math.round(11 * dpr);
-    const tokPadY = Math.round(7 * dpr);
-    const tokFont = Math.max(10, Math.round(11 * dpr));
-    const tokH = Math.round(tokFont + tokPadY * 2);
-    const tokens = tokenIds
-      .map((tok) => String(tok || "").trim())
-      .filter(Boolean)
-      .slice(0, 3);
+	  const tokenIdsRaw = Array.isArray(iconState?.checkpoint?.icons) ? iconState.checkpoint.icons : [];
+	  const tokenIds = tokenIdsRaw.length ? tokenIdsRaw : ["YES_TOKEN", "NO_TOKEN", "MAYBE_TOKEN"];
+	  const focusHit = hits.find((h) => h?.kind === "intent_branch" && String(h?.id || "") === focusId) || null;
+	  if (focusHit && focusHit.rect) {
+	    const rect = focusHit.rect;
+	    const tokY = rect.y + rect.h + tokGapTop;
+	    const tokens = tokenIds
+	      .map((tok) => String(tok || "").trim())
+	      .filter(Boolean)
+	      .slice(0, 3);
 
-    octx.save();
-    octx.font = `${tokFont}px IBM Plex Mono`;
+	    octx.save();
+	    octx.font = `${tokFont}px IBM Plex Mono`;
     const widths = tokens.map((tok) => Math.round(octx.measureText(_normalizeTokenLabel(tok)).width + tokPadX * 2));
     const totalW = widths.reduce((a, b) => a + b, 0) + Math.max(0, tokens.length - 1) * Math.round(10 * dpr);
     let x = rect.x + Math.round((rect.w - totalW) / 2);
@@ -9701,21 +9800,25 @@ function installCanvasHandlers() {
 		      const pCss = canvasCssPointFromEvent(event);
           const intentActive = intentModeActive();
 
-          if (intentActive) {
-            const uiHit = hitTestIntentUi(p);
-            if (uiHit) {
-              const kind = String(uiHit.kind || "");
-              if (kind === "intent_branch") {
-                state.intent.focusBranchId = String(uiHit.id || "");
-                scheduleIntentStateWrite({ immediate: true });
-                requestRender();
-                return;
-              }
-              if (kind === "intent_token") {
-                const raw = String(uiHit.id || "");
-                const [bid, tok] = raw.split("::");
-                if (bid && tok) applyIntentSelection(bid, tok);
-                return;
+	          if (intentActive) {
+	            const uiHit = hitTestIntentUi(p);
+	            if (uiHit) {
+	              const kind = String(uiHit.kind || "");
+	              if (kind === "intent_branch") {
+	                state.intent.focusBranchId = String(uiHit.id || "");
+	                scheduleIntentStateWrite({ immediate: true });
+	                requestRender();
+	                return;
+	              }
+	              if (kind === "intent_lock") {
+	                applyIntentSelection(state.intent?.focusBranchId || "", "YES_TOKEN");
+	                return;
+	              }
+	              if (kind === "intent_token") {
+	                const raw = String(uiHit.id || "");
+	                const [bid, tok] = raw.split("::");
+	                if (bid && tok) applyIntentSelection(bid, tok);
+	                return;
               }
             }
             // When the timer expires, block canvas interactions until the user locks an intent.
