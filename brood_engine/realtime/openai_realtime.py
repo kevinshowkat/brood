@@ -89,11 +89,21 @@ class CanvasContextRealtimeSession:
             return False, "Realtime canvas context is disabled (BROOD_CANVAS_CONTEXT_REALTIME_DISABLED=1)."
         if not snapshot_path.exists():
             return False, f"Snapshot not found: {snapshot_path}"
+        # Desktop callers can treat `/canvas_context_rt_start` as optional; if a session isn't
+        # running yet, auto-start it on demand for robustness.
         with self._lock:
-            if self._fatal_error:
-                return False, self._fatal_error
-            if not (self._thread and self._thread.is_alive()):
-                return False, "Realtime session not started. Run /canvas_context_rt_start first."
+            fatal = self._fatal_error
+            alive = bool(self._thread and self._thread.is_alive())
+        if fatal:
+            return False, fatal
+        if not alive:
+            ok, err = self.start()
+            if not ok:
+                return False, err
+            # Re-check for a fatal error set during (or immediately after) thread startup.
+            with self._lock:
+                if self._fatal_error:
+                    return False, self._fatal_error
         job = CanvasContextJob(image_path=str(snapshot_path), submitted_at_ms=int(time.time() * 1000))
         self._jobs.put(job)
         return True, None
@@ -353,11 +363,20 @@ class IntentIconsRealtimeSession:
             return False, "Realtime intent inference is disabled (BROOD_INTENT_REALTIME_DISABLED=1)."
         if not snapshot_path.exists():
             return False, f"Snapshot not found: {snapshot_path}"
+        # Desktop callers can treat `/intent_rt_start` as optional; if a session isn't
+        # running yet, auto-start it on demand for robustness.
         with self._lock:
-            if self._fatal_error:
-                return False, self._fatal_error
-            if not (self._thread and self._thread.is_alive()):
-                return False, "Realtime session not started. Run /intent_rt_start first."
+            fatal = self._fatal_error
+            alive = bool(self._thread and self._thread.is_alive())
+        if fatal:
+            return False, fatal
+        if not alive:
+            ok, err = self.start()
+            if not ok:
+                return False, err
+            with self._lock:
+                if self._fatal_error:
+                    return False, self._fatal_error
         job = CanvasContextJob(image_path=str(snapshot_path), submitted_at_ms=int(time.time() * 1000))
         self._jobs.put(job)
         return True, None
