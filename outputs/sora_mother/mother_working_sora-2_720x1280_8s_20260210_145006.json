@@ -1,0 +1,51 @@
+{
+  "action": "In a perfect loop she's gripping this gross segmented caulk-gun looking thing that shoots warm glowing resin in a smooth line off-screen left, then clicks it off and swaps to a spiny little rotary tool that grinds something down with these gorgeous orange sparks raining like embers at a campfire, whole thing so weirdly beautiful you wanna cry, then she holsters both tools back near her hip and resets like nothing happened.",
+  "agent": "mother",
+  "create_response": {
+    "completed_at": null,
+    "created_at": 1770763809,
+    "error": null,
+    "expires_at": null,
+    "id": "video_698bb620fd388198884fb7714ca4c5210b09442ec9a61be0",
+    "model": "sora-2",
+    "object": "video",
+    "progress": 0,
+    "prompt": "Continue from the reference frame with the same character, costume, materials, lighting, and framing. Single continuous shot, no cuts. No readable text, no logos, no watermarks. Perfect loop: last frame == first frame (pose, tools, lighting, background match). In a perfect loop she's gripping this gross segmented caulk-gun looking thing that shoots warm glowing resin in a smooth line off-screen left, then clicks it off and swaps to a spiny little rotary tool that grinds something down with these gorgeous orange sparks raining like embers at a campfire, whole thing so weirdly beautiful you wanna cry, then she holsters both tools back near her hip and resets like nothing happened.",
+    "remixed_from_video_id": null,
+    "seconds": "8",
+    "size": "720x1280",
+    "status": "queued"
+  },
+  "final_response": {
+    "completed_at": 1770763917,
+    "created_at": 1770763809,
+    "error": null,
+    "expires_at": 1770767517,
+    "id": "video_698bb620fd388198884fb7714ca4c5210b09442ec9a61be0",
+    "model": "sora-2",
+    "object": "video",
+    "progress": 100,
+    "prompt": "Continue from the reference frame with the same character, costume, materials, lighting, and framing. Single continuous shot, no cuts. No readable text, no logos, no watermarks. Perfect loop: last frame == first frame (pose, tools, lighting, background match). In a perfect loop she's gripping this gross segmented caulk-gun looking thing that shoots warm glowing resin in a smooth line off-screen left, then clicks it off and swaps to a spiny little rotary tool that grinds something down with these gorgeous orange sparks raining like embers at a campfire, whole thing so weirdly beautiful you wanna cry, then she holsters both tools back near her hip and resets like nothing happened.",
+    "remixed_from_video_id": null,
+    "seconds": "8",
+    "size": "720x1280",
+    "status": "completed"
+  },
+  "output_mp4": "outputs/sora_mother/mother_working_sora-2_720x1280_8s_20260210_145006.mp4",
+  "prompt": "Continue from the reference frame with the same character, costume, materials, lighting, and framing. Single continuous shot, no cuts. No readable text, no logos, no watermarks. Perfect loop: last frame == first frame (pose, tools, lighting, background match). In a perfect loop she's gripping this gross segmented caulk-gun looking thing that shoots warm glowing resin in a smooth line off-screen left, then clicks it off and swaps to a spiny little rotary tool that grinds something down with these gorgeous orange sparks raining like embers at a campfire, whole thing so weirdly beautiful you wanna cry, then she holsters both tools back near her hip and resets like nothing happened.",
+  "prompt_prefix": "Continue from the reference frame with the same character, costume, materials, lighting, and framing. Single continuous shot, no cuts. No readable text, no logos, no watermarks. Perfect loop: last frame == first frame (pose, tools, lighting, background match).",
+  "reference_png": "outputs/sora_mother/mother_working_sora-2_720x1280_8s_20260210_145006.reference.png",
+  "reference_video": "mother.mp4",
+  "requested": {
+    "crop_square": false,
+    "model": "sora-2",
+    "mute": false,
+    "ref_fit": "crop",
+    "ref_time": 0.0,
+    "seconds": 8,
+    "size": "720x1280",
+    "target_seconds": null,
+    "variant": null
+  },
+  "state": "working"
+}

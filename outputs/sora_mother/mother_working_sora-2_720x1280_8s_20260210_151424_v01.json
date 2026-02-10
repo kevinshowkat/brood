@@ -1,0 +1,52 @@
+{
+  "action": "A perfect loop of her pressing both hands against her temples and squeezing her eyes shut, veins of orange light crawling up through her neck and across her scalp between the bone spikes, whole body pulsing brighter and brighter like she's downloading something awful directly into her brain, then the glow fades back down through her chest and arms and she drops her hands and opens those ember eyes again like she just absorbed an entire wikipedia.",
+  "agent": "mother",
+  "create_response": {
+    "completed_at": null,
+    "created_at": 1770765266,
+    "error": null,
+    "expires_at": null,
+    "id": "video_698bbbd214e081909e2260b02cf3ae3e012dedf99d6b2fa5",
+    "model": "sora-2",
+    "object": "video",
+    "progress": 0,
+    "prompt": "Continue from the reference frame with the same character, costume, materials, lighting, and framing. Single continuous shot, no cuts. No readable text, no logos, no watermarks. Perfect loop: last frame == first frame (pose, tools, lighting, background match). A perfect loop of her pressing both hands against her temples and squeezing her eyes shut, veins of orange light crawling up through her neck and across her scalp between the bone spikes, whole body pulsing brighter and brighter like she's downloading something awful directly into her brain, then the glow fades back down through her chest and arms and she drops her hands and opens those ember eyes again like she just absorbed an entire wikipedia.",
+    "remixed_from_video_id": null,
+    "seconds": "8",
+    "size": "720x1280",
+    "status": "queued"
+  },
+  "final_response": {
+    "completed_at": 1770765369,
+    "created_at": 1770765266,
+    "error": null,
+    "expires_at": 1770768969,
+    "id": "video_698bbbd214e081909e2260b02cf3ae3e012dedf99d6b2fa5",
+    "model": "sora-2",
+    "object": "video",
+    "progress": 100,
+    "prompt": "Continue from the reference frame with the same character, costume, materials, lighting, and framing. Single continuous shot, no cuts. No readable text, no logos, no watermarks. Perfect loop: last frame == first frame (pose, tools, lighting, background match). A perfect loop of her pressing both hands against her temples and squeezing her eyes shut, veins of orange light crawling up through her neck and across her scalp between the bone spikes, whole body pulsing brighter and brighter like she's downloading something awful directly into her brain, then the glow fades back down through her chest and arms and she drops her hands and opens those ember eyes again like she just absorbed an entire wikipedia.",
+    "remixed_from_video_id": null,
+    "seconds": "8",
+    "size": "720x1280",
+    "status": "completed"
+  },
+  "index": 1,
+  "output_mp4": "outputs/sora_mother/mother_working_sora-2_720x1280_8s_20260210_151424_v01.mp4",
+  "prompt": "Continue from the reference frame with the same character, costume, materials, lighting, and framing. Single continuous shot, no cuts. No readable text, no logos, no watermarks. Perfect loop: last frame == first frame (pose, tools, lighting, background match). A perfect loop of her pressing both hands against her temples and squeezing her eyes shut, veins of orange light crawling up through her neck and across her scalp between the bone spikes, whole body pulsing brighter and brighter like she's downloading something awful directly into her brain, then the glow fades back down through her chest and arms and she drops her hands and opens those ember eyes again like she just absorbed an entire wikipedia.",
+  "prompt_prefix": "Continue from the reference frame with the same character, costume, materials, lighting, and framing. Single continuous shot, no cuts. No readable text, no logos, no watermarks. Perfect loop: last frame == first frame (pose, tools, lighting, background match).",
+  "reference_png": "outputs/sora_mother/mother_working_sora-2_720x1280_8s_20260210_151424.reference.png",
+  "reference_video": "mother.mp4",
+  "requested": {
+    "crop_square": false,
+    "model": "sora-2",
+    "mute": false,
+    "ref_fit": "crop",
+    "ref_time": 0.0,
+    "seconds": 8,
+    "size": "720x1280",
+    "target_seconds": null,
+    "variant": null
+  },
+  "state": "working"
+}

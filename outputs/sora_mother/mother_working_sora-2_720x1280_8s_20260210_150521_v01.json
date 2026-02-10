@@ -1,0 +1,52 @@
+{
+  "action": "A perfect loop of her leaning forward and pulling a heavy ribbed hose-tool from off-screen left, bracing it with both hands and pumping glowing amber resin through it in rhythmic pulses that light up her face like a sunset, sparks dripping off the nozzle so beautiful it's borderline spiritual, then shoving the tool back off-screen and sitting upright like nothing happened.",
+  "agent": "mother",
+  "create_response": {
+    "completed_at": null,
+    "created_at": 1770764727,
+    "error": null,
+    "expires_at": null,
+    "id": "video_698bb9b71554819899d48c4c0678bbdf015cfc76875a5b0a",
+    "model": "sora-2",
+    "object": "video",
+    "progress": 0,
+    "prompt": "Continue from the reference frame with the same character, costume, materials, lighting, and framing. Single continuous shot, no cuts. No readable text, no logos, no watermarks. Perfect loop: last frame == first frame (pose, tools, lighting, background match). A perfect loop of her leaning forward and pulling a heavy ribbed hose-tool from off-screen left, bracing it with both hands and pumping glowing amber resin through it in rhythmic pulses that light up her face like a sunset, sparks dripping off the nozzle so beautiful it's borderline spiritual, then shoving the tool back off-screen and sitting upright like nothing happened.",
+    "remixed_from_video_id": null,
+    "seconds": "8",
+    "size": "720x1280",
+    "status": "queued"
+  },
+  "final_response": {
+    "completed_at": 1770764835,
+    "created_at": 1770764727,
+    "error": null,
+    "expires_at": 1770768435,
+    "id": "video_698bb9b71554819899d48c4c0678bbdf015cfc76875a5b0a",
+    "model": "sora-2",
+    "object": "video",
+    "progress": 100,
+    "prompt": "Continue from the reference frame with the same character, costume, materials, lighting, and framing. Single continuous shot, no cuts. No readable text, no logos, no watermarks. Perfect loop: last frame == first frame (pose, tools, lighting, background match). A perfect loop of her leaning forward and pulling a heavy ribbed hose-tool from off-screen left, bracing it with both hands and pumping glowing amber resin through it in rhythmic pulses that light up her face like a sunset, sparks dripping off the nozzle so beautiful it's borderline spiritual, then shoving the tool back off-screen and sitting upright like nothing happened.",
+    "remixed_from_video_id": null,
+    "seconds": "8",
+    "size": "720x1280",
+    "status": "completed"
+  },
+  "index": 1,
+  "output_mp4": "outputs/sora_mother/mother_working_sora-2_720x1280_8s_20260210_150521_v01.mp4",
+  "prompt": "Continue from the reference frame with the same character, costume, materials, lighting, and framing. Single continuous shot, no cuts. No readable text, no logos, no watermarks. Perfect loop: last frame == first frame (pose, tools, lighting, background match). A perfect loop of her leaning forward and pulling a heavy ribbed hose-tool from off-screen left, bracing it with both hands and pumping glowing amber resin through it in rhythmic pulses that light up her face like a sunset, sparks dripping off the nozzle so beautiful it's borderline spiritual, then shoving the tool back off-screen and sitting upright like nothing happened.",
+  "prompt_prefix": "Continue from the reference frame with the same character, costume, materials, lighting, and framing. Single continuous shot, no cuts. No readable text, no logos, no watermarks. Perfect loop: last frame == first frame (pose, tools, lighting, background match).",
+  "reference_png": "outputs/sora_mother/mother_working_sora-2_720x1280_8s_20260210_150521.reference.png",
+  "reference_video": "mother.mp4",
+  "requested": {
+    "crop_square": false,
+    "model": "sora-2",
+    "mute": false,
+    "ref_fit": "crop",
+    "ref_time": 0.0,
+    "seconds": 8,
+    "size": "720x1280",
+    "target_seconds": null,
+    "variant": null
+  },
+  "state": "working"
+}

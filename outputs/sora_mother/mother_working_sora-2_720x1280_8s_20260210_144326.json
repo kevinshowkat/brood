@@ -1,0 +1,49 @@
+{
+  "agent": "mother",
+  "create_response": {
+    "completed_at": null,
+    "created_at": 1770763409,
+    "error": null,
+    "expires_at": null,
+    "id": "video_698bb491c2708190a58b4ed67b5353b80ad07b53a468cba9",
+    "model": "sora-2",
+    "object": "video",
+    "progress": 0,
+    "prompt": "Continue from the reference frame with the same character, costume, materials, lighting, and framing. Single continuous shot, no cuts. No readable text, no logos, no watermarks. Perfect loop: last frame == first frame (pose, tools, lighting, background match). She's reaching off-screen with a ridged chitinous hand-drill thing, boring into something with these stunningly beautiful amber sparks cascading out like tiny fireworks, then switching to a bone-plated seam welder that leaves behind glowing resin trails so pretty it's almost emotional, before pulling the tools back to rest and looping the whole alien construction job again.",
+    "remixed_from_video_id": null,
+    "seconds": "8",
+    "size": "720x1280",
+    "status": "queued"
+  },
+  "final_response": {
+    "completed_at": 1770763512,
+    "created_at": 1770763409,
+    "error": null,
+    "expires_at": 1770767112,
+    "id": "video_698bb491c2708190a58b4ed67b5353b80ad07b53a468cba9",
+    "model": "sora-2",
+    "object": "video",
+    "progress": 100,
+    "prompt": "Continue from the reference frame with the same character, costume, materials, lighting, and framing. Single continuous shot, no cuts. No readable text, no logos, no watermarks. Perfect loop: last frame == first frame (pose, tools, lighting, background match). She's reaching off-screen with a ridged chitinous hand-drill thing, boring into something with these stunningly beautiful amber sparks cascading out like tiny fireworks, then switching to a bone-plated seam welder that leaves behind glowing resin trails so pretty it's almost emotional, before pulling the tools back to rest and looping the whole alien construction job again.",
+    "remixed_from_video_id": null,
+    "seconds": "8",
+    "size": "720x1280",
+    "status": "completed"
+  },
+  "output_mp4": "outputs/sora_mother/mother_working_sora-2_720x1280_8s_20260210_144326.mp4",
+  "prompt": "Continue from the reference frame with the same character, costume, materials, lighting, and framing. Single continuous shot, no cuts. No readable text, no logos, no watermarks. Perfect loop: last frame == first frame (pose, tools, lighting, background match). She's reaching off-screen with a ridged chitinous hand-drill thing, boring into something with these stunningly beautiful amber sparks cascading out like tiny fireworks, then switching to a bone-plated seam welder that leaves behind glowing resin trails so pretty it's almost emotional, before pulling the tools back to rest and looping the whole alien construction job again.",
+  "reference_png": "outputs/sora_mother/mother_working_sora-2_720x1280_8s_20260210_144326.reference.png",
+  "reference_video": "mother.mp4",
+  "requested": {
+    "crop_square": false,
+    "model": "sora-2",
+    "mute": false,
+    "ref_fit": "crop",
+    "ref_time": 0.0,
+    "seconds": 8,
+    "size": "720x1280",
+    "target_seconds": null,
+    "variant": null
+  },
+  "state": "working"
+}
