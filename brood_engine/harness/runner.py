@@ -440,32 +440,20 @@ def _render_prompt_template(prompt: str, task: Mapping[str, Any]) -> str:
     )
 
 
-def _resolve_pricing_key(step: Mapping[str, Any], provider: str, model: str | None) -> str | None:
-    explicit = step.get("pricing_key")
-    if isinstance(explicit, str) and explicit.strip():
-        return explicit.strip()
-    if not model:
-        return None
-    registry = ModelRegistry()
-    spec = registry.get(model)
-    if spec and str(spec.provider).lower() == str(provider).lower():
-        return spec.pricing_key
-    return None
-
-
 def _resolve_pricing_key(
     step: Mapping[str, Any],
     provider: str,
     model: str | None,
-    catalog: Mapping[tuple[str, str], CatalogEntry],
+    catalog: Mapping[tuple[str, str], CatalogEntry] | None = None,
 ) -> str | None:
     explicit = step.get("pricing_key")
     if isinstance(explicit, str) and explicit.strip():
         return explicit.strip()
     if model:
-        entry = catalog.get((provider, model))
-        if entry and entry.pricing_key:
-            return entry.pricing_key
+        if catalog is not None:
+            entry = catalog.get((provider, model))
+            if entry and entry.pricing_key:
+                return entry.pricing_key
         registry = ModelRegistry()
         spec = registry.get(model)
         if spec and str(spec.provider).lower() == str(provider).lower():
