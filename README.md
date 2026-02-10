@@ -1,7 +1,7 @@
 # Brood
 
 <p align="left">
-  <img src="media/brood_demo_v7_20260209.gif" alt="Brood demo">
+  <img src="media/brood_demo_v8_20260210.gif" alt="Brood demo">
 </p>
 
 Brood is an image-first desktop canvas for steering AI image edits and generations using reference images.
