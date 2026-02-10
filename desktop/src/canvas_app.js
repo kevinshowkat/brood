@@ -234,13 +234,14 @@ const state = {
     frameSeq: 0,
     rtState: "off", // "off" | "connecting" | "ready" | "failed"
     disabledReason: null, // non-null = show "hard" failure state (missing keys, etc.)
-    lastError: null, // string|null (non-hard last failure message)
-    lastErrorAt: 0,
-    lastSignature: null,
-    lastRunAt: 0,
-    forceChoice: false,
-    uiHits: [], // [{ kind, id, rect }]
-  },
+	    lastError: null, // string|null (non-hard last failure message)
+	    lastErrorAt: 0,
+	    lastSignature: null,
+	    lastRunAt: 0,
+	    forceChoice: false,
+	    uiHideSuggestion: false,
+	    uiHits: [], // [{ kind, id, rect }]
+	  },
   alwaysOnVision: {
     enabled: settings.alwaysOnVision,
     pending: false,
@@ -337,8 +338,47 @@ const INTENT_INFERENCE_THROTTLE_MS = 900;
 const INTENT_INFERENCE_TIMEOUT_MS = 15_000;
 const INTENT_PERSIST_FILENAME = "intent_state.json";
 const INTENT_LOCKED_FILENAME = "intent_locked.json";
+const INTENT_TRACE_FILENAME = "intent_trace.jsonl";
 
 let visualPromptWriteTimer = null;
+let intentTraceSeq = 0;
+
+function _intentTracePath() {
+  if (!state.runDir) return null;
+  return `${state.runDir}/${INTENT_TRACE_FILENAME}`;
+}
+
+async function appendIntentTrace(entry) {
+  const outPath = _intentTracePath();
+  if (!outPath) return false;
+
+  const payload = {
+    schema: "brood.intent_trace",
+    schema_version: 1,
+    seq: (intentTraceSeq += 1),
+    at_ms: Date.now(),
+    ...entry,
+  };
+  const line = `${JSON.stringify(payload)}\n`;
+
+  // Best-effort: prefer append if supported by the Tauri FS API; fall back to read+write.
+  try {
+    await writeTextFile(outPath, line, { append: true });
+    return true;
+  } catch {
+    try {
+      const prior = (await exists(outPath)) ? await readTextFile(outPath) : "";
+      let next = `${prior}${line}`;
+      // Keep logs bounded if we ever need to rewrite the file.
+      const maxBytes = 1_200_000;
+      if (next.length > maxBytes) next = next.slice(next.length - maxBytes);
+      await writeTextFile(outPath, next);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
 function scheduleVisualPromptWrite({ immediate = false } = {}) {
   if (!state.runDir) return;
   const delay = immediate ? 0 : 350;
@@ -1953,7 +1993,16 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
     intent.disabledReason = state.keyStatus && !state.keyStatus.openai ? "Missing OPENAI_API_KEY." : "Intent realtime disabled.";
     intent.lastError = intent.disabledReason;
     intent.lastErrorAt = now;
-    ensureIntentFallbackIconState("disabled");
+    intent.uiHideSuggestion = false;
+    const icon = ensureIntentFallbackIconState("disabled");
+    if (!intent.focusBranchId) intent.focusBranchId = pickSuggestedIntentBranchId(icon) || pickDefaultIntentFocusBranchId(icon);
+    appendIntentTrace({
+      kind: "inference_blocked",
+      reason: intent.disabledReason,
+      round: Math.max(1, Number(intent.round) || 1),
+      signature,
+      rt_state: intent.rtState,
+    }).catch(() => {});
     scheduleIntentStateWrite();
     requestRender();
     return false;
@@ -1965,7 +2014,20 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
     intent.pendingPath = null;
     intent.pendingAt = 0;
     intent.pendingFrameId = null;
-    ensureIntentFallbackIconState("engine_unavailable");
+    intent.rtState = "failed";
+    intent.disabledReason = "Intent engine unavailable.";
+    intent.lastError = intent.disabledReason;
+    intent.lastErrorAt = now;
+    intent.uiHideSuggestion = false;
+    const icon = ensureIntentFallbackIconState("engine_unavailable");
+    if (!intent.focusBranchId) intent.focusBranchId = pickSuggestedIntentBranchId(icon) || pickDefaultIntentFocusBranchId(icon);
+    appendIntentTrace({
+      kind: "engine_unavailable",
+      reason: intent.disabledReason,
+      round: Math.max(1, Number(intent.round) || 1),
+      signature,
+      rt_state: intent.rtState,
+    }).catch(() => {});
     scheduleIntentStateWrite();
     requestRender();
     return false;
@@ -1989,9 +2051,23 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
   render();
 
   await writeIntentSnapshot(snapshotPath, { maxDimPx: INTENT_SNAPSHOT_MAX_DIM_PX });
-  await writeIntentContextEnvelope(snapshotPath, frameId).catch((err) => {
-    console.warn("Failed to write intent envelope:", err);
-  });
+  let ctxPath = null;
+  await writeIntentContextEnvelope(snapshotPath, frameId)
+    .then((path) => {
+      ctxPath = path;
+    })
+    .catch((err) => {
+      console.warn("Failed to write intent envelope:", err);
+    });
+  appendIntentTrace({
+    kind: "inference_dispatch",
+    reason: reason ? String(reason) : null,
+    round: Math.max(1, Number(intent.round) || 1),
+    frame_id: frameId,
+    snapshot_path: snapshotPath,
+    ctx_path: ctxPath,
+    signature,
+  }).catch(() => {});
 
   intent.pending = true;
   intent.pendingPath = snapshotPath;
@@ -2012,10 +2088,20 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
     cur.pendingFrameId = null;
     cur.rtState = "failed";
     cur.disabledReason = "Intent realtime timed out.";
+    cur.lastError = cur.disabledReason;
+    cur.lastErrorAt = Date.now();
+    cur.uiHideSuggestion = false;
     // Fall back to a local branch set so the user can still lock an intent.
     cur.forceChoice = INTENT_FORCE_CHOICE_ENABLED ? true : false;
     ensureIntentFallbackIconState("timeout");
     cur.focusBranchId = cur.focusBranchId || pickSuggestedIntentBranchId(cur.iconState) || pickDefaultIntentFocusBranchId();
+    appendIntentTrace({
+      kind: "inference_timeout",
+      reason: cur.disabledReason,
+      snapshot_path: snapshotPath,
+      frame_id: frameId,
+      rt_state: cur.rtState,
+    }).catch(() => {});
     scheduleIntentStateWrite({ immediate: true });
     requestRender();
   }, INTENT_INFERENCE_TIMEOUT_MS);
@@ -2030,8 +2116,21 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
     intent.pendingFrameId = null;
     intent.rtState = "failed";
     intent.disabledReason = err?.message ? `Intent realtime failed: ${err.message}` : "Intent realtime failed.";
+    intent.lastError = intent.disabledReason;
+    intent.lastErrorAt = Date.now();
+    intent.uiHideSuggestion = false;
     intent.forceChoice = INTENT_FORCE_CHOICE_ENABLED ? true : false;
     ensureIntentFallbackIconState("dispatch_failed");
+    if (!intent.focusBranchId) {
+      intent.focusBranchId = pickSuggestedIntentBranchId(intent.iconState) || pickDefaultIntentFocusBranchId(intent.iconState);
+    }
+    appendIntentTrace({
+      kind: "inference_dispatch_failed",
+      reason: intent.disabledReason,
+      snapshot_path: snapshotPath,
+      frame_id: frameId,
+      rt_state: intent.rtState,
+    }).catch(() => {});
     scheduleIntentStateWrite({ immediate: true });
     requestRender();
     return false;
@@ -2431,7 +2530,7 @@ function pickSuggestedIntentBranchId(iconState = null) {
   return first || null;
 }
 
-function lockIntentFromUi() {
+function lockIntentFromUi({ source = "ui" } = {}) {
   const intent = state.intent;
   if (!intent || intent.locked) return;
 
@@ -2443,6 +2542,14 @@ function lockIntentFromUi() {
   if (!bid) bid = String(primaryBranchIdFromIconState(iconState) || "").trim();
   if (!bid) bid = String(pickDefaultIntentFocusBranchId(iconState) || "").trim();
   if (!bid) return;
+
+  appendIntentTrace({
+    kind: "ui_accept",
+    source: source ? String(source) : "ui",
+    round: Math.max(1, Number(intent.round) || 1),
+    branch_id: bid,
+    icon_frame_id: iconState?.frame_id ? String(iconState.frame_id) : null,
+  }).catch(() => {});
 
   // Persist the user's final choice as a YES on the current round for debugging/replay.
   const round = Math.max(1, Number(intent.round) || 1);
@@ -2471,7 +2578,7 @@ function applyIntentSelection(branchId, tokenId) {
 
   const round = Math.max(1, Number(intent.round) || 1);
   if (tok === "YES_TOKEN") {
-    lockIntentFromUi();
+    lockIntentFromUi({ source: "yes_token" });
     return;
   }
 
@@ -2484,6 +2591,13 @@ function applyIntentSelection(branchId, tokenId) {
   intent.pending = true;
   intent.pendingAt = Date.now();
   intent.round = round + 1;
+  appendIntentTrace({
+    kind: "ui_reject",
+    source: "no_token",
+    round,
+    branch_id: bid,
+    icon_frame_id: intent.iconState?.frame_id ? String(intent.iconState.frame_id) : null,
+  }).catch(() => {});
   scheduleIntentStateWrite({ immediate: true });
   scheduleIntentInference({ immediate: true, reason: "reject" });
   requestRender();
@@ -2502,6 +2616,14 @@ async function lockIntentToBranch(branchId) {
   intent.pendingPath = null;
   intent.pendingAt = 0;
   intent.pendingFrameId = null;
+
+  appendIntentTrace({
+    kind: "intent_locked",
+    branch_id: intent.lockedBranchId ? String(intent.lockedBranchId) : null,
+    round: Math.max(1, Number(intent.round) || 1),
+    selection_count: Array.isArray(intent.selections) ? intent.selections.length : 0,
+    icon_frame_id: intent.iconState?.frame_id ? String(intent.iconState.frame_id) : null,
+  }).catch(() => {});
 
   // Stop realtime session (best-effort).
   clearTimeout(intentInferenceTimer);
@@ -8608,31 +8730,64 @@ async function handleEvent(event) {
       intent.pendingFrameId = null;
     }
 
-    if (typeof text === "string" && text.trim()) {
-      const parsed = parseIntentIconsJson(text);
-      if (parsed) {
-        intent.iconState = parsed;
-        intent.iconStateAt = Date.now();
-        intent.rtState = "ready";
-        intent.disabledReason = null;
-        intent.lastError = null;
-        intent.lastErrorAt = 0;
-        intent.uiHideSuggestion = false;
-        // Keep focus stable if possible (unless rejected); otherwise pick the next suggestion.
-        intent.focusBranchId = pickSuggestedIntentBranchId(parsed) || pickDefaultIntentFocusBranchId(parsed);
-        const total = Math.max(1, Number(intent.totalRounds) || 3);
-        const round = Math.max(1, Number(intent.round) || 1);
-        // After the final round proposals arrive, force an explicit YES to proceed.
-        if (INTENT_FORCE_CHOICE_ENABLED && INTENT_ROUNDS_ENABLED && !isPartial && round >= total && !intent.forceChoice) {
-          intent.forceChoice = true;
-          ensureIntentFallbackIconState("final_round");
-          scheduleIntentStateWrite({ immediate: true });
-        } else {
-          if (!INTENT_FORCE_CHOICE_ENABLED) intent.forceChoice = false;
-          scheduleIntentStateWrite();
-        }
-      }
-    }
+	    if (typeof text === "string" && text.trim()) {
+	      const parsed = parseIntentIconsJson(text);
+	      if (parsed) {
+	        intent.iconState = parsed;
+	        intent.iconStateAt = Date.now();
+	        intent.rtState = "ready";
+	        intent.disabledReason = null;
+	        intent.lastError = null;
+	        intent.lastErrorAt = 0;
+	        intent.uiHideSuggestion = false;
+	        // Keep focus stable if possible (unless rejected); otherwise pick the next suggestion.
+	        intent.focusBranchId = pickSuggestedIntentBranchId(parsed) || pickDefaultIntentFocusBranchId(parsed);
+	        if (!isPartial) {
+	          const branchIds = Array.isArray(parsed?.branches)
+	            ? parsed.branches.map((b) => (b?.branch_id ? String(b.branch_id) : "")).filter(Boolean)
+	            : [];
+	          appendIntentTrace({
+	            kind: "model_icons",
+	            partial: false,
+	            frame_id: parsed?.frame_id ? String(parsed.frame_id) : null,
+	            snapshot_path: path ? String(path) : null,
+	            branch_ids: branchIds,
+	            focus_branch_id: intent.focusBranchId ? String(intent.focusBranchId) : null,
+	            text_len: typeof text === "string" ? text.length : 0,
+	          }).catch(() => {});
+	        }
+	        const total = Math.max(1, Number(intent.totalRounds) || 3);
+	        const round = Math.max(1, Number(intent.round) || 1);
+	        // After the final round proposals arrive, force an explicit YES to proceed.
+	        if (INTENT_FORCE_CHOICE_ENABLED && INTENT_ROUNDS_ENABLED && !isPartial && round >= total && !intent.forceChoice) {
+	          intent.forceChoice = true;
+	          ensureIntentFallbackIconState("final_round");
+	          scheduleIntentStateWrite({ immediate: true });
+	        } else {
+	          if (!INTENT_FORCE_CHOICE_ENABLED) intent.forceChoice = false;
+	          scheduleIntentStateWrite();
+	        }
+	      } else if (!isPartial) {
+	        // Treat invalid JSON as a non-fatal failure: fall back to local branches and keep the UI interactive.
+	        intent.rtState = "failed";
+	        intent.disabledReason = "Intent icons parse failed.";
+	        intent.lastError = intent.disabledReason;
+	        intent.lastErrorAt = Date.now();
+	        intent.uiHideSuggestion = false;
+	        if (!INTENT_FORCE_CHOICE_ENABLED) intent.forceChoice = false;
+	        const icon = ensureIntentFallbackIconState("parse_failed");
+	        if (!intent.focusBranchId) intent.focusBranchId = pickSuggestedIntentBranchId(icon) || pickDefaultIntentFocusBranchId(icon);
+	        appendIntentTrace({
+	          kind: "model_icons_parse_failed",
+	          reason: intent.disabledReason,
+	          snapshot_path: path ? String(path) : null,
+	          text_len: typeof text === "string" ? text.length : 0,
+	          text_snippet: String(text || "").slice(0, 1200),
+	          rt_state: intent.rtState,
+	        }).catch(() => {});
+	        scheduleIntentStateWrite({ immediate: true });
+	      }
+	    }
 
     if (!isPartial) {
       clearTimeout(intentInferenceTimeout);
@@ -8656,10 +8811,16 @@ async function handleEvent(event) {
 
     const errRaw = typeof event.error === "string" ? event.error.trim() : "";
     const msg = errRaw ? `Intent inference failed: ${errRaw}` : "Intent inference failed.";
-    intent.rtState = "failed";
-    intent.lastError = msg;
-    intent.lastErrorAt = Date.now();
-    intent.uiHideSuggestion = false;
+	    intent.rtState = "failed";
+	    intent.lastError = msg;
+	    intent.lastErrorAt = Date.now();
+	    intent.uiHideSuggestion = false;
+	    appendIntentTrace({
+	      kind: "model_icons_failed",
+	      reason: msg,
+	      snapshot_path: path ? String(path) : null,
+	      rt_state: intent.rtState,
+	    }).catch(() => {});
 
     const errLower = errRaw.toLowerCase();
     const hardDisable = Boolean(
@@ -9793,15 +9954,15 @@ function startSpawnTimer() {
         Boolean(INTENT_FORCE_CHOICE_ENABLED) &&
         (Boolean(intent?.forceChoice) || (INTENT_ROUNDS_ENABLED ? round >= total : false));
       if (lockGate) {
-        if (!intent?.iconState) {
-          showToast("Intent updating…", "tip", 1600);
-          requestRender();
-          return;
-        }
-        lockIntentFromUi();
-        return;
-      }
-    }
+	        if (!intent?.iconState) {
+	          showToast("Intent updating…", "tip", 1600);
+	          requestRender();
+	          return;
+	        }
+	        lockIntentFromUi({ source: "keyboard" });
+	        return;
+	      }
+	    }
     importPhotosAtCanvasPoint(_defaultImportPointCss()).catch((err) => console.error(err));
   });
 
@@ -9846,11 +10007,11 @@ function startSpawnTimer() {
 	                scheduleIntentStateWrite({ immediate: true });
 	                requestRender();
 	                return;
-	              }
-	              if (kind === "intent_lock") {
-	                lockIntentFromUi();
-	                return;
-	              }
+		              }
+		              if (kind === "intent_lock") {
+		                lockIntentFromUi({ source: "start_button" });
+		                return;
+		              }
 	              if (kind === "intent_token") {
 	                const raw = String(uiHit.id || "");
 	                const [bid, tok] = raw.split("::");
