@@ -417,8 +417,8 @@ class IntentIconsRealtimeSession:
                             "session": {
                                 "instructions": _intent_icons_instruction(),
                                 "modalities": ["text"],
-                                # JSON-only: keep temperature low for stable schemas.
-                                "temperature": 0.3,
+                                # JSON-only: keep temperature at the API minimum for stable schemas.
+                                "temperature": 0.6,
                                 "max_response_output_tokens": 820,
                             },
                         }
