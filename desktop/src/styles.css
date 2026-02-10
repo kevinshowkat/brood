@@ -805,6 +805,56 @@ button.ghost:hover {
   visibility: hidden;
 }
 
+@keyframes intent-rt-pulse {
+  0% {
+    opacity: 0.22;
+    box-shadow:
+      0 0 0 1px rgba(82, 255, 148, 0.16),
+      0 0 18px rgba(82, 255, 148, 0.16),
+      0 0 64px rgba(82, 255, 148, 0.10),
+      inset 0 0 18px rgba(82, 255, 148, 0.05);
+  }
+  50% {
+    opacity: 0.95;
+    box-shadow:
+      0 0 0 1px rgba(82, 255, 148, 0.34),
+      0 0 26px rgba(82, 255, 148, 0.26),
+      0 0 92px rgba(82, 255, 148, 0.16),
+      inset 0 0 28px rgba(82, 255, 148, 0.08);
+  }
+  100% {
+    opacity: 0.22;
+    box-shadow:
+      0 0 0 1px rgba(82, 255, 148, 0.16),
+      0 0 18px rgba(82, 255, 148, 0.16),
+      0 0 64px rgba(82, 255, 148, 0.10),
+      inset 0 0 18px rgba(82, 255, 148, 0.05);
+  }
+}
+
+.canvas-wrap.intent-mode.intent-rt-active::after {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  z-index: 4;
+  pointer-events: none;
+  border-radius: 14px;
+  border: 1px solid rgba(82, 255, 148, 0.30);
+  box-shadow:
+    0 0 0 1px rgba(82, 255, 148, 0.16),
+    0 0 18px rgba(82, 255, 148, 0.16),
+    0 0 64px rgba(82, 255, 148, 0.10),
+    inset 0 0 18px rgba(82, 255, 148, 0.05);
+  animation: intent-rt-pulse 1.25s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .canvas-wrap.intent-mode.intent-rt-active::after {
+    animation: none;
+    opacity: 0.65;
+  }
+}
+
 .image-fx {
   position: absolute;
   left: 0;
