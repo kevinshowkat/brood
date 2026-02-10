@@ -1040,6 +1040,19 @@ function intentModeActive() {
 function syncIntentModeClass() {
   if (!els.canvasWrap) return;
   els.canvasWrap.classList.toggle("intent-mode", intentModeActive());
+  syncIntentRealtimeClass();
+}
+
+function intentRealtimePulseActive() {
+  const intent = state.intent;
+  if (!intent || !intentModeActive()) return false;
+  // "Actively sending/receiving" for Intent Canvas: request in flight or session connecting.
+  return Boolean(intent.pending || intent.rtState === "connecting");
+}
+
+function syncIntentRealtimeClass() {
+  if (!els.canvasWrap) return;
+  els.canvasWrap.classList.toggle("intent-rt-active", intentRealtimePulseActive());
 }
 
 function updateEmptyCanvasHint() {
@@ -2076,6 +2089,7 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
   intent.lastRunAt = now;
   intent.lastSignature = signature;
   scheduleIntentStateWrite();
+  requestRender();
 
   clearTimeout(intentInferenceTimeout);
   intentInferenceTimeout = setTimeout(() => {
@@ -9757,6 +9771,8 @@ function render() {
   const work = els.workCanvas;
   const overlay = els.overlayCanvas;
   if (!work || !overlay) return;
+  // Keep CSS-only intent effects (cursor/border) in sync with realtime activity.
+  syncIntentRealtimeClass();
   const wctx = work.getContext("2d");
   const octx = overlay.getContext("2d");
   if (!wctx || !octx) return;
