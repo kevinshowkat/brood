@@ -9198,7 +9198,7 @@ function renderIntentOverlay(octx, canvasW, canvasH) {
 	  // "Lock Intent" button (always visible; shows the latest focused intent path).
 	  const lockY = plateY + plateH + Math.round(10 * dpr);
 	  const lockPadX = Math.round(14 * dpr);
-	  const lockW = Math.round(Math.min(canvasW - marginX * 2, 820 * dpr));
+	  const lockW = Math.max(1, Math.round(Math.min(canvasW - marginX * 2, 820 * dpr)));
 	  const lockH = Math.max(22, Math.round(34 * dpr));
 	  const lockX = Math.round((canvasW - lockW) / 2);
 	  const lockRect = { x: lockX, y: lockY, w: lockW, h: lockH };
@@ -9275,7 +9275,7 @@ function renderIntentOverlay(octx, canvasW, canvasH) {
   }
 
 	  // Layout geometry.
-	  const contentW = Math.round(Math.min(canvasW - marginX * 2, 980 * dpr));
+	  const contentW = Math.max(1, Math.round(Math.min(canvasW - marginX * 2, 980 * dpr)));
 	  const contentX = Math.round((canvasW - contentW) / 2);
 	  const lanesY = lockRect.y + lockRect.h + Math.round(20 * dpr);
 	  const clusterGapY = Math.round(14 * dpr);
