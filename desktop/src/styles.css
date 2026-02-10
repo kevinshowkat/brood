@@ -1180,8 +1180,9 @@ button.ghost:hover {
   letter-spacing: 0.01em;
   text-align: center;
   padding: 24px;
-  pointer-events: auto;
-  cursor: pointer;
+  /* Visual-only hint; canvas interactions handle click-to-upload. */
+  pointer-events: none;
+  cursor: default;
 }
 
 .drop-hint-inner {
