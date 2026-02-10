@@ -13,7 +13,7 @@ foreground UX.
 - When enabled:
   - Readout shows `Connecting…` while the realtime session comes up.
   - Periodically (idle + throttled), Brood captures a small collage snapshot and sends it to the realtime session.
-  - Readout shows `SCANNING…` during the request, then fills with streaming text as it arrives.
+  - Readout shows `ANALYZING…` during the request, then fills with streaming text as it arrives.
 - On fatal failures (missing keys, network/API error):
   - Readout shows `DISABLED: <reason>`.
   - The always-on loop is stopped to avoid silent thrashing.
@@ -36,7 +36,7 @@ Primary file: `desktop/src/canvas_app.js`
 - Readout states:
   - Off
   - Connecting…
-  - SCANNING…
+  - ANALYZING…
   - Last streamed text (clipped in the drawer)
   - Fatal error disables the loop and shows `DISABLED: ...`
 
@@ -74,7 +74,7 @@ Threading:
 2. Import 2-3 photos.
 3. Enable **Always-On Vision**.
 4. Confirm:
-   - Readout goes `Connecting…` then `SCANNING…` then fills with text.
+   - Readout goes `Connecting…` then `ANALYZING…` then fills with text.
    - Updates after canvas changes (within throttle).
    - No noticeable UI lag while using Abilities / queue.
    - Disabling the toggle stops updates.
@@ -83,4 +83,3 @@ Threading:
 ## Failure Modes
 - Missing key: engine emits `canvas_context_failed` with `fatal=true` and the desktop disables the loop.
 - Network/API error: same behavior; no silent retry thrash.
-
