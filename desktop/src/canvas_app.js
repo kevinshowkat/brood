@@ -233,7 +233,9 @@ const state = {
     pendingFrameId: null,
     frameSeq: 0,
     rtState: "off", // "off" | "connecting" | "ready" | "failed"
-    disabledReason: null,
+    disabledReason: null, // non-null = show "hard" failure state (missing keys, etc.)
+    lastError: null, // string|null (non-hard last failure message)
+    lastErrorAt: 0,
     lastSignature: null,
     lastRunAt: 0,
     forceChoice: false,
@@ -1057,6 +1059,8 @@ function buildIntentPersistedState() {
     force_choice: Boolean(intent.forceChoice),
     rt_state: intent.rtState ? String(intent.rtState) : "off",
     disabled_reason: intent.disabledReason ? String(intent.disabledReason) : null,
+    last_error: intent.lastError ? String(intent.lastError) : null,
+    last_error_at_ms: Number(intent.lastErrorAt) || 0,
   };
 }
 
@@ -1101,6 +1105,8 @@ async function restoreIntentStateFromRunDir() {
     state.intent.pendingFrameId = null;
     state.intent.rtState = "off";
     state.intent.disabledReason = null;
+    state.intent.lastError = null;
+    state.intent.lastErrorAt = 0;
     syncIntentModeClass();
     stopIntentTicker();
     renderQuickActions();
@@ -1128,6 +1134,8 @@ async function restoreIntentStateFromRunDir() {
     state.intent.pendingFrameId = null;
     state.intent.rtState = "off";
     state.intent.disabledReason = persisted.disabled_reason ? String(persisted.disabled_reason) : null;
+    state.intent.lastError = persisted.last_error ? String(persisted.last_error) : null;
+    state.intent.lastErrorAt = Number(persisted.last_error_at_ms) || 0;
     const total = Math.max(1, Number(state.intent.totalRounds) || 3);
     if (!state.intent.locked && state.intent.iconState && state.intent.round >= total) {
       state.intent.forceChoice = true;
@@ -1816,7 +1824,6 @@ function allowIntentRealtime() {
   if (!state.runDir) return false;
   const intent = state.intent;
   if (!intent) return false;
-  if (intent.rtState === "failed" || intent.disabledReason) return false;
   // Fail fast before dispatch if we know required keys are missing.
   if (state.keyStatus && !state.keyStatus.openai) return false;
   return true;
@@ -1892,7 +1899,9 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
 
   const signature = computeIntentSignature();
   const since = now - (intent.lastRunAt || 0);
-  if (signature && signature === intent.lastSignature && intent.iconState && since < 12_000) return false;
+  if (signature && signature === intent.lastSignature && intent.iconState && since < 12_000 && intent.rtState === "ready") {
+    return false;
+  }
   if (since < INTENT_INFERENCE_THROTTLE_MS) {
     // Keep it responsive but avoid hammering the Realtime session while the user is dragging.
     scheduleIntentInference({ immediate: false, reason: "throttle" });
@@ -1908,6 +1917,8 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
     intent.pendingFrameId = null;
     intent.rtState = "failed";
     intent.disabledReason = state.keyStatus && !state.keyStatus.openai ? "Missing OPENAI_API_KEY." : "Intent realtime disabled.";
+    intent.lastError = intent.disabledReason;
+    intent.lastErrorAt = now;
     ensureIntentFallbackIconState("disabled");
     scheduleIntentStateWrite();
     requestRender();
@@ -1927,7 +1938,7 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
   }
 
   // Start (or keep alive) the realtime session.
-  if (intent.rtState === "off") intent.rtState = "connecting";
+  if (intent.rtState === "off" || intent.rtState === "failed") intent.rtState = "connecting";
   await invoke("write_pty", { data: "/intent_rt_start\n" }).catch(() => {});
 
   // Build a new frame id so we can ignore stale streaming updates.
@@ -5656,6 +5667,7 @@ function renderQuickActions() {
     bits.push(`Round ${round}/${total}`);
     bits.push(`Realtime: ${rt}`);
     if (intent.forceChoice) bits.push("FORCE CHOICE");
+    if (intent.lastError) bits.push(String(intent.lastError));
     if (intent.disabledReason) bits.push(String(intent.disabledReason));
     meta.textContent = bits.join("\n");
     box.appendChild(meta);
@@ -6139,6 +6151,8 @@ async function removeImageFromCanvas(imageId) {
       state.intent.pendingFrameId = null;
       state.intent.rtState = "off";
       state.intent.disabledReason = null;
+      state.intent.lastError = null;
+      state.intent.lastErrorAt = 0;
       state.intent.lastSignature = null;
       state.intent.lastRunAt = 0;
       state.intent.forceChoice = false;
@@ -7815,6 +7829,8 @@ async function createRun() {
   state.intent.pendingPath = null;
   state.intent.rtState = "off";
   state.intent.disabledReason = null;
+  state.intent.lastError = null;
+  state.intent.lastErrorAt = 0;
   state.intent.lastSignature = null;
   state.intent.lastRunAt = 0;
   state.intent.forceChoice = false;
@@ -7903,6 +7919,8 @@ async function openExistingRun() {
   state.intent.pendingPath = null;
   state.intent.rtState = "off";
   state.intent.disabledReason = null;
+  state.intent.lastError = null;
+  state.intent.lastErrorAt = 0;
   state.intent.lastSignature = null;
   state.intent.lastRunAt = 0;
   state.intent.forceChoice = false;
@@ -8439,6 +8457,8 @@ async function handleEvent(event) {
         intent.iconStateAt = Date.now();
         intent.rtState = "ready";
         intent.disabledReason = null;
+        intent.lastError = null;
+        intent.lastErrorAt = 0;
         // Keep focus stable if possible; otherwise fall back to the primary branch.
         intent.focusBranchId = pickDefaultIntentFocusBranchId(parsed);
         const total = Math.max(1, Number(intent.totalRounds) || 3);
@@ -8474,18 +8494,32 @@ async function handleEvent(event) {
     clearTimeout(intentInferenceTimeout);
     intentInferenceTimeout = null;
 
-    const msg = event.error ? `Intent inference failed: ${event.error}` : "Intent inference failed.";
-    if (event.fatal) {
-      intent.rtState = "failed";
-      intent.disabledReason = msg;
-    }
+    const errRaw = typeof event.error === "string" ? event.error.trim() : "";
+    const msg = errRaw ? `Intent inference failed: ${errRaw}` : "Intent inference failed.";
+    intent.rtState = "failed";
+    intent.lastError = msg;
+    intent.lastErrorAt = Date.now();
+
+    const errLower = errRaw.toLowerCase();
+    const hardDisable = Boolean(
+      errLower.includes("missing openai_api_key") ||
+        errLower.includes("missing dependency") ||
+        errLower.includes("disabled (brood_intent_realtime_disabled=1") ||
+        errLower.includes("realtime intent inference is disabled")
+    );
+    // Only treat clearly-unrecoverable cases as a "hard" disabled state. Otherwise,
+    // keep retrying opportunistically while the user continues arranging images.
+    intent.disabledReason = hardDisable ? msg : null;
 
     // Fall back to a local branch set so the user can still lock an intent.
     ensureIntentFallbackIconState("failed");
     if (!intent.focusBranchId) intent.focusBranchId = pickDefaultIntentFocusBranchId();
 
-    // If we're in Intent Mode, treat inference failure as a reason to force an explicit choice.
-    if (intentModeActive() && intent.startedAt) {
+    // Only force choice if time is up or we're already at the final round gate.
+    const total = Math.max(1, Number(intent.totalRounds) || 3);
+    const round = Math.max(1, Number(intent.round) || 1);
+    const remainingMs = intent.startedAt ? intentRemainingMs(Date.now()) : INTENT_DEADLINE_MS;
+    if (remainingMs <= 0 || round >= total) {
       intent.forceChoice = true;
     }
 
@@ -8493,6 +8527,10 @@ async function handleEvent(event) {
     setStatus(`Engine: ${msg}`, true);
     requestRender();
     renderQuickActions();
+
+    if (!hardDisable && intentModeActive() && !intent.forceChoice) {
+      scheduleIntentInference({ immediate: false, reason: "retry" });
+    }
   } else if (event.type === "image_description") {
     const path = event.image_path;
     const desc = event.description;

@@ -272,17 +272,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 print(msg)
                 continue
             if canvas_context_rt is None:
-                msg = "Realtime session not started. Run /canvas_context_rt_start first."
-                engine.events.emit(
-                    "canvas_context_failed",
-                    image_path=str(path),
-                    error=msg,
-                    source="openai_realtime",
-                    model=os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_MODEL") or "gpt-realtime-mini",
-                    fatal=True,
-                )
-                print(msg)
-                continue
+                canvas_context_rt = CanvasContextRealtimeSession(engine.events)
             ok, err = canvas_context_rt.submit_snapshot(path)
             if not ok:
                 engine.events.emit(
@@ -353,17 +343,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 print(msg)
                 continue
             if intent_rt is None:
-                msg = "Realtime session not started. Run /intent_rt_start first."
-                engine.events.emit(
-                    "intent_icons_failed",
-                    image_path=str(path),
-                    error=msg,
-                    source="openai_realtime",
-                    model=os.getenv("BROOD_INTENT_REALTIME_MODEL") or "gpt-realtime-mini",
-                    fatal=True,
-                )
-                print(msg)
-                continue
+                intent_rt = IntentIconsRealtimeSession(engine.events)
             ok, err = intent_rt.submit_snapshot(path)
             if not ok:
                 engine.events.emit(
