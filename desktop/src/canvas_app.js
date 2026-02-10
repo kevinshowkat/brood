@@ -704,9 +704,10 @@ function _completeDescribeInFlight({
   const inflight = describeInFlightPath || state.describePendingPath || null;
   if (!inflight) return;
   const item = state.images.find((img) => img?.path === inflight) || null;
+  const cleanedDesc = typeof description === "string" ? description.trim() : "";
   if (item) {
-    if (typeof description === "string" && description.trim()) {
-      item.visionDesc = description.trim();
+    if (cleanedDesc) {
+      item.visionDesc = cleanedDesc;
       item.visionDescMeta = {
         source: meta?.source || null,
         model: meta?.model || null,
@@ -724,6 +725,14 @@ function _completeDescribeInFlight({
 
   if (errorMessage) {
     showToast(errorMessage, "error", 3200);
+  }
+  if (cleanedDesc) {
+    // Persist new per-image descriptions into run artifacts.
+    scheduleVisualPromptWrite();
+    if (intentModeActive() && state.intent && !state.intent.locked) {
+      // Treat new vision descriptions as an intent signal.
+      scheduleIntentInference({ immediate: true, reason: "describe" });
+    }
   }
   if (getActiveImage()?.path === inflight) renderHudReadout();
   processDescribeQueue();
@@ -1918,6 +1927,17 @@ function computeIntentSignature() {
   parts.push(`round=${Math.max(1, Number(intent.round) || 1)}`);
   parts.push(`force=${intent.forceChoice ? 1 : 0}`);
   if (intent.focusBranchId) parts.push(`focus=${String(intent.focusBranchId)}`);
+
+  const sigSafe = (text, maxLen = 48) => {
+    let s = String(text || "");
+    s = s.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+    if (!s) return "";
+    // Avoid clobbering the signature delimiter.
+    s = s.replace(/[|]/g, "/");
+    if (s.length > maxLen) s = s.slice(0, maxLen);
+    return s;
+  };
+
   const sels = Array.isArray(intent.selections) ? intent.selections.slice() : [];
   sels.sort((a, b) => (Number(a?.round) || 0) - (Number(b?.round) || 0));
   for (const sel of sels) {
@@ -1930,6 +1950,10 @@ function computeIntentSignature() {
   for (const imageId of z) {
     const item = imageId ? state.imagesById.get(imageId) : null;
     if (item?.path) parts.push(item.path);
+    if (item?.visionDesc) {
+      const v = sigSafe(item.visionDesc, 40);
+      if (v) parts.push(`desc:${String(imageId)}:${v}`);
+    }
     const rect = imageId ? state.freeformRects.get(imageId) : null;
     if (!rect) continue;
     parts.push(
@@ -2214,6 +2238,8 @@ function buildIntentContextEnvelope(frameId) {
     const item = imageId ? state.imagesById.get(imageId) : null;
     const rect = imageId ? state.freeformRects.get(imageId) : null;
     if (!item?.path || !rect) continue;
+    const visionDesc = item?.visionDesc ? clampText(String(item.visionDesc), 64) : null;
+    const vmeta = item?.visionDescMeta || null;
     const x = Number(rect.x) || 0;
     const y = Number(rect.y) || 0;
     const w = Math.max(1, Number(rect.w) || 1);
@@ -2225,6 +2251,16 @@ function buildIntentContextEnvelope(frameId) {
       file: basename(item.path),
       import_index: (state.images || []).findIndex((im) => im?.id === imageId),
       z: idx,
+      // Short vision-derived label for this image (best-effort). This is an internal
+      // signal to improve intent suggestions while keeping user input "images-only".
+      vision_desc: visionDesc,
+      vision_desc_meta: visionDesc
+        ? {
+            source: vmeta?.source ? String(vmeta.source) : null,
+            model: vmeta?.model ? String(vmeta.model) : null,
+            at_ms: Number(vmeta?.at) || null,
+          }
+        : null,
       rect_css: { x, y, w, h, cx, cy },
       rect_norm: {
         x: canvasCssW ? x / canvasCssW : 0,
@@ -2512,6 +2548,116 @@ function upsertIntentSelection({ round, branchId, tokenId }) {
   intent.selections = next;
 }
 
+function inferIntentBranchFromVisionDescriptions() {
+  const items = Array.isArray(state.images) ? state.images : [];
+  const texts = [];
+  for (const item of items) {
+    if (item?.visionDesc) texts.push(String(item.visionDesc));
+  }
+  const haystack = texts.join(" ").toLowerCase().trim();
+  if (!haystack) return null;
+
+  const scores = {
+    game_dev_assets: 0,
+    streaming_content: 0,
+    uiux_prototyping: 0,
+    ecommerce_pod: 0,
+    content_engine: 0,
+  };
+
+  const bump = (key, re, weight) => {
+    if (!key || !re) return;
+    if (!scores[key] && scores[key] !== 0) return;
+    try {
+      if (re.test(haystack)) scores[key] += Number(weight) || 0;
+    } catch {
+      // ignore
+    }
+  };
+
+  // These keywords are intentionally "small + concrete" because vision descriptions are short
+  // (e.g. "instagram app icon", "couch"). They should be treated as weak signals.
+  bump("game_dev_assets", /\b(sprite|sprites|tileset|texture|textures)\b/i, 4);
+  bump("game_dev_assets", /\b(character sheet|character sheets)\b/i, 4);
+  bump("game_dev_assets", /\b(concept art)\b/i, 4);
+  bump("game_dev_assets", /\b(unreal|unity)\b/i, 2);
+  bump("game_dev_assets", /\b(terran|zerg|scv)\b/i, 4);
+  bump("game_dev_assets", /\b(game|gamedev|mod)\b/i, 2);
+
+  bump("streaming_content", /\b(instagram|twitch|youtube|tiktok)\b/i, 5);
+  bump("streaming_content", /\b(thumbnail|thumbnails)\b/i, 4);
+  bump("streaming_content", /\b(overlay|overlays)\b/i, 4);
+  bump("streaming_content", /\b(emote|emotes)\b/i, 4);
+  bump("streaming_content", /\b(social|stream|streaming|channel)\b/i, 2);
+  bump("streaming_content", /\b(logo|banner|profile)\b/i, 1);
+
+  bump("uiux_prototyping", /\b(wireframe|wireframes)\b/i, 5);
+  bump("uiux_prototyping", /\b(mockup|mockups)\b/i, 4);
+  bump("uiux_prototyping", /\b(prototype|prototyping)\b/i, 4);
+  bump("uiux_prototyping", /\b(user flow|user flows|flow diagram)\b/i, 4);
+  bump("uiux_prototyping", /\b(dashboard|app screen|app screens|screens)\b/i, 3);
+  bump("uiux_prototyping", /\b(ui|ux)\b/i, 2);
+
+  bump("ecommerce_pod", /\b(product photo|product photos)\b/i, 5);
+  bump("ecommerce_pod", /\b(listing|listings|marketplace)\b/i, 4);
+  bump("ecommerce_pod", /\b(etsy|amazon|shop)\b/i, 3);
+  bump("ecommerce_pod", /\b(merch|t-?shirt|hoodie|mug|poster)\b/i, 4);
+  bump("ecommerce_pod", /\b(packaging)\b/i, 3);
+  bump("ecommerce_pod", /\b(couch|sofa|chair|table)\b/i, 3);
+
+  bump("content_engine", /\b(pipeline|workflow|automation|automated|system|systems)\b/i, 4);
+  bump("content_engine", /\b(brand system|brand|template)\b/i, 2);
+  bump("content_engine", /\b(multi-?channel|batch)\b/i, 2);
+
+  let bestKey = null;
+  let bestScore = 0;
+  for (const [key, score] of Object.entries(scores)) {
+    const s = Number(score) || 0;
+    if (s > bestScore) {
+      bestScore = s;
+      bestKey = key;
+    }
+  }
+  // Require a little evidence before overriding icon-state suggestion.
+  if (!bestKey || bestScore < 3) return null;
+  return bestKey;
+}
+
+function _primaryBranchSuggestion(iconState) {
+  const branches = Array.isArray(iconState?.branches) ? iconState.branches : [];
+  if (!branches.length) return { branch_id: null, score: 0, ties: 0 };
+
+  const primaryIcons = new Set(
+    (Array.isArray(iconState?.intent_icons) ? iconState.intent_icons : [])
+      .filter((it) => String(it?.position_hint || "").toLowerCase() === "primary")
+      .map((it) => String(it?.icon_id || "").trim())
+      .filter(Boolean)
+  );
+  if (!primaryIcons.size) return { branch_id: null, score: 0, ties: 0 };
+
+  let bestId = null;
+  let bestScore = 0;
+  let ties = 0;
+  for (const b of branches) {
+    const bid = b?.branch_id ? String(b.branch_id) : "";
+    if (!bid) continue;
+    const icons = Array.isArray(b?.icons) ? b.icons : [];
+    let score = 0;
+    for (const icon of icons) {
+      if (primaryIcons.has(String(icon || "").trim())) score += 1;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = bid;
+      ties = score > 0 ? 1 : 0;
+    } else if (score > 0 && score === bestScore) {
+      ties += 1;
+    }
+  }
+  if (!bestId || bestScore <= 0) return { branch_id: null, score: 0, ties: 0 };
+  return { branch_id: bestId, score: bestScore, ties };
+}
+
 function pickSuggestedIntentBranchId(iconState = null) {
   const intent = state.intent;
   const icon = iconState || intent?.iconState || null;
@@ -2524,12 +2670,35 @@ function pickSuggestedIntentBranchId(iconState = null) {
     return tok === "NO_TOKEN";
   };
 
-  const existing = intent?.focusBranchId ? String(intent.focusBranchId) : "";
-  if (existing && branches.some((b) => String(b?.branch_id || "") === existing) && !isRejected(existing)) return existing;
+  const hasBranch = (bid) => branches.some((b) => String(b?.branch_id || "") === bid);
+  const findBranchInsensitive = (raw) => {
+    const wanted = String(raw || "").trim();
+    if (!wanted) return "";
+    const exact = branches.find((b) => String(b?.branch_id || "") === wanted);
+    if (exact?.branch_id) return String(exact.branch_id);
+    const lower = wanted.toLowerCase();
+    const match = branches.find((b) => String(b?.branch_id || "").toLowerCase() === lower);
+    return match?.branch_id ? String(match.branch_id) : "";
+  };
 
-  const primary = primaryBranchIdFromIconState(icon);
-  const p = primary ? String(primary) : "";
-  if (p && branches.some((b) => String(b?.branch_id || "") === p) && !isRejected(p)) return p;
+  // If the model provided an explicit checkpoint target, treat it as the active suggestion.
+  const checkpoint = icon?.checkpoint?.applies_to;
+  const checkpointBid = findBranchInsensitive(checkpoint);
+  if (checkpointBid && !isRejected(checkpointBid)) return checkpointBid;
+
+  const primaryInfo = _primaryBranchSuggestion(icon);
+  const p = primaryInfo?.branch_id ? String(primaryInfo.branch_id) : "";
+
+  // Use per-image vision descriptions (derived from images) as a tie-breaker or fallback hint.
+  const hint = inferIntentBranchFromVisionDescriptions();
+  if (hint && hasBranch(hint) && !isRejected(hint)) {
+    const primaryRejected = p ? isRejected(p) : true;
+    const primaryWeak = (Number(primaryInfo?.score) || 0) <= 1;
+    const primaryTied = (Number(primaryInfo?.ties) || 0) > 1;
+    if (primaryRejected || primaryWeak || primaryTied) return hint;
+  }
+
+  if (p && hasBranch(p) && !isRejected(p)) return p;
 
   for (const b of branches) {
     const bid = b?.branch_id ? String(b.branch_id) : "";
@@ -2539,7 +2708,7 @@ function pickSuggestedIntentBranchId(iconState = null) {
   }
 
   // If every branch has been rejected, fall back to the primary (if present) so START remains usable.
-  if (p && branches.some((b) => String(b?.branch_id || "") === p)) return p;
+  if (p && hasBranch(p)) return p;
   const first = branches[0]?.branch_id ? String(branches[0].branch_id) : "";
   return first || null;
 }
@@ -6663,6 +6832,16 @@ function buildVisualPrompt() {
     label: item?.label ? String(item.label) : null,
     width: Number(item?.img?.naturalWidth || item?.width) || null,
     height: Number(item?.img?.naturalHeight || item?.height) || null,
+    // Optional vision-side description of the image contents (e.g., "couch").
+    // This is written for run trace/debugging only; intent inference remains images-only.
+    vision_desc: item?.visionDesc ? String(item.visionDesc) : null,
+    vision_desc_meta: item?.visionDescMeta
+      ? {
+          source: item.visionDescMeta?.source ? String(item.visionDescMeta.source) : null,
+          model: item.visionDescMeta?.model ? String(item.visionDescMeta.model) : null,
+          at_ms: Number(item.visionDescMeta?.at) || null,
+        }
+      : null,
   }));
 
   const marks = [];
@@ -8875,34 +9054,49 @@ async function handleEvent(event) {
     if (!hardDisable && intentModeActive() && !intent.forceChoice) {
       scheduleIntentInference({ immediate: false, reason: "retry" });
     }
-  } else if (event.type === "image_description") {
-    const path = event.image_path;
-    const desc = event.description;
-    if (typeof path === "string" && typeof desc === "string" && desc.trim()) {
-      const cleaned = desc.trim();
-      for (const item of state.images) {
-        if (item?.path === path) {
-          item.visionDesc = cleaned;
-          item.visionPending = false;
-          item.visionDescMeta = {
-            source: event.source || null,
-            model: event.model || null,
-            at: Date.now(),
-          };
-          break;
-        }
-      }
-      if (state.describePendingPath === path) state.describePendingPath = null;
-      describeQueued.delete(path);
-      if (describeInFlightPath === path) {
-        describeInFlightPath = null;
-        clearTimeout(describeInFlightTimer);
-        describeInFlightTimer = null;
-        processDescribeQueue();
-      }
-      if (getActiveImage()?.path === path) renderHudReadout();
-    }
-  } else if (event.type === "image_diagnosis") {
+	  } else if (event.type === "image_description") {
+	    const path = event.image_path;
+	    const desc = event.description;
+	    if (typeof path === "string" && typeof desc === "string" && desc.trim()) {
+	      const cleaned = desc.trim();
+	      for (const item of state.images) {
+	        if (item?.path === path) {
+	          item.visionDesc = cleaned;
+	          item.visionPending = false;
+	          item.visionDescMeta = {
+	            source: event.source || null,
+	            model: event.model || null,
+	            at: Date.now(),
+	          };
+	          break;
+	        }
+	      }
+	      if (state.describePendingPath === path) state.describePendingPath = null;
+	      describeQueued.delete(path);
+	      if (describeInFlightPath === path) {
+	        describeInFlightPath = null;
+	        clearTimeout(describeInFlightTimer);
+	        describeInFlightTimer = null;
+	        processDescribeQueue();
+	      }
+	      // Persist the new per-image description into run artifacts.
+	      scheduleVisualPromptWrite();
+	
+	      if (intentModeActive() && state.intent && !state.intent.locked) {
+	        appendIntentTrace({
+	          kind: "vision_description",
+	          image_path: path,
+	          description: cleaned,
+	          source: event.source || null,
+	          model: event.model || null,
+	        }).catch(() => {});
+	        // Vision-derived labels are useful intent signals; schedule a refresh so the
+	        // suggested branch can tighten as these descriptions arrive.
+	        scheduleIntentInference({ immediate: true, reason: "describe" });
+	      }
+	      if (getActiveImage()?.path === path) renderHudReadout();
+	    }
+	  } else if (event.type === "image_diagnosis") {
     const text = event.text;
     if (typeof text === "string" && text.trim()) {
       const diagPath = typeof event.image_path === "string" ? event.image_path : "";

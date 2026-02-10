@@ -807,28 +807,28 @@ button.ghost:hover {
 
 @keyframes intent-rt-pulse {
   0% {
-    opacity: 0.22;
+    opacity: 0.18;
     box-shadow:
-      0 0 0 1px rgba(82, 255, 148, 0.16),
-      0 0 18px rgba(82, 255, 148, 0.16),
-      0 0 64px rgba(82, 255, 148, 0.10),
-      inset 0 0 18px rgba(82, 255, 148, 0.05);
+      0 0 0 1px rgba(82, 255, 148, 0.14),
+      0 0 12px rgba(82, 255, 148, 0.14),
+      0 0 40px rgba(82, 255, 148, 0.08),
+      inset 0 0 12px rgba(82, 255, 148, 0.04);
   }
   50% {
-    opacity: 0.95;
+    opacity: 0.80;
     box-shadow:
-      0 0 0 1px rgba(82, 255, 148, 0.34),
-      0 0 26px rgba(82, 255, 148, 0.26),
-      0 0 92px rgba(82, 255, 148, 0.16),
-      inset 0 0 28px rgba(82, 255, 148, 0.08);
+      0 0 0 1px rgba(82, 255, 148, 0.28),
+      0 0 18px rgba(82, 255, 148, 0.20),
+      0 0 56px rgba(82, 255, 148, 0.12),
+      inset 0 0 16px rgba(82, 255, 148, 0.06);
   }
   100% {
-    opacity: 0.22;
+    opacity: 0.18;
     box-shadow:
-      0 0 0 1px rgba(82, 255, 148, 0.16),
-      0 0 18px rgba(82, 255, 148, 0.16),
-      0 0 64px rgba(82, 255, 148, 0.10),
-      inset 0 0 18px rgba(82, 255, 148, 0.05);
+      0 0 0 1px rgba(82, 255, 148, 0.14),
+      0 0 12px rgba(82, 255, 148, 0.14),
+      0 0 40px rgba(82, 255, 148, 0.08),
+      inset 0 0 12px rgba(82, 255, 148, 0.04);
   }
 }
 
@@ -839,13 +839,13 @@ button.ghost:hover {
   z-index: 4;
   pointer-events: none;
   border-radius: 14px;
-  border: 1px solid rgba(82, 255, 148, 0.30);
+  border: 1px solid rgba(82, 255, 148, 0.26);
   box-shadow:
-    0 0 0 1px rgba(82, 255, 148, 0.16),
-    0 0 18px rgba(82, 255, 148, 0.16),
-    0 0 64px rgba(82, 255, 148, 0.10),
-    inset 0 0 18px rgba(82, 255, 148, 0.05);
-  animation: intent-rt-pulse 1.25s ease-in-out infinite;
+    0 0 0 1px rgba(82, 255, 148, 0.14),
+    0 0 12px rgba(82, 255, 148, 0.14),
+    0 0 40px rgba(82, 255, 148, 0.08),
+    inset 0 0 12px rgba(82, 255, 148, 0.04);
+  animation: intent-rt-pulse 2.15s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
