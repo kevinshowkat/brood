@@ -10345,22 +10345,38 @@ function startSpawnTimer() {
 
 function installDnD() {
   if (!els.canvasWrap) return;
-  // Intent Canvas uses click-to-upload; drag/drop is intentionally disabled for now.
-  return;
 
-  function stop(event) {
+  // Even when drag/drop import is disabled (Intent Mode), we must still prevent the
+  // WebView's default file-drop navigation, which can wipe the current session/run.
+  const preventNav = (event) => {
+    if (!event) return;
     event.preventDefault();
-    event.stopPropagation();
+  };
+
+  try {
+    window.addEventListener("dragover", preventNav, { passive: false });
+    window.addEventListener("drop", preventNav, { passive: false });
+  } catch {
+    // ignore
   }
 
-  els.canvasWrap.addEventListener("dragover", stop);
-  els.canvasWrap.addEventListener("dragenter", stop);
+  function stop(event) {
+    preventNav(event);
+    event?.stopPropagation?.();
+  }
+
+  els.canvasWrap.addEventListener("dragover", stop, { passive: false });
+  els.canvasWrap.addEventListener("dragenter", stop, { passive: false });
   els.canvasWrap.addEventListener("drop", async (event) => {
     stop(event);
     bumpInteraction();
     const files = Array.from(event.dataTransfer?.files || []);
     const paths = files.map((f) => f?.path).filter(Boolean);
     if (paths.length === 0) return;
+    if (intentModeActive()) {
+      showToast("Drag/drop disabled in Intent Mode. Click to add photos.", "tip", 2600);
+      return;
+    }
     await ensureRun();
     const inputsDir = `${state.runDir}/inputs`;
     await createDir(inputsDir, { recursive: true }).catch(() => {});
