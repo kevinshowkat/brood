@@ -585,6 +585,14 @@ function allowVisionDescribe() {
   return state.keyStatus ? Boolean(state.keyStatus.openai || state.keyStatus.gemini) : true;
 }
 
+function allowVisionDescribeInCurrentMode() {
+  // During Intent Canvas onboarding we prefer capturing vision labels as part of the
+  // intent realtime pass (faster + single API call). Keep describe available after
+  // intent is locked, or outside intent mode entirely.
+  if (intentModeActive()) return false;
+  return true;
+}
+
 function resetDescribeQueue({ clearPending = false } = {}) {
   describeQueue = [];
   describeQueued.clear();
@@ -674,6 +682,7 @@ function processDescribeQueue() {
 function scheduleVisionDescribe(path, { priority = false } = {}) {
   if (!path) return;
   if (!allowVisionDescribe()) return;
+  if (!allowVisionDescribeInCurrentMode()) return;
 
   const item = state.images.find((img) => img?.path === path) || null;
   if (item) {
@@ -789,6 +798,7 @@ function _handlePtyLine(line) {
 
 function scheduleVisionDescribeAll() {
   if (!allowVisionDescribe()) return;
+  if (!allowVisionDescribeInCurrentMode()) return;
   const active = getActiveImage();
   if (active?.path) scheduleVisionDescribe(active.path, { priority: true });
   for (const item of state.images) {
@@ -2475,6 +2485,35 @@ function parseIntentIconsJson(raw) {
   if (!obj.schema) obj.schema = "brood.intent_icons";
   if (!obj.schema_version) obj.schema_version = 1;
   return obj;
+}
+
+function _normalizeVisionLabel(raw, { maxChars = 32 } = {}) {
+  const s = String(raw || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!s) return "";
+  // Keep it short and HUD-friendly. (Even though it may not be shown in intent mode,
+  // we reuse the same field for later HUD rendering.)
+  const clipped = maxChars > 0 ? clampText(s, maxChars) : s;
+  // Avoid our intent-signature delimiter.
+  return clipped.replace(/[|]/g, "/").trim();
+}
+
+function extractIntentImageDescriptions(parsed) {
+  if (!parsed || typeof parsed !== "object") return [];
+  const raw = Array.isArray(parsed.image_descriptions) ? parsed.image_descriptions : [];
+  const out = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const imageId = item.image_id ? String(item.image_id) : item.id ? String(item.id) : "";
+    const labelRaw = item.label ?? item.description ?? item.text ?? "";
+    const label = _normalizeVisionLabel(labelRaw, { maxChars: 32 });
+    const confidence = typeof item.confidence === "number" ? item.confidence : null;
+    if (!imageId || !label) continue;
+    out.push({ image_id: imageId, label, confidence });
+  }
+  return out;
 }
 
 function primaryBranchIdFromIconState(iconState) {
@@ -8923,34 +8962,74 @@ async function handleEvent(event) {
       intent.pendingFrameId = null;
     }
 
-	    if (typeof text === "string" && text.trim()) {
-	      const parsed = parseIntentIconsJson(text);
-	      if (parsed) {
-	        intent.iconState = parsed;
-	        intent.iconStateAt = Date.now();
-	        intent.rtState = "ready";
-	        intent.disabledReason = null;
-	        intent.lastError = null;
-	        intent.lastErrorAt = 0;
-	        intent.uiHideSuggestion = false;
-	        // Keep focus stable if possible (unless rejected); otherwise pick the next suggestion.
-	        intent.focusBranchId = pickSuggestedIntentBranchId(parsed) || pickDefaultIntentFocusBranchId(parsed);
-	        if (!isPartial) {
-	          const branchIds = Array.isArray(parsed?.branches)
-	            ? parsed.branches.map((b) => (b?.branch_id ? String(b.branch_id) : "")).filter(Boolean)
-	            : [];
-	          appendIntentTrace({
-	            kind: "model_icons",
-	            partial: false,
-	            frame_id: parsed?.frame_id ? String(parsed.frame_id) : null,
-	            snapshot_path: path ? String(path) : null,
-	            branch_ids: branchIds,
-	            focus_branch_id: intent.focusBranchId ? String(intent.focusBranchId) : null,
-	            text_len: typeof text === "string" ? text.length : 0,
-	          }).catch(() => {});
-	        }
-	        const total = Math.max(1, Number(intent.totalRounds) || 3);
-	        const round = Math.max(1, Number(intent.round) || 1);
+		    if (typeof text === "string" && text.trim()) {
+		      const parsed = parseIntentIconsJson(text);
+		      if (parsed) {
+		        // Capture per-image vision labels from the intent realtime response so we can
+		        // use them as signals without issuing separate /describe calls.
+		        const imageDescs = !isPartial ? extractIntentImageDescriptions(parsed) : [];
+		        let wroteVision = false;
+		        if (!isPartial && imageDescs.length) {
+		          for (const rec of imageDescs) {
+		            const imageId = rec?.image_id ? String(rec.image_id) : "";
+		            const label = rec?.label ? String(rec.label) : "";
+		            if (!imageId || !label) continue;
+		            const imgItem = state.imagesById.get(imageId) || null;
+		            if (!imgItem) continue;
+		            // First-wins for stability (prevents intent-signature churn).
+		            if (imgItem.visionDesc) continue;
+		            imgItem.visionDesc = label;
+		            imgItem.visionPending = false;
+		            imgItem.visionDescMeta = {
+		              source: event.source || null,
+		              model: event.model || null,
+		              at: Date.now(),
+		            };
+		            wroteVision = true;
+		            if (intentModeActive()) {
+		              appendIntentTrace({
+		                kind: "vision_description",
+		                image_id: imageId,
+		                image_path: imgItem?.path ? String(imgItem.path) : null,
+		                description: label,
+		                source: event.source || null,
+		                model: event.model || null,
+		              }).catch(() => {});
+		            }
+		          }
+		        }
+
+		        if (wroteVision) {
+		          scheduleVisualPromptWrite();
+		          if (getActiveImage()?.id) renderHudReadout();
+		        }
+
+		        intent.iconState = parsed;
+		        intent.iconStateAt = Date.now();
+		        intent.rtState = "ready";
+		        intent.disabledReason = null;
+		        intent.lastError = null;
+		        intent.lastErrorAt = 0;
+		        intent.uiHideSuggestion = false;
+		        // Keep focus stable if possible (unless rejected); otherwise pick the next suggestion.
+		        intent.focusBranchId = pickSuggestedIntentBranchId(parsed) || pickDefaultIntentFocusBranchId(parsed);
+		        if (!isPartial) {
+		          const branchIds = Array.isArray(parsed?.branches)
+		            ? parsed.branches.map((b) => (b?.branch_id ? String(b.branch_id) : "")).filter(Boolean)
+		            : [];
+		          appendIntentTrace({
+		            kind: "model_icons",
+		            partial: false,
+		            frame_id: parsed?.frame_id ? String(parsed.frame_id) : null,
+		            snapshot_path: path ? String(path) : null,
+		            branch_ids: branchIds,
+		            focus_branch_id: intent.focusBranchId ? String(intent.focusBranchId) : null,
+		            image_descriptions: imageDescs.length ? imageDescs : null,
+		            text_len: typeof text === "string" ? text.length : 0,
+		          }).catch(() => {});
+		        }
+		        const total = Math.max(1, Number(intent.totalRounds) || 3);
+		        const round = Math.max(1, Number(intent.round) || 1);
 	        // After the final round proposals arrive, force an explicit YES to proceed.
 	        if (INTENT_FORCE_CHOICE_ENABLED && INTENT_ROUNDS_ENABLED && !isPartial && round >= total && !intent.forceChoice) {
 	          intent.forceChoice = true;
