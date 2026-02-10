@@ -558,7 +558,7 @@ function renderHudReadout() {
   if (img?.visionDesc) {
     desc = clampText(img.visionDesc, 32);
   } else if (img?.visionPending) {
-    desc = "SCANNING…";
+    desc = "ANALYZING…";
   } else if (img?.path && describeQueued.has(img.path)) {
     desc = state.ptySpawned ? "QUEUED…" : state.ptySpawning ? "STARTING…" : "ENGINE OFFLINE";
   } else {
@@ -1027,7 +1027,7 @@ function updateAlwaysOnVisionReadout() {
   } else if (aov.rtState === "connecting" && !aov.pending && !hasOutput) {
     text = "Connecting…";
   } else if (aov.pending) {
-    text = "SCANNING…";
+    text = "ANALYZING…";
   } else if (hasOutput) {
     const cleaned = aov.lastText.trim();
     text = cleaned.length > 1400 ? `${cleaned.slice(0, 1399).trimEnd()}\n…` : cleaned;
@@ -4014,7 +4014,7 @@ function buildMotherText() {
     if (aov.rtState === "connecting" && !aov.pending && !hasOutput) {
       return "CTX: Connecting…";
     }
-    if (aov.pending) return "CTX: SCANNING…";
+    if (aov.pending) return "CTX: ANALYZING…";
     if (hasOutput) {
       const summary = extractCanvasContextSummary(raw);
       const top = extractCanvasContextTopAction(raw);
@@ -9872,6 +9872,275 @@ function _drawRoundedRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
+function _drawIntentBumperPlate(ctx, rect, { active = false, loading = false, alpha = 1 } = {}) {
+  if (!ctx || !rect) return;
+  const x = Math.round(Number(rect.x) || 0);
+  const y = Math.round(Number(rect.y) || 0);
+  const w = Math.round(Number(rect.w) || 0);
+  const h = Math.round(Number(rect.h) || 0);
+  if (w <= 2 || h <= 2) return;
+
+  const dpr = getDpr();
+  const a = clamp(Number(alpha) || 1, 0.05, 1);
+  const cut = Math.max(10, Math.round(14 * dpr));
+  const inset = Math.max(1, Math.round(1.2 * dpr));
+  const edge = Math.max(1, Math.round(1.4 * dpr));
+
+  const path = () => {
+    const c = Math.max(0, Math.min(cut, Math.floor(Math.min(w, h) / 2) - 1));
+    ctx.beginPath();
+    ctx.moveTo(x + c, y);
+    ctx.lineTo(x + w - c, y);
+    ctx.lineTo(x + w, y + c);
+    ctx.lineTo(x + w, y + h - c);
+    ctx.lineTo(x + w - c, y + h);
+    ctx.lineTo(x + c, y + h);
+    ctx.lineTo(x, y + h - c);
+    ctx.lineTo(x, y + c);
+    ctx.closePath();
+  };
+
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.shadowColor = "rgba(0, 0, 0, 0.78)";
+  ctx.shadowBlur = Math.round(18 * dpr);
+  ctx.shadowOffsetY = Math.round(6 * dpr);
+
+  // Base fill.
+  path();
+  ctx.fillStyle = "rgba(8, 10, 14, 0.90)";
+  ctx.fill();
+
+  // Clip for texture/gradients.
+  ctx.save();
+  path();
+  ctx.clip();
+
+  // Metal-ish vertical gradient.
+  const grad = ctx.createLinearGradient(0, y, 0, y + h);
+  grad.addColorStop(0, "rgba(255, 255, 255, 0.08)");
+  grad.addColorStop(0.35, "rgba(255, 255, 255, 0.02)");
+  grad.addColorStop(1, "rgba(0, 0, 0, 0.62)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(x, y, w, h);
+
+  // Soft cyan bloom on the left (matches bumpers/HUD vibe without reading as a "screen").
+  const rg = ctx.createRadialGradient(x + w * 0.22, y + h * 0.12, 0, x + w * 0.22, y + h * 0.12, Math.max(w, h) * 0.75);
+  rg.addColorStop(0, "rgba(100, 210, 255, 0.10)");
+  rg.addColorStop(0.6, "rgba(0, 221, 255, 0.03)");
+  rg.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = rg;
+  ctx.fillRect(x, y, w, h);
+
+  // Subtle scanline texture.
+  ctx.save();
+  ctx.globalAlpha = 0.11;
+  ctx.fillStyle = "rgba(255, 255, 255, 0.14)";
+  const step = Math.max(7, Math.round(9 * dpr));
+  const lineH = Math.max(1, Math.round(1 * dpr));
+  for (let yy = y + Math.round(step / 2); yy < y + h; yy += step) {
+    ctx.fillRect(x, yy, w, lineH);
+  }
+  ctx.restore();
+
+  ctx.restore(); // end clip
+
+  // Outer edge.
+  path();
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.lineWidth = edge;
+  ctx.strokeStyle = "rgba(54, 76, 106, 0.62)";
+  ctx.stroke();
+
+  // Inset bevel highlight.
+  ctx.save();
+  ctx.globalAlpha = a * 0.9;
+  const ix = x + inset;
+  const iy = y + inset;
+  const iw = Math.max(1, w - inset * 2);
+  const ih = Math.max(1, h - inset * 2);
+  const icut = Math.max(8, Math.round(cut * 0.7));
+  const c = Math.max(0, Math.min(icut, Math.floor(Math.min(iw, ih) / 2) - 1));
+  ctx.beginPath();
+  ctx.moveTo(ix + c, iy);
+  ctx.lineTo(ix + iw - c, iy);
+  ctx.lineTo(ix + iw, iy + c);
+  ctx.lineTo(ix + iw, iy + ih - c);
+  ctx.lineTo(ix + iw - c, iy + ih);
+  ctx.lineTo(ix + c, iy + ih);
+  ctx.lineTo(ix, iy + ih - c);
+  ctx.lineTo(ix, iy + c);
+  ctx.closePath();
+  ctx.lineWidth = Math.max(1, Math.round(1.1 * dpr));
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.10)";
+  ctx.stroke();
+  ctx.restore();
+
+  // Accent sliver (quiet, hardware-ish).
+  const accent = loading
+    ? "rgba(0, 221, 255, 0.30)"
+    : active
+      ? "rgba(82, 255, 148, 0.28)"
+      : "rgba(54, 76, 106, 0.22)";
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = Math.max(1, Math.round(2.2 * dpr));
+  ctx.lineCap = "round";
+  const sl = Math.max(18, Math.round(Math.min(w, 260) * 0.22));
+  ctx.beginPath();
+  ctx.moveTo(x + cut + Math.round(12 * dpr), y + Math.round(6 * dpr));
+  ctx.lineTo(x + cut + Math.round(12 * dpr) + sl, y + Math.round(6 * dpr));
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x + w - cut - Math.round(12 * dpr) - sl, y + Math.round(6 * dpr));
+  ctx.lineTo(x + w - cut - Math.round(12 * dpr), y + Math.round(6 * dpr));
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.restore();
+}
+
+const LED_5X7 = {
+  " ": [0, 0, 0, 0, 0, 0, 0],
+  "-": [0, 0, 0, 0b11111, 0, 0, 0],
+  "_": [0, 0, 0, 0, 0, 0, 0b11111],
+  "/": [0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0, 0],
+  ":": [0, 0b00100, 0b00100, 0, 0b00100, 0b00100, 0],
+  "?": [0b01110, 0b10001, 0b00010, 0b00100, 0b00100, 0, 0b00100],
+  "0": [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
+  "1": [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+  "2": [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
+  "3": [0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110],
+  "4": [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
+  "5": [0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110],
+  "6": [0b00111, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
+  "7": [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
+  "8": [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
+  "9": [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b11100],
+  A: [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+  B: [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+  C: [0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111],
+  D: [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+  E: [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+  F: [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+  G: [0b01111, 0b10000, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111],
+  H: [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+  I: [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111],
+  J: [0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100],
+  K: [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+  L: [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+  M: [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
+  N: [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
+  O: [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+  P: [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
+  Q: [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101],
+  R: [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+  S: [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
+  T: [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+  U: [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+  V: [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+  W: [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010],
+  X: [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+  Y: [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
+  Z: [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
+};
+
+function _led5x7Rows(ch) {
+  const key = String(ch || "").toUpperCase();
+  return LED_5X7[key] || LED_5X7["?"] || LED_5X7[" "];
+}
+
+function _led5x7TextDims(text, dot, gap, charGap) {
+  const d = Math.max(1, Math.round(Number(dot) || 0));
+  const g = Math.max(0, Math.round(Number(gap) || 0));
+  const cg = Math.max(0, Math.round(Number(charGap) || 0));
+  const chars = String(text || "");
+  const h = 7 * d + 6 * g;
+  const cw = 5 * d + 4 * g;
+  if (!chars) return { w: 0, h };
+  const w = chars.length * cw + Math.max(0, chars.length - 1) * cg;
+  return { w, h };
+}
+
+function _drawLed5x7Text(
+  ctx,
+  x,
+  y,
+  text,
+  { dot = 10, gap = 2, charGap = 6, on = "rgba(0, 245, 160, 0.92)", off = "rgba(0, 245, 160, 0.07)", glow = null, alpha = 1 } = {}
+) {
+  if (!ctx) return { w: 0, h: 0 };
+  const d = Math.max(1, Math.round(Number(dot) || 0));
+  const g = Math.max(0, Math.round(Number(gap) || 0));
+  const cg = Math.max(0, Math.round(Number(charGap) || 0));
+  const a = clamp(Number(alpha) || 1, 0.05, 1);
+  const chars = String(text || "").toUpperCase();
+  const step = d + g;
+  const r = Math.max(0, Math.round(d * 0.22));
+  let cx = Math.round(Number(x) || 0);
+  const cy = Math.round(Number(y) || 0);
+
+  ctx.save();
+  ctx.globalAlpha = a;
+
+  // Optional dim "off" grid so it reads as an LED module.
+  if (off) {
+    ctx.save();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = off;
+    for (const ch of chars) {
+      const rows = _led5x7Rows(ch);
+      for (let ry = 0; ry < 7; ry += 1) {
+        for (let rx = 0; rx < 5; rx += 1) {
+          const px = cx + rx * step;
+          const py = cy + ry * step;
+          _drawRoundedRect(ctx, px, py, d, d, r);
+          ctx.fill();
+        }
+      }
+      cx += 5 * step - g + cg;
+    }
+    ctx.restore();
+  }
+
+  // Lit segments with glow, then a crisp pass.
+  const drawLit = ({ withGlow }) => {
+    ctx.save();
+    ctx.fillStyle = on;
+    if (withGlow && glow) {
+      ctx.shadowColor = glow;
+      ctx.shadowBlur = Math.round(d * 1.15);
+    } else {
+      ctx.shadowBlur = 0;
+    }
+    let tx = Math.round(Number(x) || 0);
+    for (const ch of chars) {
+      const rows = _led5x7Rows(ch);
+      for (let ry = 0; ry < 7; ry += 1) {
+        const mask = Number(rows[ry]) || 0;
+        for (let rx = 0; rx < 5; rx += 1) {
+          const bit = (mask >> (4 - rx)) & 1;
+          if (!bit) continue;
+          const px = tx + rx * step;
+          const py = cy + ry * step;
+          _drawRoundedRect(ctx, px, py, d, d, r);
+          ctx.fill();
+        }
+      }
+      tx += 5 * step - g + cg;
+    }
+    ctx.restore();
+  };
+
+  drawLit({ withGlow: true });
+  drawLit({ withGlow: false });
+
+  ctx.restore();
+  return _led5x7TextDims(chars, d, g, cg);
+}
+
 function _drawSevenSegDigit(ctx, x, y, digitW, digitH, ch, { on, off } = {}) {
   const segs = _sevenSegSegmentsForDigit(ch);
   const seg = Math.max(2, Math.round(digitH * 0.13));
@@ -9971,6 +10240,20 @@ function _intentUseCaseKeyFromBranchId(branchId) {
   if (key.includes("engine") || key.includes("system") || key.includes("pipeline") || key.includes("automation") || key.includes("brand"))
     return "content_engine";
   return null;
+}
+
+function _intentUseCaseTitle(useCaseKey) {
+  const key = String(useCaseKey || "").trim();
+  if (!key) return "";
+  if (key === "game_dev_assets") return "GAME ASSETS";
+  if (key === "streaming_content") return "STREAMING";
+  if (key === "uiux_prototyping") return "UI/UX";
+  if (key === "ecommerce_pod") return "ECOMMERCE";
+  if (key === "content_engine") return "PIPELINE";
+  return key
+    .toUpperCase()
+    .replace(/[^A-Z0-9/]+/g, " ")
+    .trim();
 }
 
 function _drawIntentYesNoIcon(ctx, kind, cx, cy, r, { alpha = 1 } = {}) {
@@ -10275,6 +10558,111 @@ function renderIntentOverlay(octx, canvasW, canvasH) {
   const canReject = Boolean(iconState && suggestedBranchId && !loading);
   const noAlpha = canReject ? 1 : 0.45;
   const yesAlpha = canAccept ? 1 : 0.45;
+
+  // Hardware-like bumper/strip behind the choice UI (complements the normal HUD/bumpers).
+  const tokenX0 = Math.min(noCx - tokenR, yesCx - tokenR);
+  const tokenX1 = Math.max(noCx + tokenR, yesCx + tokenR);
+  const tokenY0 = tokenCy - tokenR;
+  const tokenY1 = tokenCy + tokenR;
+  let glyphX0 = tokenX0;
+  let glyphX1 = tokenX1;
+  let glyphY0 = tokenY0;
+  let glyphY1 = tokenY1;
+  if (useCaseKey || loading) {
+    glyphX0 = glyphCx - glyphSize / 2;
+    glyphX1 = glyphCx + glyphSize / 2;
+    glyphY0 = glyphCy - glyphSize / 2;
+    glyphY1 = glyphCy + glyphSize / 2;
+  }
+  const minX = Math.min(tokenX0, glyphX0);
+  const maxX = Math.max(tokenX1, glyphX1);
+  const minY = Math.min(tokenY0, glyphY0);
+  const maxY = Math.max(tokenY1, glyphY1);
+  const platePad = Math.round(18 * dpr);
+  let plate = {
+    x: Math.round(minX - platePad),
+    y: Math.round(minY - platePad),
+    w: Math.round((maxX - minX) + platePad * 2),
+    h: Math.round((maxY - minY) + platePad * 2),
+  };
+  const maxPlateW = Math.max(1, Math.round(canvasW - margin * 2));
+  if (plate.w > maxPlateW) {
+    plate.w = maxPlateW;
+    plate.x = margin;
+  } else {
+    plate.x = clamp(plate.x, margin, Math.round(canvasW - margin - plate.w));
+  }
+
+  // Title text inside the plate (big blocky LED matrix).
+  // Do NOT show the literal word "INTENT" - show only the inferred intent/use-case when ready.
+  const titleLines = [];
+  const title1 = !loading && !intent.uiHideSuggestion && useCaseKey ? _intentUseCaseTitle(useCaseKey) : "";
+  if (title1) titleLines.push(title1);
+  const titlePadX = Math.round(24 * dpr);
+  const titlePadY = Math.round(14 * dpr);
+  const titleMaxW = Math.max(1, plate.w - titlePadX * 2);
+  const longestTitle = titleLines.reduce((best, cur) => (String(cur).length > String(best).length ? String(cur) : String(best)), "");
+  let ledDot = Math.max(6, Math.round(4.2 * dpr * Math.min(1.9, Math.max(1, INTENT_UI_CHOICE_ICON_SCALE * 0.55))));
+  const minDot = Math.max(3, Math.round(2.6 * dpr));
+  let ledGap = Math.max(1, Math.round(ledDot * 0.22));
+  let ledCharGap = Math.max(2, Math.round(ledDot * 0.9));
+  while (ledDot > minDot) {
+    const dims = _led5x7TextDims(longestTitle, ledDot, ledGap, ledCharGap);
+    if (dims.w <= titleMaxW) break;
+    ledDot -= 1;
+    ledGap = Math.max(1, Math.round(ledDot * 0.22));
+    ledCharGap = Math.max(2, Math.round(ledDot * 0.9));
+  }
+  const ledLineDims = _led5x7TextDims("A", ledDot, ledGap, ledCharGap);
+  const ledLineH = Math.max(1, ledLineDims.h);
+  const ledLineGap = Math.max(1, Math.round(ledDot * 0.9));
+  const titleBlockH = titleLines.length > 0 ? titleLines.length * ledLineH + Math.max(0, titleLines.length - 1) * ledLineGap : 0;
+  const titleGapBelow = Math.round(6 * dpr);
+  const titleReserve = titleBlockH ? titlePadY + titleBlockH + titleGapBelow : 0;
+  if (titleReserve) {
+    plate.y = Math.round(plate.y - titleReserve);
+    plate.h = Math.round(plate.h + titleReserve);
+  }
+
+  const maxPlateH = Math.max(1, Math.round(canvasH - margin * 2));
+  if (plate.h > maxPlateH) {
+    plate.h = maxPlateH;
+    plate.y = margin;
+  } else {
+    plate.y = clamp(plate.y, margin, Math.round(canvasH - margin - plate.h));
+  }
+  _drawIntentBumperPlate(octx, plate, {
+    active: canAccept,
+    loading,
+    alpha: iconState ? 1 : 0.82,
+  });
+
+  if (titleBlockH) {
+    const glow = loading
+      ? "rgba(0, 221, 255, 0.70)"
+      : canAccept
+        ? "rgba(0, 245, 160, 0.62)"
+        : "rgba(100, 210, 255, 0.48)";
+    const off = "rgba(0, 221, 255, 0.06)";
+    const on = loading ? "rgba(0, 221, 255, 0.92)" : "rgba(0, 245, 160, 0.92)";
+    let ty = Math.round(plate.y + titlePadY);
+    for (let i = 0; i < titleLines.length; i += 1) {
+      const line = String(titleLines[i] || "").trim().toUpperCase();
+      if (!line) continue;
+      const dims = _led5x7TextDims(line, ledDot, ledGap, ledCharGap);
+      const tx = Math.round(plate.x + (plate.w - dims.w) / 2);
+      _drawLed5x7Text(octx, tx, ty, line, {
+        dot: ledDot,
+        gap: ledGap,
+        charGap: ledCharGap,
+        on,
+        off,
+        glow,
+        alpha: 1,
+      });
+      ty += ledLineH + ledLineGap;
+    }
+  }
 
   _drawIntentYesNoIcon(octx, "NO", noCx, tokenCy, tokenR, { alpha: noAlpha });
   _drawIntentYesNoIcon(octx, "YES", yesCx, tokenCy, tokenR, { alpha: yesAlpha });
@@ -11756,7 +12144,7 @@ async function boot() {
 
   // Consume PTY stdout as a fallback for vision describe completion/errors.
   // Desktop normally uses `events.jsonl`, but if event polling is disrupted, this
-  // keeps the HUD "DESC" from getting stuck at SCANNING.
+  // keeps the HUD "DESC" from getting stuck at ANALYZING.
   await listen("pty-data", (event) => {
     const chunk = event?.payload;
     if (typeof chunk !== "string" || !chunk) return;
