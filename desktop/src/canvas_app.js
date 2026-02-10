@@ -4397,21 +4397,54 @@ function computeMultiRects(items, canvasW, canvasH) {
   return rects;
 }
 
-function freeformDefaultTileCss(canvasCssW, canvasCssH) {
+function freeformDefaultTileCss(canvasCssW, canvasCssH, { count = null } = {}) {
   const isMobile =
     window.matchMedia && typeof window.matchMedia === "function"
       ? window.matchMedia("(max-width: 980px)").matches
       : false;
   const minDim = Math.max(1, Math.min(Number(canvasCssW) || 0, Number(canvasCssH) || 0));
-  const frac = isMobile ? 0.38 : 0.26;
+  const n = Math.max(1, Number.isFinite(Number(count)) ? Math.round(Number(count) || 0) : 1);
+
+  // Default import size: bias larger because most sessions start with 1-3 images.
+  // Still clamp to avoid overlap in the auto-layout grid.
+  let frac = isMobile ? 0.38 : 0.26;
+  if (isMobile) {
+    if (n <= 1) frac = 0.62;
+    else if (n === 2) frac = 0.48;
+    else if (n === 3) frac = 0.44;
+    else if (n === 4) frac = 0.40;
+  } else {
+    if (n <= 1) frac = 0.54;
+    else if (n === 2) frac = 0.42;
+    else if (n === 3) frac = 0.38;
+    else if (n === 4) frac = 0.32;
+  }
+
   const base = Math.round(minDim * frac);
-  return clamp(base, isMobile ? 130 : 170, isMobile ? 240 : 340);
+  const minPx = isMobile ? 160 : 220;
+  const maxPx = isMobile ? (n <= 1 ? 520 : 420) : n <= 1 ? 680 : 560;
+
+  // Ensure the implied grid (based on n) can fit within the canvas.
+  const margin = 14;
+  const gapFrac = 0.11;
+  let cols = 1;
+  if (n === 2) cols = 2;
+  else if (n <= 4) cols = 2;
+  else cols = 3;
+  const rows = Math.ceil(n / cols);
+  const availW = Math.max(1, (Number(canvasCssW) || 0) - margin * 2);
+  const availH = Math.max(1, (Number(canvasCssH) || 0) - margin * 2);
+  const denomW = cols + Math.max(0, cols - 1) * gapFrac;
+  const denomH = rows + Math.max(0, rows - 1) * gapFrac;
+  const fitMax = Math.floor(Math.min(availW / Math.max(denomW, 0.0001), availH / Math.max(denomH, 0.0001)));
+
+  return clamp(base, minPx, Math.max(minPx, Math.min(maxPx, fitMax)));
 }
 
 function ensureFreeformLayoutRectsCss(items, canvasCssW, canvasCssH) {
   const list = Array.isArray(items) ? items : [];
   if (!list.length) return;
-  const tile = freeformDefaultTileCss(canvasCssW, canvasCssH);
+  const tile = freeformDefaultTileCss(canvasCssW, canvasCssH, { count: list.length });
   const gap = Math.round(tile * 0.11);
   const margin = 14;
 
@@ -7152,7 +7185,8 @@ async function importPhotosAtCanvasPoint(pointCss) {
   const wrap = els.canvasWrap;
   const canvasCssW = wrap?.clientWidth || 0;
   const canvasCssH = wrap?.clientHeight || 0;
-  const tile = freeformDefaultTileCss(canvasCssW, canvasCssH);
+  const totalAfter = (state.images?.length || 0) + pickedLimited.length;
+  const tile = freeformDefaultTileCss(canvasCssW, canvasCssH, { count: totalAfter });
   const gap = Math.round(tile * 0.11);
   const placements = _computeImportPlacementsCss(pickedLimited.length, pointCss, tile, gap, canvasCssW, canvasCssH);
 
