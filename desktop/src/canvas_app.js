@@ -330,6 +330,80 @@ const INTENT_IMPORT_CURSOR = (() => {
   return `url("data:image/svg+xml,${encoded}") 2 2, default`;
 })();
 
+// Intent onboarding overlay icon assets (generated via scripts/gemini_generate_intent_icons.py).
+// Keep a procedural fallback so the app still renders if assets fail to load.
+const INTENT_UI_START_ICON_SCALE = 1.12; // modestly bigger than the original procedural glyphs
+const INTENT_UI_CHOICE_ICON_SCALE = 3.0; // YES/NO + suggested use-case glyph (requested: 300% larger)
+const INTENT_UI_ICON_ASSETS = {
+  start_lock: new URL("./assets/intent-icons-sc/icons/intent-start-lock.png", import.meta.url).href,
+  token_yes: new URL("./assets/intent-icons-sc/icons/intent-token-yes.png", import.meta.url).href,
+  token_no: new URL("./assets/intent-icons-sc/icons/intent-token-no.png", import.meta.url).href,
+  usecases: {
+    game_dev_assets: new URL("./assets/intent-icons-sc/icons/intent-usecase-game-dev-assets.png", import.meta.url).href,
+    streaming_content: new URL("./assets/intent-icons-sc/icons/intent-usecase-streaming-content.png", import.meta.url).href,
+    uiux_prototyping: new URL("./assets/intent-icons-sc/icons/intent-usecase-uiux-prototyping.png", import.meta.url).href,
+    ecommerce_pod: new URL("./assets/intent-icons-sc/icons/intent-usecase-ecommerce-pod.png", import.meta.url).href,
+    content_engine: new URL("./assets/intent-icons-sc/icons/intent-usecase-content-engine.png", import.meta.url).href,
+  },
+};
+
+const intentUiIcons = {
+  ready: false,
+  loadPromise: null,
+  startLock: null,
+  tokenYes: null,
+  tokenNo: null,
+  usecases: {},
+};
+
+function _loadUiImage(url) {
+  const u = String(url || "").trim();
+  if (!u) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    try {
+      img.crossOrigin = "anonymous";
+    } catch {
+      // ignore
+    }
+    img.onload = () => resolve(img);
+    img.onerror = (err) => reject(err);
+    img.src = u;
+  });
+}
+
+function ensureIntentUiIconsLoaded() {
+  if (intentUiIcons.loadPromise) return intentUiIcons.loadPromise;
+  intentUiIcons.loadPromise = (async () => {
+    try {
+      const [startLock, tokenYes, tokenNo] = await Promise.all([
+        _loadUiImage(INTENT_UI_ICON_ASSETS.start_lock),
+        _loadUiImage(INTENT_UI_ICON_ASSETS.token_yes),
+        _loadUiImage(INTENT_UI_ICON_ASSETS.token_no),
+      ]);
+      intentUiIcons.startLock = startLock;
+      intentUiIcons.tokenYes = tokenYes;
+      intentUiIcons.tokenNo = tokenNo;
+
+      const usecases = INTENT_UI_ICON_ASSETS.usecases || {};
+      const entries = Object.entries(usecases);
+      const loaded = await Promise.all(entries.map(([, url]) => _loadUiImage(url)));
+      const out = {};
+      for (let i = 0; i < entries.length; i += 1) {
+        const [k] = entries[i];
+        out[String(k)] = loaded[i] || null;
+      }
+      intentUiIcons.usecases = out;
+      intentUiIcons.ready = true;
+      requestRender();
+    } catch (err) {
+      console.warn("Failed to load intent UI icons; falling back to procedural glyphs.", err);
+      intentUiIcons.ready = false;
+    }
+  })();
+  return intentUiIcons.loadPromise;
+}
+
 const INTENT_DEADLINE_MS = 60_000;
 const INTENT_ENVELOPE_VERSION = 1;
 const INTENT_SNAPSHOT_MAX_DIM_PX = 1200;
@@ -342,6 +416,7 @@ const INTENT_TRACE_FILENAME = "intent_trace.jsonl";
 
 let visualPromptWriteTimer = null;
 let intentTraceSeq = 0;
+let intentRealtimePortraitBusy = false;
 
 function _intentTracePath() {
   if (!state.runDir) return null;
@@ -1069,9 +1144,28 @@ function intentRealtimePulseActive() {
   return Boolean(intent.pending || intent.rtState === "connecting");
 }
 
+function syncIntentRealtimePortrait() {
+  // Intent Canvas uses OpenAI Realtime; when a request is in flight, show the OpenAI portrait "working" clip.
+  // Keep this scoped to intent mode so we don't fight foreground action portraits elsewhere.
+  const intent = state.intent;
+  const active = Boolean(intent && intentModeActive() && (intent.pending || intent.rtState === "connecting"));
+  if (active) {
+    if (!intentRealtimePortraitBusy || !state.portrait?.busy || String(state.portrait?.provider || "").toLowerCase() !== "openai") {
+      intentRealtimePortraitBusy = true;
+      portraitWorking("Intent Realtime", { providerOverride: "openai", clearDirector: false });
+    }
+    return;
+  }
+  if (intentRealtimePortraitBusy) {
+    intentRealtimePortraitBusy = false;
+    updatePortraitIdle();
+  }
+}
+
 function syncIntentRealtimeClass() {
   if (!els.canvasWrap) return;
   els.canvasWrap.classList.toggle("intent-rt-active", intentRealtimePulseActive());
+  syncIntentRealtimePortrait();
 }
 
 function updateEmptyCanvasHint() {
@@ -9882,6 +9976,18 @@ function _intentUseCaseKeyFromBranchId(branchId) {
 function _drawIntentYesNoIcon(ctx, kind, cx, cy, r, { alpha = 1 } = {}) {
   const k = String(kind || "").trim().toUpperCase();
   const isYes = k === "YES";
+  const img = isYes ? intentUiIcons.tokenYes : intentUiIcons.tokenNo;
+  if (img && img.complete && img.naturalWidth > 0) {
+    const rr = Math.max(1, Number(r) || 0);
+    const size = Math.max(1, Math.round(rr * 2));
+    ctx.save();
+    ctx.globalAlpha = clamp(Number(alpha) || 1, 0.05, 1);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, Math.round(cx - size / 2), Math.round(cy - size / 2), size, size);
+    ctx.restore();
+    return;
+  }
   const fg = isYes ? "rgba(82, 255, 148, 0.92)" : "rgba(255, 95, 95, 0.92)";
   const stroke = isYes ? "rgba(82, 255, 148, 0.34)" : "rgba(255, 95, 95, 0.34)";
   ctx.save();
@@ -9919,6 +10025,17 @@ function _drawIntentYesNoIcon(ctx, kind, cx, cy, r, { alpha = 1 } = {}) {
 function _drawIntentUseCaseGlyph(ctx, useCaseKey, cx, cy, size, { alpha = 1 } = {}) {
   const key = String(useCaseKey || "").trim();
   if (!key) return;
+  const img = intentUiIcons.usecases ? intentUiIcons.usecases[key] : null;
+  if (img && img.complete && img.naturalWidth > 0) {
+    const s = Math.max(8, Number(size) || 0);
+    ctx.save();
+    ctx.globalAlpha = clamp(Number(alpha) || 1, 0.05, 1);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, Math.round(cx - s / 2), Math.round(cy - s / 2), Math.round(s), Math.round(s));
+    ctx.restore();
+    return;
+  }
   const s = Math.max(12, Number(size) || 0);
   const lw = Math.max(1, Math.round(s * 0.09));
   const fg = "rgba(230, 237, 243, 0.90)";
@@ -10078,12 +10195,14 @@ function renderIntentOverlay(octx, canvasW, canvasH) {
   }
 
   // START button (top-right): locks current intent (same as YES).
-  const startR = Math.max(14, Math.round(17 * dpr));
-  const startCx = Math.round(canvasW - margin - startR);
-  const startCy = Math.round(margin + startR);
-  const startRect = { x: startCx - startR, y: startCy - startR, w: startR * 2, h: startR * 2 };
   const canAccept = Boolean(iconState && suggestedBranchId && !loading && !intent.uiHideSuggestion);
+  const startR = Math.max(14, Math.round(17 * dpr * INTENT_UI_START_ICON_SCALE));
+  const startSize = Math.max(1, Math.round(startR * 2.15));
+  const startCx = Math.round(canvasW - margin - startSize / 2);
+  const startCy = Math.round(margin + startSize / 2);
+  const startRect = { x: startCx - startSize / 2, y: startCy - startSize / 2, w: startSize, h: startSize };
 
+  // Backplate circle (keeps the button legible over bright pixels).
   octx.save();
   octx.shadowColor = "rgba(0, 0, 0, 0.62)";
   octx.shadowBlur = Math.round(14 * dpr);
@@ -10094,80 +10213,82 @@ function renderIntentOverlay(octx, canvasW, canvasH) {
   octx.arc(startCx, startCy, startR, 0, Math.PI * 2);
   octx.fill();
   octx.stroke();
-
-  // Play glyph.
-  octx.shadowBlur = 0;
-  octx.globalAlpha = canAccept ? 1 : 0.45;
-  octx.fillStyle = canAccept ? "rgba(82, 255, 148, 0.92)" : "rgba(230, 237, 243, 0.45)";
-  octx.beginPath();
-  octx.moveTo(startCx - startR * 0.22, startCy - startR * 0.32);
-  octx.lineTo(startCx - startR * 0.22, startCy + startR * 0.32);
-  octx.lineTo(startCx + startR * 0.42, startCy);
-  octx.closePath();
-  octx.fill();
   octx.restore();
+
+  const startImg = intentUiIcons.startLock;
+  if (startImg && startImg.complete && startImg.naturalWidth > 0) {
+    octx.save();
+    octx.globalAlpha = canAccept ? 1 : 0.45;
+    octx.imageSmoothingEnabled = true;
+    octx.imageSmoothingQuality = "high";
+    octx.drawImage(startImg, Math.round(startRect.x), Math.round(startRect.y), Math.round(startRect.w), Math.round(startRect.h));
+    octx.restore();
+  } else {
+    // Fallback: procedural play glyph.
+    octx.save();
+    octx.globalAlpha = canAccept ? 1 : 0.45;
+    octx.fillStyle = canAccept ? "rgba(82, 255, 148, 0.92)" : "rgba(230, 237, 243, 0.45)";
+    octx.beginPath();
+    octx.moveTo(startCx - startR * 0.22, startCy - startR * 0.32);
+    octx.lineTo(startCx - startR * 0.22, startCy + startR * 0.32);
+    octx.lineTo(startCx + startR * 0.42, startCy);
+    octx.closePath();
+    octx.fill();
+    octx.restore();
+  }
 
   if (canAccept) hits.push({ kind: "intent_lock", id: "start", rect: startRect });
 
-  // Bottom feedback strip: [NO] [SUGGESTION] [YES].
-  const stripH = Math.max(54, Math.round(62 * dpr));
-  const stripW = Math.max(1, Math.round(Math.min(canvasW - margin * 2, 620 * dpr)));
-  const stripX = Math.round((canvasW - stripW) / 2);
-  const stripY = Math.round(canvasH - margin - stripH);
-  const stripRect = { x: stripX, y: stripY, w: stripW, h: stripH };
+  // Bottom choice controls (no container strip): [NO] [SUGGESTION] [YES].
+  const tokenR = Math.max(14, Math.round(18 * dpr * INTENT_UI_CHOICE_ICON_SCALE));
+  const glyphSize = Math.max(30, Math.round(42 * dpr * INTENT_UI_CHOICE_ICON_SCALE));
+  const gap = Math.round(22 * dpr * Math.min(2.2, Math.max(1, INTENT_UI_CHOICE_ICON_SCALE * 0.55)));
 
-  octx.save();
-  octx.shadowColor = "rgba(0, 0, 0, 0.62)";
-  octx.shadowBlur = Math.round(16 * dpr);
-  octx.fillStyle = "rgba(8, 10, 14, 0.70)";
-  octx.strokeStyle = "rgba(54, 76, 106, 0.55)";
-  octx.lineWidth = Math.max(1, Math.round(1.4 * dpr));
-  _drawRoundedRect(octx, stripRect.x, stripRect.y, stripRect.w, stripRect.h, Math.round(16 * dpr));
-  octx.fill();
-  octx.stroke();
-  octx.restore();
+  const groupH = Math.max(tokenR * 2, glyphSize);
+  const cy = Math.round(canvasH - margin - groupH / 2);
 
-  const cy = stripRect.y + Math.round(stripRect.h / 2);
-  const tokenR = Math.max(14, Math.round(18 * dpr));
-  const glyphSize = Math.max(30, Math.round(42 * dpr));
-  const gap = Math.round(22 * dpr);
   const groupW = tokenR * 2 + gap + glyphSize + gap + tokenR * 2;
-  const groupX0 = stripRect.x + Math.round((stripRect.w - groupW) / 2);
-  const noCx = groupX0 + tokenR;
-  const glyphCx = groupX0 + tokenR * 2 + gap + glyphSize / 2;
-  const yesCx = groupX0 + tokenR * 2 + gap + glyphSize + gap + tokenR;
+  const maxGroupW = Math.max(1, canvasW - margin * 2);
+  const useVerticalLayout = groupW > maxGroupW;
+
+  let noCx = 0;
+  let yesCx = 0;
+  let glyphCx = 0;
+  let glyphCy = cy;
+  let tokenCy = cy;
+  if (!useVerticalLayout) {
+    const groupX0 = Math.round((canvasW - groupW) / 2);
+    noCx = groupX0 + tokenR;
+    glyphCx = groupX0 + tokenR * 2 + gap + glyphSize / 2;
+    yesCx = groupX0 + tokenR * 2 + gap + glyphSize + gap + tokenR;
+  } else {
+    // If the giant 3x row doesn't fit, stack the suggestion above the YES/NO pair.
+    const vGap = Math.round(14 * dpr * Math.min(2.2, Math.max(1, INTENT_UI_CHOICE_ICON_SCALE * 0.45)));
+    tokenCy = Math.round(canvasH - margin - tokenR);
+    glyphCy = Math.round(tokenCy - tokenR - vGap - glyphSize / 2);
+    glyphCx = Math.round(canvasW / 2);
+    const pairGap = Math.round(18 * dpr * Math.min(2.2, Math.max(1, INTENT_UI_CHOICE_ICON_SCALE * 0.45)));
+    noCx = Math.round(canvasW / 2 - tokenR - pairGap);
+    yesCx = Math.round(canvasW / 2 + tokenR + pairGap);
+  }
 
   const canReject = Boolean(iconState && suggestedBranchId && !loading);
   const noAlpha = canReject ? 1 : 0.45;
   const yesAlpha = canAccept ? 1 : 0.45;
 
-  _drawIntentYesNoIcon(octx, "NO", noCx, cy, tokenR, { alpha: noAlpha });
-  _drawIntentYesNoIcon(octx, "YES", yesCx, cy, tokenR, { alpha: yesAlpha });
-
-  // Suggestion plate.
-  const plateW = glyphSize;
-  const plateH = glyphSize;
-  const plateX = Math.round(glyphCx - plateW / 2);
-  const plateY = Math.round(cy - plateH / 2);
-  octx.save();
-  octx.fillStyle = "rgba(8, 10, 14, 0.82)";
-  octx.strokeStyle = canAccept ? "rgba(82, 255, 148, 0.26)" : "rgba(54, 76, 106, 0.38)";
-  octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
-  _drawRoundedRect(octx, plateX, plateY, plateW, plateH, Math.round(12 * dpr));
-  octx.fill();
-  octx.stroke();
-  octx.restore();
+  _drawIntentYesNoIcon(octx, "NO", noCx, tokenCy, tokenR, { alpha: noAlpha });
+  _drawIntentYesNoIcon(octx, "YES", yesCx, tokenCy, tokenR, { alpha: yesAlpha });
 
   const glyphAlpha = intent.uiHideSuggestion ? 0 : loading ? 0.35 : 1;
   if (useCaseKey && glyphAlpha > 0.01) {
-    _drawIntentUseCaseGlyph(octx, useCaseKey, glyphCx, cy, glyphSize * 0.74, { alpha: glyphAlpha });
+    _drawIntentUseCaseGlyph(octx, useCaseKey, glyphCx, glyphCy, glyphSize, { alpha: glyphAlpha });
   }
   if (loading) {
-    _drawIntentLoadingDots(octx, glyphCx, cy, { dotR: Math.max(2, Math.round(3.2 * dpr)), t: now / 240 });
+    _drawIntentLoadingDots(octx, glyphCx, glyphCy, { dotR: Math.max(2, Math.round(3.2 * dpr)), t: now / 240 });
   }
 
-  if (canReject) hits.push({ kind: "intent_token", id: `${suggestedBranchId}::NO_TOKEN`, rect: { x: noCx - tokenR, y: cy - tokenR, w: tokenR * 2, h: tokenR * 2 } });
-  if (canAccept) hits.push({ kind: "intent_token", id: `${suggestedBranchId}::YES_TOKEN`, rect: { x: yesCx - tokenR, y: cy - tokenR, w: tokenR * 2, h: tokenR * 2 } });
+  if (canReject) hits.push({ kind: "intent_token", id: `${suggestedBranchId}::NO_TOKEN`, rect: { x: noCx - tokenR, y: tokenCy - tokenR, w: tokenR * 2, h: tokenR * 2 } });
+  if (canAccept) hits.push({ kind: "intent_token", id: `${suggestedBranchId}::YES_TOKEN`, rect: { x: yesCx - tokenR, y: tokenCy - tokenR, w: tokenR * 2, h: tokenR * 2 } });
 
   intent.uiHits = hits;
 }
@@ -11563,6 +11684,7 @@ async function boot() {
 
   setStatus("Engine: booting…");
   setRunInfo("No run");
+  ensureIntentUiIconsLoaded().catch(() => {});
   refreshKeyStatus().catch(() => {});
   updateAlwaysOnVisionReadout();
   renderQuickActions();
