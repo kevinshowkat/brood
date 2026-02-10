@@ -807,28 +807,34 @@ button.ghost:hover {
 
 @keyframes intent-rt-pulse {
   0% {
-    opacity: 0.18;
+    opacity: 0.22;
     box-shadow:
-      0 0 0 1px rgba(82, 255, 148, 0.14),
-      0 0 12px rgba(82, 255, 148, 0.14),
-      0 0 40px rgba(82, 255, 148, 0.08),
-      inset 0 0 12px rgba(82, 255, 148, 0.04);
+      0 0 0 1px rgba(0, 255, 200, 0.18),
+      0 0 10px rgba(0, 255, 200, 0.18),
+      0 0 22px rgba(0, 255, 200, 0.12),
+      0 0 34px rgba(0, 221, 255, 0.06),
+      inset 0 0 10px rgba(0, 255, 200, 0.06);
+    filter: saturate(1.15) contrast(1.05);
   }
   50% {
-    opacity: 0.80;
+    opacity: 0.95;
     box-shadow:
-      0 0 0 1px rgba(82, 255, 148, 0.28),
-      0 0 18px rgba(82, 255, 148, 0.20),
-      0 0 56px rgba(82, 255, 148, 0.12),
-      inset 0 0 16px rgba(82, 255, 148, 0.06);
+      0 0 0 1px rgba(0, 255, 200, 0.34),
+      0 0 12px rgba(0, 255, 200, 0.30),
+      0 0 24px rgba(0, 255, 200, 0.18),
+      0 0 38px rgba(0, 221, 255, 0.10),
+      inset 0 0 12px rgba(0, 255, 200, 0.08);
+    filter: saturate(1.35) contrast(1.08);
   }
   100% {
-    opacity: 0.18;
+    opacity: 0.22;
     box-shadow:
-      0 0 0 1px rgba(82, 255, 148, 0.14),
-      0 0 12px rgba(82, 255, 148, 0.14),
-      0 0 40px rgba(82, 255, 148, 0.08),
-      inset 0 0 12px rgba(82, 255, 148, 0.04);
+      0 0 0 1px rgba(0, 255, 200, 0.18),
+      0 0 10px rgba(0, 255, 200, 0.18),
+      0 0 22px rgba(0, 255, 200, 0.12),
+      0 0 34px rgba(0, 221, 255, 0.06),
+      inset 0 0 10px rgba(0, 255, 200, 0.06);
+    filter: saturate(1.15) contrast(1.05);
   }
 }
 
@@ -839,13 +845,15 @@ button.ghost:hover {
   z-index: 4;
   pointer-events: none;
   border-radius: 14px;
-  border: 1px solid rgba(82, 255, 148, 0.26);
+  border: 1px solid rgba(0, 255, 200, 0.34);
   box-shadow:
-    0 0 0 1px rgba(82, 255, 148, 0.14),
-    0 0 12px rgba(82, 255, 148, 0.14),
-    0 0 40px rgba(82, 255, 148, 0.08),
-    inset 0 0 12px rgba(82, 255, 148, 0.04);
-  animation: intent-rt-pulse 2.15s ease-in-out infinite;
+    0 0 0 1px rgba(0, 255, 200, 0.18),
+    0 0 10px rgba(0, 255, 200, 0.18),
+    0 0 22px rgba(0, 255, 200, 0.12),
+    0 0 34px rgba(0, 221, 255, 0.06),
+    inset 0 0 10px rgba(0, 255, 200, 0.06);
+  animation: intent-rt-pulse 3.4s ease-in-out infinite;
+  mix-blend-mode: screen;
 }
 
 @media (prefers-reduced-motion: reduce) {

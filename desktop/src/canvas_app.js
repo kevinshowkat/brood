@@ -2457,8 +2457,41 @@ function parseIntentIconsJson(raw) {
 
   obj.branches = obj.branches
     .filter((b) => b && typeof b === "object")
+    .map((b, idx) => {
+      const c = typeof b.confidence === "number" ? clamp(Number(b.confidence) || 0, 0, 1) : null;
+      const evidence = Array.isArray(b.evidence_image_ids)
+        ? b.evidence_image_ids.map((v) => String(v || "").trim()).filter(Boolean)
+        : [];
+      return {
+        _idx: idx,
+        confidence: c,
+        evidence_image_ids: evidence.length ? evidence.slice(0, 3) : [],
+        branch_id: b.branch_id ? String(b.branch_id) : "",
+        icons: Array.isArray(b.icons) ? b.icons.map((v) => String(v || "").trim()).filter(Boolean) : [],
+        lane_position: b.lane_position ? String(b.lane_position) : "left",
+      };
+    })
+    .filter((b) => Boolean(b.branch_id) && b.icons.length > 0);
+
+  // If the model provides branch confidences, treat them as an ordering contract.
+  // Keep the original order as a tie-breaker to reduce UI churn.
+  const anyBranchConf = obj.branches.some((b) => typeof b?.confidence === "number" && Number.isFinite(b.confidence));
+  if (anyBranchConf) {
+    obj.branches.sort((a, b) => {
+      const ac = typeof a?.confidence === "number" && Number.isFinite(a.confidence) ? a.confidence : -1;
+      const bc = typeof b?.confidence === "number" && Number.isFinite(b.confidence) ? b.confidence : -1;
+      if (bc !== ac) return bc - ac;
+      return (Number(a?._idx) || 0) - (Number(b?._idx) || 0);
+    });
+  }
+
+  obj.branches = obj.branches
     .map((b) => ({
       branch_id: b.branch_id ? String(b.branch_id) : "",
+      confidence: typeof b.confidence === "number" && Number.isFinite(b.confidence) ? clamp(Number(b.confidence) || 0, 0, 1) : null,
+      evidence_image_ids: Array.isArray(b.evidence_image_ids)
+        ? b.evidence_image_ids.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 3)
+        : [],
       icons: Array.isArray(b.icons) ? b.icons.map((v) => String(v || "").trim()).filter(Boolean) : [],
       lane_position: b.lane_position ? String(b.lane_position) : "left",
     }))
@@ -2697,11 +2730,27 @@ function _primaryBranchSuggestion(iconState) {
   return { branch_id: bestId, score: bestScore, ties };
 }
 
-function pickSuggestedIntentBranchId(iconState = null) {
+function _rankIntentBranches(iconState) {
+  const branches = Array.isArray(iconState?.branches) ? iconState.branches : [];
+  if (!branches.length) return [];
+  const anyConf = branches.some((b) => typeof b?.confidence === "number" && Number.isFinite(b.confidence));
+  if (!anyConf) return branches.slice();
+  // Defensive: even though parseIntentIconsJson sorts, keep this stable if callers mutate iconState.
+  const list = branches.map((b, idx) => ({ b, idx }));
+  list.sort((a, b) => {
+    const ac = typeof a?.b?.confidence === "number" && Number.isFinite(a.b.confidence) ? a.b.confidence : -1;
+    const bc = typeof b?.b?.confidence === "number" && Number.isFinite(b.b.confidence) ? b.b.confidence : -1;
+    if (bc !== ac) return bc - ac;
+    return (Number(a.idx) || 0) - (Number(b.idx) || 0);
+  });
+  return list.map((it) => it.b);
+}
+
+function pickSuggestedIntentBranch(iconState = null) {
   const intent = state.intent;
   const icon = iconState || intent?.iconState || null;
   const branches = Array.isArray(icon?.branches) ? icon.branches : [];
-  if (!branches.length) return null;
+  if (!branches.length) return { branch_id: null, reason: "none", ranked_branch_ids: [] };
 
   const isRejected = (bid) => {
     const sel = latestIntentSelectionForBranch(bid);
@@ -2720,10 +2769,32 @@ function pickSuggestedIntentBranchId(iconState = null) {
     return match?.branch_id ? String(match.branch_id) : "";
   };
 
+  const rankedBranches = _rankIntentBranches(icon);
+  const rankedIds = rankedBranches
+    .map((b) => (b?.branch_id ? String(b.branch_id) : ""))
+    .filter(Boolean);
+
   // If the model provided an explicit checkpoint target, treat it as the active suggestion.
   const checkpoint = icon?.checkpoint?.applies_to;
   const checkpointBid = findBranchInsensitive(checkpoint);
-  if (checkpointBid && !isRejected(checkpointBid)) return checkpointBid;
+  if (checkpointBid && !isRejected(checkpointBid)) {
+    return {
+      branch_id: checkpointBid,
+      reason: "checkpoint",
+      ranked_branch_ids: rankedIds,
+      checkpoint_branch_id: checkpointBid,
+    };
+  }
+
+  const anyConf = rankedBranches.some((b) => typeof b?.confidence === "number" && Number.isFinite(b.confidence));
+  if (anyConf) {
+    for (const b of rankedBranches) {
+      const bid = b?.branch_id ? String(b.branch_id) : "";
+      if (!bid) continue;
+      if (isRejected(bid)) continue;
+      return { branch_id: bid, reason: "confidence", ranked_branch_ids: rankedIds, checkpoint_branch_id: checkpointBid || null };
+    }
+  }
 
   const primaryInfo = _primaryBranchSuggestion(icon);
   const p = primaryInfo?.branch_id ? String(primaryInfo.branch_id) : "";
@@ -2734,22 +2805,32 @@ function pickSuggestedIntentBranchId(iconState = null) {
     const primaryRejected = p ? isRejected(p) : true;
     const primaryWeak = (Number(primaryInfo?.score) || 0) <= 1;
     const primaryTied = (Number(primaryInfo?.ties) || 0) > 1;
-    if (primaryRejected || primaryWeak || primaryTied) return hint;
+    if (primaryRejected || primaryWeak || primaryTied) {
+      return { branch_id: hint, reason: "vision_hint", ranked_branch_ids: rankedIds, checkpoint_branch_id: checkpointBid || null };
+    }
   }
 
-  if (p && hasBranch(p) && !isRejected(p)) return p;
+  if (p && hasBranch(p) && !isRejected(p)) {
+    return { branch_id: p, reason: "primary_cluster", ranked_branch_ids: rankedIds, checkpoint_branch_id: checkpointBid || null };
+  }
 
-  for (const b of branches) {
+  for (const b of rankedBranches) {
     const bid = b?.branch_id ? String(b.branch_id) : "";
     if (!bid) continue;
     if (isRejected(bid)) continue;
-    return bid;
+    return { branch_id: bid, reason: "first_unrejected", ranked_branch_ids: rankedIds, checkpoint_branch_id: checkpointBid || null };
   }
 
   // If every branch has been rejected, fall back to the primary (if present) so START remains usable.
-  if (p && hasBranch(p)) return p;
-  const first = branches[0]?.branch_id ? String(branches[0].branch_id) : "";
-  return first || null;
+  if (p && hasBranch(p)) return { branch_id: p, reason: "all_rejected_primary", ranked_branch_ids: rankedIds, checkpoint_branch_id: checkpointBid || null };
+  const first = rankedBranches[0]?.branch_id ? String(rankedBranches[0].branch_id) : "";
+  return { branch_id: first || null, reason: "all_rejected_first", ranked_branch_ids: rankedIds, checkpoint_branch_id: checkpointBid || null };
+}
+
+function pickSuggestedIntentBranchId(iconState = null) {
+  const picked = pickSuggestedIntentBranch(iconState);
+  const bid = picked?.branch_id ? String(picked.branch_id) : "";
+  return bid || null;
 }
 
 function lockIntentFromUi({ source = "ui" } = {}) {
@@ -9012,10 +9093,22 @@ async function handleEvent(event) {
 		        intent.lastErrorAt = 0;
 		        intent.uiHideSuggestion = false;
 		        // Keep focus stable if possible (unless rejected); otherwise pick the next suggestion.
-		        intent.focusBranchId = pickSuggestedIntentBranchId(parsed) || pickDefaultIntentFocusBranchId(parsed);
+		        const picked = pickSuggestedIntentBranch(parsed);
+		        intent.focusBranchId = (picked?.branch_id ? String(picked.branch_id) : "") || pickDefaultIntentFocusBranchId(parsed);
 		        if (!isPartial) {
 		          const branchIds = Array.isArray(parsed?.branches)
 		            ? parsed.branches.map((b) => (b?.branch_id ? String(b.branch_id) : "")).filter(Boolean)
+		            : [];
+		          const branchRank = Array.isArray(parsed?.branches)
+		            ? parsed.branches
+		                .map((b) => ({
+		                  branch_id: b?.branch_id ? String(b.branch_id) : "",
+		                  confidence: typeof b?.confidence === "number" && Number.isFinite(b.confidence) ? clamp(Number(b.confidence) || 0, 0, 1) : null,
+		                  evidence_image_ids: Array.isArray(b?.evidence_image_ids)
+		                    ? b.evidence_image_ids.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 3)
+		                    : [],
+		                }))
+		                .filter((b) => Boolean(b.branch_id))
 		            : [];
 		          appendIntentTrace({
 		            kind: "model_icons",
@@ -9023,7 +9116,12 @@ async function handleEvent(event) {
 		            frame_id: parsed?.frame_id ? String(parsed.frame_id) : null,
 		            snapshot_path: path ? String(path) : null,
 		            branch_ids: branchIds,
+		            branch_rank: branchRank.length ? branchRank : null,
 		            focus_branch_id: intent.focusBranchId ? String(intent.focusBranchId) : null,
+		            checkpoint_applies_to: parsed?.checkpoint?.applies_to ? String(parsed.checkpoint.applies_to) : null,
+		            checkpoint_branch_id: picked?.checkpoint_branch_id ? String(picked.checkpoint_branch_id) : null,
+		            ranked_branch_ids: Array.isArray(picked?.ranked_branch_ids) && picked.ranked_branch_ids.length ? picked.ranked_branch_ids : null,
+		            suggestion_reason: picked?.reason ? String(picked.reason) : null,
 		            image_descriptions: imageDescs.length ? imageDescs : null,
 		            text_len: typeof text === "string" ? text.length : 0,
 		          }).catch(() => {});
