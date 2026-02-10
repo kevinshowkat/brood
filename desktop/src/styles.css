@@ -789,6 +789,80 @@ button.ghost:hover {
   border-left: 0;
 }
 
+.canvas-wrap.intent-mode .hud,
+.canvas-wrap.intent-mode #spawnbar {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.canvas-wrap.intent-mode .hud {
+  transform: translateX(-50%) translateY(18px);
+}
+
+.canvas-wrap.intent-mode .canvas-bumper {
+  opacity: 0;
+  visibility: hidden;
+}
+
+@keyframes intent-rt-pulse {
+  0% {
+    opacity: 0.22;
+    box-shadow:
+      0 0 0 1px rgba(0, 255, 200, 0.18),
+      0 0 10px rgba(0, 255, 200, 0.18),
+      0 0 22px rgba(0, 255, 200, 0.12),
+      0 0 34px rgba(0, 221, 255, 0.06),
+      inset 0 0 10px rgba(0, 255, 200, 0.06);
+    filter: saturate(1.15) contrast(1.05);
+  }
+  50% {
+    opacity: 0.95;
+    box-shadow:
+      0 0 0 1px rgba(0, 255, 200, 0.34),
+      0 0 12px rgba(0, 255, 200, 0.30),
+      0 0 24px rgba(0, 255, 200, 0.18),
+      0 0 38px rgba(0, 221, 255, 0.10),
+      inset 0 0 12px rgba(0, 255, 200, 0.08);
+    filter: saturate(1.35) contrast(1.08);
+  }
+  100% {
+    opacity: 0.22;
+    box-shadow:
+      0 0 0 1px rgba(0, 255, 200, 0.18),
+      0 0 10px rgba(0, 255, 200, 0.18),
+      0 0 22px rgba(0, 255, 200, 0.12),
+      0 0 34px rgba(0, 221, 255, 0.06),
+      inset 0 0 10px rgba(0, 255, 200, 0.06);
+    filter: saturate(1.15) contrast(1.05);
+  }
+}
+
+.canvas-wrap.intent-mode.intent-rt-active::after {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  z-index: 4;
+  pointer-events: none;
+  border-radius: 14px;
+  border: 1px solid rgba(0, 255, 200, 0.34);
+  box-shadow:
+    0 0 0 1px rgba(0, 255, 200, 0.18),
+    0 0 10px rgba(0, 255, 200, 0.18),
+    0 0 22px rgba(0, 255, 200, 0.12),
+    0 0 34px rgba(0, 221, 255, 0.06),
+    inset 0 0 10px rgba(0, 255, 200, 0.06);
+  animation: intent-rt-pulse 3.4s ease-in-out infinite;
+  mix-blend-mode: screen;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .canvas-wrap.intent-mode.intent-rt-active::after {
+    animation: none;
+    opacity: 0.65;
+  }
+}
+
 .image-fx {
   position: absolute;
   left: 0;
@@ -1164,8 +1238,9 @@ button.ghost:hover {
   letter-spacing: 0.01em;
   text-align: center;
   padding: 24px;
-  pointer-events: auto;
-  cursor: pointer;
+  /* Visual-only hint; canvas interactions handle click-to-upload. */
+  pointer-events: none;
+  cursor: default;
 }
 
 .drop-hint-inner {
@@ -2271,6 +2346,26 @@ button.ghost:hover {
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
   letter-spacing: 0.02em;
+  color: rgba(230, 237, 243, 0.62);
+}
+
+.panel-body.actions .actions-empty.actions-locked {
+  border-style: solid;
+  border-color: rgba(255, 212, 0, 0.35);
+  background: rgba(18, 26, 37, 0.55);
+  color: rgba(255, 212, 0, 0.72);
+}
+
+.actions-locked-title {
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: rgba(255, 212, 0, 0.86);
+  margin-bottom: 6px;
+}
+
+.actions-locked-meta {
+  white-space: pre-line;
+  line-height: 1.35;
   color: rgba(230, 237, 243, 0.62);
 }
 

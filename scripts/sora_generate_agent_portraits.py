@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Generate StarCraft-1-like "agent portrait" videos using the OpenAI Sora 2 API.
+Generate StarCraft-1-like "agent portrait" videos using the OpenAI Sora API (Sora 2 / Sora 2 Pro).
 
 This script:
   1) Creates a video job via POST /v1/videos (multipart form).
   2) Polls GET /v1/videos/{id} until completed/failed.
   3) Downloads bytes via GET /v1/videos/{id}/content to an .mp4.
-  4) Optionally crops portrait output to a square and/or trims/loops to a target duration (ffmpeg).
+  4) Optionally remixes a completed video via POST /v1/videos/{id}/remix to keep character consistency
+     between states.
+  5) Optionally crops portrait output to a square and/or trims/loops to a target duration (ffmpeg).
 
 Environment:
   - OPENAI_API_KEY (required) or OPENAI_API_KEY_BACKUP
@@ -20,7 +22,7 @@ Examples:
   python scripts/sora_generate_agent_portraits.py --agents all --states both --parallel 3 --seconds 12 --crop-square --mute
 
   # Target a 15s looping square clip (API max is 12s, so we loop+trim locally).
-  python scripts/sora_generate_agent_portraits.py --agents openai,gemini --states working --seconds 12 --target-seconds 15 --crop-square --mute
+  python scripts/sora_generate_agent_portraits.py --agents providers --states both --seconds 12 --target-seconds 15 --crop-square --mute
 """
 
 from __future__ import annotations
@@ -49,132 +51,133 @@ DEFAULT_API_BASE = "https://api.openai.com/v1"
 # Prompts are designed for portrait output that will often be center-cropped to square in the UI.
 MOOD_PHRASE = "stunningly awe-inspiring and tearfully joyous"
 MOOD_LINE = f"Mood: {MOOD_PHRASE}."
+LOOP_LINE = (
+    "Perfect loop: last frame == first frame (pose, tools, lighting, background match)."
+)
 
 BASE_STYLE_LINE = (
-    "Late-90s RTS unit-portrait aesthetic, low-res pre-rendered 3D, chunky pixels, dithering, CRT scanlines, "
-    "subtle VHS noise, slight chromatic aberration, 15 fps feel. Head-and-shoulders portrait centered with "
-    "generous safe margins, keep all important motion in the center 60% so a square crop still works. "
-    "Exaggerated character design with clearly pseudo-human proportions: larger-than-life facial features, strong "
-    "silhouettes, heroic jawlines, slightly uncanny 90s CGI vibe, gritty armor and gear. "
-    "Single continuous shot, no cuts. Seamless loop (end pose matches start). Cockpit/console background with "
-    "blinking lights and abstract HUD shapes, but no readable text. No logos, no watermarks, no subtitles. "
-    "Original character design only; do not mimic any specific movie/game character. "
-    "No recognizable StarCraft characters/factions. No spoken words; optional "
-    f"faint radio static only. {MOOD_LINE}"
+    "Scene: a late-90s RTS unit portrait video, low-res pre-rendered 3D (N64 crunchy), 224x240 feel, dithering, CRT scanlines + VHS noise, 15 fps. "
+    "Design: subtle Guillermo del Toro biomech touch (light). "
+    "Camera: tight near-square close-up; head+shoulders fill frame; a little negative space on screen-left; a hand/tool may enter at lower-left; single shot. "
+    "Pose: camera-facing 3/4 left profile; head+eyes turned to their right (viewer-left/screen-left) the whole time. "
+    "Lighting: warm amber from upper-left + cool cyan from lower-left LEDs; glossy highlights; faint cyan HUD reflections. "
+    "Background: cockpit console with abstract HUD glow shapes (unreadable) and a clean, unbranded frame. "
+    "Character is original. "
+    f"{LOOP_LINE} {MOOD_LINE}"
 )
 
 IDLE_STATE_LINE = (
-    "IDLE state: subtle breathing, blinking, tiny eye saccades, micro head movement. Console lights flicker but "
-    "no big hologram transformations; nothing dramatic changes in the scene."
+    "Action (idle, bored): alive breathing/shoulders; slow blinks; tiny head tilt/nod; in-frame hand/tendril fidget; returns to the start pose."
 )
 
 WORKING_STATE_LINE = (
-    "WORKING state: the unit is clearly doing hands-on work with visible tooling (wrench, screwdriver, diagnostic "
-    "probe, soldering iron, micro blowtorch, cable crimper). Small readable motions near the center of frame; "
-    "occasional controlled sparks or vapor allowed. Keep the action loopable so the end matches the start."
+    "Action (working): a looped 2-3 beat work cycle using species-native tools/holograms to build/repair just off-screen to their right "
+    "(viewer-left/screen-left); visible hand/tool near lower-left; rhythmic sparks/pulses; returns to the start pose."
 )
 
-AGENT_PROMPTS_BY_STATE: dict[str, dict[str, str]] = {
-    "idle": {
-        "dryrun": (
-            f"{BASE_STYLE_LINE} {IDLE_STATE_LINE} "
-            "A swarm-born bio-synthetic test-range operator (adult): pseudo-human silhouette with chitin shoulder "
-            "plates and a simple visor, expressive human eyes, exaggerated heroic facial features (bold brows, strong "
-            "jaw). A dim wireframe calibration grid sits behind them, barely pulsing. "
-            "The unit rests fingertips on three chunky switches without toggling them; subtle servo breathing, a slow "
-            "blink, and a tiny head tilt."
-        ),
-        "openai": (
-            f"{BASE_STYLE_LINE} {IDLE_STATE_LINE} "
-            "A Persian commando tactician (adult) with black-and-ivory armor plates and amber accent lights, "
-            "caricatured but respectful facial features. Coolly smokes a cigarette: takes one slow drag, exhales a "
-            "thin smoke ribbon, flicks ash into a small tray. A stable holographic plane floats faintly and does not "
-            "change. The unit holds a stylus near the console, makes a tiny micro-adjustment, then returns to "
-            "neutral; slow breathing and eye saccades."
-        ),
-        "gemini": (
-            f"{BASE_STYLE_LINE} {IDLE_STATE_LINE} "
-            "An East Asian analyst (adult) with a split-color visor (cool cyan on one side, deep blue on the other) "
-            "and two asymmetrical ocular modules. Two small holograms remain steady and quiet. The unit alternates "
-            "gaze left/right, gentle breathing, one blink; no major scene changes."
-        ),
-        "imagen": (
-            f"{BASE_STYLE_LINE} {IDLE_STATE_LINE} "
-            "A white field photographer-mechanic (adult) wearing a camera-rig helmet with green accent LEDs and a "
-            "rugged utility vest. Coolly smokes a cigarette: ember glow reflected on the visor, a slow exhale, then "
-            "a gentle ash tap. A lens spanner tool rests on the console. The unit lightly turns a focus ring a few "
-            "millimeters, then returns to the starting position; warm practical lights and drifting dust motes."
-        ),
-        "flux": (
-            f"{BASE_STYLE_LINE} {IDLE_STATE_LINE} "
-            "A psionic, crystalline alien (classic RTS 'high-tech psychic' vibe): tall posture, "
-            "curved plated armor with glowing seams, faint magenta coil glow at the collar. A powered-down micro "
-            "blowtorch is holstered; coils hum softly (visual only). The unit breathes, blinks once, and makes a "
-            "tiny head movement; no sparks."
-        ),
-        "stability": (
-            f"{BASE_STYLE_LINE} {IDLE_STATE_LINE} "
-            "A Hispanic reactor engineer (adult) with a chunky helmet, red-blue stabilizer diodes, and grease-stained "
-            "armor. Coolly smokes a cigarette clamped at the corner of the mouth; ember glow and a thin smoke curl. "
-            "A noise meter sits steady at center. The unit rests one hand on a dial, makes a tiny corrective nudge, "
-            "then returns to the exact starting pose; diode lights gently breathe."
-        ),
-    },
-    "working": {
-        "dryrun": (
-            f"{BASE_STYLE_LINE} {WORKING_STATE_LINE} "
-            "A swarm-born bio-synthetic test-range operator (adult) with chitin shoulder plates and a simple visor. "
-            "Action: "
-            "uses a diagnostic probe in one hand and toggles one chunky switch with the other. A wireframe hologram "
-            "preview flickers on, jitters, then snaps back to the blank calibration grid. Tiny controlled sparks when "
-            "the probe touches a contact; end pose matches the starting pose."
-        ),
-        "openai": (
-            f"{BASE_STYLE_LINE} {WORKING_STATE_LINE} "
-            "A Persian commando tactician (adult) with amber accent lights and a battle-worn look. Action: tightens a tiny knurled "
-            "thumbwheel with a precision screwdriver while the other hand drags a holographic lattice into alignment. "
-            "A clean holographic image plane resolves, then dissolves back into particles as the screwdriver returns "
-            "to its starting position."
-        ),
-        "gemini": (
-            f"{BASE_STYLE_LINE} {WORKING_STATE_LINE} "
-            "An East Asian analyst (adult) with a split-color visor. Action: plugs two diagnostic probes into two ports "
-            "simultaneously (one per hand), then swaps them in a quick, deliberate motion. Two holograms pulse in sync, "
-            "merge into one unified plane, then split back into two as the probes return to their original ports."
-        ),
-        "imagen": (
-            f"{BASE_STYLE_LINE} {WORKING_STATE_LINE} "
-            "A white field photographer-mechanic (adult) with green accent LEDs. Action: uses a lens spanner wrench to loosen and "
-            "re-seat a camera mount, then uses a tiny air duster to clear dust. A controlled shutter-like flash reveals "
-            "a holographic photo panel that develops from blurry to sharp, then fades back as the wrench returns to "
-            "the exact start position."
-        ),
-        "flux": (
-            f"{BASE_STYLE_LINE} {WORKING_STATE_LINE} "
-            "A psionic, crystalline alien with an energy collar and magenta coil glow. Action: ignites a micro blowtorch and "
-            "briefly fuses a small energy conduit in front of the console; bright but controlled sparks and a curl of "
-            "vapor. The unit shuts off the torch and returns it to the holster; a flux vortex hologram swirls, resolves "
-            "into a clean plane, then collapses back to the vortex at the end of the loop."
-        ),
-        "stability": (
-            f"{BASE_STYLE_LINE} {WORKING_STATE_LINE} "
-            "A Hispanic reactor engineer (adult) with red-blue stabilizer diodes. Action: uses a heavy wrench to tighten a "
-            "stabilizer ring while briefly spot-welding a seam with an arc welder; small controlled sparks near center "
-            "frame. A chaotic noise hologram dampens into a stable plane, then re-noises as the wrench and welder "
-            "return to their initial positions."
-        ),
-    },
+REMIX_DIRECTIVE_LINE = (
+    "Remix from source video: keep the same character, pose, framing, lighting, background, and style. Only change the action below."
+)
+
+# Keep remix prompts narrow: one change, same character + framing.
+REMIX_GUARDRAILS_LINE = "Keep the HUD glow abstract (unreadable) and the frame clean/unbranded; silent."
+
+# Keep these identity lines exactly reused across states to reduce drift.
+AGENT_IDENTITY_LINE: dict[str, str] = {
+    "openai": (
+        "OpenAI: human commando technician in bulky olive power armor with amber LEDs; grimy heroic face; cigarette at mouth corner."
+    ),
+    "gemini": (
+        "Gemini: noble psionic alien analyst; sleek gold+cobalt armor; luminous eyes; two hovering ocular drones."
+    ),
+    "flux": (
+        "Flux: swarm-grown bioengineer; chitin ridges; tendrils into organic console; biolum sacs; subtle mandibles."
+    ),
+    "mother": (
+        "Mother: broodmother queen; chitin crown/carapace; pulsing sacs; glossy eyes; mandibles; resin/bone console."
+    ),
 }
 
-AVAILABLE_STATES = ("idle", "working")
-_idle_agents = set(AGENT_PROMPTS_BY_STATE["idle"].keys())
-_working_agents = set(AGENT_PROMPTS_BY_STATE["working"].keys())
-if _idle_agents != _working_agents:
-    raise RuntimeError(
-        "Agent prompt sets mismatch between idle and working states. "
-        f"idle-only={sorted(_idle_agents - _working_agents)}, working-only={sorted(_working_agents - _idle_agents)}"
+AGENT_IDLE_ACTION_LINE: dict[str, str] = {
+    "openai": (
+        "Bored: slouch+breathe; slow drag+smoke exhale; ash tap; finger drum; tiny head tilt."
+    ),
+    "gemini": (
+        "Bored: blink, micro-sigh, tiny eye-roll; lazy hand trace; idle hologram panes shimmer in Google colors."
+    ),
+    "flux": (
+        "Bored: blink; tendrils coil; mandible click; claw tap leaves faint resin smear."
+    ),
+    "mother": (
+        "Bored regal: slow breath; sacs pulse; mandible click; slight head cant."
+    ),
+}
+
+AGENT_WORKING_ACTION_LINE: dict[str, str] = {
+    "openai": (
+        "Weld off-screen to their right: torch/forearm lower-left; bright arc flashes + controlled sparks. Cig stays; quick drag + thin exhale."
+    ),
+    "gemini": (
+        "Psychic hologram work (Google colors: blue/red/yellow/green): projects hard-light planes + abstract glyph-shapes (unreadable) "
+        "off-screen to their right. Hands in-frame; holograms brighten, align/merge, resolve, fracture back."
+    ),
+    "flux": (
+        "Alien surgical work off-screen to their right: living micro-scalpel+clamp; precise suture; hands/tools lower-left; antiseptic mist; tiny biolum drip; clinical, bloodless."
+    ),
+    "mother": (
+        "Brood construction off-screen to her right: lays resin ribbon; sacs pulse; seals seam; retracts."
+    ),
+}
+
+
+def build_prompt(*, agent: str, state: str, prompt_suffix: str = "") -> str:
+    agent = str(agent or "").strip().lower()
+    state = str(state or "").strip().lower()
+    if agent not in AGENT_IDENTITY_LINE:
+        raise KeyError(f"Unknown agent for prompt: {agent}")
+    if state not in {"idle", "working"}:
+        raise KeyError(f"Unknown state for prompt: {state}")
+
+    identity = AGENT_IDENTITY_LINE[agent]
+    if state == "idle":
+        action = AGENT_IDLE_ACTION_LINE[agent]
+        prompt = f"{BASE_STYLE_LINE} {IDLE_STATE_LINE} {identity} {action}"
+    else:
+        action = AGENT_WORKING_ACTION_LINE[agent]
+        prompt = f"{BASE_STYLE_LINE} {WORKING_STATE_LINE} {identity} {action}"
+
+    suffix = str(prompt_suffix or "").strip()
+    if suffix:
+        prompt = f"{prompt}\n{suffix}"
+    return prompt
+
+
+def build_remix_prompt(*, agent: str, state: str, prompt_suffix: str = "") -> str:
+    # Keep remix prompts narrow: per OpenAI guidance, smaller edits preserve more fidelity/continuity.
+    agent = str(agent or "").strip().lower()
+    state = str(state or "").strip().lower()
+    if state == "idle":
+        action = AGENT_IDLE_ACTION_LINE[agent]
+        state_line = IDLE_STATE_LINE
+    else:
+        action = AGENT_WORKING_ACTION_LINE[agent]
+        state_line = WORKING_STATE_LINE
+    prompt = (
+        f"{REMIX_DIRECTIVE_LINE} {REMIX_GUARDRAILS_LINE} "
+        f"{state_line} {action} {LOOP_LINE} {MOOD_LINE}"
     )
-AVAILABLE_AGENTS = tuple(sorted(_idle_agents))
+
+    suffix = str(prompt_suffix or "").strip()
+    if suffix:
+        prompt = f"{prompt}\n{suffix}"
+    return prompt
+
+AVAILABLE_STATES = ("idle", "working")
+PROVIDER_AGENTS = ("openai", "gemini", "flux")
+_agents = set(AGENT_IDENTITY_LINE.keys())
+if set(AGENT_IDLE_ACTION_LINE.keys()) != _agents or set(AGENT_WORKING_ACTION_LINE.keys()) != _agents:
+    raise RuntimeError("Agent prompt sets mismatch between identity/idle/working definitions.")
+AVAILABLE_AGENTS = tuple(sorted(_agents))
 
 
 @dataclass(frozen=True)
@@ -332,6 +335,30 @@ def create_video_job(
     return VideoJob(id=vid, status=str(resp.get("status") or "unknown"), raw=resp)
 
 
+def remix_video_job(
+    *,
+    api_base: str,
+    api_key: str,
+    source_video_id: str,
+    prompt: str,
+    timeout_s: float,
+) -> VideoJob:
+    headers = _headers(api_key)
+    headers["Content-Type"] = "application/json"
+    body = json.dumps({"prompt": prompt}).encode("utf-8")
+    resp = _request_json(
+        "POST",
+        f"{api_base.rstrip('/')}/videos/{source_video_id}/remix",
+        headers,
+        body=body,
+        timeout_s=timeout_s,
+    )
+    vid = str(resp.get("id") or "")
+    if not vid:
+        raise RuntimeError(f"Video remix response missing id: {resp}")
+    return VideoJob(id=vid, status=str(resp.get("status") or "unknown"), raw=resp)
+
+
 def retrieve_video_job(*, api_base: str, api_key: str, video_id: str, timeout_s: float) -> VideoJob:
     resp = _request_json(
         "GET",
@@ -466,13 +493,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--out", default="outputs/sora_portraits", help="Output directory (default: outputs/sora_portraits)")
     parser.add_argument(
         "--agents",
-        default="all",
-        help=f"Comma-separated list or 'all' (available: {', '.join(AVAILABLE_AGENTS)})",
+        default="providers",
+        help=(
+            "Comma-separated list, or 'providers' (openai, gemini, flux), or 'all' "
+            f"(available: {', '.join(AVAILABLE_AGENTS)})"
+        ),
     )
     parser.add_argument(
         "--states",
         default="both",
-        help="Comma-separated list: idle, working, or 'both' (default: both).",
+        help="Comma-separated list: idle, working (aka active), or 'both' (default: both).",
     )
     parser.add_argument(
         "--parallel",
@@ -482,7 +512,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        default="sora-2",
+        default="sora-2-pro",
         help="Video model (e.g. sora-2, sora-2-pro, or a snapshot like sora-2-pro-2025-10-06).",
     )
     parser.add_argument(
@@ -498,11 +528,36 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         choices=["720x1280", "1280x720", "1024x1792", "1792x1024"],
         help="Output resolution (widthxheight).",
     )
-    parser.add_argument("--reference", type=str, default=None, help="Optional image reference path (input_reference).")
+    parser.add_argument(
+        "--reference",
+        type=str,
+        default=None,
+        help=(
+            "Optional image reference path (input_reference). Used as the first frame for stronger consistency; "
+            "must match --size."
+        ),
+    )
     parser.add_argument(
         "--prompt-suffix",
         default="",
         help="Extra text appended to every prompt (useful for tightening safe-zone/loop constraints).",
+    )
+    parser.add_argument(
+        "--pair-strategy",
+        default="remix",
+        choices=["remix", "independent"],
+        help=(
+            "How to generate idle+working pairs. 'remix' generates idle, then remixes it into working to preserve "
+            "character consistency. 'independent' generates both states independently (can drift)."
+        ),
+    )
+    parser.add_argument(
+        "--remix-from-video-id",
+        default=None,
+        help=(
+            "Advanced: generate WORKING by remixing an existing completed video id (skips creating IDLE). "
+            "Requires exactly one agent and --states working."
+        ),
     )
     parser.add_argument("--api-base", default=DEFAULT_API_BASE, help=f"API base URL (default: {DEFAULT_API_BASE})")
     parser.add_argument("--poll", type=float, default=2.5, help="Poll interval seconds (default: 2.5)")
@@ -530,6 +585,11 @@ def resolve_agents(spec: str, available_agents: set[str]) -> list[str]:
     spec = (spec or "").strip()
     if not spec or spec.lower() == "all":
         return sorted(available_agents)
+    if spec.lower() == "providers":
+        providers = [a for a in PROVIDER_AGENTS if a in available_agents]
+        if not providers:
+            raise SystemExit("No provider agents are available in this script.")
+        return providers
     parts = [p.strip().lower() for p in spec.split(",") if p.strip()]
     unknown = [p for p in parts if p not in available_agents]
     if unknown:
@@ -552,6 +612,7 @@ def resolve_states(spec: str) -> list[str]:
     if spec in {"both", "all"}:
         return list(AVAILABLE_STATES)
     parts = [p.strip().lower() for p in spec.split(",") if p.strip()]
+    parts = ["working" if p == "active" else p for p in parts]
     unknown = [p for p in parts if p not in AVAILABLE_STATES]
     if unknown:
         raise SystemExit(f"Unknown state(s): {', '.join(unknown)}. Available: {', '.join(AVAILABLE_STATES)}")
@@ -579,9 +640,11 @@ def main(argv: list[str]) -> int:
     if not model:
         print("Missing --model.", file=sys.stderr)
         return 2
-    if args.size in {"1024x1792", "1792x1024"} and not model.startswith("sora-2-pro"):
-        print(f"Size {args.size} typically requires sora-2-pro; rerun with --model sora-2-pro.", file=sys.stderr)
-        return 2
+    remix_from_video_id = str(args.remix_from_video_id or "").strip()
+    if not remix_from_video_id:
+        if args.size in {"1024x1792", "1792x1024"} and not model.startswith("sora-2-pro"):
+            print(f"Size {args.size} typically requires sora-2-pro; rerun with --model sora-2-pro.", file=sys.stderr)
+            return 2
 
     reference_path = Path(args.reference).expanduser() if args.reference else None
     if reference_path is not None and not reference_path.exists():
@@ -592,24 +655,16 @@ def main(argv: list[str]) -> int:
     states = resolve_states(args.states)
     run_stamp = time.strftime("%Y%m%d_%H%M%S")
 
-    tasks: list[tuple[str, str]] = []
-    for agent in agents:
-        for state in states:
-            tasks.append((agent, state))
+    # Stable processing order for per-agent sequencing.
+    states = [s for s in AVAILABLE_STATES if s in set(states)]
 
-    def run_one(agent: str, state: str) -> Path:
-        prompt = AGENT_PROMPTS_BY_STATE[state][agent]
-        if args.prompt_suffix.strip():
-            prompt = f"{prompt}\n{args.prompt_suffix.strip()}"
-
-        # Conservative filenames that are easy to diff/replace in UI assets.
+    def build_paths(agent: str, state: str) -> tuple[Path, Path, Path]:
         base = f"{_slug(agent)}_{_slug(state)}_{_slug(model)}_{args.size}_{args.seconds}s_{run_stamp}"
         raw_path = out_dir / f"{base}.raw.mp4"
         final_suffix: list[str] = []
         if args.crop_square:
             final_suffix.append("sq")
         if args.target_seconds is not None:
-            # Keep filenames stable for integer durations like 10/15.
             t = int(args.target_seconds) if float(args.target_seconds).is_integer() else args.target_seconds
             final_suffix.append(f"t{t}")
         if args.mute:
@@ -617,7 +672,45 @@ def main(argv: list[str]) -> int:
         final_name = base + (("." + ".".join(final_suffix)) if final_suffix else "") + ".mp4"
         final_path = out_dir / final_name
         meta_path = out_dir / (final_path.stem + ".json")
+        return raw_path, final_path, meta_path
 
+    def write_meta(path: Path, meta: Mapping[str, Any]) -> None:
+        path.write_text(json.dumps(dict(meta), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def download_and_finalize(*, video_id: str, raw_path: Path, final_path: Path) -> None:
+        download_video_content(
+            api_base=args.api_base,
+            api_key=api_key,
+            video_id=video_id,
+            out_path=raw_path,
+            variant=args.variant,
+            timeout_s=float(args.download_timeout),
+        )
+
+        needs_post = bool(args.crop_square or args.target_seconds is not None or args.mute)
+        if needs_post:
+            postprocess_with_ffmpeg(
+                in_path=raw_path,
+                out_path=final_path,
+                crop_square=bool(args.crop_square),
+                target_seconds=args.target_seconds,
+                loop_input_seconds=float(args.seconds),
+                mute=bool(args.mute),
+                crf=int(args.crf),
+                preset=str(args.preset),
+            )
+            if not args.keep_raw:
+                try:
+                    raw_path.unlink()
+                except FileNotFoundError:
+                    pass
+        else:
+            raw_path.rename(final_path)
+
+    def run_create(agent: str, state: str) -> tuple[str, Path]:
+        prompt = build_prompt(agent=agent, state=state, prompt_suffix=args.prompt_suffix)
+
+        raw_path, final_path, meta_path = build_paths(agent, state)
         label = f"{agent}/{state}"
         print(f"== {label} -> {final_path.name}", file=sys.stderr)
 
@@ -644,10 +737,11 @@ def main(argv: list[str]) -> int:
                 "target_seconds": args.target_seconds,
                 "mute": bool(args.mute),
                 "variant": args.variant,
+                "pair_strategy": args.pair_strategy,
             },
             "create_response": dict(created.raw),
         }
-        meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        write_meta(meta_path, meta)
 
         completed = wait_for_completion(
             api_base=args.api_base,
@@ -659,59 +753,139 @@ def main(argv: list[str]) -> int:
             label=label,
         )
         meta["final_response"] = dict(completed.raw)
-        meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        write_meta(meta_path, meta)
 
-        download_video_content(
+        download_and_finalize(video_id=created.id, raw_path=raw_path, final_path=final_path)
+        meta["output_mp4"] = str(final_path)
+        write_meta(meta_path, meta)
+        return created.id, final_path
+
+    def run_remix(agent: str, state: str, *, source_video_id: str) -> tuple[str, Path]:
+        prompt = build_remix_prompt(agent=agent, state=state, prompt_suffix=args.prompt_suffix)
+
+        raw_path, final_path, meta_path = build_paths(agent, state)
+        label = f"{agent}/{state}"
+        print(f"== {label} (remix of {source_video_id}) -> {final_path.name}", file=sys.stderr)
+
+        created = remix_video_job(
+            api_base=args.api_base,
+            api_key=api_key,
+            source_video_id=source_video_id,
+            prompt=prompt,
+            timeout_s=float(args.request_timeout),
+        )
+
+        meta: dict[str, Any] = {
+            "agent": agent,
+            "state": state,
+            "prompt": prompt,
+            "requested": {
+                "model": model,
+                "seconds": int(args.seconds),
+                "size": args.size,
+                "crop_square": bool(args.crop_square),
+                "target_seconds": args.target_seconds,
+                "mute": bool(args.mute),
+                "variant": args.variant,
+                "pair_strategy": args.pair_strategy,
+            },
+            "remix_from_video_id": source_video_id,
+            "create_response": dict(created.raw),
+        }
+        write_meta(meta_path, meta)
+
+        completed = wait_for_completion(
             api_base=args.api_base,
             api_key=api_key,
             video_id=created.id,
-            out_path=raw_path,
-            variant=args.variant,
-            timeout_s=float(args.download_timeout),
+            poll_s=float(args.poll),
+            timeout_s=float(args.timeout),
+            request_timeout_s=float(args.request_timeout),
+            label=label,
+        )
+        meta["final_response"] = dict(completed.raw)
+        write_meta(meta_path, meta)
+
+        download_and_finalize(video_id=created.id, raw_path=raw_path, final_path=final_path)
+        meta["output_mp4"] = str(final_path)
+        write_meta(meta_path, meta)
+        return created.id, final_path
+
+    def run_agent(agent: str) -> None:
+        agent = str(agent or "").strip().lower()
+        if agent not in AVAILABLE_AGENTS:
+            raise RuntimeError(f"Unknown agent: {agent}")
+
+        want_remix_pair = (
+            str(args.pair_strategy or "").strip().lower() == "remix"
+            and "idle" in states
+            and "working" in states
         )
 
-        needs_post = bool(args.crop_square or args.target_seconds is not None or args.mute)
-        if needs_post:
-            postprocess_with_ffmpeg(
-                in_path=raw_path,
-                out_path=final_path,
-                crop_square=bool(args.crop_square),
-                target_seconds=args.target_seconds,
-                loop_input_seconds=float(args.seconds),
-                mute=bool(args.mute),
-                crf=int(args.crf),
-                preset=str(args.preset),
-            )
-            if not args.keep_raw:
-                try:
-                    raw_path.unlink()
-                except FileNotFoundError:
-                    pass
-        else:
-            raw_path.rename(final_path)
+        if want_remix_pair:
+            idle_id, _ = run_create(agent, "idle")
+            run_remix(agent, "working", source_video_id=idle_id)
+            return
 
-        meta["output_mp4"] = str(final_path)
-        meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        return final_path
+        for state in states:
+            run_create(agent, state)
+
+    if remix_from_video_id:
+        if len(agents) != 1:
+            raise SystemExit("--remix-from-video-id requires exactly one agent (e.g. --agents openai).")
+        if states != ["working"]:
+            raise SystemExit("--remix-from-video-id requires --states working (only).")
+
+        # Sync naming/meta to the source video so outputs are labeled correctly.
+        source = retrieve_video_job(
+            api_base=args.api_base,
+            api_key=api_key,
+            video_id=remix_from_video_id,
+            timeout_s=float(args.request_timeout),
+        )
+        if source.status != "completed":
+            source = wait_for_completion(
+                api_base=args.api_base,
+                api_key=api_key,
+                video_id=remix_from_video_id,
+                poll_s=float(args.poll),
+                timeout_s=float(args.timeout),
+                request_timeout_s=float(args.request_timeout),
+                label="source",
+            )
+
+        src_model = str(source.raw.get("model") or "").strip()
+        if src_model:
+            model = src_model
+        src_size = str(source.raw.get("size") or "").strip()
+        if src_size:
+            args.size = src_size
+        src_seconds = str(source.raw.get("seconds") or "").strip()
+        if src_seconds.isdigit():
+            args.seconds = int(src_seconds)
+
+        run_remix(agents[0], "working", source_video_id=remix_from_video_id)
+        print(f"Wrote videos to {out_dir}", file=sys.stderr)
+        return 0
 
     parallel = max(1, int(args.parallel))
-    if parallel <= 1 or len(tasks) <= 1:
-        for agent, state in tasks:
-            run_one(agent, state)
+    if parallel <= 1 or len(agents) <= 1:
+        for agent in agents:
+            run_agent(agent)
     else:
-        max_workers = min(parallel, len(tasks))
-        failures: list[tuple[str, str, Exception]] = []
+        max_workers = min(parallel, len(agents))
+        failures: list[tuple[str, Exception]] = []
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            future_map = {pool.submit(run_one, agent, state): (agent, state) for agent, state in tasks}
+            future_map = {pool.submit(run_agent, agent): agent for agent in agents}
             for future in as_completed(future_map):
-                agent, state = future_map[future]
+                agent = future_map[future]
                 try:
                     future.result()
                 except Exception as exc:
-                    failures.append((agent, state, exc))
-                    print(f"!! {agent}/{state} failed: {exc}", file=sys.stderr)
+                    failures.append((agent, exc))
+                    print(f"!! {agent} failed: {exc}", file=sys.stderr)
         if failures:
-            print(f"{len(failures)} job(s) failed.", file=sys.stderr)
+            print(f"{len(failures)} agent(s) failed.", file=sys.stderr)
             return 1
 
     print(f"Wrote videos to {out_dir}", file=sys.stderr)

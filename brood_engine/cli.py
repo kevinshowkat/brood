@@ -12,7 +12,7 @@ from .chat.intent_parser import parse_intent
 from .chat.refine import extract_model_directive, detect_edit_model, is_edit_request, is_refinement, is_repeat_request
 from .cli_progress import progress_once, ProgressTicker, elapsed_line
 from .engine import BroodEngine
-from .realtime.openai_realtime import CanvasContextRealtimeSession
+from .realtime.openai_realtime import CanvasContextRealtimeSession, IntentIconsRealtimeSession
 from .recreate.caption import infer_description, infer_diagnosis, infer_argument, infer_canvas_context
 from .recreate.triplet import infer_triplet_rule, infer_triplet_odd_one_out
 from .runs.export import export_html
@@ -111,6 +111,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
     last_prompt: str | None = None
     last_artifact_path: str | None = None
     canvas_context_rt: CanvasContextRealtimeSession | None = None
+    intent_rt: IntentIconsRealtimeSession | None = None
 
     print("Brood chat started. Type /help for commands.")
     while True:
@@ -126,6 +127,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 "Commands: /profile /text_model /image_model /fast /quality /cheaper "
                 "/better /optimize /recreate /describe /canvas_context /diagnose /recast /use "
                 "/canvas_context_rt_start /canvas_context_rt_stop /canvas_context_rt "
+                "/intent_rt_start /intent_rt_stop /intent_rt "
                 "/blend /swap_dna /argue /bridge /extract_rule /odd_one_out /triforce /export"
             )
             continue
@@ -270,17 +272,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 print(msg)
                 continue
             if canvas_context_rt is None:
-                msg = "Realtime session not started. Run /canvas_context_rt_start first."
-                engine.events.emit(
-                    "canvas_context_failed",
-                    image_path=str(path),
-                    error=msg,
-                    source="openai_realtime",
-                    model=os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_MODEL") or "gpt-realtime-mini",
-                    fatal=True,
-                )
-                print(msg)
-                continue
+                canvas_context_rt = CanvasContextRealtimeSession(engine.events)
             ok, err = canvas_context_rt.submit_snapshot(path)
             if not ok:
                 engine.events.emit(
@@ -297,6 +289,76 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 canvas_context_rt = None
                 continue
             # No blocking here. Results stream via `canvas_context` events.
+            continue
+        if intent.action == "intent_rt_start":
+            if intent_rt is None:
+                intent_rt = IntentIconsRealtimeSession(engine.events)
+            ok, err = intent_rt.start()
+            if not ok:
+                model = os.getenv("BROOD_INTENT_REALTIME_MODEL") or os.getenv("OPENAI_INTENT_REALTIME_MODEL") or "gpt-realtime-mini"
+                engine.events.emit(
+                    "intent_icons_failed",
+                    image_path=None,
+                    error=err or "Realtime start failed.",
+                    source="openai_realtime",
+                    model=model,
+                    fatal=True,
+                )
+                print(f"Intent realtime start failed: {err}")
+                intent_rt = None
+                continue
+            print("Intent realtime started.")
+            continue
+        if intent.action == "intent_rt_stop":
+            if intent_rt is not None:
+                intent_rt.stop()
+                intent_rt = None
+            print("Intent realtime stopped.")
+            continue
+        if intent.action == "intent_rt":
+            raw_path = intent.command_args.get("path") or last_artifact_path
+            if not raw_path:
+                msg = "/intent_rt requires a path (or set an active image with /use)"
+                engine.events.emit(
+                    "intent_icons_failed",
+                    image_path=None,
+                    error=msg,
+                    source="openai_realtime",
+                    model=os.getenv("BROOD_INTENT_REALTIME_MODEL") or "gpt-realtime-mini",
+                    fatal=True,
+                )
+                print(msg)
+                continue
+            path = Path(str(raw_path))
+            if not path.exists():
+                msg = f"Intent realtime failed: file not found ({path})"
+                engine.events.emit(
+                    "intent_icons_failed",
+                    image_path=str(path),
+                    error=msg,
+                    source="openai_realtime",
+                    model=os.getenv("BROOD_INTENT_REALTIME_MODEL") or "gpt-realtime-mini",
+                    fatal=True,
+                )
+                print(msg)
+                continue
+            if intent_rt is None:
+                intent_rt = IntentIconsRealtimeSession(engine.events)
+            ok, err = intent_rt.submit_snapshot(path)
+            if not ok:
+                engine.events.emit(
+                    "intent_icons_failed",
+                    image_path=str(path),
+                    error=err or "Realtime submit failed.",
+                    source="openai_realtime",
+                    model=os.getenv("BROOD_INTENT_REALTIME_MODEL") or "gpt-realtime-mini",
+                    fatal=True,
+                )
+                print(f"Intent realtime submit failed: {err}")
+                intent_rt.stop()
+                intent_rt = None
+                continue
+            # No blocking here. Results stream via `intent_icons` events.
             continue
         if intent.action == "diagnose":
             raw_path = intent.command_args.get("path") or last_artifact_path
@@ -1026,6 +1088,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 print("Generation complete.")
             continue
 
+    if intent_rt is not None:
+        intent_rt.stop()
     if canvas_context_rt is not None:
         canvas_context_rt.stop()
     engine.finish()

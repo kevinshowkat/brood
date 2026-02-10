@@ -127,8 +127,14 @@ const state = {
   designationsByImageId: new Map(), // imageId -> [{ id, kind, x, y, at }]
   pendingDesignation: null, // { imageId, x, y, at } | null
   imageMenuTargetId: null,
-  canvasMode: "single", // "single" renders the active image; "multi" renders all images for pair actions (Combine demo).
-  multiRects: new Map(), // imageId -> { x, y, w, h } in canvas device pixels (for hit-testing).
+  // Canvas rendering modes:
+  // - "multi": freeform spatial canvas (primary mode; multiple images can be arranged on the canvas)
+  // - "single": focused, zoomable view of the active image (secondary mode)
+  canvasMode: "multi",
+  // In multi/freeform mode we store rects in CSS pixels and derive device-pixel rects each render.
+  freeformRects: new Map(), // imageId -> { x, y, w, h } in canvas CSS pixels (top-left anchored)
+  freeformZOrder: [], // imageId[] draw/hit-test order (last is top)
+  multiRects: new Map(), // imageId -> { x, y, w, h } in canvas device pixels (hit-testing + canvas->image mapping).
   pendingBlend: null, // { sourceIds: [string, string], startedAt: number }
   pendingSwapDna: null, // { structureId: string, surfaceId: string, startedAt: number }
   pendingBridge: null, // { sourceIds: [string, string], startedAt: number }
@@ -162,12 +168,20 @@ const state = {
   tool: "pan",
   pointer: {
     active: false,
+    kind: null, // "freeform_move" | "freeform_resize" | "freeform_import"
+    imageId: null,
+    corner: null, // "nw"|"ne"|"sw"|"se"
+    startRectCss: null, // { x, y, w, h }
     startX: 0,
     startY: 0,
     lastX: 0,
     lastY: 0,
+    startCssX: 0,
+    startCssY: 0,
     startOffsetX: 0,
     startOffsetY: 0,
+    importPointCss: null, // { x, y }
+    moved: false,
   },
   selection: null, // { points: [{x,y}], closed: true }
   lassoDraft: [],
@@ -201,6 +215,33 @@ const state = {
   lastStatusError: false,
   fallbackToFullRead: false,
   keyStatus: null, // { openai, gemini, imagen, flux, anthropic }
+  intent: {
+    locked: false,
+    lockedAt: 0,
+    lockedBranchId: null,
+    startedAt: 0,
+    deadlineAt: 0,
+    totalRounds: 3,
+    round: 1,
+    selections: [], // [{ round, branch_id, token }]
+    focusBranchId: null,
+    iconState: null, // last parsed JSON
+    iconStateAt: 0,
+    pending: false,
+    pendingPath: null,
+    pendingAt: 0,
+    pendingFrameId: null,
+    frameSeq: 0,
+    rtState: "off", // "off" | "connecting" | "ready" | "failed"
+    disabledReason: null, // non-null = show "hard" failure state (missing keys, etc.)
+	    lastError: null, // string|null (non-hard last failure message)
+	    lastErrorAt: 0,
+	    lastSignature: null,
+	    lastRunAt: 0,
+	    forceChoice: false,
+	    uiHideSuggestion: false,
+	    uiHits: [], // [{ kind, id, rect }]
+	  },
   alwaysOnVision: {
     enabled: settings.alwaysOnVision,
     pending: false,
@@ -265,8 +306,154 @@ const ENABLE_LARVA_SPAWN = false;
 // Spawnbar actions (Studio White, Variations, etc) sit on the canvas "control surface".
 // Disable by default; the inspector still contains Abilities.
 const ENABLE_SPAWN_ACTIONS = false;
+// Drag/drop import is currently disabled; we still prevent file-drop navigation
+// to protect the session/run.
+const ENABLE_DRAG_DROP_IMPORT = false;
+
+// Intent Canvas feature flags. Keep the full implementation in place so we can
+// re-enable specific behaviors without ripping out code.
+const INTENT_TIMER_ENABLED = false; // hide LED timer + disable timeout-based force-choice
+const INTENT_ROUNDS_ENABLED = false; // disable "max rounds" gating
+const INTENT_FORCE_CHOICE_ENABLED = INTENT_TIMER_ENABLED || INTENT_ROUNDS_ENABLED;
+const INTENT_DEBUG_SHOW_CLUSTERS = false; // hide branch-pill debug UI; keep implemented
+
+// StarCraft-like pointer for Intent Mode (data-url SVG cursor).
+const INTENT_IMPORT_CURSOR = (() => {
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">`,
+    `<path d="M4 2 L4 22 L9 17 L13 28 L17 26 L13 16 L22 16 Z" fill="#00f5a0" stroke="#061014" stroke-width="2" stroke-linejoin="round"/>`,
+    `<path d="M6 6 L6 18 L9 15 L12 22 L14 21 L11 14 L18 14 Z" fill="#ffffff" fill-opacity="0.18"/>`,
+    `</svg>`,
+  ].join("");
+  const encoded = encodeURIComponent(svg).replace(/'/g, "%27").replace(/"/g, "%22");
+  // Hotspot near the arrow tip.
+  return `url("data:image/svg+xml,${encoded}") 2 2, default`;
+})();
+
+// Intent onboarding overlay icon assets (generated via scripts/gemini_generate_intent_icons.py).
+// Keep a procedural fallback so the app still renders if assets fail to load.
+const INTENT_UI_START_ICON_SCALE = 1.12; // modestly bigger than the original procedural glyphs
+const INTENT_UI_CHOICE_ICON_SCALE = 3.0; // YES/NO + suggested use-case glyph (requested: 300% larger)
+const INTENT_UI_ICON_ASSETS = {
+  start_lock: new URL("./assets/intent-icons-sc/icons/intent-start-lock.png", import.meta.url).href,
+  token_yes: new URL("./assets/intent-icons-sc/icons/intent-token-yes.png", import.meta.url).href,
+  token_no: new URL("./assets/intent-icons-sc/icons/intent-token-no.png", import.meta.url).href,
+  usecases: {
+    game_dev_assets: new URL("./assets/intent-icons-sc/icons/intent-usecase-game-dev-assets.png", import.meta.url).href,
+    streaming_content: new URL("./assets/intent-icons-sc/icons/intent-usecase-streaming-content.png", import.meta.url).href,
+    uiux_prototyping: new URL("./assets/intent-icons-sc/icons/intent-usecase-uiux-prototyping.png", import.meta.url).href,
+    ecommerce_pod: new URL("./assets/intent-icons-sc/icons/intent-usecase-ecommerce-pod.png", import.meta.url).href,
+    content_engine: new URL("./assets/intent-icons-sc/icons/intent-usecase-content-engine.png", import.meta.url).href,
+  },
+};
+
+const intentUiIcons = {
+  ready: false,
+  loadPromise: null,
+  startLock: null,
+  tokenYes: null,
+  tokenNo: null,
+  usecases: {},
+};
+
+function _loadUiImage(url) {
+  const u = String(url || "").trim();
+  if (!u) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    try {
+      img.crossOrigin = "anonymous";
+    } catch {
+      // ignore
+    }
+    img.onload = () => resolve(img);
+    img.onerror = (err) => reject(err);
+    img.src = u;
+  });
+}
+
+function ensureIntentUiIconsLoaded() {
+  if (intentUiIcons.loadPromise) return intentUiIcons.loadPromise;
+  intentUiIcons.loadPromise = (async () => {
+    try {
+      const [startLock, tokenYes, tokenNo] = await Promise.all([
+        _loadUiImage(INTENT_UI_ICON_ASSETS.start_lock),
+        _loadUiImage(INTENT_UI_ICON_ASSETS.token_yes),
+        _loadUiImage(INTENT_UI_ICON_ASSETS.token_no),
+      ]);
+      intentUiIcons.startLock = startLock;
+      intentUiIcons.tokenYes = tokenYes;
+      intentUiIcons.tokenNo = tokenNo;
+
+      const usecases = INTENT_UI_ICON_ASSETS.usecases || {};
+      const entries = Object.entries(usecases);
+      const loaded = await Promise.all(entries.map(([, url]) => _loadUiImage(url)));
+      const out = {};
+      for (let i = 0; i < entries.length; i += 1) {
+        const [k] = entries[i];
+        out[String(k)] = loaded[i] || null;
+      }
+      intentUiIcons.usecases = out;
+      intentUiIcons.ready = true;
+      requestRender();
+    } catch (err) {
+      console.warn("Failed to load intent UI icons; falling back to procedural glyphs.", err);
+      intentUiIcons.ready = false;
+    }
+  })();
+  return intentUiIcons.loadPromise;
+}
+
+const INTENT_DEADLINE_MS = 60_000;
+const INTENT_ENVELOPE_VERSION = 1;
+const INTENT_SNAPSHOT_MAX_DIM_PX = 1200;
+const INTENT_INFERENCE_DEBOUNCE_MS = 260;
+const INTENT_INFERENCE_THROTTLE_MS = 900;
+const INTENT_INFERENCE_TIMEOUT_MS = 15_000;
+const INTENT_PERSIST_FILENAME = "intent_state.json";
+const INTENT_LOCKED_FILENAME = "intent_locked.json";
+const INTENT_TRACE_FILENAME = "intent_trace.jsonl";
 
 let visualPromptWriteTimer = null;
+let intentTraceSeq = 0;
+let intentRealtimePortraitBusy = false;
+
+function _intentTracePath() {
+  if (!state.runDir) return null;
+  return `${state.runDir}/${INTENT_TRACE_FILENAME}`;
+}
+
+async function appendIntentTrace(entry) {
+  const outPath = _intentTracePath();
+  if (!outPath) return false;
+
+  const payload = {
+    schema: "brood.intent_trace",
+    schema_version: 1,
+    seq: (intentTraceSeq += 1),
+    at_ms: Date.now(),
+    ...entry,
+  };
+  const line = `${JSON.stringify(payload)}\n`;
+
+  // Best-effort: prefer append if supported by the Tauri FS API; fall back to read+write.
+  try {
+    await writeTextFile(outPath, line, { append: true });
+    return true;
+  } catch {
+    try {
+      const prior = (await exists(outPath)) ? await readTextFile(outPath) : "";
+      let next = `${prior}${line}`;
+      // Keep logs bounded if we ever need to rewrite the file.
+      const maxBytes = 1_200_000;
+      if (next.length > maxBytes) next = next.slice(next.length - maxBytes);
+      await writeTextFile(outPath, next);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
 function scheduleVisualPromptWrite({ immediate = false } = {}) {
   if (!state.runDir) return;
   const delay = immediate ? 0 : 350;
@@ -371,7 +558,7 @@ function renderHudReadout() {
   if (img?.visionDesc) {
     desc = clampText(img.visionDesc, 32);
   } else if (img?.visionPending) {
-    desc = "SCANNING…";
+    desc = "ANALYZING…";
   } else if (img?.path && describeQueued.has(img.path)) {
     desc = state.ptySpawned ? "QUEUED…" : state.ptySpawning ? "STARTING…" : "ENGINE OFFLINE";
   } else {
@@ -473,6 +660,14 @@ function allowVisionDescribe() {
   return state.keyStatus ? Boolean(state.keyStatus.openai || state.keyStatus.gemini) : true;
 }
 
+function allowVisionDescribeInCurrentMode() {
+  // During Intent Canvas onboarding we prefer capturing vision labels as part of the
+  // intent realtime pass (faster + single API call). Keep describe available after
+  // intent is locked, or outside intent mode entirely.
+  if (intentModeActive()) return false;
+  return true;
+}
+
 function resetDescribeQueue({ clearPending = false } = {}) {
   describeQueue = [];
   describeQueued.clear();
@@ -562,6 +757,7 @@ function processDescribeQueue() {
 function scheduleVisionDescribe(path, { priority = false } = {}) {
   if (!path) return;
   if (!allowVisionDescribe()) return;
+  if (!allowVisionDescribeInCurrentMode()) return;
 
   const item = state.images.find((img) => img?.path === path) || null;
   if (item) {
@@ -592,9 +788,10 @@ function _completeDescribeInFlight({
   const inflight = describeInFlightPath || state.describePendingPath || null;
   if (!inflight) return;
   const item = state.images.find((img) => img?.path === inflight) || null;
+  const cleanedDesc = typeof description === "string" ? description.trim() : "";
   if (item) {
-    if (typeof description === "string" && description.trim()) {
-      item.visionDesc = description.trim();
+    if (cleanedDesc) {
+      item.visionDesc = cleanedDesc;
       item.visionDescMeta = {
         source: meta?.source || null,
         model: meta?.model || null,
@@ -612,6 +809,14 @@ function _completeDescribeInFlight({
 
   if (errorMessage) {
     showToast(errorMessage, "error", 3200);
+  }
+  if (cleanedDesc) {
+    // Persist new per-image descriptions into run artifacts.
+    scheduleVisualPromptWrite();
+    if (intentModeActive() && state.intent && !state.intent.locked) {
+      // Treat new vision descriptions as an intent signal.
+      scheduleIntentInference({ immediate: true, reason: "describe" });
+    }
   }
   if (getActiveImage()?.path === inflight) renderHudReadout();
   processDescribeQueue();
@@ -668,6 +873,7 @@ function _handlePtyLine(line) {
 
 function scheduleVisionDescribeAll() {
   if (!allowVisionDescribe()) return;
+  if (!allowVisionDescribeInCurrentMode()) return;
   const active = getActiveImage();
   if (active?.path) scheduleVisionDescribe(active.path, { priority: true });
   for (const item of state.images) {
@@ -684,6 +890,11 @@ const ALWAYS_ON_VISION_TIMEOUT_MS = 45000;
 
 let alwaysOnVisionTimer = null;
 let alwaysOnVisionTimeout = null;
+
+let intentInferenceTimer = null;
+let intentInferenceTimeout = null;
+let intentTicker = null;
+let intentStateWriteTimer = null;
 
 function _collapseWs(text) {
   return String(text || "")
@@ -816,7 +1027,7 @@ function updateAlwaysOnVisionReadout() {
   } else if (aov.rtState === "connecting" && !aov.pending && !hasOutput) {
     text = "Connecting…";
   } else if (aov.pending) {
-    text = "SCANNING…";
+    text = "ANALYZING…";
   } else if (hasOutput) {
     const cleaned = aov.lastText.trim();
     text = cleaned.length > 1400 ? `${cleaned.slice(0, 1399).trimEnd()}\n…` : cleaned;
@@ -857,11 +1068,12 @@ function syncAlwaysOnVisionPortrait() {
     return;
   }
 
+  const busyProvider = "openai";
   const provider1 = String(state.portrait.provider || "").toLowerCase();
   const provider2 = String(state.portrait2.provider || "").toLowerCase();
-  // Prefer lighting up an existing OpenAI portrait (avoid swapping the provider label mid-scan).
-  // Otherwise, use the secondary portrait slot to show OpenAI working.
-  const targetSlot = provider2 === "openai" ? "secondary" : provider1 === "openai" ? "primary" : "secondary";
+  // Prefer lighting up an existing provider portrait (avoid swapping the provider label mid-scan).
+  // Otherwise, use the secondary portrait slot to show the canvas-context backend working.
+  const targetSlot = provider2 === busyProvider ? "secondary" : provider1 === busyProvider ? "primary" : "secondary";
 
   if (currentOverride && currentOverride.slot !== targetSlot) {
     restore(currentOverride);
@@ -887,31 +1099,250 @@ function syncAlwaysOnVisionPortrait() {
   }
 
   if (targetSlot === "primary") {
-    if (String(state.portrait.provider || "").toLowerCase() !== "openai" || !state.portrait.busy) {
-      setPortrait({ provider: "openai", title: providerDisplay("openai"), busy: true });
+    if (String(state.portrait.provider || "").toLowerCase() !== busyProvider || !state.portrait.busy) {
+      setPortrait({ provider: busyProvider, title: providerDisplay(busyProvider), busy: true });
     }
     return;
   }
 
-  // Secondary slot: show OpenAI working while the canvas-context realtime call is pending.
+  // Secondary slot: show provider working while the canvas-context call is pending.
   if (
-    String(state.portrait2.provider || "").toLowerCase() !== "openai" ||
+    String(state.portrait2.provider || "").toLowerCase() !== busyProvider ||
     !state.portrait2.busy ||
-    state.portrait2.title !== providerDisplay("openai")
+    state.portrait2.title !== providerDisplay(busyProvider)
   ) {
-    setPortrait2({ provider: "openai", title: providerDisplay("openai"), busy: true });
+    setPortrait2({ provider: busyProvider, title: providerDisplay(busyProvider), busy: true });
   }
 }
 
 function allowAlwaysOnVision() {
+  if (intentModeActive()) return false;
   if (!state.alwaysOnVision?.enabled) return false;
   if (!state.images.length) return false;
   if (!state.runDir) return false;
-  // Realtime canvas context requires an OpenAI key; fail fast before dispatch.
+  // Fail fast before dispatch if we know required keys are missing.
   if (state.keyStatus) {
     if (!state.keyStatus.openai) return false;
   }
   return true;
+}
+
+function intentModeActive() {
+  return Boolean(state.intent && !state.intent.locked);
+}
+
+function syncIntentModeClass() {
+  if (!els.canvasWrap) return;
+  els.canvasWrap.classList.toggle("intent-mode", intentModeActive());
+  syncIntentRealtimeClass();
+}
+
+function intentRealtimePulseActive() {
+  const intent = state.intent;
+  if (!intent || !intentModeActive()) return false;
+  // "Actively sending/receiving" for Intent Canvas: request in flight or session connecting.
+  return Boolean(intent.pending || intent.rtState === "connecting");
+}
+
+function syncIntentRealtimePortrait() {
+  // Intent Canvas uses OpenAI Realtime; when a request is in flight, show the OpenAI portrait "working" clip.
+  // Keep this scoped to intent mode so we don't fight foreground action portraits elsewhere.
+  const intent = state.intent;
+  const active = Boolean(intent && intentModeActive() && (intent.pending || intent.rtState === "connecting"));
+  if (active) {
+    if (!intentRealtimePortraitBusy || !state.portrait?.busy || String(state.portrait?.provider || "").toLowerCase() !== "openai") {
+      intentRealtimePortraitBusy = true;
+      portraitWorking("Intent Realtime", { providerOverride: "openai", clearDirector: false });
+    }
+    return;
+  }
+  if (intentRealtimePortraitBusy) {
+    intentRealtimePortraitBusy = false;
+    updatePortraitIdle();
+  }
+}
+
+function syncIntentRealtimeClass() {
+  if (!els.canvasWrap) return;
+  els.canvasWrap.classList.toggle("intent-rt-active", intentRealtimePulseActive());
+  syncIntentRealtimePortrait();
+}
+
+function updateEmptyCanvasHint() {
+  // Hint is a keyboard-accessible fallback for click-to-upload when no images exist.
+  showDropHint((state.images?.length || 0) === 0);
+}
+
+function ensureIntentTicker() {
+  if (intentTicker) return;
+  if (!intentModeActive()) return;
+  if (!INTENT_TIMER_ENABLED) return;
+  // Only tick once the countdown is actually running.
+  if (!state.intent?.startedAt) return;
+  intentTicker = setInterval(() => {
+    if (!intentModeActive()) {
+      stopIntentTicker();
+      return;
+    }
+    updateIntentCountdown();
+    requestRender();
+  }, 200);
+}
+
+function stopIntentTicker() {
+  clearInterval(intentTicker);
+  intentTicker = null;
+}
+
+function intentRemainingMs(nowMs = Date.now()) {
+  const intent = state.intent;
+  if (!intent) return INTENT_DEADLINE_MS;
+  if (!intent.startedAt || !intent.deadlineAt) return INTENT_DEADLINE_MS;
+  return Math.max(0, (Number(intent.deadlineAt) || 0) - (Number(nowMs) || 0));
+}
+
+function updateIntentCountdown(nowMs = Date.now()) {
+  const intent = state.intent;
+  if (!intentModeActive() || !intent) return;
+  if (!INTENT_TIMER_ENABLED) return;
+  if (!intent.startedAt || !intent.deadlineAt) return;
+  const remaining = intentRemainingMs(nowMs);
+  if (remaining > 0) return;
+  if (intent.forceChoice) return;
+  if (!INTENT_FORCE_CHOICE_ENABLED) return;
+  intent.forceChoice = true;
+  // If the model hasn't produced branches yet, fall back to a minimal local default so we can force a choice.
+  ensureIntentFallbackIconState("timeout");
+  if (!intent.focusBranchId) {
+    intent.focusBranchId = pickDefaultIntentFocusBranchId();
+  }
+  scheduleIntentStateWrite({ immediate: true });
+}
+
+function scheduleIntentStateWrite({ immediate = false } = {}) {
+  if (!state.runDir) return;
+  const delay = immediate ? 0 : 320;
+  clearTimeout(intentStateWriteTimer);
+  intentStateWriteTimer = setTimeout(() => {
+    intentStateWriteTimer = null;
+    writeIntentState().catch((err) => {
+      console.warn("Failed to write intent state:", err);
+    });
+  }, delay);
+}
+
+function buildIntentPersistedState() {
+  const intent = state.intent || {};
+  return {
+    schema: "brood.intent_state",
+    schema_version: 1,
+    generated_at: new Date().toISOString(),
+    locked: Boolean(intent.locked),
+    locked_at_ms: Number(intent.lockedAt) || 0,
+    locked_branch_id: intent.lockedBranchId ? String(intent.lockedBranchId) : null,
+    started_at_ms: Number(intent.startedAt) || 0,
+    deadline_at_ms: INTENT_TIMER_ENABLED ? Number(intent.deadlineAt) || 0 : 0,
+    round: Math.max(1, Number(intent.round) || 1),
+    total_rounds: INTENT_ROUNDS_ENABLED ? Math.max(1, Number(intent.totalRounds) || 3) : 0,
+    selections: Array.isArray(intent.selections) ? intent.selections : [],
+    focus_branch_id: intent.focusBranchId ? String(intent.focusBranchId) : null,
+    icon_state: intent.iconState || null,
+    icon_state_at_ms: Number(intent.iconStateAt) || 0,
+    force_choice: INTENT_FORCE_CHOICE_ENABLED ? Boolean(intent.forceChoice) : false,
+    rt_state: intent.rtState ? String(intent.rtState) : "off",
+    disabled_reason: intent.disabledReason ? String(intent.disabledReason) : null,
+    last_error: intent.lastError ? String(intent.lastError) : null,
+    last_error_at_ms: Number(intent.lastErrorAt) || 0,
+  };
+}
+
+async function writeIntentState() {
+  if (!state.runDir) return false;
+  const outPath = `${state.runDir}/${INTENT_PERSIST_FILENAME}`;
+  const payload = buildIntentPersistedState();
+  await writeTextFile(outPath, JSON.stringify(payload, null, 2));
+  return true;
+}
+
+async function restoreIntentStateFromRunDir() {
+  if (!state.runDir) return false;
+  const lockedPath = `${state.runDir}/${INTENT_LOCKED_FILENAME}`;
+  const statePath = `${state.runDir}/${INTENT_PERSIST_FILENAME}`;
+
+  const loadJson = async (path) => {
+    try {
+      if (!(await exists(path))) return null;
+      return JSON.parse(await readTextFile(path));
+    } catch {
+      return null;
+    }
+  };
+
+  const locked = await loadJson(lockedPath);
+  if (locked && typeof locked === "object") {
+    state.intent.locked = true;
+    state.intent.lockedAt = Number(locked.locked_at_ms) || 0;
+    state.intent.lockedBranchId = locked.locked_branch_id ? String(locked.locked_branch_id) : null;
+    state.intent.startedAt = Number(locked.started_at_ms) || 0;
+    state.intent.deadlineAt = Number(locked.deadline_at_ms) || 0;
+    state.intent.round = Math.max(1, Number(locked.round) || 1);
+    state.intent.selections = Array.isArray(locked.selections) ? locked.selections : [];
+    state.intent.focusBranchId = locked.focus_branch_id ? String(locked.focus_branch_id) : null;
+    state.intent.iconState = locked.icon_state && typeof locked.icon_state === "object" ? locked.icon_state : null;
+    state.intent.iconStateAt = Number(locked.icon_state_at_ms) || 0;
+    state.intent.forceChoice = false;
+    state.intent.pending = false;
+    state.intent.pendingPath = null;
+    state.intent.pendingAt = 0;
+    state.intent.pendingFrameId = null;
+    state.intent.rtState = "off";
+    state.intent.disabledReason = null;
+    state.intent.lastError = null;
+    state.intent.lastErrorAt = 0;
+    syncIntentModeClass();
+    stopIntentTicker();
+    renderQuickActions();
+    requestRender();
+    return true;
+  }
+
+  const persisted = await loadJson(statePath);
+  if (persisted && typeof persisted === "object") {
+    state.intent.locked = Boolean(persisted.locked);
+    state.intent.lockedAt = Number(persisted.locked_at_ms) || 0;
+    state.intent.lockedBranchId = persisted.locked_branch_id ? String(persisted.locked_branch_id) : null;
+    state.intent.startedAt = Number(persisted.started_at_ms) || 0;
+    state.intent.deadlineAt = Number(persisted.deadline_at_ms) || 0;
+    state.intent.round = Math.max(1, Number(persisted.round) || 1);
+    state.intent.totalRounds = Math.max(1, Number(persisted.total_rounds) || state.intent.totalRounds || 3);
+    state.intent.selections = Array.isArray(persisted.selections) ? persisted.selections : [];
+    state.intent.focusBranchId = persisted.focus_branch_id ? String(persisted.focus_branch_id) : null;
+    state.intent.iconState = persisted.icon_state && typeof persisted.icon_state === "object" ? persisted.icon_state : null;
+    state.intent.iconStateAt = Number(persisted.icon_state_at_ms) || 0;
+    state.intent.forceChoice = Boolean(persisted.force_choice);
+    state.intent.pending = false;
+    state.intent.pendingPath = null;
+    state.intent.pendingAt = 0;
+    state.intent.pendingFrameId = null;
+    state.intent.rtState = "off";
+    state.intent.disabledReason = persisted.disabled_reason ? String(persisted.disabled_reason) : null;
+    state.intent.lastError = persisted.last_error ? String(persisted.last_error) : null;
+    state.intent.lastErrorAt = Number(persisted.last_error_at_ms) || 0;
+    if (!INTENT_FORCE_CHOICE_ENABLED) {
+      state.intent.forceChoice = false;
+    } else if (INTENT_ROUNDS_ENABLED) {
+      const total = Math.max(1, Number(state.intent.totalRounds) || 3);
+      if (!state.intent.locked && state.intent.iconState && state.intent.round >= total) {
+        state.intent.forceChoice = true;
+      }
+    }
+    syncIntentModeClass();
+    if (intentModeActive()) ensureIntentTicker();
+    renderQuickActions();
+    requestRender();
+    return true;
+  }
+  return false;
 }
 
 const CANVAS_CONTEXT_ENVELOPE_VERSION = 1;
@@ -1365,6 +1796,13 @@ async function triggerCanvasContextSuggestedAction(actionName) {
   throw new Error(`Unknown suggested action: ${action}`);
 }
 
+function requireIntentUnlocked(message = null) {
+  if (!intentModeActive()) return true;
+  const msg = message ? String(message) : "Lock an intent to unlock abilities.";
+  showToast(msg, "tip", 2200);
+  return false;
+}
+
 function isForegroundActionRunning() {
   return Boolean(
     state.ptySpawning ||
@@ -1389,7 +1827,22 @@ function computeCanvasSignature() {
   parts.push(`mode=${state.canvasMode}`);
   parts.push(`active=${state.activeId || ""}`);
   for (const item of state.images) {
+    if (item?.id) parts.push(`id=${item.id}`);
     if (item?.path) parts.push(item.path);
+  }
+  // Spatial layout is a first-class signal; include freeform rects so background inference
+  // can react to user arrangement (only relevant in multi/freeform mode).
+  if (state.canvasMode === "multi") {
+    const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
+    for (const imageId of z) {
+      const rect = imageId ? state.freeformRects.get(imageId) : null;
+      if (!rect) continue;
+      parts.push(
+        `rect:${imageId}:${Math.round(Number(rect.x) || 0)},${Math.round(Number(rect.y) || 0)},${Math.round(
+          Number(rect.w) || 0
+        )},${Math.round(Number(rect.h) || 0)}`
+      );
+    }
   }
   return parts.join("|");
 }
@@ -1542,9 +1995,9 @@ async function runAlwaysOnVisionOnce() {
 
   if (aov.rtState === "off") aov.rtState = "connecting";
 
-  // Ensure the realtime session is running before dispatching snapshot work.
-  await invoke("write_pty", { data: `/canvas_context_rt_start\n` }).catch((err) => {
-    console.warn("Always-on vision realtime start failed:", err);
+  // Ensure the canvas-context realtime backend is running before dispatching snapshot work.
+  await invoke("write_pty", { data: "/canvas_context_rt_start\n" }).catch((err) => {
+    console.warn("Always-on vision canvas context start failed:", err);
   });
 
   try {
@@ -1558,6 +2011,1055 @@ async function runAlwaysOnVisionOnce() {
     return false;
   }
   bumpSessionApiCalls();
+  return true;
+}
+
+function allowIntentRealtime() {
+  if (!intentModeActive()) return false;
+  if (!state.images.length) return false;
+  if (!state.runDir) return false;
+  const intent = state.intent;
+  if (!intent) return false;
+  // Fail fast before dispatch if we know required keys are missing.
+  if (state.keyStatus && !state.keyStatus.openai) return false;
+  return true;
+}
+
+function computeIntentSignature() {
+  const intent = state.intent || {};
+  const parts = [];
+  parts.push(`round=${Math.max(1, Number(intent.round) || 1)}`);
+  parts.push(`force=${intent.forceChoice ? 1 : 0}`);
+  if (intent.focusBranchId) parts.push(`focus=${String(intent.focusBranchId)}`);
+
+  const sigSafe = (text, maxLen = 48) => {
+    let s = String(text || "");
+    s = s.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+    if (!s) return "";
+    // Avoid clobbering the signature delimiter.
+    s = s.replace(/[|]/g, "/");
+    if (s.length > maxLen) s = s.slice(0, maxLen);
+    return s;
+  };
+
+  const sels = Array.isArray(intent.selections) ? intent.selections.slice() : [];
+  sels.sort((a, b) => (Number(a?.round) || 0) - (Number(b?.round) || 0));
+  for (const sel of sels) {
+    const r = Math.max(0, Number(sel?.round) || 0);
+    const bid = sel?.branch_id ? String(sel.branch_id) : "";
+    const tok = sel?.token ? String(sel.token) : "";
+    parts.push(`sel:${r}:${bid}:${tok}`);
+  }
+  const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
+  for (const imageId of z) {
+    const item = imageId ? state.imagesById.get(imageId) : null;
+    if (item?.path) parts.push(item.path);
+    if (item?.visionDesc) {
+      const v = sigSafe(item.visionDesc, 40);
+      if (v) parts.push(`desc:${String(imageId)}:${v}`);
+    }
+    const rect = imageId ? state.freeformRects.get(imageId) : null;
+    if (!rect) continue;
+    parts.push(
+      `rect:${imageId}:${Math.round(Number(rect.x) || 0)},${Math.round(Number(rect.y) || 0)},${Math.round(
+        Number(rect.w) || 0
+      )},${Math.round(Number(rect.h) || 0)}`
+    );
+  }
+  return parts.join("|");
+}
+
+function scheduleIntentInference({ immediate = false, reason = null } = {}) {
+  if (!intentModeActive()) return;
+  const intent = state.intent;
+  if (!intent || intent.forceChoice) return;
+  if (!state.images.length) return;
+
+  clearTimeout(intentInferenceTimer);
+  const delay = immediate ? 0 : INTENT_INFERENCE_DEBOUNCE_MS;
+  intentInferenceTimer = setTimeout(() => {
+    intentInferenceTimer = null;
+    runIntentInferenceOnce({ reason: reason || (immediate ? "immediate" : "debounce") }).catch((err) => {
+      console.warn("Intent inference failed:", err);
+    });
+  }, delay);
+}
+
+async function runIntentInferenceOnce({ reason = null } = {}) {
+  const intent = state.intent;
+  if (!intentModeActive() || !intent) return false;
+  if (intent.forceChoice) {
+    intent.pending = false;
+    intent.pendingPath = null;
+    intent.pendingAt = 0;
+    intent.pendingFrameId = null;
+    return false;
+  }
+  if (!state.images.length) return false;
+
+  const now = Date.now();
+  if (!intent.startedAt) {
+    intent.startedAt = now;
+    if (INTENT_TIMER_ENABLED) {
+      intent.deadlineAt = now + INTENT_DEADLINE_MS;
+      ensureIntentTicker();
+    } else {
+      intent.deadlineAt = 0;
+    }
+    scheduleIntentStateWrite({ immediate: true });
+  }
+
+  updateIntentCountdown(now);
+  if (intent.forceChoice) return false;
+
+  const signature = computeIntentSignature();
+  const since = now - (intent.lastRunAt || 0);
+  if (signature && signature === intent.lastSignature && intent.iconState && since < 12_000 && intent.rtState === "ready") {
+    return false;
+  }
+  if (since < INTENT_INFERENCE_THROTTLE_MS) {
+    // Keep it responsive but avoid hammering the Realtime session while the user is dragging.
+    scheduleIntentInference({ immediate: false, reason: "throttle" });
+    return false;
+  }
+
+  await ensureRun();
+
+  if (!allowIntentRealtime()) {
+    intent.pending = false;
+    intent.pendingPath = null;
+    intent.pendingAt = 0;
+    intent.pendingFrameId = null;
+    intent.rtState = "failed";
+    intent.disabledReason = state.keyStatus && !state.keyStatus.openai ? "Missing OPENAI_API_KEY." : "Intent realtime disabled.";
+    intent.lastError = intent.disabledReason;
+    intent.lastErrorAt = now;
+    intent.uiHideSuggestion = false;
+    const icon = ensureIntentFallbackIconState("disabled");
+    if (!intent.focusBranchId) intent.focusBranchId = pickSuggestedIntentBranchId(icon) || pickDefaultIntentFocusBranchId(icon);
+    appendIntentTrace({
+      kind: "inference_blocked",
+      reason: intent.disabledReason,
+      round: Math.max(1, Number(intent.round) || 1),
+      signature,
+      rt_state: intent.rtState,
+    }).catch(() => {});
+    scheduleIntentStateWrite();
+    requestRender();
+    return false;
+  }
+
+  const ok = await ensureEngineSpawned({ reason: "intent inference" });
+  if (!ok) {
+    intent.pending = false;
+    intent.pendingPath = null;
+    intent.pendingAt = 0;
+    intent.pendingFrameId = null;
+    intent.rtState = "failed";
+    intent.disabledReason = "Intent engine unavailable.";
+    intent.lastError = intent.disabledReason;
+    intent.lastErrorAt = now;
+    intent.uiHideSuggestion = false;
+    const icon = ensureIntentFallbackIconState("engine_unavailable");
+    if (!intent.focusBranchId) intent.focusBranchId = pickSuggestedIntentBranchId(icon) || pickDefaultIntentFocusBranchId(icon);
+    appendIntentTrace({
+      kind: "engine_unavailable",
+      reason: intent.disabledReason,
+      round: Math.max(1, Number(intent.round) || 1),
+      signature,
+      rt_state: intent.rtState,
+    }).catch(() => {});
+    scheduleIntentStateWrite();
+    requestRender();
+    return false;
+  }
+
+  // Start (or keep alive) the realtime session.
+  if (intent.rtState === "off" || intent.rtState === "failed") intent.rtState = "connecting";
+  await invoke("write_pty", { data: "/intent_rt_start\n" }).catch(() => {});
+
+  // Build a new frame id so we can ignore stale streaming updates.
+  intent.frameSeq = (Number(intent.frameSeq) || 0) + 1;
+  const stamp = Date.now();
+  const frameId = `intent-r${Math.max(1, Number(intent.round) || 1)}-${stamp}-${intent.frameSeq}`;
+  const snapshotPath = `${state.runDir}/intent-${stamp}-r${String(Math.max(1, Number(intent.round) || 1)).padStart(
+    2,
+    "0"
+  )}.png`;
+
+  await waitForIntentImagesLoaded({ timeoutMs: 900 });
+  // Ensure the on-screen canvas is up to date before we capture a snapshot.
+  render();
+
+  await writeIntentSnapshot(snapshotPath, { maxDimPx: INTENT_SNAPSHOT_MAX_DIM_PX });
+  let ctxPath = null;
+  await writeIntentContextEnvelope(snapshotPath, frameId)
+    .then((path) => {
+      ctxPath = path;
+    })
+    .catch((err) => {
+      console.warn("Failed to write intent envelope:", err);
+    });
+  appendIntentTrace({
+    kind: "inference_dispatch",
+    reason: reason ? String(reason) : null,
+    round: Math.max(1, Number(intent.round) || 1),
+    frame_id: frameId,
+    snapshot_path: snapshotPath,
+    ctx_path: ctxPath,
+    signature,
+  }).catch(() => {});
+
+  intent.pending = true;
+  intent.pendingPath = snapshotPath;
+  intent.pendingAt = now;
+  intent.pendingFrameId = frameId;
+  intent.lastRunAt = now;
+  intent.lastSignature = signature;
+  scheduleIntentStateWrite();
+  requestRender();
+
+  clearTimeout(intentInferenceTimeout);
+  intentInferenceTimeout = setTimeout(() => {
+    const cur = state.intent;
+    if (!cur || cur.locked) return;
+    if (!cur.pending || cur.pendingPath !== snapshotPath) return;
+    cur.pending = false;
+    cur.pendingPath = null;
+    cur.pendingAt = 0;
+    cur.pendingFrameId = null;
+    cur.rtState = "failed";
+    cur.disabledReason = "Intent realtime timed out.";
+    cur.lastError = cur.disabledReason;
+    cur.lastErrorAt = Date.now();
+    cur.uiHideSuggestion = false;
+    // Fall back to a local branch set so the user can still lock an intent.
+    cur.forceChoice = INTENT_FORCE_CHOICE_ENABLED ? true : false;
+    ensureIntentFallbackIconState("timeout");
+    cur.focusBranchId = cur.focusBranchId || pickSuggestedIntentBranchId(cur.iconState) || pickDefaultIntentFocusBranchId();
+    appendIntentTrace({
+      kind: "inference_timeout",
+      reason: cur.disabledReason,
+      snapshot_path: snapshotPath,
+      frame_id: frameId,
+      rt_state: cur.rtState,
+    }).catch(() => {});
+    scheduleIntentStateWrite({ immediate: true });
+    requestRender();
+  }, INTENT_INFERENCE_TIMEOUT_MS);
+
+  try {
+    await invoke("write_pty", { data: `/intent_rt ${quoteForPtyArg(snapshotPath)}\n` });
+    bumpSessionApiCalls();
+  } catch (err) {
+    intent.pending = false;
+    intent.pendingPath = null;
+    intent.pendingAt = 0;
+    intent.pendingFrameId = null;
+    intent.rtState = "failed";
+    intent.disabledReason = err?.message ? `Intent realtime failed: ${err.message}` : "Intent realtime failed.";
+    intent.lastError = intent.disabledReason;
+    intent.lastErrorAt = Date.now();
+    intent.uiHideSuggestion = false;
+    intent.forceChoice = INTENT_FORCE_CHOICE_ENABLED ? true : false;
+    ensureIntentFallbackIconState("dispatch_failed");
+    if (!intent.focusBranchId) {
+      intent.focusBranchId = pickSuggestedIntentBranchId(intent.iconState) || pickDefaultIntentFocusBranchId(intent.iconState);
+    }
+    appendIntentTrace({
+      kind: "inference_dispatch_failed",
+      reason: intent.disabledReason,
+      snapshot_path: snapshotPath,
+      frame_id: frameId,
+      rt_state: intent.rtState,
+    }).catch(() => {});
+    scheduleIntentStateWrite({ immediate: true });
+    requestRender();
+    return false;
+  }
+
+  // Keep a light status breadcrumb in the debug header.
+  if (reason) setStatus(`Engine: intent scan (${reason})`);
+  return true;
+}
+
+async function waitForIntentImagesLoaded({ timeoutMs = 900 } = {}) {
+  const items = (state.images || []).filter((it) => it?.path).slice(0, 6);
+  for (const item of items) ensureCanvasImageLoaded(item);
+  const deadline = Date.now() + Math.max(60, Number(timeoutMs) || 900);
+  while (Date.now() < deadline) {
+    if (items.every((it) => Boolean(it?.img))) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return items.some((it) => Boolean(it?.img));
+}
+
+async function writeIntentSnapshot(outPath, { maxDimPx = INTENT_SNAPSHOT_MAX_DIM_PX } = {}) {
+  const baseWork = els.workCanvas;
+  if (!baseWork) return null;
+
+  const baseW = Number(baseWork.width) || 0;
+  const baseH = Number(baseWork.height) || 0;
+  if (!baseW || !baseH) return null;
+
+  const maxDim = Math.max(420, Math.round(Number(maxDimPx) || INTENT_SNAPSHOT_MAX_DIM_PX));
+  const scale = Math.min(1, maxDim / Math.max(1, Math.max(baseW, baseH)));
+  const w = Math.max(1, Math.round(baseW * scale));
+  const h = Math.max(1, Math.round(baseH * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+
+  // Background (matches the in-app canvas atmosphere).
+  const bg = ctx.createLinearGradient(0, 0, 0, h);
+  bg.addColorStop(0, "rgba(18, 26, 37, 0.92)");
+  bg.addColorStop(1, "rgba(6, 8, 12, 0.96)");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+
+  // Snapshot only the user content canvas (no UI overlays) for cleaner vision input.
+  ctx.drawImage(baseWork, 0, 0, w, h);
+
+  await writeCanvasPngToPath(canvas, outPath);
+  return outPath;
+}
+
+function buildIntentContextEnvelope(frameId) {
+  const wrap = els.canvasWrap;
+  const intent = state.intent || {};
+  const dpr = getDpr();
+  const canvasCssW = wrap?.clientWidth || 0;
+  const canvasCssH = wrap?.clientHeight || 0;
+
+  const images = [];
+  const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
+  for (let idx = 0; idx < z.length; idx += 1) {
+    const imageId = z[idx];
+    const item = imageId ? state.imagesById.get(imageId) : null;
+    const rect = imageId ? state.freeformRects.get(imageId) : null;
+    if (!item?.path || !rect) continue;
+    const visionDesc = item?.visionDesc ? clampText(String(item.visionDesc), 64) : null;
+    const vmeta = item?.visionDescMeta || null;
+    const x = Number(rect.x) || 0;
+    const y = Number(rect.y) || 0;
+    const w = Math.max(1, Number(rect.w) || 1);
+    const h = Math.max(1, Number(rect.h) || 1);
+    const cx = x + w / 2;
+    const cy = y + h / 2;
+    images.push({
+      id: String(imageId),
+      file: basename(item.path),
+      import_index: (state.images || []).findIndex((im) => im?.id === imageId),
+      z: idx,
+      // Short vision-derived label for this image (best-effort). This is an internal
+      // signal to improve intent suggestions while keeping user input "images-only".
+      vision_desc: visionDesc,
+      vision_desc_meta: visionDesc
+        ? {
+            source: vmeta?.source ? String(vmeta.source) : null,
+            model: vmeta?.model ? String(vmeta.model) : null,
+            at_ms: Number(vmeta?.at) || null,
+          }
+        : null,
+      rect_css: { x, y, w, h, cx, cy },
+      rect_norm: {
+        x: canvasCssW ? x / canvasCssW : 0,
+        y: canvasCssH ? y / canvasCssH : 0,
+        w: canvasCssW ? w / canvasCssW : 0,
+        h: canvasCssH ? h / canvasCssH : 0,
+        cx: canvasCssW ? cx / canvasCssW : 0,
+        cy: canvasCssH ? cy / canvasCssH : 0,
+      },
+    });
+  }
+
+  const now = Date.now();
+  const remaining_ms = INTENT_TIMER_ENABLED
+    ? intent.startedAt
+      ? intentRemainingMs(now)
+      : INTENT_DEADLINE_MS
+    : 0;
+
+  return {
+    schema: "brood.intent_envelope",
+    schema_version: INTENT_ENVELOPE_VERSION,
+    generated_at: new Date().toISOString(),
+    frame_id: String(frameId || ""),
+    canvas: {
+      width_css: canvasCssW,
+      height_css: canvasCssH,
+      width_px: Math.max(0, Math.round(canvasCssW * dpr)),
+      height_px: Math.max(0, Math.round(canvasCssH * dpr)),
+      dpr,
+    },
+    intent: {
+      round: Math.max(1, Number(intent.round) || 1),
+      total_rounds: INTENT_ROUNDS_ENABLED ? Math.max(1, Number(intent.totalRounds) || 3) : 0,
+      started_at_ms: Number(intent.startedAt) || 0,
+      deadline_at_ms: INTENT_TIMER_ENABLED ? Number(intent.deadlineAt) || 0 : 0,
+      remaining_ms,
+      timer_enabled: Boolean(INTENT_TIMER_ENABLED),
+      rounds_enabled: Boolean(INTENT_ROUNDS_ENABLED),
+      force_choice_enabled: Boolean(INTENT_FORCE_CHOICE_ENABLED),
+      force_choice: INTENT_FORCE_CHOICE_ENABLED ? Boolean(intent.forceChoice) : false,
+      focus_branch_id: intent.focusBranchId ? String(intent.focusBranchId) : null,
+      selections: Array.isArray(intent.selections) ? intent.selections : [],
+    },
+    images,
+  };
+}
+
+async function writeIntentContextEnvelope(snapshotPath, frameId) {
+  if (!state.runDir) return null;
+  const ctxPath = _canvasContextSidecarPath(snapshotPath);
+  if (!ctxPath) return null;
+  const envelope = buildIntentContextEnvelope(frameId);
+  await writeTextFile(ctxPath, JSON.stringify(envelope));
+  return ctxPath;
+}
+
+function _normalizeTokenLabel(tokenId) {
+  const tok = String(tokenId || "").trim().toUpperCase();
+  if (tok === "YES_TOKEN") return "YES";
+  if (tok === "NO_TOKEN") return "NO";
+  if (tok === "MAYBE_TOKEN") return "MAYBE";
+  return tok || "?";
+}
+
+function buildFallbackIntentIconState(frameId, { reason = null } = {}) {
+  const seed = String(reason || "fallback").toUpperCase();
+  const gen = { icon_id: "IMAGE_GENERATION", confidence: 0.52, position_hint: "primary" };
+  const iterate = { icon_id: "ITERATION", confidence: 0.44, position_hint: "primary" };
+  const outputs = { icon_id: "OUTPUTS", confidence: 0.34, position_hint: "secondary" };
+  const pipeline = { icon_id: "PIPELINE", confidence: 0.30, position_hint: "emerging" };
+  const branches = [
+    {
+      branch_id: "game_dev_assets",
+      icons: ["GAME_DEV_ASSETS", "CONCEPT_ART", "SPRITES", "TEXTURES", "CHARACTER_SHEETS", "MIXED_FIDELITY", "ITERATION"],
+      lane_position: "left",
+    },
+    {
+      branch_id: "streaming_content",
+      icons: ["STREAMING_CONTENT", "THUMBNAILS", "OVERLAYS", "EMOTES", "SOCIAL_GRAPHICS", "VOLUME", "OUTCOMES"],
+      lane_position: "right",
+    },
+    {
+      branch_id: "uiux_prototyping",
+      icons: ["UI_UX_PROTOTYPING", "SCREENS", "WIREFRAMES", "MOCKUPS", "USER_FLOWS", "STRUCTURED", "SINGULAR"],
+      lane_position: "left",
+    },
+    {
+      branch_id: "ecommerce_pod",
+      icons: ["ECOMMERCE_POD", "MERCH_DESIGN", "PRODUCT_PHOTOS", "MARKETPLACE_LISTINGS", "PHYSICAL_OUTPUT", "VOLUME"],
+      lane_position: "right",
+    },
+    {
+      branch_id: "content_engine",
+      icons: ["CONTENT_ENGINE", "BRAND_SYSTEM", "MULTI_CHANNEL", "PROCESS", "AUTOMATION", "PIPELINE", "VOLUME"],
+      lane_position: "left",
+    },
+  ];
+  return {
+    frame_id: String(frameId || `fallback-${Date.now()}`),
+    schema: "brood.intent_icons",
+    schema_version: 1,
+    intent_icons: [gen, iterate, outputs, pipeline],
+    relations: [
+      { from_icon: "ITERATION", to_icon: "IMAGE_GENERATION", relation_type: "DEPENDENCY" },
+      { from_icon: "IMAGE_GENERATION", to_icon: "OUTPUTS", relation_type: "FLOW" },
+    ],
+    branches,
+    checkpoint: { icons: ["YES_TOKEN", "NO_TOKEN", "MAYBE_TOKEN"], applies_to: seed ? seed : "branches" },
+  };
+}
+
+function ensureIntentFallbackIconState(reason = "fallback") {
+  const intent = state.intent;
+  if (!intent) return null;
+  const now = Date.now();
+  if (!intent.iconState || typeof intent.iconState !== "object") {
+    const frameId = intent.pendingFrameId || `fallback-${now}`;
+    intent.iconState = buildFallbackIntentIconState(frameId, { reason });
+    intent.iconStateAt = now;
+    return intent.iconState;
+  }
+  // If the model returned no branches, keep the user's ability to choose by adding a fallback set.
+  const branches = Array.isArray(intent.iconState?.branches) ? intent.iconState.branches : [];
+  if (branches.length === 0) {
+    const frameId = intent.iconState?.frame_id || intent.pendingFrameId || `fallback-${now}`;
+    const fallback = buildFallbackIntentIconState(frameId, { reason });
+    intent.iconState.branches = fallback.branches;
+    if (!intent.iconState.checkpoint) intent.iconState.checkpoint = fallback.checkpoint;
+    intent.iconStateAt = now;
+  }
+  return intent.iconState;
+}
+
+function _stripJsonFences(raw) {
+  let text = String(raw || "").trim();
+  if (!text) return "";
+  if (text.startsWith("```")) {
+    text = text.replace(/^```(?:json)?/i, "").trim();
+    text = text.replace(/```$/i, "").trim();
+  }
+  return text.trim();
+}
+
+function parseIntentIconsJson(raw) {
+  const cleaned = _stripJsonFences(raw);
+  if (!cleaned) return null;
+
+  const tryParse = (value) => {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  };
+
+  let obj = tryParse(cleaned);
+  if (!obj) {
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      obj = tryParse(cleaned.slice(start, end + 1));
+    }
+  }
+
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+  if (obj.schema && String(obj.schema) !== "brood.intent_icons") return null;
+
+  // Normalize common fields so rendering code can be defensive and simple.
+  if (!Array.isArray(obj.intent_icons)) obj.intent_icons = [];
+  if (!Array.isArray(obj.branches)) obj.branches = [];
+  if (!Array.isArray(obj.relations)) obj.relations = [];
+  if (obj.checkpoint && typeof obj.checkpoint !== "object") obj.checkpoint = null;
+
+  // Coerce icon_id fields to strings.
+  obj.intent_icons = obj.intent_icons
+    .filter((it) => it && typeof it === "object")
+    .map((it) => ({
+      icon_id: it.icon_id ? String(it.icon_id) : "",
+      confidence: typeof it.confidence === "number" ? it.confidence : 0,
+      position_hint: it.position_hint ? String(it.position_hint) : "secondary",
+    }))
+    .filter((it) => Boolean(it.icon_id));
+
+  obj.branches = obj.branches
+    .filter((b) => b && typeof b === "object")
+    .map((b, idx) => {
+      const c = typeof b.confidence === "number" ? clamp(Number(b.confidence) || 0, 0, 1) : null;
+      const evidence = Array.isArray(b.evidence_image_ids)
+        ? b.evidence_image_ids.map((v) => String(v || "").trim()).filter(Boolean)
+        : [];
+      return {
+        _idx: idx,
+        confidence: c,
+        evidence_image_ids: evidence.length ? evidence.slice(0, 3) : [],
+        branch_id: b.branch_id ? String(b.branch_id) : "",
+        icons: Array.isArray(b.icons) ? b.icons.map((v) => String(v || "").trim()).filter(Boolean) : [],
+        lane_position: b.lane_position ? String(b.lane_position) : "left",
+      };
+    })
+    .filter((b) => Boolean(b.branch_id) && b.icons.length > 0);
+
+  // If the model provides branch confidences, treat them as an ordering contract.
+  // Keep the original order as a tie-breaker to reduce UI churn.
+  const anyBranchConf = obj.branches.some((b) => typeof b?.confidence === "number" && Number.isFinite(b.confidence));
+  if (anyBranchConf) {
+    obj.branches.sort((a, b) => {
+      const ac = typeof a?.confidence === "number" && Number.isFinite(a.confidence) ? a.confidence : -1;
+      const bc = typeof b?.confidence === "number" && Number.isFinite(b.confidence) ? b.confidence : -1;
+      if (bc !== ac) return bc - ac;
+      return (Number(a?._idx) || 0) - (Number(b?._idx) || 0);
+    });
+  }
+
+  obj.branches = obj.branches
+    .map((b) => ({
+      branch_id: b.branch_id ? String(b.branch_id) : "",
+      confidence: typeof b.confidence === "number" && Number.isFinite(b.confidence) ? clamp(Number(b.confidence) || 0, 0, 1) : null,
+      evidence_image_ids: Array.isArray(b.evidence_image_ids)
+        ? b.evidence_image_ids.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 3)
+        : [],
+      icons: Array.isArray(b.icons) ? b.icons.map((v) => String(v || "").trim()).filter(Boolean) : [],
+      lane_position: b.lane_position ? String(b.lane_position) : "left",
+    }))
+    .filter((b) => Boolean(b.branch_id) && b.icons.length > 0);
+
+  obj.relations = obj.relations
+    .filter((r) => r && typeof r === "object")
+    .map((r) => ({
+      from_icon: r.from_icon ? String(r.from_icon) : "",
+      to_icon: r.to_icon ? String(r.to_icon) : "",
+      relation_type: r.relation_type ? String(r.relation_type) : "FLOW",
+    }))
+    .filter((r) => r.from_icon && r.to_icon);
+
+  if (obj.checkpoint) {
+    const icons = Array.isArray(obj.checkpoint.icons) ? obj.checkpoint.icons : [];
+    obj.checkpoint = {
+      icons: icons.map((v) => String(v || "").trim()).filter(Boolean),
+      applies_to: obj.checkpoint.applies_to ? String(obj.checkpoint.applies_to) : null,
+    };
+  }
+
+  if (!obj.frame_id) obj.frame_id = "";
+  if (!obj.schema) obj.schema = "brood.intent_icons";
+  if (!obj.schema_version) obj.schema_version = 1;
+  return obj;
+}
+
+function _normalizeVisionLabel(raw, { maxChars = 32 } = {}) {
+  const s = String(raw || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!s) return "";
+  // Keep it short and HUD-friendly. (Even though it may not be shown in intent mode,
+  // we reuse the same field for later HUD rendering.)
+  const clipped = maxChars > 0 ? clampText(s, maxChars) : s;
+  // Avoid our intent-signature delimiter.
+  return clipped.replace(/[|]/g, "/").trim();
+}
+
+function extractIntentImageDescriptions(parsed) {
+  if (!parsed || typeof parsed !== "object") return [];
+  const raw = Array.isArray(parsed.image_descriptions) ? parsed.image_descriptions : [];
+  const out = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const imageId = item.image_id ? String(item.image_id) : item.id ? String(item.id) : "";
+    const labelRaw = item.label ?? item.description ?? item.text ?? "";
+    const label = _normalizeVisionLabel(labelRaw, { maxChars: 32 });
+    const confidence = typeof item.confidence === "number" ? item.confidence : null;
+    if (!imageId || !label) continue;
+    out.push({ image_id: imageId, label, confidence });
+  }
+  return out;
+}
+
+function primaryBranchIdFromIconState(iconState) {
+  const branches = Array.isArray(iconState?.branches) ? iconState.branches : [];
+  if (!branches.length) return null;
+  const primaryIcons = new Set(
+    (Array.isArray(iconState?.intent_icons) ? iconState.intent_icons : [])
+      .filter((it) => String(it?.position_hint || "").toLowerCase() === "primary")
+      .map((it) => String(it?.icon_id || "").trim())
+      .filter(Boolean)
+  );
+  if (!primaryIcons.size) return String(branches[0]?.branch_id || "") || null;
+
+  let best = null;
+  let bestScore = -1;
+  for (const b of branches) {
+    const icons = Array.isArray(b?.icons) ? b.icons : [];
+    let score = 0;
+    for (const icon of icons) {
+      if (primaryIcons.has(String(icon || "").trim())) score += 1;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = b;
+    }
+  }
+  return best && best.branch_id ? String(best.branch_id) : String(branches[0]?.branch_id || "") || null;
+}
+
+function pickDefaultIntentFocusBranchId(iconState = null) {
+  const intent = state.intent;
+  const icon = iconState || intent?.iconState || null;
+  const branches = Array.isArray(icon?.branches) ? icon.branches : [];
+  const hasPrimaryCluster = Array.isArray(icon?.intent_icons) && icon.intent_icons.length > 0;
+
+  const existing = intent?.focusBranchId ? String(intent.focusBranchId) : "";
+  if (existing) {
+    if (existing === "__primary__") {
+      if (hasPrimaryCluster) return existing;
+    }
+    if (branches.some((b) => String(b?.branch_id || "") === existing)) return existing;
+  }
+
+  const primary = primaryBranchIdFromIconState(icon);
+  if (primary) return primary;
+  return "__primary__";
+}
+
+function latestIntentSelectionForBranch(branchId) {
+  const bid = String(branchId || "");
+  if (!bid) return null;
+  const sels = Array.isArray(state.intent?.selections) ? state.intent.selections : [];
+  let best = null;
+  for (const sel of sels) {
+    if (String(sel?.branch_id || "") !== bid) continue;
+    const r = Number(sel?.round) || 0;
+    if (!best || r > (Number(best.round) || 0)) best = sel;
+  }
+  return best;
+}
+
+function upsertIntentSelection({ round, branchId, tokenId }) {
+  const intent = state.intent;
+  if (!intent) return;
+  const r = Math.max(1, Number(round) || 1);
+  const bid = String(branchId || "");
+  const tok = String(tokenId || "");
+  if (!bid || !tok) return;
+  const next = (Array.isArray(intent.selections) ? intent.selections : []).filter((sel) => Number(sel?.round) !== r);
+  next.push({ round: r, branch_id: bid, token: tok });
+  intent.selections = next;
+}
+
+function inferIntentBranchFromVisionDescriptions() {
+  const items = Array.isArray(state.images) ? state.images : [];
+  const texts = [];
+  for (const item of items) {
+    if (item?.visionDesc) texts.push(String(item.visionDesc));
+  }
+  const haystack = texts.join(" ").toLowerCase().trim();
+  if (!haystack) return null;
+
+  const scores = {
+    game_dev_assets: 0,
+    streaming_content: 0,
+    uiux_prototyping: 0,
+    ecommerce_pod: 0,
+    content_engine: 0,
+  };
+
+  const bump = (key, re, weight) => {
+    if (!key || !re) return;
+    if (!scores[key] && scores[key] !== 0) return;
+    try {
+      if (re.test(haystack)) scores[key] += Number(weight) || 0;
+    } catch {
+      // ignore
+    }
+  };
+
+  // These keywords are intentionally "small + concrete" because vision descriptions are short
+  // (e.g. "instagram app icon", "couch"). They should be treated as weak signals.
+  bump("game_dev_assets", /\b(sprite|sprites|tileset|texture|textures)\b/i, 4);
+  bump("game_dev_assets", /\b(character sheet|character sheets)\b/i, 4);
+  bump("game_dev_assets", /\b(concept art)\b/i, 4);
+  bump("game_dev_assets", /\b(unreal|unity)\b/i, 2);
+  bump("game_dev_assets", /\b(terran|zerg|scv)\b/i, 4);
+  bump("game_dev_assets", /\b(game|gamedev|mod)\b/i, 2);
+
+  bump("streaming_content", /\b(instagram|twitch|youtube|tiktok)\b/i, 5);
+  bump("streaming_content", /\b(thumbnail|thumbnails)\b/i, 4);
+  bump("streaming_content", /\b(overlay|overlays)\b/i, 4);
+  bump("streaming_content", /\b(emote|emotes)\b/i, 4);
+  bump("streaming_content", /\b(social|stream|streaming|channel)\b/i, 2);
+  bump("streaming_content", /\b(logo|banner|profile)\b/i, 1);
+
+  bump("uiux_prototyping", /\b(wireframe|wireframes)\b/i, 5);
+  bump("uiux_prototyping", /\b(mockup|mockups)\b/i, 4);
+  bump("uiux_prototyping", /\b(prototype|prototyping)\b/i, 4);
+  bump("uiux_prototyping", /\b(user flow|user flows|flow diagram)\b/i, 4);
+  bump("uiux_prototyping", /\b(dashboard|app screen|app screens|screens)\b/i, 3);
+  bump("uiux_prototyping", /\b(ui|ux)\b/i, 2);
+
+  bump("ecommerce_pod", /\b(product photo|product photos)\b/i, 5);
+  bump("ecommerce_pod", /\b(listing|listings|marketplace)\b/i, 4);
+  bump("ecommerce_pod", /\b(etsy|amazon|shop)\b/i, 3);
+  bump("ecommerce_pod", /\b(merch|t-?shirt|hoodie|mug|poster)\b/i, 4);
+  bump("ecommerce_pod", /\b(packaging)\b/i, 3);
+  bump("ecommerce_pod", /\b(couch|sofa|chair|table)\b/i, 3);
+
+  bump("content_engine", /\b(pipeline|workflow|automation|automated|system|systems)\b/i, 4);
+  bump("content_engine", /\b(brand system|brand|template)\b/i, 2);
+  bump("content_engine", /\b(multi-?channel|batch)\b/i, 2);
+
+  let bestKey = null;
+  let bestScore = 0;
+  for (const [key, score] of Object.entries(scores)) {
+    const s = Number(score) || 0;
+    if (s > bestScore) {
+      bestScore = s;
+      bestKey = key;
+    }
+  }
+  // Require a little evidence before overriding icon-state suggestion.
+  if (!bestKey || bestScore < 3) return null;
+  return bestKey;
+}
+
+function _primaryBranchSuggestion(iconState) {
+  const branches = Array.isArray(iconState?.branches) ? iconState.branches : [];
+  if (!branches.length) return { branch_id: null, score: 0, ties: 0 };
+
+  const primaryIcons = new Set(
+    (Array.isArray(iconState?.intent_icons) ? iconState.intent_icons : [])
+      .filter((it) => String(it?.position_hint || "").toLowerCase() === "primary")
+      .map((it) => String(it?.icon_id || "").trim())
+      .filter(Boolean)
+  );
+  if (!primaryIcons.size) return { branch_id: null, score: 0, ties: 0 };
+
+  let bestId = null;
+  let bestScore = 0;
+  let ties = 0;
+  for (const b of branches) {
+    const bid = b?.branch_id ? String(b.branch_id) : "";
+    if (!bid) continue;
+    const icons = Array.isArray(b?.icons) ? b.icons : [];
+    let score = 0;
+    for (const icon of icons) {
+      if (primaryIcons.has(String(icon || "").trim())) score += 1;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = bid;
+      ties = score > 0 ? 1 : 0;
+    } else if (score > 0 && score === bestScore) {
+      ties += 1;
+    }
+  }
+  if (!bestId || bestScore <= 0) return { branch_id: null, score: 0, ties: 0 };
+  return { branch_id: bestId, score: bestScore, ties };
+}
+
+function _rankIntentBranches(iconState) {
+  const branches = Array.isArray(iconState?.branches) ? iconState.branches : [];
+  if (!branches.length) return [];
+  const anyConf = branches.some((b) => typeof b?.confidence === "number" && Number.isFinite(b.confidence));
+  if (!anyConf) return branches.slice();
+  // Defensive: even though parseIntentIconsJson sorts, keep this stable if callers mutate iconState.
+  const list = branches.map((b, idx) => ({ b, idx }));
+  list.sort((a, b) => {
+    const ac = typeof a?.b?.confidence === "number" && Number.isFinite(a.b.confidence) ? a.b.confidence : -1;
+    const bc = typeof b?.b?.confidence === "number" && Number.isFinite(b.b.confidence) ? b.b.confidence : -1;
+    if (bc !== ac) return bc - ac;
+    return (Number(a.idx) || 0) - (Number(b.idx) || 0);
+  });
+  return list.map((it) => it.b);
+}
+
+function pickSuggestedIntentBranch(iconState = null) {
+  const intent = state.intent;
+  const icon = iconState || intent?.iconState || null;
+  const branches = Array.isArray(icon?.branches) ? icon.branches : [];
+  if (!branches.length) return { branch_id: null, reason: "none", ranked_branch_ids: [] };
+
+  const isRejected = (bid) => {
+    const sel = latestIntentSelectionForBranch(bid);
+    const tok = sel?.token ? String(sel.token).trim().toUpperCase() : "";
+    return tok === "NO_TOKEN";
+  };
+
+  const hasBranch = (bid) => branches.some((b) => String(b?.branch_id || "") === bid);
+  const findBranchInsensitive = (raw) => {
+    const wanted = String(raw || "").trim();
+    if (!wanted) return "";
+    const exact = branches.find((b) => String(b?.branch_id || "") === wanted);
+    if (exact?.branch_id) return String(exact.branch_id);
+    const lower = wanted.toLowerCase();
+    const match = branches.find((b) => String(b?.branch_id || "").toLowerCase() === lower);
+    return match?.branch_id ? String(match.branch_id) : "";
+  };
+
+  const rankedBranches = _rankIntentBranches(icon);
+  const rankedIds = rankedBranches
+    .map((b) => (b?.branch_id ? String(b.branch_id) : ""))
+    .filter(Boolean);
+
+  // If the model provided an explicit checkpoint target, treat it as the active suggestion.
+  const checkpoint = icon?.checkpoint?.applies_to;
+  const checkpointBid = findBranchInsensitive(checkpoint);
+  if (checkpointBid && !isRejected(checkpointBid)) {
+    return {
+      branch_id: checkpointBid,
+      reason: "checkpoint",
+      ranked_branch_ids: rankedIds,
+      checkpoint_branch_id: checkpointBid,
+    };
+  }
+
+  const anyConf = rankedBranches.some((b) => typeof b?.confidence === "number" && Number.isFinite(b.confidence));
+  if (anyConf) {
+    for (const b of rankedBranches) {
+      const bid = b?.branch_id ? String(b.branch_id) : "";
+      if (!bid) continue;
+      if (isRejected(bid)) continue;
+      return { branch_id: bid, reason: "confidence", ranked_branch_ids: rankedIds, checkpoint_branch_id: checkpointBid || null };
+    }
+  }
+
+  const primaryInfo = _primaryBranchSuggestion(icon);
+  const p = primaryInfo?.branch_id ? String(primaryInfo.branch_id) : "";
+
+  // Use per-image vision descriptions (derived from images) as a tie-breaker or fallback hint.
+  const hint = inferIntentBranchFromVisionDescriptions();
+  if (hint && hasBranch(hint) && !isRejected(hint)) {
+    const primaryRejected = p ? isRejected(p) : true;
+    const primaryWeak = (Number(primaryInfo?.score) || 0) <= 1;
+    const primaryTied = (Number(primaryInfo?.ties) || 0) > 1;
+    if (primaryRejected || primaryWeak || primaryTied) {
+      return { branch_id: hint, reason: "vision_hint", ranked_branch_ids: rankedIds, checkpoint_branch_id: checkpointBid || null };
+    }
+  }
+
+  if (p && hasBranch(p) && !isRejected(p)) {
+    return { branch_id: p, reason: "primary_cluster", ranked_branch_ids: rankedIds, checkpoint_branch_id: checkpointBid || null };
+  }
+
+  for (const b of rankedBranches) {
+    const bid = b?.branch_id ? String(b.branch_id) : "";
+    if (!bid) continue;
+    if (isRejected(bid)) continue;
+    return { branch_id: bid, reason: "first_unrejected", ranked_branch_ids: rankedIds, checkpoint_branch_id: checkpointBid || null };
+  }
+
+  // If every branch has been rejected, fall back to the primary (if present) so START remains usable.
+  if (p && hasBranch(p)) return { branch_id: p, reason: "all_rejected_primary", ranked_branch_ids: rankedIds, checkpoint_branch_id: checkpointBid || null };
+  const first = rankedBranches[0]?.branch_id ? String(rankedBranches[0].branch_id) : "";
+  return { branch_id: first || null, reason: "all_rejected_first", ranked_branch_ids: rankedIds, checkpoint_branch_id: checkpointBid || null };
+}
+
+function pickSuggestedIntentBranchId(iconState = null) {
+  const picked = pickSuggestedIntentBranch(iconState);
+  const bid = picked?.branch_id ? String(picked.branch_id) : "";
+  return bid || null;
+}
+
+function lockIntentFromUi({ source = "ui" } = {}) {
+  const intent = state.intent;
+  if (!intent || intent.locked) return;
+
+  const iconState = ensureIntentFallbackIconState("lock");
+  if (!iconState) return;
+
+  let bid = String(pickSuggestedIntentBranchId(iconState) || "").trim();
+  if (bid === "__primary__") bid = "";
+  if (!bid) bid = String(primaryBranchIdFromIconState(iconState) || "").trim();
+  if (!bid) bid = String(pickDefaultIntentFocusBranchId(iconState) || "").trim();
+  if (!bid) return;
+
+  appendIntentTrace({
+    kind: "ui_accept",
+    source: source ? String(source) : "ui",
+    round: Math.max(1, Number(intent.round) || 1),
+    branch_id: bid,
+    icon_frame_id: iconState?.frame_id ? String(iconState.frame_id) : null,
+  }).catch(() => {});
+
+  // Persist the user's final choice as a YES on the current round for debugging/replay.
+  const round = Math.max(1, Number(intent.round) || 1);
+  upsertIntentSelection({ round, branchId: bid, tokenId: "YES_TOKEN" });
+  intent.focusBranchId = bid;
+  intent.uiHideSuggestion = false;
+  scheduleIntentStateWrite({ immediate: true });
+  lockIntentToBranch(bid).catch((err) => console.error(err));
+}
+
+function applyIntentSelection(branchId, tokenId) {
+  const intent = state.intent;
+  if (!intent || intent.locked) return;
+  const bid = String(branchId || intent.focusBranchId || pickSuggestedIntentBranchId(intent.iconState) || "").trim();
+  if (!bid) return;
+  const tok = String(tokenId || "")
+    .trim()
+    .toUpperCase();
+  if (!tok) return;
+
+  // Prevent users from spamming feedback while a new model frame is in flight.
+  if (intent.pending || intentInferenceTimer) {
+    showToast("Intent updating…", "tip", 1600);
+    return;
+  }
+
+  const round = Math.max(1, Number(intent.round) || 1);
+  if (tok === "YES_TOKEN") {
+    lockIntentFromUi({ source: "yes_token" });
+    return;
+  }
+
+  if (tok !== "NO_TOKEN") return;
+
+  // NO: hide the current suggestion and load another candidate.
+  upsertIntentSelection({ round, branchId: bid, tokenId: "NO_TOKEN" });
+  intent.focusBranchId = null;
+  intent.uiHideSuggestion = true;
+  intent.pending = true;
+  intent.pendingAt = Date.now();
+  intent.round = round + 1;
+  appendIntentTrace({
+    kind: "ui_reject",
+    source: "no_token",
+    round,
+    branch_id: bid,
+    icon_frame_id: intent.iconState?.frame_id ? String(intent.iconState.frame_id) : null,
+  }).catch(() => {});
+  scheduleIntentStateWrite({ immediate: true });
+  scheduleIntentInference({ immediate: true, reason: "reject" });
+  requestRender();
+}
+
+async function lockIntentToBranch(branchId) {
+  const intent = state.intent;
+  if (!intent || intent.locked) return false;
+  await ensureRun();
+
+  intent.locked = true;
+  intent.lockedAt = Date.now();
+  intent.lockedBranchId = String(branchId || intent.focusBranchId || "") || null;
+  intent.forceChoice = false;
+  intent.pending = false;
+  intent.pendingPath = null;
+  intent.pendingAt = 0;
+  intent.pendingFrameId = null;
+
+  appendIntentTrace({
+    kind: "intent_locked",
+    branch_id: intent.lockedBranchId ? String(intent.lockedBranchId) : null,
+    round: Math.max(1, Number(intent.round) || 1),
+    selection_count: Array.isArray(intent.selections) ? intent.selections.length : 0,
+    icon_frame_id: intent.iconState?.frame_id ? String(intent.iconState.frame_id) : null,
+  }).catch(() => {});
+
+  // Stop realtime session (best-effort).
+  clearTimeout(intentInferenceTimer);
+  intentInferenceTimer = null;
+  clearTimeout(intentInferenceTimeout);
+  intentInferenceTimeout = null;
+  stopIntentTicker();
+  intent.rtState = "off";
+  intent.disabledReason = null;
+  if (state.ptySpawned) {
+    invoke("write_pty", { data: "/intent_rt_stop\n" }).catch(() => {});
+  }
+
+  // Persist locked intent as a run artifact for downstream prompting/recommendations.
+  const lockedPayload = {
+    schema: "brood.intent_locked",
+    schema_version: 1,
+    locked_at_ms: Number(intent.lockedAt) || 0,
+    locked_branch_id: intent.lockedBranchId,
+    started_at_ms: Number(intent.startedAt) || 0,
+    deadline_at_ms: INTENT_TIMER_ENABLED ? Number(intent.deadlineAt) || 0 : 0,
+    round: Math.max(1, Number(intent.round) || 1),
+    total_rounds: INTENT_ROUNDS_ENABLED ? Math.max(1, Number(intent.totalRounds) || 3) : 0,
+    focus_branch_id: intent.focusBranchId ? String(intent.focusBranchId) : null,
+    selections: Array.isArray(intent.selections) ? intent.selections : [],
+    icon_state: intent.iconState || null,
+    icon_state_at_ms: Number(intent.iconStateAt) || 0,
+  };
+  const outPath = `${state.runDir}/${INTENT_LOCKED_FILENAME}`;
+  await writeTextFile(outPath, JSON.stringify(lockedPayload, null, 2)).catch(() => {});
+  scheduleIntentStateWrite({ immediate: true });
+
+  // Reveal the normal UI.
+  syncIntentModeClass();
+  updateEmptyCanvasHint();
+  renderQuickActions();
+  renderHudReadout();
+  requestRender();
+  showToast("Intent locked.", "tip", 1800);
   return true;
 }
 
@@ -2509,8 +4011,10 @@ function buildMotherText() {
   const hasOutput = Boolean(raw);
 
   if (aov?.enabled) {
-    if (aov.rtState === "connecting" && !aov.pending && !hasOutput) return "CTX: Connecting…";
-    if (aov.pending) return "CTX: SCANNING…";
+    if (aov.rtState === "connecting" && !aov.pending && !hasOutput) {
+      return "CTX: Connecting…";
+    }
+    if (aov.pending) return "CTX: ANALYZING…";
     if (hasOutput) {
       const summary = extractCanvasContextSummary(raw);
       const top = extractCanvasContextTopAction(raw);
@@ -2857,6 +4361,8 @@ function getActiveImage() {
 
 function setCanvasMode(mode) {
   const next = mode === "multi" ? "multi" : "single";
+  // Intent Mode requires the freeform spatial canvas; keep users in multi mode until intent is locked.
+  if (intentModeActive() && next !== "multi") return;
   if (state.canvasMode === next) return;
   state.canvasMode = next;
   state.multiRects.clear();
@@ -2896,6 +4402,34 @@ function ensureCanvasImageLoaded(item) {
       item.img = img;
       item.width = img?.naturalWidth || null;
       item.height = img?.naturalHeight || null;
+      // One-shot: once we know the real aspect ratio, convert square placeholders into
+      // aspect-correct freeform rects (keeps the click-to-place flow feeling intentional).
+      if (item?.id) {
+        const rect = state.freeformRects.get(item.id) || null;
+        const iw = item.width;
+        const ih = item.height;
+        if (rect && rect.autoAspect && iw && ih) {
+          const prevH = Number(rect.h) || 1;
+          const nextH = Math.max(1, Math.round(rect.w * (ih / iw)));
+          rect.h = nextH;
+          // Keep the rect center stable as we switch from placeholder square -> real aspect.
+          rect.y = (Number(rect.y) || 0) + Math.round((prevH - nextH) / 2);
+          rect.autoAspect = false;
+          const wrap = els.canvasWrap;
+          const cw = wrap?.clientWidth || 0;
+          const ch = wrap?.clientHeight || 0;
+          const margin = 14;
+          if (cw && ch) {
+            rect.x = clamp(Math.round(rect.x), margin, Math.max(margin, Math.round(cw - rect.w - margin)));
+            rect.y = clamp(Math.round(rect.y), margin, Math.max(margin, Math.round(ch - rect.h - margin)));
+          }
+          scheduleVisualPromptWrite();
+          if (intentModeActive()) {
+            scheduleIntentInference({ immediate: true, reason: "aspect" });
+            scheduleIntentStateWrite();
+          }
+        }
+      }
     })
     .catch((err) => {
       console.warn("Failed to load image for canvas:", err);
@@ -2955,6 +4489,239 @@ function computeMultiRects(items, canvasW, canvasH) {
     rects.set(item.id, { x, y, w, h, cellX, cellY, cellW, cellH });
   }
   return rects;
+}
+
+function freeformDefaultTileCss(canvasCssW, canvasCssH, { count = null } = {}) {
+  const isMobile =
+    window.matchMedia && typeof window.matchMedia === "function"
+      ? window.matchMedia("(max-width: 980px)").matches
+      : false;
+  const minDim = Math.max(1, Math.min(Number(canvasCssW) || 0, Number(canvasCssH) || 0));
+  const n = Math.max(1, Number.isFinite(Number(count)) ? Math.round(Number(count) || 0) : 1);
+
+  // Default import size: bias larger because most sessions start with 1-3 images.
+  // Still clamp to avoid overlap in the auto-layout grid.
+  let frac = isMobile ? 0.38 : 0.26;
+  if (isMobile) {
+    if (n <= 1) frac = 0.62;
+    else if (n === 2) frac = 0.48;
+    else if (n === 3) frac = 0.44;
+    else if (n === 4) frac = 0.40;
+  } else {
+    if (n <= 1) frac = 0.54;
+    else if (n === 2) frac = 0.42;
+    else if (n === 3) frac = 0.38;
+    else if (n === 4) frac = 0.32;
+  }
+
+  const base = Math.round(minDim * frac);
+  const minPx = isMobile ? 160 : 220;
+  const maxPx = isMobile ? (n <= 1 ? 520 : 420) : n <= 1 ? 680 : 560;
+
+  // Ensure the implied grid (based on n) can fit within the canvas.
+  const margin = 14;
+  const gapFrac = 0.11;
+  let cols = 1;
+  if (n === 2) cols = 2;
+  else if (n <= 4) cols = 2;
+  else cols = 3;
+  const rows = Math.ceil(n / cols);
+  const availW = Math.max(1, (Number(canvasCssW) || 0) - margin * 2);
+  const availH = Math.max(1, (Number(canvasCssH) || 0) - margin * 2);
+  const denomW = cols + Math.max(0, cols - 1) * gapFrac;
+  const denomH = rows + Math.max(0, rows - 1) * gapFrac;
+  const fitMax = Math.floor(Math.min(availW / Math.max(denomW, 0.0001), availH / Math.max(denomH, 0.0001)));
+
+  return clamp(base, minPx, Math.max(minPx, Math.min(maxPx, fitMax)));
+}
+
+function ensureFreeformLayoutRectsCss(items, canvasCssW, canvasCssH) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return;
+  const tile = freeformDefaultTileCss(canvasCssW, canvasCssH, { count: list.length });
+  const gap = Math.round(tile * 0.11);
+  const margin = 14;
+
+  // Keep z-order stable: start with import order, allow runtime reordering via state.freeformZOrder.
+  for (const item of list) {
+    if (!item?.id) continue;
+    if (!state.freeformZOrder.includes(item.id)) state.freeformZOrder.push(item.id);
+  }
+
+  const missing = list.some((item) => item?.id && !state.freeformRects.has(item.id));
+  if (!missing) return;
+
+  const n = list.length;
+  let cols = 1;
+  if (n === 2) cols = 2;
+  else if (n <= 4) cols = 2;
+  else cols = 3;
+  const rows = Math.ceil(n / cols);
+
+  const gridW = cols * tile + (cols - 1) * gap;
+  const gridH = rows * tile + (rows - 1) * gap;
+  const startX = Math.round((canvasCssW - gridW) * 0.5);
+  const startY = Math.round((canvasCssH - gridH) * 0.5);
+
+  for (let i = 0; i < list.length; i += 1) {
+    const item = list[i];
+    if (!item?.id) continue;
+    if (state.freeformRects.has(item.id)) continue;
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    let x = startX + col * (tile + gap);
+    let y = startY + row * (tile + gap);
+    x = clamp(Math.round(x), margin, Math.max(margin, Math.round(canvasCssW - tile - margin)));
+    y = clamp(Math.round(y), margin, Math.max(margin, Math.round(canvasCssH - tile - margin)));
+    state.freeformRects.set(item.id, { x, y, w: tile, h: tile, autoAspect: true });
+  }
+}
+
+function computeFreeformRectsPx(canvasW, canvasH) {
+  const dpr = getDpr();
+  const canvasCssW = (Number(canvasW) || 0) / dpr;
+  const canvasCssH = (Number(canvasH) || 0) / dpr;
+  ensureFreeformLayoutRectsCss(state.images || [], canvasCssW, canvasCssH);
+
+  const rects = new Map();
+  for (const imageId of state.freeformZOrder || []) {
+    const rectCss = state.freeformRects.get(imageId) || null;
+    if (!rectCss) continue;
+    rects.set(imageId, {
+      x: Math.round((Number(rectCss.x) || 0) * dpr),
+      y: Math.round((Number(rectCss.y) || 0) * dpr),
+      w: Math.max(1, Math.round((Number(rectCss.w) || 1) * dpr)),
+      h: Math.max(1, Math.round((Number(rectCss.h) || 1) * dpr)),
+    });
+  }
+  return rects;
+}
+
+function clampFreeformRectCss(rectCss, canvasCssW, canvasCssH, { margin = 14, minSize = 44 } = {}) {
+  const w = Math.max(minSize, Math.round(Number(rectCss?.w) || 0));
+  const h = Math.max(minSize, Math.round(Number(rectCss?.h) || 0));
+  const maxX = Math.max(margin, Math.round((Number(canvasCssW) || 0) - w - margin));
+  const maxY = Math.max(margin, Math.round((Number(canvasCssH) || 0) - h - margin));
+  return {
+    x: clamp(Math.round(Number(rectCss?.x) || 0), margin, maxX),
+    y: clamp(Math.round(Number(rectCss?.y) || 0), margin, maxY),
+    w,
+    h,
+    autoAspect: Boolean(rectCss?.autoAspect),
+  };
+}
+
+function hitTestFreeformCornerHandle(ptCanvas, rectPx) {
+  if (!ptCanvas || !rectPx) return null;
+  const dpr = getDpr();
+  const hs = Math.max(10, Math.round(10 * dpr));
+  const r = Math.round(hs / 2);
+  const corners = [
+    { id: "nw", x: rectPx.x, y: rectPx.y },
+    { id: "ne", x: rectPx.x + rectPx.w, y: rectPx.y },
+    { id: "sw", x: rectPx.x, y: rectPx.y + rectPx.h },
+    { id: "se", x: rectPx.x + rectPx.w, y: rectPx.y + rectPx.h },
+  ];
+  for (const c of corners) {
+    if (Math.abs(ptCanvas.x - c.x) <= r && Math.abs(ptCanvas.y - c.y) <= r) return c.id;
+  }
+  return null;
+}
+
+function hitTestFreeformCornerHandleWithPad(ptCanvas, rectPx, padPx = 0) {
+  if (!ptCanvas || !rectPx) return null;
+  const dpr = getDpr();
+  const hs = Math.max(10, Math.round(10 * dpr));
+  const r = Math.round(hs / 2) + Math.max(0, Math.round(Number(padPx) || 0));
+  const corners = [
+    { id: "nw", x: rectPx.x, y: rectPx.y },
+    { id: "ne", x: rectPx.x + rectPx.w, y: rectPx.y },
+    { id: "sw", x: rectPx.x, y: rectPx.y + rectPx.h },
+    { id: "se", x: rectPx.x + rectPx.w, y: rectPx.y + rectPx.h },
+  ];
+  for (const c of corners) {
+    if (Math.abs(ptCanvas.x - c.x) <= r && Math.abs(ptCanvas.y - c.y) <= r) return c.id;
+  }
+  return null;
+}
+
+function hitTestAnyFreeformCornerHandle(ptCanvas, { padPx = 0 } = {}) {
+  if (!ptCanvas) return null;
+  const ms = state.multiView?.scale || 1;
+  const mx = state.multiView?.offsetX || 0;
+  const my = state.multiView?.offsetY || 0;
+  const x = (ptCanvas.x - mx) / Math.max(ms, 0.0001);
+  const y = (ptCanvas.y - my) / Math.max(ms, 0.0001);
+  const entries = Array.from(state.multiRects.entries());
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const [id, rect] = entries[i];
+    if (!rect) continue;
+    const corner = hitTestFreeformCornerHandleWithPad({ x, y }, rect, padPx);
+    if (!corner) continue;
+    return { id, corner };
+  }
+  return null;
+}
+
+function resizeFreeformRectFromCorner(startRectCss, corner, pointerCss, canvasCssW, canvasCssH) {
+  const start = startRectCss || {};
+  const x0 = Number(start.x) || 0;
+  const y0 = Number(start.y) || 0;
+  const w0 = Math.max(1, Number(start.w) || 1);
+  const h0 = Math.max(1, Number(start.h) || 1);
+  const x1 = x0 + w0;
+  const y1 = y0 + h0;
+
+  const px = Number(pointerCss?.x) || 0;
+  const py = Number(pointerCss?.y) || 0;
+
+  let fx = x0;
+  let fy = y0;
+  let sx = 1;
+  let sy = 1;
+  if (corner === "nw") {
+    fx = x1;
+    fy = y1;
+    sx = -1;
+    sy = -1;
+  } else if (corner === "ne") {
+    fx = x0;
+    fy = y1;
+    sx = 1;
+    sy = -1;
+  } else if (corner === "sw") {
+    fx = x1;
+    fy = y0;
+    sx = -1;
+    sy = 1;
+  } else if (corner === "se") {
+    fx = x0;
+    fy = y0;
+    sx = 1;
+    sy = 1;
+  }
+
+  const dx = px - fx;
+  const dy = py - fy;
+  const aspect = w0 / Math.max(1, h0);
+  const absW = Math.max(1, Math.abs(dx));
+  const absH = Math.max(1, Math.abs(dy));
+
+  const nextW = Math.max(absW, absH * aspect);
+  const nextH = nextW / Math.max(0.001, aspect);
+
+  const cx = fx + sx * nextW;
+  const cy = fy + sy * nextH;
+  const nx0 = Math.min(fx, cx);
+  const ny0 = Math.min(fy, cy);
+  const nx1 = Math.max(fx, cx);
+  const ny1 = Math.max(fy, cy);
+
+  return clampFreeformRectCss(
+    { x: nx0, y: ny0, w: nx1 - nx0, h: ny1 - ny0, autoAspect: false },
+    canvasCssW,
+    canvasCssH
+  );
 }
 
 function computeAutoCanvasDiagnoseSignature() {
@@ -3033,6 +4800,7 @@ async function runAutoCanvasDiagnose(signature) {
 
 async function renderCanvasSnapshotForDiagnose({ maxDimPx = 1200 } = {}) {
   const baseCanvas = els.workCanvas;
+  if (!baseCanvas) return null;
   const dpr = getDpr();
   const baseW = baseCanvas?.width || Math.round(900 * dpr);
   const baseH = baseCanvas?.height || Math.round(700 * dpr);
@@ -3054,23 +4822,8 @@ async function renderCanvasSnapshotForDiagnose({ maxDimPx = 1200 } = {}) {
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, w, h);
 
-  const rects = computeMultiRects(state.images || [], w, h);
-  for (const item of state.images || []) {
-    if (!item?.id || !item?.path) continue;
-    const rect = rects.get(item.id);
-    if (!rect) continue;
-    if (!item.img) {
-      try {
-        item.img = await loadImage(item.path);
-        item.width = item.img?.naturalWidth || item.width || null;
-        item.height = item.img?.naturalHeight || item.height || null;
-      } catch {
-        continue;
-      }
-    }
-    if (!item.img) continue;
-    ctx.drawImage(item.img, rect.x, rect.y, rect.w, rect.h);
-  }
+  // Snapshot the actual canvas pixels so freeform spatial layout is preserved.
+  ctx.drawImage(baseCanvas, 0, 0, w, h);
   return canvas;
 }
 
@@ -3087,6 +4840,28 @@ function hitTestMulti(pt) {
     if (!rect) continue;
     if (x < rect.x || x > rect.x + rect.w) continue;
     if (y < rect.y || y > rect.y + rect.h) continue;
+    return id;
+  }
+  return null;
+}
+
+function hitTestMultiWithPad(pt, padPx = 0) {
+  const padRaw = Math.max(0, Number(padPx) || 0);
+  if (!padRaw) return hitTestMulti(pt);
+  if (!pt) return null;
+  const ms = state.multiView?.scale || 1;
+  const mx = state.multiView?.offsetX || 0;
+  const my = state.multiView?.offsetY || 0;
+  const x = (pt.x - mx) / Math.max(ms, 0.0001);
+  const y = (pt.y - my) / Math.max(ms, 0.0001);
+  // Pad is specified in screen/canvas pixels; convert to local multi-rect space.
+  const pad = padRaw / Math.max(ms, 0.0001);
+  const entries = Array.from(state.multiRects.entries());
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const [id, rect] = entries[i];
+    if (!rect) continue;
+    if (x < rect.x - pad || x > rect.x + rect.w + pad) continue;
+    if (y < rect.y - pad || y > rect.y + rect.h + pad) continue;
     return id;
   }
   return null;
@@ -4584,6 +6359,32 @@ function computeQuickActions() {
 function renderQuickActions() {
   const root = els.quickActions;
   if (!root) return;
+  if (intentModeActive()) {
+    const intent = state.intent || {};
+    root.innerHTML = "";
+    const box = document.createElement("div");
+    box.className = "actions-empty actions-locked";
+    const title = document.createElement("div");
+    title.className = "actions-locked-title";
+    title.textContent = "INTENT MODE";
+    box.appendChild(title);
+    const meta = document.createElement("div");
+    meta.className = "actions-locked-meta";
+    const round = Math.max(1, Number(intent.round) || 1);
+    const total = Math.max(1, Number(intent.totalRounds) || 3);
+    const rt = intent.rtState ? String(intent.rtState).toUpperCase() : "OFF";
+    const bits = [];
+    bits.push(INTENT_ROUNDS_ENABLED ? `Round ${round}/${total}` : `Round ${round}`);
+    bits.push(`Realtime: ${rt}`);
+    if (INTENT_FORCE_CHOICE_ENABLED && intent.forceChoice) bits.push("FORCE CHOICE");
+    if (intent.lastError) bits.push(String(intent.lastError));
+    if (intent.disabledReason) bits.push(String(intent.disabledReason));
+    meta.textContent = bits.join("\n");
+    box.appendChild(meta);
+    root.appendChild(box);
+    renderCanvasContextSuggestion();
+    return;
+  }
   let actions = computeQuickActions();
   const rec = state.canvasContextSuggestion;
   if (state.alwaysOnVision?.enabled && rec?.action) {
@@ -4963,6 +6764,9 @@ function addImage(item, { select = false } = {}) {
   if (state.imagesById.has(item.id)) return;
   state.imagesById.set(item.id, item);
   state.images.push(item);
+  if (!state.freeformZOrder.includes(item.id)) {
+    state.freeformZOrder.push(item.id);
+  }
   ensureTimelineNodeForImageItem(item);
   appendFilmstripThumb(item);
   if (state.canvasMode === "multi") {
@@ -4972,9 +6776,14 @@ function addImage(item, { select = false } = {}) {
   if (item.receiptPath && !item.receiptMetaChecked) {
     ensureReceiptMeta(item).catch(() => {});
   }
-  showDropHint(state.images.length === 0);
+  showDropHint(false);
   scheduleVisualPromptWrite();
   scheduleAlwaysOnVision();
+  if (intentModeActive()) {
+    updateEmptyCanvasHint();
+    scheduleIntentInference({ immediate: true, reason: "add" });
+    scheduleIntentStateWrite();
+  }
   if (select || !state.activeId) {
     setActiveImage(item.id).catch(() => {});
   }
@@ -4998,6 +6807,8 @@ async function removeImageFromCanvas(imageId) {
   // Remove from collections.
   state.imagesById.delete(id);
   state.images = (state.images || []).filter((item) => item?.id !== id);
+  state.freeformRects.delete(id);
+  state.freeformZOrder = (state.freeformZOrder || []).filter((v) => v !== id);
   state.multiRects.delete(id);
 
   // Remove filmstrip thumb if present (filmstrip might be hidden in multi mode).
@@ -5023,7 +6834,9 @@ async function removeImageFromCanvas(imageId) {
   if (state.images.length === 0) {
     clearImageCache();
     state.activeId = null;
-    state.canvasMode = "single";
+    state.canvasMode = "multi";
+    state.freeformRects.clear();
+    state.freeformZOrder = [];
     state.multiRects.clear();
     state.pendingBlend = null;
     state.pendingSwapDna = null;
@@ -5032,7 +6845,40 @@ async function removeImageFromCanvas(imageId) {
     state.pendingRecast = null;
     state.pendingDiagnose = null;
     clearSelection();
-    showDropHint(true);
+    if (state.intent && !state.intent.locked) {
+      state.intent.lockedAt = 0;
+      state.intent.lockedBranchId = null;
+      state.intent.startedAt = 0;
+      state.intent.deadlineAt = 0;
+      state.intent.round = 1;
+      state.intent.selections = [];
+      state.intent.focusBranchId = null;
+      state.intent.iconState = null;
+      state.intent.iconStateAt = 0;
+      state.intent.pending = false;
+      state.intent.pendingPath = null;
+      state.intent.pendingAt = 0;
+      state.intent.pendingFrameId = null;
+      state.intent.rtState = "off";
+      state.intent.disabledReason = null;
+      state.intent.lastError = null;
+      state.intent.lastErrorAt = 0;
+      state.intent.lastSignature = null;
+      state.intent.lastRunAt = 0;
+      state.intent.forceChoice = false;
+      state.intent.uiHits = [];
+      clearTimeout(intentInferenceTimer);
+      intentInferenceTimer = null;
+      clearTimeout(intentInferenceTimeout);
+      intentInferenceTimeout = null;
+      stopIntentTicker();
+      if (state.ptySpawned) {
+        invoke("write_pty", { data: "/intent_rt_stop\n" }).catch(() => {});
+      }
+      syncIntentModeClass();
+      scheduleIntentStateWrite({ immediate: true });
+    }
+    updateEmptyCanvasHint();
     setTip(DEFAULT_TIP);
     setDirectorText(null, null);
     renderFilmstrip();
@@ -5042,13 +6888,12 @@ async function removeImageFromCanvas(imageId) {
     return true;
   }
 
-  if (state.canvasMode === "multi" && state.images.length < 2) {
-    setCanvasMode("single");
-  } else {
-    renderFilmstrip();
-  }
+  renderFilmstrip();
 
+  updateEmptyCanvasHint();
   scheduleVisualPromptWrite();
+  if (intentModeActive()) scheduleIntentInference({ immediate: true, reason: "remove" });
+  scheduleIntentStateWrite();
   renderQuickActions();
   renderHudReadout();
   requestRender();
@@ -5213,7 +7058,7 @@ function buildVisualPrompt() {
   let multiRects = null;
   if (state.canvasMode === "multi" && canvas) {
     const rectMap =
-      state.multiRects && state.multiRects.size ? state.multiRects : computeMultiRects(state.images, canvas.width, canvas.height);
+      state.multiRects && state.multiRects.size ? state.multiRects : computeFreeformRectsPx(canvas.width, canvas.height);
     multiRects = Array.from(rectMap.entries()).map(([imageId, rect]) => ({
       image_id: String(imageId),
       x: Number(rect?.x) || 0,
@@ -5234,6 +7079,16 @@ function buildVisualPrompt() {
     label: item?.label ? String(item.label) : null,
     width: Number(item?.img?.naturalWidth || item?.width) || null,
     height: Number(item?.img?.naturalHeight || item?.height) || null,
+    // Optional vision-side description of the image contents (e.g., "couch").
+    // This is written for run trace/debugging only; intent inference remains images-only.
+    vision_desc: item?.visionDesc ? String(item.visionDesc) : null,
+    vision_desc_meta: item?.visionDescMeta
+      ? {
+          source: item.visionDescMeta?.source ? String(item.visionDescMeta.source) : null,
+          model: item.visionDescMeta?.model ? String(item.visionDescMeta.model) : null,
+          at_ms: Number(item.visionDescMeta?.at) || null,
+        }
+      : null,
   }));
 
   const marks = [];
@@ -5354,35 +7209,98 @@ async function writeVisualPrompt() {
   return true;
 }
 
-async function importPhotos() {
+function _defaultImportPointCss() {
+  const wrap = els.canvasWrap;
+  const w = wrap?.clientWidth || 0;
+  const h = wrap?.clientHeight || 0;
+  return { x: Math.round(w * 0.5), y: Math.round(h * 0.5) };
+}
+
+function _computeImportPlacementsCss(n, center, tile, gap, canvasCssW, canvasCssH) {
+  const count = Math.max(0, Number(n) || 0);
+  if (!count) return [];
+  const margin = 14;
+  let cols = 1;
+  if (count === 2) cols = 2;
+  else if (count <= 4) cols = 2;
+  else cols = 3;
+  const rows = Math.ceil(count / cols);
+  const clusterW = cols * tile + (cols - 1) * gap;
+  const clusterH = rows * tile + (rows - 1) * gap;
+  const maxX = Math.max(margin, Math.round(canvasCssW - clusterW - margin));
+  const maxY = Math.max(margin, Math.round(canvasCssH - clusterH - margin));
+  const startX = clamp(Math.round((Number(center?.x) || 0) - clusterW / 2), margin, maxX);
+  const startY = clamp(Math.round((Number(center?.y) || 0) - clusterH / 2), margin, maxY);
+  const out = [];
+  for (let i = 0; i < count; i += 1) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    out.push({
+      x: Math.round(startX + col * (tile + gap)),
+      y: Math.round(startY + row * (tile + gap)),
+      w: tile,
+      h: tile,
+    });
+  }
+  return out;
+}
+
+async function importPhotosAtCanvasPoint(pointCss) {
   bumpInteraction();
   setStatus("Engine: pick photos…");
+
   const picked = await open({
     multiple: true,
-    filters: [
-      { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "heic"] },
-    ],
+    filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "heic"] }],
   });
   const pickedPaths = Array.isArray(picked) ? picked : picked ? [picked] : [];
   if (pickedPaths.length === 0) {
     setStatus("Engine: ready");
     return;
   }
+
+  const INTENT_MAX_PHOTOS = 5;
+  const intentActive = Boolean(state.intent && !state.intent.locked);
+  const remaining = intentActive ? Math.max(0, INTENT_MAX_PHOTOS - (state.images?.length || 0)) : Infinity;
+  const pickedLimited = Number.isFinite(remaining) ? pickedPaths.slice(0, remaining) : pickedPaths;
+  if (intentActive && pickedLimited.length < pickedPaths.length) {
+    showToast(`Intent Mode: only ${INTENT_MAX_PHOTOS} photos allowed.`, "tip", 2600);
+  }
+  if (pickedLimited.length === 0) {
+    setStatus("Engine: ready");
+    return;
+  }
+
   await ensureRun();
   const inputsDir = `${state.runDir}/inputs`;
   await createDir(inputsDir, { recursive: true }).catch(() => {});
   const stamp = Date.now();
+
+  const wrap = els.canvasWrap;
+  const canvasCssW = wrap?.clientWidth || 0;
+  const canvasCssH = wrap?.clientHeight || 0;
+  const totalAfter = (state.images?.length || 0) + pickedLimited.length;
+  const tile = freeformDefaultTileCss(canvasCssW, canvasCssH, { count: totalAfter });
+  const gap = Math.round(tile * 0.11);
+  const placements = _computeImportPlacementsCss(pickedLimited.length, pointCss, tile, gap, canvasCssW, canvasCssH);
+
   let ok = 0;
   let failed = 0;
   let lastErr = null;
-  for (let idx = 0; idx < pickedPaths.length; idx += 1) {
-    const src = pickedPaths[idx];
+  for (let idx = 0; idx < pickedLimited.length; idx += 1) {
+    const src = pickedLimited[idx];
     if (typeof src !== "string" || !src) continue;
     try {
       const ext = extname(src);
       const safeExt = ext && ext.length <= 8 ? ext : ".png";
       const artifactId = `input-${stamp}-${String(idx).padStart(2, "0")}`;
       const dest = `${inputsDir}/${artifactId}${safeExt}`;
+
+      const place = placements[idx] || null;
+      if (place && artifactId) {
+        state.freeformRects.set(artifactId, { ...place, autoAspect: true });
+      }
+
       await copyFile(src, dest);
       const receiptPath = await writeLocalReceipt({
         artifactId,
@@ -5407,20 +7325,34 @@ async function importPhotos() {
       console.error("Import failed:", src, err);
     }
   }
+
   if (ok > 0) {
     const suffix = failed ? ` (${failed} failed)` : "";
     setStatus(`Engine: imported ${ok} photo${ok === 1 ? "" : "s"}${suffix}`, failed > 0);
-    if (state.images.length > 1) {
-      setCanvasMode("multi");
-      setTip("Multiple photos loaded. Click a photo to select it. Press M to toggle multi view. Use L to lasso or D to designate.");
+    if (intentActive && !state.intent.startedAt) {
+      state.intent.startedAt = Date.now();
+      state.intent.deadlineAt = state.intent.startedAt + INTENT_DEADLINE_MS;
+      state.intent.rtState = "connecting";
+      ensureIntentTicker();
     }
+    if (intentActive) {
+      updateEmptyCanvasHint();
+      scheduleIntentInference({ immediate: true, reason: "import" });
+      scheduleIntentStateWrite({ immediate: true });
+    }
+    requestRender();
   } else {
     const msg = lastErr?.message || String(lastErr || "unknown error");
     setStatus(`Engine: import failed (${msg})`, true);
   }
 }
 
+async function importPhotos() {
+  await importPhotosAtCanvasPoint(_defaultImportPointCss());
+}
+
 async function cropSquare({ fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
   bumpInteraction();
   if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
     enqueueAction({
@@ -5497,6 +7429,7 @@ async function aiReplaceBackground(style) {
 }
 
 async function aiRemovePeople({ fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
   bumpInteraction();
   if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
     enqueueAction({
@@ -5546,6 +7479,7 @@ async function aiRemovePeople({ fromQueue = false } = {}) {
 }
 
 async function aiSurpriseMe({ fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
   bumpInteraction();
   if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
     enqueueAction({
@@ -5611,6 +7545,7 @@ async function aiAnnotateEdit({
   instructionOverride = null,
   requestedModelOverride = null,
 } = {}) {
+  if (!requireIntentUnlocked()) return;
   bumpInteraction();
   const activeItem = getActiveImage();
   const imgItem = targetId ? state.imagesById.get(targetId) || null : activeItem;
@@ -5825,6 +7760,7 @@ async function compositeAnnotateBoxEdit(targetId, editedCropPath, { box, instruc
 }
 
 async function applyBackground(style, { fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
   bumpInteraction();
   if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
     const label = style === "sweep" ? "Background: Sweep" : "Background: White";
@@ -5994,6 +7930,7 @@ async function saveCanvasAsArtifact(canvas, { operation, label, meta = {}, repla
 }
 
 async function runVariations({ fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
   bumpInteraction();
   if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
     enqueueAction({
@@ -6033,6 +7970,7 @@ function quoteForPtyArg(value) {
 }
 
 async function runBlendPair({ fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
   bumpInteraction();
   if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
     enqueueAction({
@@ -6087,6 +8025,7 @@ async function runBlendPair({ fromQueue = false } = {}) {
 }
 
 async function runSwapDnaPair({ invert = false, fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
   bumpInteraction();
   if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
     enqueueAction({
@@ -6152,6 +8091,7 @@ async function runSwapDnaPair({ invert = false, fromQueue = false } = {}) {
 }
 
 async function runBridgePair({ fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
   bumpInteraction();
   if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
     enqueueAction({
@@ -6210,6 +8150,7 @@ async function runBridgePair({ fromQueue = false } = {}) {
 }
 
 async function runArguePair({ fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
   bumpInteraction();
   if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
     enqueueAction({
@@ -6265,6 +8206,7 @@ async function runArguePair({ fromQueue = false } = {}) {
 }
 
 async function runExtractRuleTriplet({ fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
   bumpInteraction();
   if (!fromQueue && (isEngineBusy() || isMultiActionRunning() || state.actionQueueActive || state.actionQueue.length)) {
     enqueueAction({
@@ -6320,6 +8262,7 @@ async function runExtractRuleTriplet({ fromQueue = false } = {}) {
 }
 
 async function runOddOneOutTriplet({ fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
   bumpInteraction();
   if (!fromQueue && (isEngineBusy() || isMultiActionRunning() || state.actionQueueActive || state.actionQueue.length)) {
     enqueueAction({
@@ -6375,6 +8318,7 @@ async function runOddOneOutTriplet({ fromQueue = false } = {}) {
 }
 
 async function runTriforceTriplet({ fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
   bumpInteraction();
   if (!fromQueue && (isEngineBusy() || isMultiActionRunning() || state.actionQueueActive || state.actionQueue.length)) {
     enqueueAction({
@@ -6439,6 +8383,7 @@ async function runTriforceTriplet({ fromQueue = false } = {}) {
 }
 
 async function runDiagnose({ fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
   bumpInteraction();
   if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
     enqueueAction({
@@ -6479,6 +8424,7 @@ async function runDiagnose({ fromQueue = false } = {}) {
 }
 
 async function runRecast({ fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
   bumpInteraction();
   if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
     enqueueAction({
@@ -6560,7 +8506,9 @@ async function createRun() {
   closeTimeline();
   state.designationsByImageId.clear();
   state.pendingDesignation = null;
-  state.canvasMode = "single";
+  state.canvasMode = "multi";
+  state.freeformRects.clear();
+  state.freeformZOrder = [];
   state.multiRects.clear();
   state.pendingBlend = null;
   state.pendingSwapDna = null;
@@ -6588,10 +8536,38 @@ async function createRun() {
   state.lastRecreatePrompt = null;
   state.lastDirectorText = null;
   state.lastDirectorMeta = null;
+  state.intent.locked = false;
+  state.intent.lockedAt = 0;
+  state.intent.lockedBranchId = null;
+  state.intent.startedAt = 0;
+  state.intent.deadlineAt = 0;
+  state.intent.round = 1;
+  state.intent.selections = [];
+  state.intent.focusBranchId = null;
+  state.intent.iconState = null;
+  state.intent.iconStateAt = 0;
+  state.intent.pending = false;
+  state.intent.pendingPath = null;
+  state.intent.rtState = "off";
+  state.intent.disabledReason = null;
+  state.intent.lastError = null;
+  state.intent.lastErrorAt = 0;
+  state.intent.lastSignature = null;
+  state.intent.lastRunAt = 0;
+  state.intent.forceChoice = false;
+  state.intent.uiHits = [];
   setRunInfo(`Run: ${state.runDir}`);
   setTip(DEFAULT_TIP);
   setDirectorText(null, null);
-  showDropHint(true);
+  stopIntentTicker();
+  clearTimeout(intentInferenceTimer);
+  intentInferenceTimer = null;
+  clearTimeout(intentInferenceTimeout);
+  intentInferenceTimeout = null;
+  clearTimeout(intentStateWriteTimer);
+  intentStateWriteTimer = null;
+  syncIntentModeClass();
+  updateEmptyCanvasHint();
   renderFilmstrip();
   chooseSpawnNodes();
   scheduleVisualPromptWrite({ immediate: true });
@@ -6619,7 +8595,9 @@ async function openExistingRun() {
   closeTimeline();
   state.designationsByImageId.clear();
   state.pendingDesignation = null;
-  state.canvasMode = "single";
+  state.canvasMode = "multi";
+  state.freeformRects.clear();
+  state.freeformZOrder = [];
   state.multiRects.clear();
   state.pendingBlend = null;
   state.pendingSwapDna = null;
@@ -6648,10 +8626,39 @@ async function openExistingRun() {
   state.lastRecreatePrompt = null;
   state.lastDirectorText = null;
   state.lastDirectorMeta = null;
+  state.intent.locked = false;
+  state.intent.lockedAt = 0;
+  state.intent.lockedBranchId = null;
+  state.intent.startedAt = 0;
+  state.intent.deadlineAt = 0;
+  state.intent.round = 1;
+  state.intent.selections = [];
+  state.intent.focusBranchId = null;
+  state.intent.iconState = null;
+  state.intent.iconStateAt = 0;
+  state.intent.pending = false;
+  state.intent.pendingPath = null;
+  state.intent.rtState = "off";
+  state.intent.disabledReason = null;
+  state.intent.lastError = null;
+  state.intent.lastErrorAt = 0;
+  state.intent.lastSignature = null;
+  state.intent.lastRunAt = 0;
+  state.intent.forceChoice = false;
+  state.intent.uiHits = [];
   setRunInfo(`Run: ${state.runDir}`);
   setTip(DEFAULT_TIP);
   setDirectorText(null, null);
-  showDropHint(true);
+  stopIntentTicker();
+  clearTimeout(intentInferenceTimer);
+  intentInferenceTimer = null;
+  clearTimeout(intentInferenceTimeout);
+  intentInferenceTimeout = null;
+  clearTimeout(intentStateWriteTimer);
+  intentStateWriteTimer = null;
+  syncIntentModeClass();
+  updateEmptyCanvasHint();
+  await restoreIntentStateFromRunDir().catch(() => {});
   await loadExistingArtifacts();
   await spawnEngine();
   await startEventsPolling();
@@ -7077,7 +9084,8 @@ async function handleEvent(event) {
         image_path: event.image_path || null,
         partial: isPartial,
       };
-      if (String(event.source || "") === "openai_realtime") {
+      const src = String(event.source || "");
+      if (src === "openai_realtime") {
         aov.rtState = "ready";
         aov.disabledReason = null;
       }
@@ -7117,12 +9125,13 @@ async function handleEvent(event) {
         at: Date.now(),
         image_path: event.image_path || null,
       };
-      if (event.fatal && String(event.source || "") === "openai_realtime") {
+      const src = String(event.source || "");
+      if (event.fatal && src === "openai_realtime") {
         aov.enabled = false;
         aov.rtState = "failed";
         aov.disabledReason = event.error
           ? `Always-on vision disabled: ${event.error}`
-          : "Always-on vision disabled (realtime error).";
+          : `Always-on vision disabled (${src || "canvas context"} error).`;
         settings.alwaysOnVision = false;
         localStorage.setItem("brood.alwaysOnVision", "0");
         if (els.alwaysOnVisionToggle) els.alwaysOnVisionToggle.checked = false;
@@ -7131,8 +9140,10 @@ async function handleEvent(event) {
         alwaysOnVisionTimer = null;
 
         // Best-effort shutdown; the engine will ignore if not running.
-        if (state.ptySpawned) invoke("write_pty", { data: `/canvas_context_rt_stop\n` }).catch(() => {});
-        setStatus("Engine: always-on vision disabled (realtime failure)", true);
+        if (state.ptySpawned) {
+          invoke("write_pty", { data: "/canvas_context_rt_stop\n" }).catch(() => {});
+        }
+        setStatus("Engine: always-on vision disabled (canvas context failure)", true);
       }
     }
     state.canvasContextSuggestion = null;
@@ -7141,34 +9152,256 @@ async function handleEvent(event) {
     updateAlwaysOnVisionReadout();
     renderQuickActions();
     processActionQueue().catch(() => {});
-  } else if (event.type === "image_description") {
-    const path = event.image_path;
-    const desc = event.description;
-    if (typeof path === "string" && typeof desc === "string" && desc.trim()) {
-      const cleaned = desc.trim();
-      for (const item of state.images) {
-        if (item?.path === path) {
-          item.visionDesc = cleaned;
-          item.visionPending = false;
-          item.visionDescMeta = {
-            source: event.source || null,
-            model: event.model || null,
-            at: Date.now(),
-          };
-          break;
-        }
-      }
-      if (state.describePendingPath === path) state.describePendingPath = null;
-      describeQueued.delete(path);
-      if (describeInFlightPath === path) {
-        describeInFlightPath = null;
-        clearTimeout(describeInFlightTimer);
-        describeInFlightTimer = null;
-        processDescribeQueue();
-      }
-      if (getActiveImage()?.path === path) renderHudReadout();
+  } else if (event.type === "intent_icons") {
+    const intent = state.intent;
+    if (!intent) return;
+    const isPartial = Boolean(event.partial);
+    const text = event.text;
+    const path = event.image_path || null;
+
+    // Ignore stale streaming from older snapshots once we've queued a newer one.
+    if (path && intent.pendingPath && path !== intent.pendingPath) return;
+
+    if (isPartial) {
+      intent.pending = true;
+    } else {
+      intent.pending = false;
+      intent.pendingPath = null;
+      intent.pendingAt = 0;
+      intent.pendingFrameId = null;
     }
-  } else if (event.type === "image_diagnosis") {
+
+		    if (typeof text === "string" && text.trim()) {
+		      const parsed = parseIntentIconsJson(text);
+		      if (parsed) {
+		        // Capture per-image vision labels from the intent realtime response so we can
+		        // use them as signals without issuing separate /describe calls.
+		        const imageDescs = !isPartial ? extractIntentImageDescriptions(parsed) : [];
+		        let wroteVision = false;
+		        if (!isPartial && imageDescs.length) {
+		          for (const rec of imageDescs) {
+		            const imageId = rec?.image_id ? String(rec.image_id) : "";
+		            const label = rec?.label ? String(rec.label) : "";
+		            if (!imageId || !label) continue;
+		            const imgItem = state.imagesById.get(imageId) || null;
+		            if (!imgItem) continue;
+		            // First-wins for stability (prevents intent-signature churn).
+		            if (imgItem.visionDesc) continue;
+		            imgItem.visionDesc = label;
+		            imgItem.visionPending = false;
+		            imgItem.visionDescMeta = {
+		              source: event.source || null,
+		              model: event.model || null,
+		              at: Date.now(),
+		            };
+		            wroteVision = true;
+		            if (intentModeActive()) {
+		              appendIntentTrace({
+		                kind: "vision_description",
+		                image_id: imageId,
+		                image_path: imgItem?.path ? String(imgItem.path) : null,
+		                description: label,
+		                source: event.source || null,
+		                model: event.model || null,
+		              }).catch(() => {});
+		            }
+		          }
+		        }
+
+		        if (wroteVision) {
+		          scheduleVisualPromptWrite();
+		          if (getActiveImage()?.id) renderHudReadout();
+		        }
+
+		        intent.iconState = parsed;
+		        intent.iconStateAt = Date.now();
+		        intent.rtState = "ready";
+		        intent.disabledReason = null;
+		        intent.lastError = null;
+		        intent.lastErrorAt = 0;
+		        intent.uiHideSuggestion = false;
+		        // Keep focus stable if possible (unless rejected); otherwise pick the next suggestion.
+		        const picked = pickSuggestedIntentBranch(parsed);
+		        intent.focusBranchId = (picked?.branch_id ? String(picked.branch_id) : "") || pickDefaultIntentFocusBranchId(parsed);
+		        if (!isPartial) {
+		          const branchIds = Array.isArray(parsed?.branches)
+		            ? parsed.branches.map((b) => (b?.branch_id ? String(b.branch_id) : "")).filter(Boolean)
+		            : [];
+		          const branchRank = Array.isArray(parsed?.branches)
+		            ? parsed.branches
+		                .map((b) => ({
+		                  branch_id: b?.branch_id ? String(b.branch_id) : "",
+		                  confidence: typeof b?.confidence === "number" && Number.isFinite(b.confidence) ? clamp(Number(b.confidence) || 0, 0, 1) : null,
+		                  evidence_image_ids: Array.isArray(b?.evidence_image_ids)
+		                    ? b.evidence_image_ids.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 3)
+		                    : [],
+		                }))
+		                .filter((b) => Boolean(b.branch_id))
+		            : [];
+		          appendIntentTrace({
+		            kind: "model_icons",
+		            partial: false,
+		            frame_id: parsed?.frame_id ? String(parsed.frame_id) : null,
+		            snapshot_path: path ? String(path) : null,
+		            branch_ids: branchIds,
+		            branch_rank: branchRank.length ? branchRank : null,
+		            focus_branch_id: intent.focusBranchId ? String(intent.focusBranchId) : null,
+		            checkpoint_applies_to: parsed?.checkpoint?.applies_to ? String(parsed.checkpoint.applies_to) : null,
+		            checkpoint_branch_id: picked?.checkpoint_branch_id ? String(picked.checkpoint_branch_id) : null,
+		            ranked_branch_ids: Array.isArray(picked?.ranked_branch_ids) && picked.ranked_branch_ids.length ? picked.ranked_branch_ids : null,
+		            suggestion_reason: picked?.reason ? String(picked.reason) : null,
+		            image_descriptions: imageDescs.length ? imageDescs : null,
+		            text_len: typeof text === "string" ? text.length : 0,
+		          }).catch(() => {});
+		        }
+		        const total = Math.max(1, Number(intent.totalRounds) || 3);
+		        const round = Math.max(1, Number(intent.round) || 1);
+	        // After the final round proposals arrive, force an explicit YES to proceed.
+	        if (INTENT_FORCE_CHOICE_ENABLED && INTENT_ROUNDS_ENABLED && !isPartial && round >= total && !intent.forceChoice) {
+	          intent.forceChoice = true;
+	          ensureIntentFallbackIconState("final_round");
+	          scheduleIntentStateWrite({ immediate: true });
+	        } else {
+	          if (!INTENT_FORCE_CHOICE_ENABLED) intent.forceChoice = false;
+	          scheduleIntentStateWrite();
+	        }
+	      } else if (!isPartial) {
+	        // Treat invalid JSON as a non-fatal failure: fall back to local branches and keep the UI interactive.
+	        intent.rtState = "failed";
+	        intent.disabledReason = "Intent icons parse failed.";
+	        intent.lastError = intent.disabledReason;
+	        intent.lastErrorAt = Date.now();
+	        intent.uiHideSuggestion = false;
+	        if (!INTENT_FORCE_CHOICE_ENABLED) intent.forceChoice = false;
+	        const icon = ensureIntentFallbackIconState("parse_failed");
+	        if (!intent.focusBranchId) intent.focusBranchId = pickSuggestedIntentBranchId(icon) || pickDefaultIntentFocusBranchId(icon);
+	        appendIntentTrace({
+	          kind: "model_icons_parse_failed",
+	          reason: intent.disabledReason,
+	          snapshot_path: path ? String(path) : null,
+	          text_len: typeof text === "string" ? text.length : 0,
+	          text_snippet: String(text || "").slice(0, 1200),
+	          rt_state: intent.rtState,
+	        }).catch(() => {});
+	        scheduleIntentStateWrite({ immediate: true });
+	      }
+	    }
+
+    if (!isPartial) {
+      clearTimeout(intentInferenceTimeout);
+      intentInferenceTimeout = null;
+    }
+
+    requestRender();
+    renderQuickActions();
+  } else if (event.type === "intent_icons_failed") {
+    const intent = state.intent;
+    if (!intent) return;
+    const path = event.image_path || null;
+    if (path && intent.pendingPath && path !== intent.pendingPath) return;
+
+    intent.pending = false;
+    intent.pendingPath = null;
+    intent.pendingAt = 0;
+    intent.pendingFrameId = null;
+    clearTimeout(intentInferenceTimeout);
+    intentInferenceTimeout = null;
+
+    const errRaw = typeof event.error === "string" ? event.error.trim() : "";
+    const msg = errRaw ? `Intent inference failed: ${errRaw}` : "Intent inference failed.";
+	    intent.rtState = "failed";
+	    intent.lastError = msg;
+	    intent.lastErrorAt = Date.now();
+	    intent.uiHideSuggestion = false;
+	    appendIntentTrace({
+	      kind: "model_icons_failed",
+	      reason: msg,
+	      snapshot_path: path ? String(path) : null,
+	      rt_state: intent.rtState,
+	    }).catch(() => {});
+
+    const errLower = errRaw.toLowerCase();
+    const hardDisable = Boolean(
+      errLower.includes("missing openai_api_key") ||
+        errLower.includes("missing dependency") ||
+        errLower.includes("disabled (brood_intent_realtime_disabled=1") ||
+        errLower.includes("realtime intent inference is disabled")
+    );
+    // Only treat clearly-unrecoverable cases as a "hard" disabled state. Otherwise,
+    // keep retrying opportunistically while the user continues arranging images.
+    intent.disabledReason = hardDisable ? msg : null;
+
+    // Fall back to a local branch set so the user can still lock an intent.
+    ensureIntentFallbackIconState("failed");
+    if (!intent.focusBranchId) {
+      intent.focusBranchId = pickSuggestedIntentBranchId(intent.iconState) || pickDefaultIntentFocusBranchId();
+    }
+
+    if (!INTENT_FORCE_CHOICE_ENABLED) {
+      intent.forceChoice = false;
+    } else {
+      // Only force choice if time is up or we're already at the final round gate.
+      const total = Math.max(1, Number(intent.totalRounds) || 3);
+      const round = Math.max(1, Number(intent.round) || 1);
+      const remainingMs = intent.startedAt ? intentRemainingMs(Date.now()) : INTENT_DEADLINE_MS;
+      const gateByTimer = Boolean(INTENT_TIMER_ENABLED) && remainingMs <= 0;
+      const gateByRounds = Boolean(INTENT_ROUNDS_ENABLED) && round >= total;
+      if (gateByTimer || gateByRounds) {
+        intent.forceChoice = true;
+      }
+    }
+
+    scheduleIntentStateWrite({ immediate: true });
+    setStatus(`Engine: ${msg}`, true);
+    requestRender();
+    renderQuickActions();
+
+    if (!hardDisable && intentModeActive() && !intent.forceChoice) {
+      scheduleIntentInference({ immediate: false, reason: "retry" });
+    }
+	  } else if (event.type === "image_description") {
+	    const path = event.image_path;
+	    const desc = event.description;
+	    if (typeof path === "string" && typeof desc === "string" && desc.trim()) {
+	      const cleaned = desc.trim();
+	      for (const item of state.images) {
+	        if (item?.path === path) {
+	          item.visionDesc = cleaned;
+	          item.visionPending = false;
+	          item.visionDescMeta = {
+	            source: event.source || null,
+	            model: event.model || null,
+	            at: Date.now(),
+	          };
+	          break;
+	        }
+	      }
+	      if (state.describePendingPath === path) state.describePendingPath = null;
+	      describeQueued.delete(path);
+	      if (describeInFlightPath === path) {
+	        describeInFlightPath = null;
+	        clearTimeout(describeInFlightTimer);
+	        describeInFlightTimer = null;
+	        processDescribeQueue();
+	      }
+	      // Persist the new per-image description into run artifacts.
+	      scheduleVisualPromptWrite();
+	
+	      if (intentModeActive() && state.intent && !state.intent.locked) {
+	        appendIntentTrace({
+	          kind: "vision_description",
+	          image_path: path,
+	          description: cleaned,
+	          source: event.source || null,
+	          model: event.model || null,
+	        }).catch(() => {});
+	        // Vision-derived labels are useful intent signals; schedule a refresh so the
+	        // suggested branch can tighten as these descriptions arrive.
+	        scheduleIntentInference({ immediate: true, reason: "describe" });
+	      }
+	      if (getActiveImage()?.path === path) renderHudReadout();
+	    }
+	  } else if (event.type === "image_diagnosis") {
     const text = event.text;
     if (typeof text === "string" && text.trim()) {
       const diagPath = typeof event.image_path === "string" ? event.image_path : "";
@@ -7413,18 +9646,29 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     ensureCanvasImageLoaded(item);
   }
 
-  state.multiRects = computeMultiRects(items, canvasW, canvasH);
-  const ms = state.multiView?.scale || 1;
-  const mox = state.multiView?.offsetX || 0;
-  const moy = state.multiView?.offsetY || 0;
+  state.multiRects = computeFreeformRectsPx(canvasW, canvasH);
+  if (state.multiView) {
+    state.multiView.scale = 1;
+    state.multiView.offsetX = 0;
+    state.multiView.offsetY = 0;
+  }
+  // Freeform canvas: multiView transforms are disabled (dragging moves images, not the camera).
+  const ms = 1;
+  const mox = 0;
+  const moy = 0;
 
   const dpr = getDpr();
   wctx.save();
   wctx.imageSmoothingEnabled = true;
   wctx.imageSmoothingQuality = "high";
 
-  for (const item of items) {
-    const rect = item?.id ? state.multiRects.get(item.id) : null;
+  const drawOrder = Array.isArray(state.freeformZOrder) && state.freeformZOrder.length
+    ? state.freeformZOrder
+    : items.map((it) => it?.id).filter(Boolean);
+
+  for (const imageId of drawOrder) {
+    const item = imageId ? state.imagesById.get(imageId) : null;
+    const rect = imageId ? state.multiRects.get(imageId) : null;
     if (!rect) continue;
     const x = rect.x * ms + mox;
     const y = rect.y * ms + moy;
@@ -7485,6 +9729,32 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
     octx.strokeRect(ax - 1, ay - 1, aw + 2, ah + 2);
     octx.restore();
+
+    // Freeform resize handles (corner drag). Render only for the active image to keep the canvas clean.
+    const showHandles = state.tool === "pan" || !state.intent?.locked;
+    if (showHandles) {
+      const hs = Math.max(10, Math.round(10 * dpr));
+      const r = Math.round(hs / 2);
+      const corners = [
+        { x: ax, y: ay, cursor: "nw" },
+        { x: ax + aw, y: ay, cursor: "ne" },
+        { x: ax, y: ay + ah, cursor: "sw" },
+        { x: ax + aw, y: ay + ah, cursor: "se" },
+      ];
+      octx.save();
+      octx.shadowColor = "rgba(0, 0, 0, 0.55)";
+      octx.shadowBlur = Math.round(12 * dpr);
+      for (const c of corners) {
+        octx.fillStyle = "rgba(8, 10, 14, 0.86)";
+        octx.strokeStyle = "rgba(255, 212, 0, 0.92)";
+        octx.lineWidth = Math.max(1, Math.round(1.6 * dpr));
+        octx.beginPath();
+        octx.rect(Math.round(c.x - r), Math.round(c.y - r), hs, hs);
+        octx.fill();
+        octx.stroke();
+      }
+      octx.restore();
+    }
   }
 
   // Triplet insights overlays (Extract the Rule / Odd One Out).
@@ -7557,10 +9827,866 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   }
 }
 
+function hitTestIntentUi(ptCanvas) {
+  const intent = state.intent;
+  if (!intent || !ptCanvas) return null;
+  const hits = Array.isArray(intent.uiHits) ? intent.uiHits : [];
+  for (let i = hits.length - 1; i >= 0; i -= 1) {
+    const hit = hits[i];
+    const rect = hit?.rect;
+    if (!rect) continue;
+    const x0 = Number(rect.x) || 0;
+    const y0 = Number(rect.y) || 0;
+    const w = Number(rect.w) || 0;
+    const h = Number(rect.h) || 0;
+    if (ptCanvas.x >= x0 && ptCanvas.x <= x0 + w && ptCanvas.y >= y0 && ptCanvas.y <= y0 + h) return hit;
+  }
+  return null;
+}
+
+function _sevenSegSegmentsForDigit(ch) {
+  const d = String(ch || "");
+  const map = {
+    "0": ["A", "B", "C", "D", "E", "F"],
+    "1": ["B", "C"],
+    "2": ["A", "B", "G", "E", "D"],
+    "3": ["A", "B", "G", "C", "D"],
+    "4": ["F", "G", "B", "C"],
+    "5": ["A", "F", "G", "C", "D"],
+    "6": ["A", "F", "G", "E", "C", "D"],
+    "7": ["A", "B", "C"],
+    "8": ["A", "B", "C", "D", "E", "F", "G"],
+    "9": ["A", "B", "C", "D", "F", "G"],
+  };
+  return map[d] || [];
+}
+
+function _drawRoundedRect(ctx, x, y, w, h, r) {
+  const rr = Math.max(0, Math.min(Number(r) || 0, Math.min(w, h) / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+function _drawIntentBumperPlate(ctx, rect, { active = false, loading = false, alpha = 1 } = {}) {
+  if (!ctx || !rect) return;
+  const x = Math.round(Number(rect.x) || 0);
+  const y = Math.round(Number(rect.y) || 0);
+  const w = Math.round(Number(rect.w) || 0);
+  const h = Math.round(Number(rect.h) || 0);
+  if (w <= 2 || h <= 2) return;
+
+  const dpr = getDpr();
+  const a = clamp(Number(alpha) || 1, 0.05, 1);
+  const cut = Math.max(10, Math.round(14 * dpr));
+  const inset = Math.max(1, Math.round(1.2 * dpr));
+  const edge = Math.max(1, Math.round(1.4 * dpr));
+
+  const path = () => {
+    const c = Math.max(0, Math.min(cut, Math.floor(Math.min(w, h) / 2) - 1));
+    ctx.beginPath();
+    ctx.moveTo(x + c, y);
+    ctx.lineTo(x + w - c, y);
+    ctx.lineTo(x + w, y + c);
+    ctx.lineTo(x + w, y + h - c);
+    ctx.lineTo(x + w - c, y + h);
+    ctx.lineTo(x + c, y + h);
+    ctx.lineTo(x, y + h - c);
+    ctx.lineTo(x, y + c);
+    ctx.closePath();
+  };
+
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.shadowColor = "rgba(0, 0, 0, 0.78)";
+  ctx.shadowBlur = Math.round(18 * dpr);
+  ctx.shadowOffsetY = Math.round(6 * dpr);
+
+  // Base fill.
+  path();
+  ctx.fillStyle = "rgba(8, 10, 14, 0.90)";
+  ctx.fill();
+
+  // Clip for texture/gradients.
+  ctx.save();
+  path();
+  ctx.clip();
+
+  // Metal-ish vertical gradient.
+  const grad = ctx.createLinearGradient(0, y, 0, y + h);
+  grad.addColorStop(0, "rgba(255, 255, 255, 0.08)");
+  grad.addColorStop(0.35, "rgba(255, 255, 255, 0.02)");
+  grad.addColorStop(1, "rgba(0, 0, 0, 0.62)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(x, y, w, h);
+
+  // Soft cyan bloom on the left (matches bumpers/HUD vibe without reading as a "screen").
+  const rg = ctx.createRadialGradient(x + w * 0.22, y + h * 0.12, 0, x + w * 0.22, y + h * 0.12, Math.max(w, h) * 0.75);
+  rg.addColorStop(0, "rgba(100, 210, 255, 0.10)");
+  rg.addColorStop(0.6, "rgba(0, 221, 255, 0.03)");
+  rg.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = rg;
+  ctx.fillRect(x, y, w, h);
+
+  // Subtle scanline texture.
+  ctx.save();
+  ctx.globalAlpha = 0.11;
+  ctx.fillStyle = "rgba(255, 255, 255, 0.14)";
+  const step = Math.max(7, Math.round(9 * dpr));
+  const lineH = Math.max(1, Math.round(1 * dpr));
+  for (let yy = y + Math.round(step / 2); yy < y + h; yy += step) {
+    ctx.fillRect(x, yy, w, lineH);
+  }
+  ctx.restore();
+
+  ctx.restore(); // end clip
+
+  // Outer edge.
+  path();
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.lineWidth = edge;
+  ctx.strokeStyle = "rgba(54, 76, 106, 0.62)";
+  ctx.stroke();
+
+  // Inset bevel highlight.
+  ctx.save();
+  ctx.globalAlpha = a * 0.9;
+  const ix = x + inset;
+  const iy = y + inset;
+  const iw = Math.max(1, w - inset * 2);
+  const ih = Math.max(1, h - inset * 2);
+  const icut = Math.max(8, Math.round(cut * 0.7));
+  const c = Math.max(0, Math.min(icut, Math.floor(Math.min(iw, ih) / 2) - 1));
+  ctx.beginPath();
+  ctx.moveTo(ix + c, iy);
+  ctx.lineTo(ix + iw - c, iy);
+  ctx.lineTo(ix + iw, iy + c);
+  ctx.lineTo(ix + iw, iy + ih - c);
+  ctx.lineTo(ix + iw - c, iy + ih);
+  ctx.lineTo(ix + c, iy + ih);
+  ctx.lineTo(ix, iy + ih - c);
+  ctx.lineTo(ix, iy + c);
+  ctx.closePath();
+  ctx.lineWidth = Math.max(1, Math.round(1.1 * dpr));
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.10)";
+  ctx.stroke();
+  ctx.restore();
+
+  // Accent sliver (quiet, hardware-ish).
+  const accent = loading
+    ? "rgba(0, 221, 255, 0.30)"
+    : active
+      ? "rgba(82, 255, 148, 0.28)"
+      : "rgba(54, 76, 106, 0.22)";
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = Math.max(1, Math.round(2.2 * dpr));
+  ctx.lineCap = "round";
+  const sl = Math.max(18, Math.round(Math.min(w, 260) * 0.22));
+  ctx.beginPath();
+  ctx.moveTo(x + cut + Math.round(12 * dpr), y + Math.round(6 * dpr));
+  ctx.lineTo(x + cut + Math.round(12 * dpr) + sl, y + Math.round(6 * dpr));
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x + w - cut - Math.round(12 * dpr) - sl, y + Math.round(6 * dpr));
+  ctx.lineTo(x + w - cut - Math.round(12 * dpr), y + Math.round(6 * dpr));
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.restore();
+}
+
+const LED_5X7 = {
+  " ": [0, 0, 0, 0, 0, 0, 0],
+  "-": [0, 0, 0, 0b11111, 0, 0, 0],
+  "_": [0, 0, 0, 0, 0, 0, 0b11111],
+  "/": [0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0, 0],
+  ":": [0, 0b00100, 0b00100, 0, 0b00100, 0b00100, 0],
+  "?": [0b01110, 0b10001, 0b00010, 0b00100, 0b00100, 0, 0b00100],
+  "0": [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
+  "1": [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+  "2": [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
+  "3": [0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110],
+  "4": [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
+  "5": [0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110],
+  "6": [0b00111, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
+  "7": [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
+  "8": [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
+  "9": [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b11100],
+  A: [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+  B: [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+  C: [0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111],
+  D: [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+  E: [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+  F: [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+  G: [0b01111, 0b10000, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111],
+  H: [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+  I: [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111],
+  J: [0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100],
+  K: [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+  L: [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+  M: [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
+  N: [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
+  O: [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+  P: [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
+  Q: [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101],
+  R: [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+  S: [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
+  T: [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+  U: [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+  V: [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+  W: [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010],
+  X: [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+  Y: [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
+  Z: [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
+};
+
+function _led5x7Rows(ch) {
+  const key = String(ch || "").toUpperCase();
+  return LED_5X7[key] || LED_5X7["?"] || LED_5X7[" "];
+}
+
+function _led5x7TextDims(text, dot, gap, charGap) {
+  const d = Math.max(1, Math.round(Number(dot) || 0));
+  const g = Math.max(0, Math.round(Number(gap) || 0));
+  const cg = Math.max(0, Math.round(Number(charGap) || 0));
+  const chars = String(text || "");
+  const h = 7 * d + 6 * g;
+  const cw = 5 * d + 4 * g;
+  if (!chars) return { w: 0, h };
+  const w = chars.length * cw + Math.max(0, chars.length - 1) * cg;
+  return { w, h };
+}
+
+function _drawLed5x7Text(
+  ctx,
+  x,
+  y,
+  text,
+  { dot = 10, gap = 2, charGap = 6, on = "rgba(0, 245, 160, 0.92)", off = "rgba(0, 245, 160, 0.07)", glow = null, alpha = 1 } = {}
+) {
+  if (!ctx) return { w: 0, h: 0 };
+  const d = Math.max(1, Math.round(Number(dot) || 0));
+  const g = Math.max(0, Math.round(Number(gap) || 0));
+  const cg = Math.max(0, Math.round(Number(charGap) || 0));
+  const a = clamp(Number(alpha) || 1, 0.05, 1);
+  const chars = String(text || "").toUpperCase();
+  const step = d + g;
+  const r = Math.max(0, Math.round(d * 0.22));
+  let cx = Math.round(Number(x) || 0);
+  const cy = Math.round(Number(y) || 0);
+
+  ctx.save();
+  ctx.globalAlpha = a;
+
+  // Optional dim "off" grid so it reads as an LED module.
+  if (off) {
+    ctx.save();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = off;
+    for (const ch of chars) {
+      const rows = _led5x7Rows(ch);
+      for (let ry = 0; ry < 7; ry += 1) {
+        for (let rx = 0; rx < 5; rx += 1) {
+          const px = cx + rx * step;
+          const py = cy + ry * step;
+          _drawRoundedRect(ctx, px, py, d, d, r);
+          ctx.fill();
+        }
+      }
+      cx += 5 * step - g + cg;
+    }
+    ctx.restore();
+  }
+
+  // Lit segments with glow, then a crisp pass.
+  const drawLit = ({ withGlow }) => {
+    ctx.save();
+    ctx.fillStyle = on;
+    if (withGlow && glow) {
+      ctx.shadowColor = glow;
+      ctx.shadowBlur = Math.round(d * 1.15);
+    } else {
+      ctx.shadowBlur = 0;
+    }
+    let tx = Math.round(Number(x) || 0);
+    for (const ch of chars) {
+      const rows = _led5x7Rows(ch);
+      for (let ry = 0; ry < 7; ry += 1) {
+        const mask = Number(rows[ry]) || 0;
+        for (let rx = 0; rx < 5; rx += 1) {
+          const bit = (mask >> (4 - rx)) & 1;
+          if (!bit) continue;
+          const px = tx + rx * step;
+          const py = cy + ry * step;
+          _drawRoundedRect(ctx, px, py, d, d, r);
+          ctx.fill();
+        }
+      }
+      tx += 5 * step - g + cg;
+    }
+    ctx.restore();
+  };
+
+  drawLit({ withGlow: true });
+  drawLit({ withGlow: false });
+
+  ctx.restore();
+  return _led5x7TextDims(chars, d, g, cg);
+}
+
+function _drawSevenSegDigit(ctx, x, y, digitW, digitH, ch, { on, off } = {}) {
+  const segs = _sevenSegSegmentsForDigit(ch);
+  const seg = Math.max(2, Math.round(digitH * 0.13));
+  const gap = Math.max(1, Math.round(seg * 0.55));
+  const innerW = Math.max(1, digitW - seg);
+  const halfH = Math.round(digitH / 2);
+
+  const rects = {
+    A: { x: x + gap, y: y, w: innerW - gap * 2, h: seg },
+    D: { x: x + gap, y: y + digitH - seg, w: innerW - gap * 2, h: seg },
+    G: { x: x + gap, y: y + halfH - Math.round(seg / 2), w: innerW - gap * 2, h: seg },
+    F: { x: x, y: y + gap, w: seg, h: halfH - gap - Math.round(seg / 2) },
+    E: { x: x, y: y + halfH + Math.round(seg / 2), w: seg, h: halfH - gap - Math.round(seg / 2) },
+    B: { x: x + digitW - seg, y: y + gap, w: seg, h: halfH - gap - Math.round(seg / 2) },
+    C: { x: x + digitW - seg, y: y + halfH + Math.round(seg / 2), w: seg, h: halfH - gap - Math.round(seg / 2) },
+  };
+
+  const drawSeg = (key, active) => {
+    const r = rects[key];
+    if (!r || r.w <= 0 || r.h <= 0) return;
+    ctx.fillStyle = active ? on : off;
+    _drawRoundedRect(ctx, Math.round(r.x), Math.round(r.y), Math.round(r.w), Math.round(r.h), Math.round(seg * 0.38));
+    ctx.fill();
+  };
+
+  const onSet = new Set(segs);
+  for (const key of ["A", "B", "C", "D", "E", "F", "G"]) {
+    drawSeg(key, onSet.has(key));
+  }
+}
+
+function _drawSevenSegText(ctx, x, y, text, { digitH, on, off, colon } = {}) {
+  const h = Math.max(10, Math.round(Number(digitH) || 22));
+  const w = Math.round(h * 0.62);
+  const pad = Math.max(2, Math.round(h * 0.14));
+  const gap = Math.max(2, Math.round(h * 0.18));
+
+  let cx = x;
+  for (const ch of String(text || "")) {
+    if (ch === ":") {
+      const dot = Math.max(2, Math.round(h * 0.12));
+      ctx.fillStyle = colon || on;
+      _drawRoundedRect(ctx, Math.round(cx + w * 0.5 - dot / 2), Math.round(y + h * 0.32), dot, dot, 2);
+      ctx.fill();
+      _drawRoundedRect(ctx, Math.round(cx + w * 0.5 - dot / 2), Math.round(y + h * 0.66), dot, dot, 2);
+      ctx.fill();
+      cx += Math.round(w * 0.48);
+      continue;
+    }
+    _drawSevenSegDigit(ctx, cx, y, w, h, ch, { on, off });
+    cx += w + gap;
+  }
+  return { w: cx - x - gap, h };
+}
+
+function _sevenSegTextDims(text, digitH) {
+  const h = Math.max(10, Math.round(Number(digitH) || 22));
+  const w = Math.round(h * 0.62);
+  const gap = Math.max(2, Math.round(h * 0.18));
+  let cx = 0;
+  const chars = String(text || "");
+  for (const ch of chars) {
+    if (ch === ":") {
+      cx += Math.round(w * 0.48);
+      continue;
+    }
+    cx += w + gap;
+  }
+  if (chars && chars[chars.length - 1] !== ":") cx -= gap;
+  return { w: Math.max(0, cx), h };
+}
+
+function _tokenGlyph(tokenId) {
+  const tok = String(tokenId || "").trim().toUpperCase();
+  if (tok === "YES_TOKEN") return "Y";
+  if (tok === "NO_TOKEN") return "N";
+  if (tok === "MAYBE_TOKEN") return "?";
+  return "?";
+}
+
+function _normalizeIntentKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+/, "")
+    .replace(/_+$/, "");
+}
+
+function _intentUseCaseKeyFromBranchId(branchId) {
+  const key = _normalizeIntentKey(branchId);
+  if (!key) return null;
+  if (key.includes("game")) return "game_dev_assets";
+  if (key.includes("stream")) return "streaming_content";
+  if (key.includes("ui") || key.includes("ux") || key.includes("wireframe") || key.includes("mock")) return "uiux_prototyping";
+  if (key.includes("ecommerce") || key.includes("pod") || key.includes("product") || key.includes("merch")) return "ecommerce_pod";
+  if (key.includes("engine") || key.includes("system") || key.includes("pipeline") || key.includes("automation") || key.includes("brand"))
+    return "content_engine";
+  return null;
+}
+
+function _intentUseCaseTitle(useCaseKey) {
+  const key = String(useCaseKey || "").trim();
+  if (!key) return "";
+  if (key === "game_dev_assets") return "GAME ASSETS";
+  if (key === "streaming_content") return "STREAMING";
+  if (key === "uiux_prototyping") return "UI/UX";
+  if (key === "ecommerce_pod") return "ECOMMERCE";
+  if (key === "content_engine") return "PIPELINE";
+  return key
+    .toUpperCase()
+    .replace(/[^A-Z0-9/]+/g, " ")
+    .trim();
+}
+
+function _drawIntentYesNoIcon(ctx, kind, cx, cy, r, { alpha = 1 } = {}) {
+  const k = String(kind || "").trim().toUpperCase();
+  const isYes = k === "YES";
+  const img = isYes ? intentUiIcons.tokenYes : intentUiIcons.tokenNo;
+  if (img && img.complete && img.naturalWidth > 0) {
+    const rr = Math.max(1, Number(r) || 0);
+    const size = Math.max(1, Math.round(rr * 2));
+    ctx.save();
+    ctx.globalAlpha = clamp(Number(alpha) || 1, 0.05, 1);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, Math.round(cx - size / 2), Math.round(cy - size / 2), size, size);
+    ctx.restore();
+    return;
+  }
+  const fg = isYes ? "rgba(82, 255, 148, 0.92)" : "rgba(255, 95, 95, 0.92)";
+  const stroke = isYes ? "rgba(82, 255, 148, 0.34)" : "rgba(255, 95, 95, 0.34)";
+  ctx.save();
+  ctx.globalAlpha = clamp(Number(alpha) || 1, 0.05, 1);
+  ctx.fillStyle = "rgba(8, 10, 14, 0.82)";
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = Math.max(1, Math.round(r * 0.18));
+  ctx.shadowColor = "rgba(0, 0, 0, 0.55)";
+  ctx.shadowBlur = Math.round(r * 0.7);
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = fg;
+  ctx.lineWidth = Math.max(1, Math.round(r * 0.18));
+  ctx.lineCap = "round";
+  if (isYes) {
+    ctx.beginPath();
+    ctx.moveTo(cx - r * 0.45, cy + r * 0.05);
+    ctx.lineTo(cx - r * 0.15, cy + r * 0.35);
+    ctx.lineTo(cx + r * 0.55, cy - r * 0.35);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(cx - r * 0.42, cy - r * 0.42);
+    ctx.lineTo(cx + r * 0.42, cy + r * 0.42);
+    ctx.moveTo(cx + r * 0.42, cy - r * 0.42);
+    ctx.lineTo(cx - r * 0.42, cy + r * 0.42);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function _drawIntentUseCaseGlyph(ctx, useCaseKey, cx, cy, size, { alpha = 1 } = {}) {
+  const key = String(useCaseKey || "").trim();
+  if (!key) return;
+  const img = intentUiIcons.usecases ? intentUiIcons.usecases[key] : null;
+  if (img && img.complete && img.naturalWidth > 0) {
+    const s = Math.max(8, Number(size) || 0);
+    ctx.save();
+    ctx.globalAlpha = clamp(Number(alpha) || 1, 0.05, 1);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, Math.round(cx - s / 2), Math.round(cy - s / 2), Math.round(s), Math.round(s));
+    ctx.restore();
+    return;
+  }
+  const s = Math.max(12, Number(size) || 0);
+  const lw = Math.max(1, Math.round(s * 0.09));
+  const fg = "rgba(230, 237, 243, 0.90)";
+  ctx.save();
+  ctx.globalAlpha = clamp(Number(alpha) || 1, 0.05, 1);
+  ctx.strokeStyle = fg;
+  ctx.fillStyle = fg;
+  ctx.lineWidth = lw;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  if (key === "game_dev_assets") {
+    const w = s * 1.05;
+    const h = s * 0.68;
+    const x = cx - w / 2;
+    const y = cy - h / 2;
+    _drawRoundedRect(ctx, x, y, w, h, h * 0.38);
+    ctx.stroke();
+    // D-pad.
+    ctx.beginPath();
+    ctx.moveTo(cx - w * 0.26, cy);
+    ctx.lineTo(cx - w * 0.12, cy);
+    ctx.moveTo(cx - w * 0.19, cy - h * 0.14);
+    ctx.lineTo(cx - w * 0.19, cy + h * 0.14);
+    ctx.stroke();
+    // Buttons.
+    const br = Math.max(1.5, s * 0.06);
+    const bx = cx + w * 0.22;
+    const by = cy;
+    for (const off of [
+      { x: -br * 1.1, y: -br * 1.1 },
+      { x: br * 1.1, y: -br * 1.1 },
+      { x: -br * 1.1, y: br * 1.1 },
+      { x: br * 1.1, y: br * 1.1 },
+    ]) {
+      ctx.beginPath();
+      ctx.arc(bx + off.x, by + off.y, br, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  } else if (key === "streaming_content") {
+    // Lightning bolt.
+    ctx.beginPath();
+    ctx.moveTo(cx - s * 0.10, cy - s * 0.52);
+    ctx.lineTo(cx + s * 0.10, cy - s * 0.10);
+    ctx.lineTo(cx - s * 0.02, cy - s * 0.10);
+    ctx.lineTo(cx + s * 0.02, cy + s * 0.52);
+    ctx.lineTo(cx - s * 0.10, cy + s * 0.12);
+    ctx.lineTo(cx + s * 0.02, cy + s * 0.12);
+    ctx.closePath();
+    ctx.stroke();
+  } else if (key === "uiux_prototyping") {
+    const w = s * 1.05;
+    const h = s * 0.82;
+    const x = cx - w / 2;
+    const y = cy - h / 2;
+    _drawRoundedRect(ctx, x, y, w, h, s * 0.16);
+    ctx.stroke();
+    // Top bar + columns.
+    ctx.beginPath();
+    ctx.moveTo(x + lw, y + h * 0.22);
+    ctx.lineTo(x + w - lw, y + h * 0.22);
+    ctx.moveTo(x + w * 0.42, y + h * 0.22);
+    ctx.lineTo(x + w * 0.42, y + h - lw);
+    ctx.stroke();
+  } else if (key === "ecommerce_pod") {
+    // Box/cube.
+    const w = s * 0.95;
+    const h = s * 0.78;
+    const x0 = cx - w / 2;
+    const y0 = cy - h / 2 + s * 0.06;
+    ctx.beginPath();
+    ctx.rect(x0, y0, w, h);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x0 + w * 0.18, y0 - s * 0.18);
+    ctx.lineTo(x0 + w * 1.18, y0 - s * 0.18);
+    ctx.lineTo(x0 + w, y0);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x0 + w, y0);
+    ctx.lineTo(x0 + w * 1.18, y0 - s * 0.18);
+    ctx.lineTo(x0 + w * 1.18, y0 - s * 0.18 + h);
+    ctx.lineTo(x0 + w, y0 + h);
+    ctx.stroke();
+  } else if (key === "content_engine") {
+    // Simple gear.
+    const r = s * 0.34;
+    const teeth = 7;
+    for (let i = 0; i < teeth; i += 1) {
+      const a = (i / teeth) * Math.PI * 2;
+      const tx = cx + Math.cos(a) * r * 1.2;
+      const ty = cy + Math.sin(a) * r * 1.2;
+      ctx.beginPath();
+      ctx.arc(tx, ty, Math.max(1.5, s * 0.05), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.42, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function _drawIntentLoadingDots(ctx, cx, cy, { dotR = 3, color = "rgba(82, 255, 148, 0.92)", t = 0 } = {}) {
+  const r = Math.max(1, Number(dotR) || 0);
+  const gap = Math.max(4, Math.round(r * 2.1));
+  for (let i = 0; i < 3; i += 1) {
+    const pulse = 0.25 + 0.75 * Math.abs(Math.sin(t + i * 0.85));
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(cx + (i - 1) * gap, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function renderIntentOverlay(octx, canvasW, canvasH) {
+  const intent = state.intent;
+  if (!intent) return;
+
+  if (!intentModeActive()) {
+    intent.uiHits = [];
+    return;
+  }
+
+  const dpr = getDpr();
+  const now = Date.now();
+  const hits = [];
+  const margin = Math.round(18 * dpr);
+
+  const loading = Boolean(intent.pending || intentInferenceTimer || intent.rtState === "connecting");
+
+  let iconState = null;
+  if (intent.iconState && typeof intent.iconState === "object") {
+    iconState = ensureIntentFallbackIconState("render");
+  } else if (intent.disabledReason || intent.rtState === "failed") {
+    iconState = ensureIntentFallbackIconState("failed");
+  }
+
+  const suggestedBranchId = iconState ? pickSuggestedIntentBranchId(iconState) : null;
+  if (suggestedBranchId && !intent.uiHideSuggestion) intent.focusBranchId = suggestedBranchId;
+  const useCaseKey = _intentUseCaseKeyFromBranchId(suggestedBranchId);
+
+  // Optional force-choice overlay (disabled by default).
+  if (INTENT_FORCE_CHOICE_ENABLED && intent.forceChoice) {
+    octx.save();
+    octx.fillStyle = "rgba(0, 0, 0, 0.42)";
+    octx.fillRect(0, 0, canvasW, canvasH);
+    octx.restore();
+  }
+
+  // START button (top-right): locks current intent (same as YES).
+  const canAccept = Boolean(iconState && suggestedBranchId && !loading && !intent.uiHideSuggestion);
+  const startR = Math.max(14, Math.round(17 * dpr * INTENT_UI_START_ICON_SCALE));
+  const startSize = Math.max(1, Math.round(startR * 2.15));
+  const startCx = Math.round(canvasW - margin - startSize / 2);
+  const startCy = Math.round(margin + startSize / 2);
+  const startRect = { x: startCx - startSize / 2, y: startCy - startSize / 2, w: startSize, h: startSize };
+
+  // Backplate circle (keeps the button legible over bright pixels).
+  octx.save();
+  octx.shadowColor = "rgba(0, 0, 0, 0.62)";
+  octx.shadowBlur = Math.round(14 * dpr);
+  octx.fillStyle = "rgba(8, 10, 14, 0.78)";
+  octx.strokeStyle = canAccept ? "rgba(82, 255, 148, 0.44)" : "rgba(54, 76, 106, 0.38)";
+  octx.lineWidth = Math.max(1, Math.round(1.4 * dpr));
+  octx.beginPath();
+  octx.arc(startCx, startCy, startR, 0, Math.PI * 2);
+  octx.fill();
+  octx.stroke();
+  octx.restore();
+
+  const startImg = intentUiIcons.startLock;
+  if (startImg && startImg.complete && startImg.naturalWidth > 0) {
+    octx.save();
+    octx.globalAlpha = canAccept ? 1 : 0.45;
+    octx.imageSmoothingEnabled = true;
+    octx.imageSmoothingQuality = "high";
+    octx.drawImage(startImg, Math.round(startRect.x), Math.round(startRect.y), Math.round(startRect.w), Math.round(startRect.h));
+    octx.restore();
+  } else {
+    // Fallback: procedural play glyph.
+    octx.save();
+    octx.globalAlpha = canAccept ? 1 : 0.45;
+    octx.fillStyle = canAccept ? "rgba(82, 255, 148, 0.92)" : "rgba(230, 237, 243, 0.45)";
+    octx.beginPath();
+    octx.moveTo(startCx - startR * 0.22, startCy - startR * 0.32);
+    octx.lineTo(startCx - startR * 0.22, startCy + startR * 0.32);
+    octx.lineTo(startCx + startR * 0.42, startCy);
+    octx.closePath();
+    octx.fill();
+    octx.restore();
+  }
+
+  if (canAccept) hits.push({ kind: "intent_lock", id: "start", rect: startRect });
+
+  // Bottom choice controls (no container strip): [NO] [SUGGESTION] [YES].
+  const tokenR = Math.max(14, Math.round(18 * dpr * INTENT_UI_CHOICE_ICON_SCALE));
+  const glyphSize = Math.max(30, Math.round(42 * dpr * INTENT_UI_CHOICE_ICON_SCALE));
+  const gap = Math.round(22 * dpr * Math.min(2.2, Math.max(1, INTENT_UI_CHOICE_ICON_SCALE * 0.55)));
+
+  const groupH = Math.max(tokenR * 2, glyphSize);
+  const cy = Math.round(canvasH - margin - groupH / 2);
+
+  const groupW = tokenR * 2 + gap + glyphSize + gap + tokenR * 2;
+  const maxGroupW = Math.max(1, canvasW - margin * 2);
+  const useVerticalLayout = groupW > maxGroupW;
+
+  let noCx = 0;
+  let yesCx = 0;
+  let glyphCx = 0;
+  let glyphCy = cy;
+  let tokenCy = cy;
+  if (!useVerticalLayout) {
+    const groupX0 = Math.round((canvasW - groupW) / 2);
+    noCx = groupX0 + tokenR;
+    glyphCx = groupX0 + tokenR * 2 + gap + glyphSize / 2;
+    yesCx = groupX0 + tokenR * 2 + gap + glyphSize + gap + tokenR;
+  } else {
+    // If the giant 3x row doesn't fit, stack the suggestion above the YES/NO pair.
+    const vGap = Math.round(14 * dpr * Math.min(2.2, Math.max(1, INTENT_UI_CHOICE_ICON_SCALE * 0.45)));
+    tokenCy = Math.round(canvasH - margin - tokenR);
+    glyphCy = Math.round(tokenCy - tokenR - vGap - glyphSize / 2);
+    glyphCx = Math.round(canvasW / 2);
+    const pairGap = Math.round(18 * dpr * Math.min(2.2, Math.max(1, INTENT_UI_CHOICE_ICON_SCALE * 0.45)));
+    noCx = Math.round(canvasW / 2 - tokenR - pairGap);
+    yesCx = Math.round(canvasW / 2 + tokenR + pairGap);
+  }
+
+  const canReject = Boolean(iconState && suggestedBranchId && !loading);
+  const noAlpha = canReject ? 1 : 0.45;
+  const yesAlpha = canAccept ? 1 : 0.45;
+
+  // Hardware-like bumper/strip behind the choice UI (complements the normal HUD/bumpers).
+  const tokenX0 = Math.min(noCx - tokenR, yesCx - tokenR);
+  const tokenX1 = Math.max(noCx + tokenR, yesCx + tokenR);
+  const tokenY0 = tokenCy - tokenR;
+  const tokenY1 = tokenCy + tokenR;
+  let glyphX0 = tokenX0;
+  let glyphX1 = tokenX1;
+  let glyphY0 = tokenY0;
+  let glyphY1 = tokenY1;
+  if (useCaseKey || loading) {
+    glyphX0 = glyphCx - glyphSize / 2;
+    glyphX1 = glyphCx + glyphSize / 2;
+    glyphY0 = glyphCy - glyphSize / 2;
+    glyphY1 = glyphCy + glyphSize / 2;
+  }
+  const minX = Math.min(tokenX0, glyphX0);
+  const maxX = Math.max(tokenX1, glyphX1);
+  const minY = Math.min(tokenY0, glyphY0);
+  const maxY = Math.max(tokenY1, glyphY1);
+  const platePad = Math.round(18 * dpr);
+  let plate = {
+    x: Math.round(minX - platePad),
+    y: Math.round(minY - platePad),
+    w: Math.round((maxX - minX) + platePad * 2),
+    h: Math.round((maxY - minY) + platePad * 2),
+  };
+  const maxPlateW = Math.max(1, Math.round(canvasW - margin * 2));
+  if (plate.w > maxPlateW) {
+    plate.w = maxPlateW;
+    plate.x = margin;
+  } else {
+    plate.x = clamp(plate.x, margin, Math.round(canvasW - margin - plate.w));
+  }
+
+  // Title text inside the plate (big blocky LED matrix).
+  // Do NOT show the literal word "INTENT" - show only the inferred intent/use-case when ready.
+  const titleLines = [];
+  const title1 = !loading && !intent.uiHideSuggestion && useCaseKey ? _intentUseCaseTitle(useCaseKey) : "";
+  if (title1) titleLines.push(title1);
+  const titlePadX = Math.round(24 * dpr);
+  const titlePadY = Math.round(14 * dpr);
+  const titleMaxW = Math.max(1, plate.w - titlePadX * 2);
+  const longestTitle = titleLines.reduce((best, cur) => (String(cur).length > String(best).length ? String(cur) : String(best)), "");
+  let ledDot = Math.max(6, Math.round(4.2 * dpr * Math.min(1.9, Math.max(1, INTENT_UI_CHOICE_ICON_SCALE * 0.55))));
+  const minDot = Math.max(3, Math.round(2.6 * dpr));
+  let ledGap = Math.max(1, Math.round(ledDot * 0.22));
+  let ledCharGap = Math.max(2, Math.round(ledDot * 0.9));
+  while (ledDot > minDot) {
+    const dims = _led5x7TextDims(longestTitle, ledDot, ledGap, ledCharGap);
+    if (dims.w <= titleMaxW) break;
+    ledDot -= 1;
+    ledGap = Math.max(1, Math.round(ledDot * 0.22));
+    ledCharGap = Math.max(2, Math.round(ledDot * 0.9));
+  }
+  const ledLineDims = _led5x7TextDims("A", ledDot, ledGap, ledCharGap);
+  const ledLineH = Math.max(1, ledLineDims.h);
+  const ledLineGap = Math.max(1, Math.round(ledDot * 0.9));
+  const titleBlockH = titleLines.length > 0 ? titleLines.length * ledLineH + Math.max(0, titleLines.length - 1) * ledLineGap : 0;
+  const titleGapBelow = Math.round(6 * dpr);
+  const titleReserve = titleBlockH ? titlePadY + titleBlockH + titleGapBelow : 0;
+  if (titleReserve) {
+    plate.y = Math.round(plate.y - titleReserve);
+    plate.h = Math.round(plate.h + titleReserve);
+  }
+
+  const maxPlateH = Math.max(1, Math.round(canvasH - margin * 2));
+  if (plate.h > maxPlateH) {
+    plate.h = maxPlateH;
+    plate.y = margin;
+  } else {
+    plate.y = clamp(plate.y, margin, Math.round(canvasH - margin - plate.h));
+  }
+  _drawIntentBumperPlate(octx, plate, {
+    active: canAccept,
+    loading,
+    alpha: iconState ? 1 : 0.82,
+  });
+
+  if (titleBlockH) {
+    const glow = loading
+      ? "rgba(0, 221, 255, 0.70)"
+      : canAccept
+        ? "rgba(0, 245, 160, 0.62)"
+        : "rgba(100, 210, 255, 0.48)";
+    const off = "rgba(0, 221, 255, 0.06)";
+    const on = loading ? "rgba(0, 221, 255, 0.92)" : "rgba(0, 245, 160, 0.92)";
+    let ty = Math.round(plate.y + titlePadY);
+    for (let i = 0; i < titleLines.length; i += 1) {
+      const line = String(titleLines[i] || "").trim().toUpperCase();
+      if (!line) continue;
+      const dims = _led5x7TextDims(line, ledDot, ledGap, ledCharGap);
+      const tx = Math.round(plate.x + (plate.w - dims.w) / 2);
+      _drawLed5x7Text(octx, tx, ty, line, {
+        dot: ledDot,
+        gap: ledGap,
+        charGap: ledCharGap,
+        on,
+        off,
+        glow,
+        alpha: 1,
+      });
+      ty += ledLineH + ledLineGap;
+    }
+  }
+
+  _drawIntentYesNoIcon(octx, "NO", noCx, tokenCy, tokenR, { alpha: noAlpha });
+  _drawIntentYesNoIcon(octx, "YES", yesCx, tokenCy, tokenR, { alpha: yesAlpha });
+
+  const glyphAlpha = intent.uiHideSuggestion ? 0 : loading ? 0.35 : 1;
+  if (useCaseKey && glyphAlpha > 0.01) {
+    _drawIntentUseCaseGlyph(octx, useCaseKey, glyphCx, glyphCy, glyphSize, { alpha: glyphAlpha });
+  }
+  if (loading) {
+    _drawIntentLoadingDots(octx, glyphCx, glyphCy, { dotR: Math.max(2, Math.round(3.2 * dpr)), t: now / 240 });
+  }
+
+  if (canReject) hits.push({ kind: "intent_token", id: `${suggestedBranchId}::NO_TOKEN`, rect: { x: noCx - tokenR, y: tokenCy - tokenR, w: tokenR * 2, h: tokenR * 2 } });
+  if (canAccept) hits.push({ kind: "intent_token", id: `${suggestedBranchId}::YES_TOKEN`, rect: { x: yesCx - tokenR, y: tokenCy - tokenR, w: tokenR * 2, h: tokenR * 2 } });
+
+  intent.uiHits = hits;
+}
+
 function render() {
   const work = els.workCanvas;
   const overlay = els.overlayCanvas;
   if (!work || !overlay) return;
+  // Keep CSS-only intent effects (cursor/border) in sync with realtime activity.
+  syncIntentRealtimeClass();
   const wctx = work.getContext("2d");
   const octx = overlay.getContext("2d");
   if (!wctx || !octx) return;
@@ -7723,6 +10849,8 @@ function render() {
       octx.restore();
     }
   }
+
+  renderIntentOverlay(octx, work.width, work.height);
 }
 
 function startSpawnTimer() {
@@ -7736,8 +10864,37 @@ function startSpawnTimer() {
   }, 5000);
 }
 
-function installCanvasHandlers() {
+  function installCanvasHandlers() {
   if (!els.overlayCanvas) return;
+
+  els.overlayCanvas.addEventListener("keydown", (event) => {
+    const key = String(event?.key || "");
+    if (key !== "Enter" && key !== " ") return;
+    bumpInteraction();
+    event.preventDefault();
+    // Keyboard-accessible primary action.
+    // - Normal mode: import at a sensible default point (center).
+    // - Forced-choice intent gate: do NOT allow importing (it bypasses the gate). Treat Enter/Space
+    //   as "Lock Intent" (YES_TOKEN) on the current focus branch.
+    if (intentModeActive()) {
+      const intent = state.intent;
+      const total = Math.max(1, Number(intent?.totalRounds) || 3);
+      const round = Math.max(1, Number(intent?.round) || 1);
+      const lockGate =
+        Boolean(INTENT_FORCE_CHOICE_ENABLED) &&
+        (Boolean(intent?.forceChoice) || (INTENT_ROUNDS_ENABLED ? round >= total : false));
+      if (lockGate) {
+	        if (!intent?.iconState) {
+	          showToast("Intent updating…", "tip", 1600);
+	          requestRender();
+	          return;
+	        }
+	        lockIntentFromUi({ source: "keyboard" });
+	        return;
+	      }
+	    }
+    importPhotosAtCanvasPoint(_defaultImportPointCss()).catch((err) => console.error(err));
+  });
 
   els.overlayCanvas.addEventListener("contextmenu", (event) => {
     bumpInteraction();
@@ -7759,37 +10916,129 @@ function installCanvasHandlers() {
   });
 
   els.overlayCanvas.addEventListener("pointerdown", (event) => {
-    bumpInteraction();
-	    hideDesignateMenu();
-	    if (state.canvasMode === "multi") {
-	      const canvas = els.workCanvas;
-	      if (canvas && state.multiRects.size === 0) {
-	        state.multiRects = computeMultiRects(state.images, canvas.width, canvas.height);
-	      }
+	    bumpInteraction();
+		    hideDesignateMenu();
+		    if (state.canvasMode === "multi") {
+		      const canvas = els.workCanvas;
+		      if (canvas && state.multiRects.size === 0) {
+		        state.multiRects = computeFreeformRectsPx(canvas.width, canvas.height);
+		      }
 
-	      const p = canvasPointFromEvent(event);
-	      let hit = hitTestMulti(p);
-	      if (!hit && canvas) {
-	        state.multiRects = computeMultiRects(state.images, canvas.width, canvas.height);
-	        hit = hitTestMulti(p);
-	      }
+		      const p = canvasPointFromEvent(event);
+		      const pCss = canvasCssPointFromEvent(event);
+          const intentActive = intentModeActive();
 
-	      if (hit && hit !== state.activeId) setActiveImage(hit).catch(() => {});
+	          if (intentActive) {
+	            const uiHit = hitTestIntentUi(p);
+	            if (uiHit) {
+	              const kind = String(uiHit.kind || "");
+	              if (kind === "intent_branch") {
+	                state.intent.focusBranchId = String(uiHit.id || "");
+	                scheduleIntentStateWrite({ immediate: true });
+	                requestRender();
+	                return;
+		              }
+		              if (kind === "intent_lock") {
+		                lockIntentFromUi({ source: "start_button" });
+		                return;
+		              }
+	              if (kind === "intent_token") {
+	                const raw = String(uiHit.id || "");
+	                const [bid, tok] = raw.split("::");
+	                if (bid && tok) applyIntentSelection(bid, tok);
+	                return;
+              }
+            }
+            // Optional gate (disabled by default): block canvas interactions until the user locks an intent.
+            if (INTENT_FORCE_CHOICE_ENABLED && state.intent.forceChoice) {
+              requestRender();
+              return;
+            }
+          }
+		      let hit = hitTestMulti(p);
+          let corner = null;
+          if (state.tool === "pan") {
+            const handleHit = hitTestAnyFreeformCornerHandle(p, { padPx: Math.round(12 * getDpr()) });
+            if (handleHit?.id && handleHit.corner) {
+              hit = handleHit.id;
+              corner = handleHit.corner;
+            }
+          }
+			      if (!hit && canvas) {
+			        state.multiRects = computeFreeformRectsPx(canvas.width, canvas.height);
+	            hit = hitTestMulti(p);
+	            corner = null;
+	            if (state.tool === "pan") {
+	              const handleHit = hitTestAnyFreeformCornerHandle(p, { padPx: Math.round(12 * getDpr()) });
+	              if (handleHit?.id && handleHit.corner) {
+	                hit = handleHit.id;
+	                corner = handleHit.corner;
+	              }
+	            }
+			      }
 
-	      if (state.tool === "pan") {
-	        els.overlayCanvas.setPointerCapture(event.pointerId);
-	        state.pointer.active = true;
-	        state.pointer.startX = p.x;
-	        state.pointer.startY = p.y;
-        state.pointer.lastX = p.x;
-        state.pointer.lastY = p.y;
-        state.pointer.startOffsetX = state.multiView.offsetX;
-        state.pointer.startOffsetY = state.multiView.offsetY;
-	        requestRender();
-	        return;
-	      }
+            // Avoid accidental click-to-import when the user is trying to grab a tile edge/handle.
+            if (!hit && intentActive) {
+              const paddedHit = hitTestMultiWithPad(p, Math.round(10 * getDpr()));
+              if (paddedHit) hit = paddedHit;
+            }
 
-	      if (!hit) return;
+			      if (hit && hit !== state.activeId) setActiveImage(hit).catch(() => {});
+
+	          if (!hit) {
+	            // Click-to-upload anywhere on the canvas (primary import path).
+            els.overlayCanvas.setPointerCapture(event.pointerId);
+            state.pointer.active = true;
+            state.pointer.kind = "freeform_import";
+            state.pointer.imageId = null;
+            state.pointer.corner = null;
+            state.pointer.startX = p.x;
+            state.pointer.startY = p.y;
+            state.pointer.lastX = p.x;
+            state.pointer.lastY = p.y;
+            state.pointer.startCssX = pCss.x;
+            state.pointer.startCssY = pCss.y;
+            state.pointer.importPointCss = { x: pCss.x, y: pCss.y };
+            state.pointer.moved = false;
+            if (intentActive && !state.intent.startedAt) {
+              // Timer starts only after the first image is placed, but we want the user to feel the mode immediately.
+              state.intent.rtState = "connecting";
+            }
+            requestRender();
+            return;
+          }
+
+		      if (state.tool === "pan") {
+		        const rectPx = state.multiRects.get(hit) || null;
+		        const cornerHit = corner || (rectPx ? hitTestFreeformCornerHandleWithPad(p, rectPx, Math.round(12 * getDpr())) : null);
+
+		        // Bring the active (dragged) image to the top for intuitive hit-testing and stacking.
+		        const z = state.freeformZOrder || [];
+		        const zIdx = z.indexOf(hit);
+		        if (zIdx >= 0) {
+		          z.splice(zIdx, 1);
+		          z.push(hit);
+		        }
+
+		        const rectCss = state.freeformRects.get(hit) || null;
+		        els.overlayCanvas.setPointerCapture(event.pointerId);
+		        state.pointer.active = true;
+		        state.pointer.kind = cornerHit ? "freeform_resize" : "freeform_move";
+		        state.pointer.imageId = hit;
+		        state.pointer.corner = cornerHit;
+		        state.pointer.startX = p.x;
+		        state.pointer.startY = p.y;
+		        state.pointer.lastX = p.x;
+		        state.pointer.lastY = p.y;
+		        state.pointer.startCssX = pCss.x;
+		        state.pointer.startCssY = pCss.y;
+		        state.pointer.startRectCss = rectCss ? { ...rectCss } : null;
+		        state.pointer.moved = false;
+		        requestRender();
+		        return;
+		      }
+
+		      if (!hit) return;
 
 	      const img = state.imagesById.get(hit) || getActiveImage();
 	      if (!img) return;
@@ -7956,16 +11205,127 @@ function installCanvasHandlers() {
   });
 
   els.overlayCanvas.addEventListener("pointermove", (event) => {
-    if (!state.pointer.active) return;
-    bumpInteraction();
     const p = canvasPointFromEvent(event);
+    const pCss = canvasCssPointFromEvent(event);
+
+    if (!state.pointer.active) {
+      const intentActive = intentModeActive();
+      if (intentActive) {
+        const uiHit = hitTestIntentUi(p);
+        if (uiHit) {
+          els.overlayCanvas.style.cursor = INTENT_IMPORT_CURSOR;
+          return;
+        }
+      }
+      // Hover cursor feedback (click-to-upload + freeform arrange).
+      if (state.canvasMode === "multi") {
+        const canvas = els.workCanvas;
+        if (canvas && state.multiRects.size === 0) {
+          state.multiRects = computeFreeformRectsPx(canvas.width, canvas.height);
+        }
+        if (state.tool === "pan") {
+          const handleHit = hitTestAnyFreeformCornerHandle(p, { padPx: Math.round(12 * getDpr()) });
+          if (handleHit?.corner) {
+            els.overlayCanvas.style.cursor =
+              handleHit.corner === "nw" || handleHit.corner === "se" ? "nwse-resize" : "nesw-resize";
+            return;
+          }
+        }
+
+        const hit = hitTestMulti(p);
+        // Intent Mode uses an RTS-like pointer; reserve grab/drag cursors for the active drag.
+        if (intentActive) {
+          els.overlayCanvas.style.cursor = INTENT_IMPORT_CURSOR;
+          return;
+        }
+        if (!hit) {
+          els.overlayCanvas.style.cursor = "crosshair";
+          return;
+        }
+        if (state.tool === "pan") {
+          els.overlayCanvas.style.cursor = "grab";
+          return;
+        }
+        els.overlayCanvas.style.cursor = "";
+        return;
+      }
+      if (intentActive) {
+        els.overlayCanvas.style.cursor = INTENT_IMPORT_CURSOR;
+        return;
+      }
+      els.overlayCanvas.style.cursor = "";
+      return;
+    }
+
+    // Keep move/resize affordances during active drags.
+    if (state.pointer.kind === "freeform_resize") {
+      const corner = state.pointer.corner;
+      if (corner) {
+        els.overlayCanvas.style.cursor = corner === "nw" || corner === "se" ? "nwse-resize" : "nesw-resize";
+      }
+    } else if (state.pointer.kind === "freeform_move") {
+      els.overlayCanvas.style.cursor = "grabbing";
+    } else if (state.pointer.kind === "freeform_import") {
+      els.overlayCanvas.style.cursor = intentModeActive() ? INTENT_IMPORT_CURSOR : "crosshair";
+    }
+
+    bumpInteraction();
     const dx = p.x - state.pointer.startX;
-	    const dy = p.y - state.pointer.startY;
-	    state.pointer.lastX = p.x;
-	    state.pointer.lastY = p.y;
-		    if (state.tool === "annotate") {
-		      const img = getActiveImage();
-		      if (!img) return;
+		    const dy = p.y - state.pointer.startY;
+		    state.pointer.lastX = p.x;
+		    state.pointer.lastY = p.y;
+
+    // Freeform interactions (multi canvas + pan tool).
+    if (state.pointer.kind === "freeform_import") {
+      const dist = Math.hypot((Number(pCss.x) || 0) - state.pointer.startCssX, (Number(pCss.y) || 0) - state.pointer.startCssY);
+      if (dist > 6) state.pointer.moved = true;
+      return;
+    }
+    if (state.pointer.kind === "freeform_move" && state.pointer.imageId) {
+      const id = state.pointer.imageId;
+      const startRect = state.pointer.startRectCss || state.freeformRects.get(id) || null;
+      if (!startRect) return;
+      const wrap = els.canvasWrap;
+      const canvasCssW = wrap?.clientWidth || 0;
+      const canvasCssH = wrap?.clientHeight || 0;
+      const next = clampFreeformRectCss(
+        {
+          x: (Number(startRect.x) || 0) + (Number(pCss.x) || 0) - state.pointer.startCssX,
+          y: (Number(startRect.y) || 0) + (Number(pCss.y) || 0) - state.pointer.startCssY,
+          w: Number(startRect.w) || 1,
+          h: Number(startRect.h) || 1,
+          autoAspect: false,
+        },
+        canvasCssW,
+        canvasCssH
+      );
+      state.freeformRects.set(id, next);
+      state.pointer.moved = true;
+      scheduleVisualPromptWrite();
+      if (intentModeActive()) scheduleIntentInference({ reason: "move" });
+      requestRender();
+      return;
+    }
+    if (state.pointer.kind === "freeform_resize" && state.pointer.imageId) {
+      const id = state.pointer.imageId;
+      const startRect = state.pointer.startRectCss || state.freeformRects.get(id) || null;
+      if (!startRect) return;
+      const wrap = els.canvasWrap;
+      const canvasCssW = wrap?.clientWidth || 0;
+      const canvasCssH = wrap?.clientHeight || 0;
+      const next = resizeFreeformRectFromCorner(startRect, state.pointer.corner, pCss, canvasCssW, canvasCssH);
+      state.freeformRects.set(id, next);
+      state.pointer.moved = true;
+      scheduleVisualPromptWrite();
+      if (intentModeActive()) scheduleIntentInference({ reason: "resize" });
+      requestRender();
+      return;
+    }
+
+    // Existing tools (single canvas + edit tools).
+			    if (state.tool === "annotate") {
+			      const img = getActiveImage();
+			      if (!img) return;
           if (state.circleDraft && state.circleDraft.imageId === img.id) {
             const imgPt = canvasToImage(p);
             const dxImg = (Number(imgPt.x) || 0) - (Number(state.circleDraft.cx) || 0);
@@ -7974,13 +11334,13 @@ function installCanvasHandlers() {
             requestRender();
             return;
           }
-		      if (!state.annotateDraft || state.annotateDraft.imageId !== img.id) return;
-		      const imgPt = canvasToImage(p);
-		      state.annotateDraft.x1 = imgPt.x;
-		      state.annotateDraft.y1 = imgPt.y;
-		      requestRender();
-		      return;
-		    }
+			      if (!state.annotateDraft || state.annotateDraft.imageId !== img.id) return;
+			      const imgPt = canvasToImage(p);
+			      state.annotateDraft.x1 = imgPt.x;
+			      state.annotateDraft.y1 = imgPt.y;
+			      requestRender();
+			      return;
+			    }
 	    if (state.tool === "pan") {
 	      if (state.canvasMode === "multi") {
 	        state.multiView.offsetX = state.pointer.startOffsetX + dx;
@@ -7993,25 +11353,25 @@ function installCanvasHandlers() {
 	      requestRender();
 	      return;
 	    }
-	    if (state.tool === "lasso") {
-	      const imgPt = canvasToImage(p);
-	      const last = state.lassoDraft[state.lassoDraft.length - 1];
-	      const dist2 = (imgPt.x - last.x) ** 2 + (imgPt.y - last.y) ** 2;
-	      let scale = state.view.scale;
-	      if (state.canvasMode === "multi") {
-	        const ms = state.multiView?.scale || 1;
-	        const img = getActiveImage();
-	        const rect = img?.id ? state.multiRects.get(img.id) : null;
-	        if (img && rect) {
-	          const iw = img?.img?.naturalWidth || img?.width || rect.w || 1;
-	          const ih = img?.img?.naturalHeight || img?.height || rect.h || 1;
-	          const sx = rect.w / Math.max(1, iw);
-	          const sy = rect.h / Math.max(1, ih);
-	          scale = Math.min(sx, sy) * ms;
-	        } else {
-	          scale = ms;
-	        }
-	      }
+		    if (state.tool === "lasso") {
+		      const imgPt = canvasToImage(p);
+		      const last = state.lassoDraft[state.lassoDraft.length - 1];
+		      const dist2 = (imgPt.x - last.x) ** 2 + (imgPt.y - last.y) ** 2;
+		      let scale = state.view.scale;
+		      if (state.canvasMode === "multi") {
+		        const ms = state.multiView?.scale || 1;
+		        const img = getActiveImage();
+		        const rect = img?.id ? state.multiRects.get(img.id) : null;
+		        if (img && rect) {
+		          const iw = img?.img?.naturalWidth || img?.width || rect.w || 1;
+		          const ih = img?.img?.naturalHeight || img?.height || rect.h || 1;
+		          const sx = rect.w / Math.max(1, iw);
+		          const sy = rect.h / Math.max(1, ih);
+		          scale = Math.min(sx, sy) * ms;
+		        } else {
+		          scale = ms;
+		        }
+		      }
       const minDist = 4 / Math.max(scale, 0.02);
       if (dist2 >= minDist * minDist) {
         state.lassoDraft.push(imgPt);
@@ -8020,15 +11380,30 @@ function installCanvasHandlers() {
     }
   });
 
-	  function finalizePointer(event) {
-	    if (!state.pointer.active) return;
-	    bumpInteraction();
-	    state.pointer.active = false;
-		    if (state.tool === "annotate") {
-		      const img = getActiveImage();
-          if (img && state.circleDraft && state.circleDraft.imageId === img.id) {
-            const draft = state.circleDraft;
-            state.circleDraft = null;
+		  function finalizePointer(event) {
+		    if (!state.pointer.active) return;
+		    bumpInteraction();
+		    state.pointer.active = false;
+		    const kind = state.pointer.kind;
+		    const importPt = state.pointer.importPointCss;
+		    const moved = Boolean(state.pointer.moved);
+		    state.pointer.kind = null;
+		    state.pointer.imageId = null;
+		    state.pointer.corner = null;
+		    state.pointer.startRectCss = null;
+		    state.pointer.importPointCss = null;
+		    state.pointer.moved = false;
+
+		    if (kind === "freeform_import") {
+		      if (!moved && importPt) {
+		        importPhotosAtCanvasPoint(importPt).catch((err) => console.error(err));
+		      }
+		    }
+			    if (state.tool === "annotate") {
+			      const img = getActiveImage();
+	          if (img && state.circleDraft && state.circleDraft.imageId === img.id) {
+	            const draft = state.circleDraft;
+	            state.circleDraft = null;
             const r = Math.max(0, Number(draft?.r) || 0);
             if (r >= 6) {
               const entry = {
@@ -8097,6 +11472,8 @@ function installCanvasHandlers() {
       bumpInteraction();
       if (!getActiveImage()) return;
       event.preventDefault();
+      // Freeform canvas uses drag-to-move + corner-resize; disable camera zoom to keep spatial layout stable.
+      if (state.canvasMode === "multi") return;
       const p = canvasPointFromEvent(event);
       const factor = Math.exp(-event.deltaY * 0.0012);
       if (state.canvasMode === "multi") {
@@ -8126,19 +11503,42 @@ function installCanvasHandlers() {
 function installDnD() {
   if (!els.canvasWrap) return;
 
-  function stop(event) {
+  // Even when drag/drop import is disabled, we must still prevent the WebView's
+  // default file-drop navigation (which can wipe the current session/run).
+  const preventNav = (event) => {
+    if (!event) return;
     event.preventDefault();
-    event.stopPropagation();
+  };
+
+  try {
+    window.addEventListener("dragover", preventNav, { passive: false });
+    window.addEventListener("drop", preventNav, { passive: false });
+  } catch {
+    // ignore
   }
 
-  els.canvasWrap.addEventListener("dragover", stop);
-  els.canvasWrap.addEventListener("dragenter", stop);
+  function stop(event) {
+    preventNav(event);
+    event?.stopPropagation?.();
+  }
+
+  els.canvasWrap.addEventListener("dragover", stop, { passive: false });
+  els.canvasWrap.addEventListener("dragenter", stop, { passive: false });
+  let disabledToastAt = 0;
   els.canvasWrap.addEventListener("drop", async (event) => {
     stop(event);
     bumpInteraction();
     const files = Array.from(event.dataTransfer?.files || []);
     const paths = files.map((f) => f?.path).filter(Boolean);
     if (paths.length === 0) return;
+    if (!ENABLE_DRAG_DROP_IMPORT) {
+      const now = Date.now();
+      if (!disabledToastAt || now - disabledToastAt > 3500) {
+        disabledToastAt = now;
+        showToast("Drag/drop disabled. Click anywhere to add a photo.", "tip", 2400);
+      }
+      return;
+    }
     await ensureRun();
     const inputsDir = `${state.runDir}/inputs`;
     await createDir(inputsDir, { recursive: true }).catch(() => {});
@@ -8198,7 +11598,14 @@ function installUi() {
       if (els.dropHint.classList.contains("hidden")) return;
       event?.preventDefault?.();
       event?.stopPropagation?.();
-      importPhotos().catch((e) => console.error(e));
+      if (event && typeof event.clientX === "number" && typeof event.clientY === "number" && els.canvasWrap) {
+        const rect = els.canvasWrap.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        importPhotosAtCanvasPoint({ x, y }).catch((e) => console.error(e));
+        return;
+      }
+      importPhotosAtCanvasPoint(_defaultImportPointCss()).catch((e) => console.error(e));
     };
     els.dropHint.addEventListener("click", openPicker);
     els.dropHint.addEventListener("keydown", (event) => {
@@ -8315,7 +11722,7 @@ function installUi() {
         ensureEngineSpawned({ reason: "always-on vision" })
           .then((ok) => {
             if (!ok) return;
-            return invoke("write_pty", { data: `/canvas_context_rt_start\n` }).catch(() => {});
+            return invoke("write_pty", { data: "/canvas_context_rt_start\n" }).catch(() => {});
           })
           .catch(() => {});
         scheduleAlwaysOnVision({ immediate: true });
@@ -8323,7 +11730,7 @@ function installUi() {
         setStatus("Engine: always-on vision disabled");
         updatePortraitIdle({ fromSettings: true });
         if (state.ptySpawned) {
-          invoke("write_pty", { data: `/canvas_context_rt_stop\n` }).catch(() => {});
+          invoke("write_pty", { data: "/canvas_context_rt_stop\n" }).catch(() => {});
         }
       }
     });
@@ -8605,6 +12012,7 @@ function installUi() {
 
 	    // HUD action grid 1-9.
 	    if (/^[1-9]$/.test(rawKey)) {
+        if (intentModeActive()) return;
 	      const digit = rawKey;
 	      const btn = document.querySelector(`.hud-keybar .tool[data-hotkey="${digit}"][data-tool]`);
 	      if (btn) {
@@ -8614,6 +12022,7 @@ function installUi() {
     }
 
     if (key === "l") {
+      if (intentModeActive()) return;
       setTool("lasso");
       return;
     }
@@ -8622,6 +12031,7 @@ function installUi() {
       return;
     }
     if (key === "d") {
+      if (intentModeActive()) return;
       setTool("designate");
       return;
     }
@@ -8634,6 +12044,10 @@ function installUi() {
       return;
     }
     if (key === "m") {
+      if (intentModeActive()) {
+        showToast("Intent Mode: Multi view only (until intent is locked).", "tip", 2200);
+        return;
+      }
       if (state.images.length < 2) {
         showToast("Multi view needs at least 2 images.", "tip", 2000);
         return;
@@ -8658,12 +12072,14 @@ async function boot() {
 
   setStatus("Engine: booting…");
   setRunInfo("No run");
+  ensureIntentUiIconsLoaded().catch(() => {});
   refreshKeyStatus().catch(() => {});
   updateAlwaysOnVisionReadout();
   renderQuickActions();
   ensurePortraitIndex().catch(() => {});
   updatePortraitIdle({ fromSettings: true });
-  showDropHint(true);
+  syncIntentModeClass();
+  updateEmptyCanvasHint();
   renderSelectionMeta();
   chooseSpawnNodes();
   renderFilmstrip();
@@ -8697,6 +12113,7 @@ async function boot() {
   new ResizeObserver(() => {
     ensureCanvasSize();
     scheduleVisualPromptWrite();
+    if (intentModeActive()) scheduleIntentInference({ immediate: true, reason: "canvas_resize" });
     requestRender();
   }).observe(els.canvasWrap);
 
@@ -8727,7 +12144,7 @@ async function boot() {
 
   // Consume PTY stdout as a fallback for vision describe completion/errors.
   // Desktop normally uses `events.jsonl`, but if event polling is disrupted, this
-  // keeps the HUD "DESC" from getting stuck at SCANNING.
+  // keeps the HUD "DESC" from getting stuck at ANALYZING.
   await listen("pty-data", (event) => {
     const chunk = event?.payload;
     if (typeof chunk !== "string" || !chunk) return;

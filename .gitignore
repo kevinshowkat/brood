@@ -37,6 +37,16 @@ npm-debug.log*
 outputs/first_light/
 outputs/aip_packs/
 outputs/aip_server/
+outputs/sora_portraits/
+
+# Generated UI icon intermediates
+desktop/src/assets/intent-icons-sc/raw/
+desktop/src/assets/intent-icons-sc/manifest.json
+
+# Local reference images
+bumpers.png
+minimap.jpg
+github.png
 
 # Editor
 .idea/
