@@ -111,8 +111,15 @@ class BroodEngine:
         n: int,
         measured_latency: float,
         cached: bool = False,
+        *,
+        size: str | None = None,
+        provider_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        cost_estimate = self.pricing.estimate_image_cost(model_spec.pricing_key)
+        cost_estimate = self.pricing.estimate_image_cost_with_params(
+            model_spec.pricing_key,
+            size=size,
+            provider_options=provider_options,
+        )
         latency_estimate = self.latency.estimate_image_latency(model_spec.latency_key)
         latency_value = latency_estimate.latency_per_image_s
         if latency_value is None:
@@ -194,6 +201,8 @@ class BroodEngine:
                 n=n,
                 measured_latency=0.0,
                 cached=True,
+                size=size,
+                provider_options=settings.get("provider_options", {}),
             )
             for item in cached.get("artifacts", []):
                 artifact = dict(item)
@@ -224,6 +233,8 @@ class BroodEngine:
             model_spec,
             n=n,
             measured_latency=measured_latency,
+            size=size,
+            provider_options=settings.get("provider_options", {}),
         )
         if error is not None:
             self.events.emit("cost_latency_update", **cost_payload)

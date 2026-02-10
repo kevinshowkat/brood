@@ -14,11 +14,16 @@ import {
   copyFile,
 } from "@tauri-apps/api/fs";
 
+import { computeActionGridSlots } from "./action_grid_logic.js";
+
 const THUMB_PLACEHOLDER_SRC = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
 const els = {
   runInfo: document.getElementById("run-info"),
   engineStatus: document.getElementById("engine-status"),
+  brandStrip: document.querySelector(".brand-strip"),
+  appMenuToggle: document.getElementById("app-menu-toggle"),
+  appMenu: document.getElementById("app-menu"),
   newRun: document.getElementById("new-run"),
   openRun: document.getElementById("open-run"),
   import: document.getElementById("import"),
@@ -85,6 +90,7 @@ const els = {
   portraitVideo2: document.getElementById("portrait-video-2"),
   selectionMeta: document.getElementById("selection-meta"),
   tipsText: document.getElementById("tips-text"),
+  actionGrid: document.getElementById("action-grid"),
   designateMenu: document.getElementById("designate-menu"),
   imageMenu: document.getElementById("image-menu"),
   quickActions: document.getElementById("quick-actions"),
@@ -93,7 +99,6 @@ const els = {
   timelineClose: document.getElementById("timeline-close"),
   timelineStrip: document.getElementById("timeline-strip"),
   timelineDetail: document.getElementById("timeline-detail"),
-  toolButtons: Array.from(document.querySelectorAll(".tool[data-tool]")),
 };
 
 const settings = {
@@ -116,6 +121,7 @@ const state = {
   images: [],
   imagesById: new Map(),
   activeId: null,
+  selectedIds: [], // imageId[] (multi-select in multi canvas; last entry is "active")
   imageCache: new Map(), // path -> { url: string|null, urlPromise: Promise<string>|null, imgPromise: Promise<HTMLImageElement>|null }
   thumbsById: new Map(), // artifactId -> { rootEl, imgEl, labelEl }
   // Hide the filmstrip by default (keeps the UI focused on the canvas). The feature remains
@@ -135,6 +141,8 @@ const state = {
   freeformRects: new Map(), // imageId -> { x, y, w, h } in canvas CSS pixels (top-left anchored)
   freeformZOrder: [], // imageId[] draw/hit-test order (last is top)
   multiRects: new Map(), // imageId -> { x, y, w, h } in canvas device pixels (hit-testing + canvas->image mapping).
+  // Used for local (non-engine) actions so the Action Grid can show the pressed state while running.
+  runningActionKey: null, // string | null
   pendingBlend: null, // { sourceIds: [string, string], startedAt: number }
   pendingSwapDna: null, // { structureId: string, surfaceId: string, startedAt: number }
   pendingBridge: null, // { sourceIds: [string, string], startedAt: number }
@@ -216,7 +224,7 @@ const state = {
   fallbackToFullRead: false,
   keyStatus: null, // { openai, gemini, imagen, flux, anthropic }
   intent: {
-    locked: false,
+    locked: true,
     lockedAt: 0,
     lockedBranchId: null,
     startedAt: 0,
@@ -312,6 +320,7 @@ const ENABLE_DRAG_DROP_IMPORT = false;
 
 // Intent Canvas feature flags. Keep the full implementation in place so we can
 // re-enable specific behaviors without ripping out code.
+const INTENT_CANVAS_ENABLED = false; // disable onboarding intent decider (keep code intact)
 const INTENT_TIMER_ENABLED = false; // hide LED timer + disable timeout-based force-choice
 const INTENT_ROUNDS_ENABLED = false; // disable "max rounds" gating
 const INTENT_FORCE_CHOICE_ENABLED = INTENT_TIMER_ENABLED || INTENT_ROUNDS_ENABLED;
@@ -534,7 +543,7 @@ function renderHudReadout() {
     const zoomPct = Math.round(zoomScale * 100);
     if (els.hudUnitName) els.hudUnitName.textContent = "NO IMAGE";
     if (els.hudUnitDesc) els.hudUnitDesc.textContent = "Tap or drag to add photos";
-    if (els.hudUnitSel) els.hudUnitSel.textContent = `${sel} · ${state.tool} · ${zoomPct}%`;
+    if (els.hudUnitSel) els.hudUnitSel.textContent = `imgs:0 · ${sel} · ${state.tool} · ${zoomPct}%`;
     if (els.hudUnitStat) els.hudUnitStat.textContent = state.ptySpawned ? "ready" : "engine offline";
     if (els.hudLineDirector) els.hudLineDirector.classList.add("hidden");
     if (els.hudDirectorVal) els.hudDirectorVal.textContent = "";
@@ -569,8 +578,9 @@ function renderHudReadout() {
   if (els.hudUnitDesc) els.hudUnitDesc.textContent = desc || "—";
 
   const sel = state.selection?.points?.length >= 3 ? `${state.selection.points.length} pts` : "none";
+  const imgSel = selectedCount();
   const zoomPct = Math.round(zoomScale * 100);
-  if (els.hudUnitSel) els.hudUnitSel.textContent = `${sel} · ${state.tool} · ${zoomPct}%`;
+  if (els.hudUnitSel) els.hudUnitSel.textContent = `imgs:${imgSel} · ${sel} · ${state.tool} · ${zoomPct}%`;
 
   const meta = img?.receiptMeta || null;
   const opRaw = meta?.operation || img?.kind || null;
@@ -1128,6 +1138,7 @@ function allowAlwaysOnVision() {
 }
 
 function intentModeActive() {
+  if (!INTENT_CANVAS_ENABLED) return false;
   return Boolean(state.intent && !state.intent.locked);
 }
 
@@ -1585,23 +1596,24 @@ function _hideCanvasContextSuggestion(wrap, btn) {
 }
 
 function _canvasContextDisabledReason(action) {
-  const n = state.images.length || 0;
+  const nImages = state.images.length || 0;
+  const nSelected = selectedCount();
   if (action === "Multi view") {
-    if (n < 2) return `Requires at least 2 images (you have ${n}).`;
+    if (nImages < 2) return `Requires at least 2 images (you have ${nImages}).`;
     if (state.canvasMode === "multi") return "Already in multi view.";
     return "";
   }
   if (action === "Single view") {
-    if (n < 1) return "No images loaded.";
+    if (nImages < 1) return "No images loaded.";
     if (state.canvasMode !== "multi") return "Already in single view.";
     return "";
   }
   if (["Combine", "Bridge", "Swap DNA", "Argue"].includes(action)) {
-    if (n !== 2) return `Requires exactly 2 images (you have ${n}).`;
+    if (nSelected !== 2) return `Requires exactly 2 selected images (you have ${nSelected}).`;
     return "";
   }
   if (["Extract the Rule", "Odd One Out", "Triforce"].includes(action)) {
-    if (n !== 3) return `Requires exactly 3 images (you have ${n}).`;
+    if (nSelected !== 3) return `Requires exactly 3 selected images (you have ${nSelected}).`;
     return "";
   }
   if (!getActiveImage()) return "No active image.";
@@ -1694,6 +1706,7 @@ async function triggerCanvasContextSuggestedAction(actionName) {
   const action = normalizeSuggestedActionName(actionName);
   if (!action) return;
   const active = getActiveImage();
+  const nSelected = selectedCount();
 
   if (action === "Multi view") {
     if (state.images.length < 2) throw new Error("Multi view requires at least 2 images.");
@@ -1706,43 +1719,44 @@ async function triggerCanvasContextSuggestedAction(actionName) {
     return;
   }
   if (action === "Combine") {
-    if (state.images.length !== 2) throw new Error("Combine requires exactly 2 images.");
+    if (nSelected !== 2) throw new Error(`Combine requires exactly 2 selected images (you have ${nSelected}).`);
     if (state.canvasMode !== "multi") setCanvasMode("multi");
     await runBlendPair();
     return;
   }
   if (action === "Bridge") {
-    if (state.images.length !== 2) throw new Error("Bridge requires exactly 2 images.");
+    if (nSelected !== 2) throw new Error(`Bridge requires exactly 2 selected images (you have ${nSelected}).`);
     if (state.canvasMode !== "multi") setCanvasMode("multi");
     await runBridgePair();
     return;
   }
   if (action === "Swap DNA") {
-    if (state.images.length !== 2) throw new Error("Swap DNA requires exactly 2 images.");
+    if (nSelected !== 2) throw new Error(`Swap DNA requires exactly 2 selected images (you have ${nSelected}).`);
     if (state.canvasMode !== "multi") setCanvasMode("multi");
     await runSwapDnaPair({ invert: false });
     return;
   }
   if (action === "Argue") {
-    if (state.images.length !== 2) throw new Error("Argue requires exactly 2 images.");
+    if (nSelected !== 2) throw new Error(`Argue requires exactly 2 selected images (you have ${nSelected}).`);
     if (state.canvasMode !== "multi") setCanvasMode("multi");
     await runArguePair();
     return;
   }
   if (action === "Extract the Rule") {
-    if (state.images.length !== 3) throw new Error("Extract the Rule requires exactly 3 images.");
+    if (nSelected !== 3)
+      throw new Error(`Extract the Rule requires exactly 3 selected images (you have ${nSelected}).`);
     if (state.canvasMode !== "multi") setCanvasMode("multi");
     await runExtractRuleTriplet();
     return;
   }
   if (action === "Odd One Out") {
-    if (state.images.length !== 3) throw new Error("Odd One Out requires exactly 3 images.");
+    if (nSelected !== 3) throw new Error(`Odd One Out requires exactly 3 selected images (you have ${nSelected}).`);
     if (state.canvasMode !== "multi") setCanvasMode("multi");
     await runOddOneOutTriplet();
     return;
   }
   if (action === "Triforce") {
-    if (state.images.length !== 3) throw new Error("Triforce requires exactly 3 images.");
+    if (nSelected !== 3) throw new Error(`Triforce requires exactly 3 selected images (you have ${nSelected}).`);
     if (state.canvasMode !== "multi") setCanvasMode("multi");
     await runTriforceTriplet();
     return;
@@ -4072,7 +4086,9 @@ function setDirectorText(text, meta = null) {
 }
 
 function pulseTool(tool) {
-  const btn = els.toolButtons.find((b) => b?.dataset?.tool === tool);
+  const key = String(tool || "").trim();
+  if (!key) return;
+  const btn = document.querySelector(`.action-grid .tool[data-key="${CSS.escape(key)}"]`);
   if (!btn) return;
   btn.classList.remove("pulse");
   // Trigger reflow so the animation restarts.
@@ -4137,6 +4153,21 @@ function syncHudHeightVar() {
   if (next !== lastHudHeightCssPx) {
     lastHudHeightCssPx = next;
     els.canvasWrap.style.setProperty("--hud-h", next);
+  }
+}
+
+let lastBrandStripHeightCssPx = null;
+let brandStripResizeObserver = null;
+function syncBrandStripHeightVar() {
+  const el = els.brandStrip;
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const h = Math.max(0, Math.round(rect.height));
+  if (!h) return;
+  const next = `${h}px`;
+  if (next !== lastBrandStripHeightCssPx) {
+    lastBrandStripHeightCssPx = next;
+    document.documentElement.style.setProperty("--brand-strip-h", next);
   }
 }
 
@@ -4359,12 +4390,111 @@ function getActiveImage() {
   return state.imagesById.get(state.activeId) || null;
 }
 
+function getSelectedIds() {
+  const raw = Array.isArray(state.selectedIds) ? state.selectedIds : [];
+  const out = [];
+  for (const id of raw) {
+    const key = String(id || "").trim();
+    if (!key) continue;
+    if (!out.includes(key)) out.push(key);
+  }
+  const active = String(state.activeId || "").trim();
+  if (active && !out.includes(active)) out.push(active);
+  return out;
+}
+
+function setSelectedIds(nextIds) {
+  const out = [];
+  for (const id of Array.isArray(nextIds) ? nextIds : []) {
+    const key = String(id || "").trim();
+    if (!key) continue;
+    if (!out.includes(key)) out.push(key);
+  }
+  state.selectedIds = out;
+}
+
+function selectedCount() {
+  return getSelectedImages().length;
+}
+
+function getSelectedImages({ requireCount = null } = {}) {
+  const ids = getSelectedIds();
+  const items = ids.map((id) => state.imagesById.get(id)).filter(Boolean);
+  if (typeof requireCount === "number") {
+    if (items.length !== requireCount) return [];
+  }
+  return items;
+}
+
+function getSelectedImagesActiveFirst({ requireCount = null } = {}) {
+  const selected = getSelectedImages();
+  const active = getActiveImage();
+  if (active?.id) {
+    const ordered = [active, ...selected.filter((item) => item?.id && item.id !== active.id)];
+    if (typeof requireCount === "number") {
+      if (ordered.length !== requireCount) return [];
+    }
+    return ordered;
+  }
+  if (typeof requireCount === "number") {
+    if (selected.length !== requireCount) return [];
+  }
+  return selected;
+}
+
+async function selectCanvasImage(imageId, { toggle = false } = {}) {
+  const id = String(imageId || "").trim();
+  if (!id) return;
+  const item = state.imagesById.get(id) || null;
+  if (!item) return;
+
+  const current = getSelectedIds();
+  const has = current.includes(id);
+  let next = current.slice();
+
+  if (!toggle) {
+    next = [id];
+  } else if (has) {
+    // Keep at least one selected image to avoid entering a confusing "no selection" state.
+    if (next.length > 1) next = next.filter((v) => v !== id);
+  } else {
+    next.push(id);
+    // Cap multi-select to 3 images (2/3-image abilities).
+    if (next.length > 3) next = next.slice(next.length - 3);
+  }
+
+  setSelectedIds(next);
+  const nextActive = next.includes(id) ? id : next[next.length - 1] || null;
+  if (!nextActive) {
+    renderQuickActions();
+    renderHudReadout();
+    requestRender();
+    return;
+  }
+
+  if (nextActive === state.activeId) {
+    renderQuickActions();
+    renderHudReadout();
+    requestRender();
+    return;
+  }
+
+  await setActiveImage(nextActive, { preserveSelection: true }).catch(() => {});
+}
+
 function setCanvasMode(mode) {
   const next = mode === "multi" ? "multi" : "single";
   // Intent Mode requires the freeform spatial canvas; keep users in multi mode until intent is locked.
   if (intentModeActive() && next !== "multi") return;
   if (state.canvasMode === next) return;
   state.canvasMode = next;
+  if (next === "single") {
+    const active = String(state.activeId || "").trim();
+    setSelectedIds(active ? [active] : []);
+  } else if (next === "multi") {
+    const active = String(state.activeId || "").trim();
+    if (active && selectedCount() === 0) setSelectedIds([active]);
+  }
   state.multiRects.clear();
   if (next === "multi") {
     state.multiView.scale = 1;
@@ -5028,6 +5158,19 @@ function clearPendingReplace() {
   state.pendingReplace = null;
 }
 
+function beginRunningAction(key) {
+  const k = String(key || "").trim();
+  if (!k) return;
+  state.runningActionKey = k;
+  renderQuickActions();
+}
+
+function clearRunningAction(key = null) {
+  if (key && state.runningActionKey !== key) return;
+  state.runningActionKey = null;
+  renderQuickActions();
+}
+
 function clearSelection() {
   state.selection = null;
   state.lassoDraft = [];
@@ -5058,10 +5201,7 @@ function setTool(tool) {
   if (tool !== "designate") state.pendingDesignation = null;
   hideDesignateMenu();
   state.tool = tool;
-  for (const btn of els.toolButtons) {
-    const t = btn.dataset.tool;
-    btn.classList.toggle("selected", t === tool);
-  }
+  renderQuickActions();
   renderSelectionMeta();
   renderHudReadout();
   if (tool === "lasso") {
@@ -5171,7 +5311,7 @@ function showDesignateMenuAtHudKey() {
   const menu = els.designateMenu;
   const wrap = els.canvasWrap;
   if (!menu || !wrap) return;
-  const btn = els.toolButtons.find((b) => b?.dataset?.tool === "designate") || null;
+  const btn = document.querySelector(`.action-grid .tool[data-key="designate"]`);
   if (!btn) return;
   const wrapRect = wrap.getBoundingClientRect();
   const keyRect = btn.getBoundingClientRect();
@@ -6154,7 +6294,7 @@ function chooseSpawnNodes() {
   const img = getActiveImage();
   const items = [];
   if (state.canvasMode === "multi") {
-    const canBlend = state.images.length === 2 && !isMultiActionRunning();
+    const canBlend = selectedCount() === 2 && !isMultiActionRunning();
     if (canBlend) items.push({ id: "blend_pair", title: "Combine", action: "blend_pair" });
   }
   items.push({ id: "bg_white", title: "Studio White", action: "bg_white" });
@@ -6202,6 +6342,7 @@ function computeQuickActions() {
   // grow rules over time without entangling UI code.
   const actions = [];
   const active = getActiveImage();
+  const nSelected = selectedCount();
 
   if (!active) {
     actions.push({
@@ -6212,8 +6353,7 @@ function computeQuickActions() {
     return actions;
   }
 
-  // When the canvas itself is multi-image, prefer multi-image abilities and hide
-  // single-image abilities to reduce ambiguity.
+  // View toggles.
   if (state.canvasMode === "multi") {
     actions.push({
       id: "single_view",
@@ -6222,88 +6362,86 @@ function computeQuickActions() {
       disabled: false,
       onClick: () => setCanvasMode("single"),
     });
-    if (state.images.length === 2) {
-      actions.push({
-        id: "combine",
-        label: state.pendingBlend ? "Combine (running…)" : "Combine",
-        title: "Blend the two loaded photos into one",
-        disabled: false,
-        onClick: () => runBlendPair().catch((err) => console.error(err)),
-      });
-      actions.push({
-        id: "bridge",
-        label: state.pendingBridge ? "Bridge (running…)" : "Bridge",
-        title: "Find the aesthetic midpoint between the two images (not a collage)",
-        disabled: false,
-        onClick: () => runBridgePair().catch((err) => console.error(err)),
-      });
-      actions.push({
-        id: "swap_dna",
-        label: state.pendingSwapDna ? "Swap DNA (running…)" : "Swap DNA",
-        title: "Use structure from the selected image and surface qualities from the other (Shift-click to invert)",
-        disabled: false,
-        onClick: (ev) =>
-          runSwapDnaPair({ invert: Boolean(ev?.shiftKey) }).catch((err) => console.error(err)),
-      });
-      actions.push({
-        id: "argue",
-        label: state.pendingArgue ? "Argue (running…)" : "Argue",
-        title: "Debate the two directions (why each is stronger, with visual evidence)",
-        disabled: false,
-        onClick: () => runArguePair().catch((err) => console.error(err)),
-      });
-      return actions;
-    }
-    if (state.images.length === 3) {
-      const runningMulti = isMultiActionRunning();
-      actions.push({
-        id: "extract_rule",
-        label: state.pendingExtractRule ? "Extract the Rule (running…)" : "Extract the Rule",
-        title:
-          "Three images is the minimum for pattern recognition. Extract the invisible rule you're applying.",
-        disabled: Boolean(runningMulti && !state.pendingExtractRule),
-        onClick: () => runExtractRuleTriplet().catch((err) => console.error(err)),
-      });
-      actions.push({
-        id: "odd_one_out",
-        label: state.pendingOddOneOut ? "Odd One Out (running…)" : "Odd One Out",
-        title:
-          "Identify which of the three breaks the shared pattern, and explain why (brutal but useful).",
-        disabled: Boolean(runningMulti && !state.pendingOddOneOut),
-        onClick: () => runOddOneOutTriplet().catch((err) => console.error(err)),
-      });
-      actions.push({
-        id: "triforce",
-        label: state.pendingTriforce ? "Triforce (running…)" : "Triforce",
-        title:
-          "Generate the centroid: a single image equidistant from all three references (mood board distillation).",
-        disabled: Boolean(runningMulti && !state.pendingTriforce),
-        onClick: () => runTriforceTriplet().catch((err) => console.error(err)),
-      });
-      return actions;
-    }
-    const n = state.images.length || 0;
-    const hint =
-      n <= 1
-        ? "Multi-image abilities need 2 photos in the run."
-        : `Multi-image abilities need exactly 2 photos (you have ${n}).`;
-    actions.push({ id: "multi_hint", label: hint, disabled: true });
-    // Fall through to single-image actions for the active image.
+  } else if (state.images.length > 1) {
+    actions.push({
+      id: "multi_view",
+      label: "Multi view",
+      title: "Show all loaded photos (enables multi-select + multi-image abilities)",
+      disabled: false,
+      onClick: () => setCanvasMode("multi"),
+    });
+  }
+
+  // Multi-image abilities are driven by *selected* images, not run size.
+  if (nSelected === 2) {
+    actions.push({
+      id: "combine",
+      label: state.pendingBlend ? "Combine (running…)" : "Combine",
+      title: "Blend the 2 selected photos into one",
+      disabled: false,
+      onClick: () => runBlendPair().catch((err) => console.error(err)),
+    });
+    actions.push({
+      id: "bridge",
+      label: state.pendingBridge ? "Bridge (running…)" : "Bridge",
+      title: "Find the aesthetic midpoint between the 2 selected images (not a collage)",
+      disabled: false,
+      onClick: () => runBridgePair().catch((err) => console.error(err)),
+    });
+    actions.push({
+      id: "swap_dna",
+      label: state.pendingSwapDna ? "Swap DNA (running…)" : "Swap DNA",
+      title: "Use structure from the active image and surface qualities from the other (Shift-click to invert)",
+      disabled: false,
+      onClick: (ev) =>
+        runSwapDnaPair({ invert: Boolean(ev?.shiftKey) }).catch((err) => console.error(err)),
+    });
+    actions.push({
+      id: "argue",
+      label: state.pendingArgue ? "Argue (running…)" : "Argue",
+      title: "Debate the two directions (why each is stronger, with visual evidence)",
+      disabled: false,
+      onClick: () => runArguePair().catch((err) => console.error(err)),
+    });
+    return actions;
+  }
+  if (nSelected === 3) {
+    const runningMulti = isMultiActionRunning();
+    actions.push({
+      id: "extract_rule",
+      label: state.pendingExtractRule ? "Extract the Rule (running…)" : "Extract the Rule",
+      title: "Extract the invisible rule you're applying across the 3 selected images.",
+      disabled: Boolean(runningMulti && !state.pendingExtractRule),
+      onClick: () => runExtractRuleTriplet().catch((err) => console.error(err)),
+    });
+    actions.push({
+      id: "odd_one_out",
+      label: state.pendingOddOneOut ? "Odd One Out (running…)" : "Odd One Out",
+      title: "Identify which of the 3 selected breaks the shared pattern, and explain why.",
+      disabled: Boolean(runningMulti && !state.pendingOddOneOut),
+      onClick: () => runOddOneOutTriplet().catch((err) => console.error(err)),
+    });
+    actions.push({
+      id: "triforce",
+      label: state.pendingTriforce ? "Triforce (running…)" : "Triforce",
+      title: "Generate the centroid: one image equidistant from all 3 selected references.",
+      disabled: Boolean(runningMulti && !state.pendingTriforce),
+      onClick: () => runTriforceTriplet().catch((err) => console.error(err)),
+    });
+    return actions;
+  }
+  if (nSelected > 3) {
+    actions.push({
+      id: "multi_hint",
+      label: `Multi-select: pick exactly 2 or 3 images (you have ${nSelected}).`,
+      disabled: true,
+    });
+    return actions;
   }
 
   const iw = active?.img?.naturalWidth || active?.width || null;
   const ih = active?.img?.naturalHeight || active?.height || null;
   const canCropSquare = Boolean(iw && ih && Math.abs(iw - ih) > 8);
-
-  if (state.canvasMode !== "multi" && state.images.length > 1) {
-    actions.push({
-      id: "multi_view",
-      label: "Multi view",
-      title: "Show all loaded photos (enables 2-photo abilities when exactly 2 photos are loaded)",
-      disabled: false,
-      onClick: () => setCanvasMode("multi"),
-    });
-  }
 
   // Realtime canvas context effectively performs continuous diagnosis; hide the explicit Diagnose action
   // when Always-On Vision is enabled so the system recommends other next steps.
@@ -6356,77 +6494,302 @@ function computeQuickActions() {
   return actions;
 }
 
-function renderQuickActions() {
-  const root = els.quickActions;
+function _runningKeyFromPendingReplace(pending) {
+  const label = pending?.label ? String(pending.label) : "";
+  const stable = label.toLowerCase();
+  if (stable.includes("remove people")) return "remove_people";
+  if (stable.includes("surprise")) return "surprise";
+  if (stable.includes("studio white") || stable.includes("soft sweep") || stable.includes("background")) return "bg";
+  if (stable.includes("annotate")) return "annotate";
+  return "bg";
+}
+
+function currentRunningActionKey() {
+  if (state.runningActionKey) return state.runningActionKey;
+  if (state.pendingBlend) return "combine";
+  if (state.pendingBridge) return "bridge";
+  if (state.pendingSwapDna) return "swap_dna";
+  if (state.pendingArgue) return "argue";
+  if (state.pendingExtractRule) return "extract_rule";
+  if (state.pendingOddOneOut) return "odd_one_out";
+  if (state.pendingTriforce) return "triforce";
+  if (state.pendingRecast) return "recast";
+  if (state.pendingDiagnose) return "diagnose";
+  if (state.pendingRecreate) return "variations";
+  if (state.pendingReplace) return _runningKeyFromPendingReplace(state.pendingReplace);
+  return null;
+}
+
+function actionGridTitleFor(key) {
+  const k = String(key || "").trim();
+  if (!k) return "";
+  if (k === "annotate") return "Annotate (box + instruction)";
+  if (k === "pan") return "Pan / Zoom";
+  if (k === "lasso") return "Lasso selection";
+  if (k === "designate") return "Designate subject/reference/object";
+  if (k === "bg") return "Background replace (Shift: Sweep)";
+  if (k === "remove_people") return "Remove people from the active image";
+  if (k === "variations") return "Zero-prompt variations";
+  if (k === "diagnose") return "Creative-director diagnosis";
+  if (k === "recast") return "Reimagine the image in a different medium/context";
+  if (k === "crop_square") return "Crop the active image to a centered square";
+  if (k === "combine") return "Combine: blend the 2 selected photos";
+  if (k === "bridge") return "Bridge: find the aesthetic midpoint between the 2 selected photos";
+  if (k === "swap_dna") return "Swap DNA (Shift: invert)";
+  if (k === "argue") return "Argue: debate the 2 directions with visual evidence";
+  if (k === "extract_rule") return "Extract the Rule (3 selected photos)";
+  if (k === "odd_one_out") return "Odd One Out (3 selected photos)";
+  if (k === "triforce") return "Triforce (3 selected photos)";
+  return k;
+}
+
+function actionGridIconFor(key) {
+  const k = String(key || "").trim();
+  if (!k) return "";
+  // Keep SVGs small and stroke-only so the tool style does the heavy lifting.
+  if (k === "annotate") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 6h11v11H5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+      <path d="M14.5 4.5l5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M13 6l6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </svg>`;
+  }
+  if (k === "pan") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 3v6M12 21v-6M3 12h6M21 12h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" />
+      <path d="M12 3l-2 2M12 3l2 2M12 21l-2-2M12 21l2-2M3 12l2-2M3 12l2 2M21 12l-2-2M21 12l-2 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" />
+    </svg>`;
+  }
+  if (k === "lasso") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <ellipse cx="12" cy="9.5" rx="6.5" ry="4.5" fill="none" stroke="currentColor" stroke-width="2" />
+      <path d="M15 13.5c0.9 1.2 1.9 2.6 3.5 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M19.5 18l1.8 1.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </svg>`;
+  }
+  if (k === "designate") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2" />
+      <path d="M12 4v3M12 17v3M4 12h3M17 12h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </svg>`;
+  }
+  if (k === "bg") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 7h10v4H6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+      <path d="M16 9h2a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M8 11v7h4v-4h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>`;
+  }
+  if (k === "remove_people") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 12a3.5 3.5 0 1 0-0.01 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M5 20c1.2-3 4-5 7-5s5.8 2 7 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M6 6l12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </svg>`;
+  }
+  if (k === "variations") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 7h4l8 10h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M20 17l-2-2 2-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M4 17h4l2.5-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M20 7l-2 2 2 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>`;
+  }
+  if (k === "diagnose") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15z" fill="none" stroke="currentColor" stroke-width="2" />
+      <path d="M16.6 16.6L21 21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </svg>`;
+  }
+  if (k === "recast") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M21 12a9 9 0 1 1-2.7-6.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M21 3v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>`;
+  }
+  if (k === "crop_square") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 3v14a4 4 0 0 0 4 4h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M3 7h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M7 7h10v10H7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+    </svg>`;
+  }
+  if (k === "combine") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 7h8v8H5z" fill="none" stroke="currentColor" stroke-width="2" />
+      <path d="M11 9h8v8h-8z" fill="none" stroke="currentColor" stroke-width="2" />
+    </svg>`;
+  }
+  if (k === "bridge") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 8h6v8H4z" fill="none" stroke="currentColor" stroke-width="2" />
+      <path d="M14 8h6v8h-6z" fill="none" stroke="currentColor" stroke-width="2" />
+      <path d="M10 12h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </svg>`;
+  }
+  if (k === "swap_dna") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 7h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M7 17h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M9 9l-2-2 2-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M15 15l2 2-2 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>`;
+  }
+  if (k === "argue") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 6h10v7H7l-3 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+      <path d="M10 13h10v5l-3-2h-7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+    </svg>`;
+  }
+  if (k === "extract_rule") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 4h12v16H6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+      <path d="M8 8h8M8 12h8M8 16h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </svg>`;
+  }
+  if (k === "odd_one_out") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="7.5" cy="12" r="2.5" fill="none" stroke="currentColor" stroke-width="2" />
+      <circle cx="16.5" cy="8" r="2.5" fill="none" stroke="currentColor" stroke-width="2" />
+      <circle cx="16.5" cy="16" r="2.5" fill="none" stroke="currentColor" stroke-width="2" />
+    </svg>`;
+  }
+  if (k === "triforce") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 5l4.5 8H7.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+      <path d="M7.5 13l4.5 8 4.5-8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+    </svg>`;
+  }
+  return "";
+}
+
+function renderActionGrid() {
+  const root = els.actionGrid;
   if (!root) return;
-  if (intentModeActive()) {
-    const intent = state.intent || {};
-    root.innerHTML = "";
-    const box = document.createElement("div");
-    box.className = "actions-empty actions-locked";
-    const title = document.createElement("div");
-    title.className = "actions-locked-title";
-    title.textContent = "INTENT MODE";
-    box.appendChild(title);
-    const meta = document.createElement("div");
-    meta.className = "actions-locked-meta";
-    const round = Math.max(1, Number(intent.round) || 1);
-    const total = Math.max(1, Number(intent.totalRounds) || 3);
-    const rt = intent.rtState ? String(intent.rtState).toUpperCase() : "OFF";
-    const bits = [];
-    bits.push(INTENT_ROUNDS_ENABLED ? `Round ${round}/${total}` : `Round ${round}`);
-    bits.push(`Realtime: ${rt}`);
-    if (INTENT_FORCE_CHOICE_ENABLED && intent.forceChoice) bits.push("FORCE CHOICE");
-    if (intent.lastError) bits.push(String(intent.lastError));
-    if (intent.disabledReason) bits.push(String(intent.disabledReason));
-    meta.textContent = bits.join("\n");
-    box.appendChild(meta);
-    root.appendChild(box);
-    renderCanvasContextSuggestion();
-    return;
-  }
-  let actions = computeQuickActions();
-  const rec = state.canvasContextSuggestion;
-  if (state.alwaysOnVision?.enabled && rec?.action) {
-    const suggested = canonicalizeCanvasContextAction(rec.action, rec.why).toLowerCase();
-    if (suggested) {
-      actions = actions.filter((action) => {
-        if (!action?.label) return true;
-        const stable = _stableQuickActionLabel(action.label);
-        return normalizeSuggestedActionName(stable).toLowerCase() !== suggested;
-      });
-    }
-  }
+
+  const active = getActiveImage();
+  const hasImage = Boolean(active);
+  const selectionN = hasImage ? selectedCount() : 0;
+  const slots = computeActionGridSlots({
+    selectionCount: selectionN,
+    hasImage,
+    alwaysOnVisionEnabled: Boolean(state.alwaysOnVision?.enabled),
+  });
+  const runningKey = currentRunningActionKey();
+
+  const iw = active?.img?.naturalWidth || active?.width || null;
+  const ih = active?.img?.naturalHeight || active?.height || null;
+  const canCropSquare = Boolean(iw && ih && Math.abs(iw - ih) > 8);
+
   root.innerHTML = "";
   const frag = document.createDocumentFragment();
-  let rendered = 0;
 
-  for (const action of actions) {
-    if (!action?.id || !action?.label) continue;
-    if (action.disabled) continue;
+  for (const slot of slots) {
+    if (!slot) {
+      const blank = document.createElement("button");
+      blank.type = "button";
+      blank.className = "tool tool-blank";
+      blank.disabled = true;
+      blank.setAttribute("aria-hidden", "true");
+      frag.appendChild(blank);
+      continue;
+    }
+
+    const key = String(slot.key || "").trim();
+    const hotkey = String(slot.hotkey || "").trim();
+    const label = String(slot.label || "").trim();
+    const kind = String(slot.kind || "");
+
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = String(action.label);
-    if (action.title) btn.title = String(action.title);
-    if (typeof action.onClick === "function") {
-      btn.addEventListener("click", (ev) => {
-        bumpInteraction();
-        action.onClick(ev);
-      });
-    }
-    frag.appendChild(btn);
-    rendered += 1;
-  }
+    btn.className = "tool";
+    btn.dataset.key = key;
+    btn.dataset.hotkey = hotkey;
+    btn.title = actionGridTitleFor(key);
+    btn.setAttribute("aria-label", label || key);
 
-  if (!rendered) {
-    const empty = document.createElement("div");
-    empty.className = "actions-empty";
-    empty.textContent = state.images.length ? "Select an image to unlock abilities." : "Import photos to unlock abilities.";
-    frag.appendChild(empty);
+    if (kind === "ability_multi") btn.classList.add("tool-multi");
+    if (kind === "tool" && state.tool === key) btn.classList.add("selected");
+    if (runningKey && runningKey === key) btn.classList.add("depressed");
+
+    if (key === "crop_square" && !canCropSquare) {
+      btn.disabled = true;
+      btn.title = "Already square (or image size unknown)";
+    }
+
+    const icon = actionGridIconFor(key);
+    btn.innerHTML = `${icon}<span class="tool-hint" aria-hidden="true">${hotkey}</span><span class="tool-label" aria-hidden="true">${label}</span>`;
+
+    btn.addEventListener("click", (ev) => {
+      bumpInteraction();
+
+      if (key === "annotate" || key === "pan" || key === "lasso" || key === "designate") {
+        setTool(key);
+        return;
+      }
+      if (key === "bg") {
+        const style = ev?.shiftKey ? "sweep" : "white";
+        applyBackground(style).catch((e) => console.error(e));
+        return;
+      }
+      if (key === "remove_people") {
+        aiRemovePeople().catch((e) => console.error(e));
+        return;
+      }
+      if (key === "variations") {
+        runVariations().catch((e) => console.error(e));
+        return;
+      }
+      if (key === "recast") {
+        runRecast().catch((e) => console.error(e));
+        return;
+      }
+      if (key === "diagnose") {
+        runDiagnose().catch((e) => console.error(e));
+        return;
+      }
+      if (key === "crop_square") {
+        cropSquare().catch((e) => console.error(e));
+        return;
+      }
+      if (key === "combine") {
+        runBlendPair().catch((e) => console.error(e));
+        return;
+      }
+      if (key === "bridge") {
+        runBridgePair().catch((e) => console.error(e));
+        return;
+      }
+      if (key === "swap_dna") {
+        runSwapDnaPair({ invert: Boolean(ev?.shiftKey) }).catch((e) => console.error(e));
+        return;
+      }
+      if (key === "argue") {
+        runArguePair().catch((e) => console.error(e));
+        return;
+      }
+      if (key === "extract_rule") {
+        runExtractRuleTriplet().catch((e) => console.error(e));
+        return;
+      }
+      if (key === "odd_one_out") {
+        runOddOneOutTriplet().catch((e) => console.error(e));
+        return;
+      }
+      if (key === "triforce") {
+        runTriforceTriplet().catch((e) => console.error(e));
+        return;
+      }
+    });
+
+    frag.appendChild(btn);
   }
 
   root.appendChild(frag);
-  renderCanvasContextSuggestion();
+}
+
+function renderQuickActions() {
+  renderActionGrid();
 }
 
 async function handleSpawnNode(node) {
@@ -6731,15 +7094,23 @@ async function jumpToTimelineNode(nodeId) {
   renderTimeline();
 }
 
-async function setActiveImage(id) {
+async function setActiveImage(id, { preserveSelection = false } = {}) {
   const item = state.imagesById.get(id);
   if (!item) return;
   const prevActive = state.activeId;
   state.activeId = id;
+  if (preserveSelection) {
+    // Ensure the newly-active image is included and keep multi-select ordering stable.
+    const next = getSelectedIds();
+    setSelectedIds(next.length > 3 ? next.slice(next.length - 3) : next);
+  } else {
+    setSelectedIds([id]);
+  }
   setFilmstripSelected(prevActive, id);
   clearSelection();
   showDropHint(false);
   renderSelectionMeta();
+  renderQuickActions();
   chooseSpawnNodes();
   await setEngineActiveImage(item.path);
   if (!item.visionDesc) {
@@ -6810,6 +7181,8 @@ async function removeImageFromCanvas(imageId) {
   state.freeformRects.delete(id);
   state.freeformZOrder = (state.freeformZOrder || []).filter((v) => v !== id);
   state.multiRects.delete(id);
+  // Maintain multi-select.
+  setSelectedIds(getSelectedIds().filter((v) => v !== id));
 
   // Remove filmstrip thumb if present (filmstrip might be hidden in multi mode).
   const thumb = state.thumbsById.get(id);
@@ -6825,15 +7198,17 @@ async function removeImageFromCanvas(imageId) {
   // If we removed the active image, select a sensible next.
   if (state.activeId === id) {
     state.activeId = null;
-    const next = state.images.length ? state.images[state.images.length - 1] : null;
-    if (next?.id) {
-      await setActiveImage(next.id);
-    }
+    const selected = Array.isArray(state.selectedIds) ? state.selectedIds : [];
+    const nextSelectedId = selected.length ? selected[selected.length - 1] : null;
+    const nextSelected = nextSelectedId ? state.imagesById.get(nextSelectedId) : null;
+    const next = nextSelected || (state.images.length ? state.images[state.images.length - 1] : null);
+    if (next?.id) await setActiveImage(next.id, { preserveSelection: true });
   }
 
   if (state.images.length === 0) {
     clearImageCache();
     state.activeId = null;
+    state.selectedIds = [];
     state.canvasMode = "multi";
     state.freeformRects.clear();
     state.freeformZOrder = [];
@@ -7260,7 +7635,7 @@ async function importPhotosAtCanvasPoint(pointCss) {
   }
 
   const INTENT_MAX_PHOTOS = 5;
-  const intentActive = Boolean(state.intent && !state.intent.locked);
+  const intentActive = intentModeActive();
   const remaining = intentActive ? Math.max(0, INTENT_MAX_PHOTOS - (state.images?.length || 0)) : Infinity;
   const pickedLimited = Number.isFinite(remaining) ? pickedPaths.slice(0, remaining) : pickedPaths;
   if (intentActive && pickedLimited.length < pickedPaths.length) {
@@ -7367,20 +7742,21 @@ async function cropSquare({ fromQueue = false } = {}) {
   const imgItem = getActiveImage();
   if (!imgItem || !imgItem.img) return;
   await ensureRun();
+  beginRunningAction("crop_square");
   setImageFxActive(true, "Square Crop");
   portraitWorking("Square Crop");
-  const img = imgItem.img;
-  const w = img.naturalWidth;
-  const h = img.naturalHeight;
-  const size = Math.min(w, h);
-  const sx = Math.floor((w - size) / 2);
-  const sy = Math.floor((h - size) / 2);
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(img, sx, sy, size, size, 0, 0, size, size);
   try {
+    const img = imgItem.img;
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    const size = Math.min(w, h);
+    const sx = Math.floor((w - size) / 2);
+    const sy = Math.floor((h - size) / 2);
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, sx, sy, size, size, 0, 0, size, size);
     await saveCanvasAsArtifact(canvas, {
       operation: "crop_square",
       label: "Square crop",
@@ -7390,6 +7766,7 @@ async function cropSquare({ fromQueue = false } = {}) {
   } finally {
     setImageFxActive(false);
     updatePortraitIdle();
+    clearRunningAction("crop_square");
   }
 }
 
@@ -7796,54 +8173,55 @@ async function applyBackground(style, { fromQueue = false } = {}) {
   const label = style === "sweep" ? "Soft Sweep" : "Studio White";
   state.lastAction = `${label} (local)`;
   await ensureRun();
+  beginRunningAction("bg");
   setImageFxActive(true, label);
   portraitWorking(label);
-  const img = imgItem.img;
-  const w = img.naturalWidth;
-  const h = img.naturalHeight;
-
-  const fgCanvas = document.createElement("canvas");
-  fgCanvas.width = w;
-  fgCanvas.height = h;
-  const fgCtx = fgCanvas.getContext("2d");
-  fgCtx.drawImage(img, 0, 0);
-
-  // Build polygon mask in image pixel space.
-  const maskCanvas = document.createElement("canvas");
-  maskCanvas.width = w;
-  maskCanvas.height = h;
-  const maskCtx = maskCanvas.getContext("2d");
-  maskCtx.clearRect(0, 0, w, h);
-  maskCtx.fillStyle = "#fff";
-  maskCtx.beginPath();
-  const pts = state.selection.points;
-  maskCtx.moveTo(pts[0].x, pts[0].y);
-  for (let i = 1; i < pts.length; i += 1) {
-    maskCtx.lineTo(pts[i].x, pts[i].y);
-  }
-  maskCtx.closePath();
-  maskCtx.fill();
-
-  fgCtx.globalCompositeOperation = "destination-in";
-  fgCtx.drawImage(maskCanvas, 0, 0);
-  fgCtx.globalCompositeOperation = "source-over";
-
-  const out = document.createElement("canvas");
-  out.width = w;
-  out.height = h;
-  const outCtx = out.getContext("2d");
-  if (style === "sweep") {
-    const g = outCtx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, "#ffffff");
-    g.addColorStop(1, "#e9eef5");
-    outCtx.fillStyle = g;
-  } else {
-    outCtx.fillStyle = "#ffffff";
-  }
-  outCtx.fillRect(0, 0, w, h);
-  outCtx.drawImage(fgCanvas, 0, 0);
-
   try {
+    const img = imgItem.img;
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+
+    const fgCanvas = document.createElement("canvas");
+    fgCanvas.width = w;
+    fgCanvas.height = h;
+    const fgCtx = fgCanvas.getContext("2d");
+    fgCtx.drawImage(img, 0, 0);
+
+    // Build polygon mask in image pixel space.
+    const maskCanvas = document.createElement("canvas");
+    maskCanvas.width = w;
+    maskCanvas.height = h;
+    const maskCtx = maskCanvas.getContext("2d");
+    maskCtx.clearRect(0, 0, w, h);
+    maskCtx.fillStyle = "#fff";
+    maskCtx.beginPath();
+    const pts = state.selection.points;
+    maskCtx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i += 1) {
+      maskCtx.lineTo(pts[i].x, pts[i].y);
+    }
+    maskCtx.closePath();
+    maskCtx.fill();
+
+    fgCtx.globalCompositeOperation = "destination-in";
+    fgCtx.drawImage(maskCanvas, 0, 0);
+    fgCtx.globalCompositeOperation = "source-over";
+
+    const out = document.createElement("canvas");
+    out.width = w;
+    out.height = h;
+    const outCtx = out.getContext("2d");
+    if (style === "sweep") {
+      const g = outCtx.createLinearGradient(0, 0, 0, h);
+      g.addColorStop(0, "#ffffff");
+      g.addColorStop(1, "#e9eef5");
+      outCtx.fillStyle = g;
+    } else {
+      outCtx.fillStyle = "#ffffff";
+    }
+    outCtx.fillRect(0, 0, w, h);
+    outCtx.drawImage(fgCanvas, 0, 0);
+
     await saveCanvasAsArtifact(out, {
       operation: "bg_replace",
       label: style === "sweep" ? "BG sweep" : "BG white",
@@ -7856,6 +8234,7 @@ async function applyBackground(style, { fromQueue = false } = {}) {
   } finally {
     setImageFxActive(false);
     updatePortraitIdle();
+    clearRunningAction("bg");
   }
 }
 
@@ -7984,12 +8363,12 @@ async function runBlendPair({ fromQueue = false } = {}) {
   if (!state.runDir) {
     await ensureRun();
   }
-  if (state.images.length !== 2) {
-    showToast("Combine needs exactly 2 photos in the run.", "error", 3200);
+  const pair = getSelectedImagesActiveFirst({ requireCount: 2 });
+  if (pair.length !== 2) {
+    showToast("Combine needs exactly 2 selected photos.", "error", 3200);
     return;
   }
-  const a = state.images[0];
-  const b = state.images[1];
+  const [a, b] = pair;
   if (!a?.path || !b?.path) {
     showToast("Combine failed: missing image paths.", "error", 3200);
     return;
@@ -8039,20 +8418,15 @@ async function runSwapDnaPair({ invert = false, fromQueue = false } = {}) {
   if (!state.runDir) {
     await ensureRun();
   }
-  if (state.images.length !== 2) {
-    showToast("Swap DNA needs exactly 2 photos in the run.", "error", 3200);
+  const pair = getSelectedImagesActiveFirst({ requireCount: 2 });
+  if (pair.length !== 2) {
+    showToast("Swap DNA needs exactly 2 selected photos.", "error", 3200);
     return;
   }
 
-  const active = getActiveImage();
-  const first = active || state.images[0];
-  const second = state.images.find((item) => item?.id && item.id !== first?.id) || state.images[1];
-  let structure = first;
-  let surface = second;
-  if (invert) {
-    structure = second;
-    surface = first;
-  }
+  const [first, second] = pair;
+  let structure = invert ? second : first;
+  let surface = invert ? first : second;
   if (!structure?.path || !surface?.path) {
     showToast("Swap DNA failed: missing image paths.", "error", 3200);
     return;
@@ -8105,14 +8479,13 @@ async function runBridgePair({ fromQueue = false } = {}) {
   if (!state.runDir) {
     await ensureRun();
   }
-  if (state.images.length !== 2) {
-    showToast("Bridge needs exactly 2 photos in the run.", "error", 3200);
+  const pair = getSelectedImagesActiveFirst({ requireCount: 2 });
+  if (pair.length !== 2) {
+    showToast("Bridge needs exactly 2 selected photos.", "error", 3200);
     return;
   }
 
-  const active = getActiveImage();
-  const first = active || state.images[0];
-  const second = state.images.find((item) => item?.id && item.id !== first?.id) || state.images[1];
+  const [first, second] = pair;
   if (!first?.path || !second?.path) {
     showToast("Bridge failed: missing image paths.", "error", 3200);
     return;
@@ -8164,14 +8537,13 @@ async function runArguePair({ fromQueue = false } = {}) {
   if (!state.runDir) {
     await ensureRun();
   }
-  if (state.images.length !== 2) {
-    showToast("Argue needs exactly 2 photos in the run.", "error", 3200);
+  const pair = getSelectedImagesActiveFirst({ requireCount: 2 });
+  if (pair.length !== 2) {
+    showToast("Argue needs exactly 2 selected photos.", "error", 3200);
     return;
   }
 
-  const active = getActiveImage();
-  const first = active || state.images[0];
-  const second = state.images.find((item) => item?.id && item.id !== first?.id) || state.images[1];
+  const [first, second] = pair;
   if (!first?.path || !second?.path) {
     showToast("Argue failed: missing image paths.", "error", 3200);
     return;
@@ -8220,13 +8592,12 @@ async function runExtractRuleTriplet({ fromQueue = false } = {}) {
   if (!state.runDir) {
     await ensureRun();
   }
-  if (state.images.length !== 3) {
-    showToast("Extract the Rule needs exactly 3 photos in the run.", "error", 3200);
+  const triplet = getSelectedImagesActiveFirst({ requireCount: 3 });
+  if (triplet.length !== 3) {
+    showToast("Extract the Rule needs exactly 3 selected photos.", "error", 3200);
     return;
   }
-  const a = state.images[0];
-  const b = state.images[1];
-  const c = state.images[2];
+  const [a, b, c] = triplet;
   if (!a?.path || !b?.path || !c?.path) {
     showToast("Extract the Rule failed: missing image paths.", "error", 3200);
     return;
@@ -8276,13 +8647,12 @@ async function runOddOneOutTriplet({ fromQueue = false } = {}) {
   if (!state.runDir) {
     await ensureRun();
   }
-  if (state.images.length !== 3) {
-    showToast("Odd One Out needs exactly 3 photos in the run.", "error", 3200);
+  const triplet = getSelectedImagesActiveFirst({ requireCount: 3 });
+  if (triplet.length !== 3) {
+    showToast("Odd One Out needs exactly 3 selected photos.", "error", 3200);
     return;
   }
-  const a = state.images[0];
-  const b = state.images[1];
-  const c = state.images[2];
+  const [a, b, c] = triplet;
   if (!a?.path || !b?.path || !c?.path) {
     showToast("Odd One Out failed: missing image paths.", "error", 3200);
     return;
@@ -8332,8 +8702,9 @@ async function runTriforceTriplet({ fromQueue = false } = {}) {
   if (!state.runDir) {
     await ensureRun();
   }
-  if (state.images.length !== 3) {
-    showToast("Triforce needs exactly 3 photos in the run.", "error", 3200);
+  const triplet = getSelectedImagesActiveFirst({ requireCount: 3 });
+  if (triplet.length !== 3) {
+    showToast("Triforce needs exactly 3 selected photos.", "error", 3200);
     return;
   }
   const okProvider = await ensureGeminiProImagePreviewForAction("Triforce");
@@ -8342,11 +8713,7 @@ async function runTriforceTriplet({ fromQueue = false } = {}) {
     return;
   }
 
-  const active = getActiveImage();
-  const first = active || state.images[0];
-  const rest = state.images.filter((item) => item?.id && item.id !== first?.id);
-  const second = rest[0] || state.images[1];
-  const third = rest[1] || state.images[2];
+  const [first, second, third] = triplet;
   if (!first?.path || !second?.path || !third?.path) {
     showToast("Triforce failed: missing image paths.", "error", 3200);
     return;
@@ -8501,6 +8868,7 @@ async function createRun() {
   state.images = [];
   state.imagesById.clear();
   state.activeId = null;
+  state.selectedIds = [];
   state.timelineNodes = [];
   state.timelineNodesById.clear();
   closeTimeline();
@@ -8536,7 +8904,7 @@ async function createRun() {
   state.lastRecreatePrompt = null;
   state.lastDirectorText = null;
   state.lastDirectorMeta = null;
-  state.intent.locked = false;
+  state.intent.locked = true;
   state.intent.lockedAt = 0;
   state.intent.lockedBranchId = null;
   state.intent.startedAt = 0;
@@ -8626,7 +8994,7 @@ async function openExistingRun() {
   state.lastRecreatePrompt = null;
   state.lastDirectorText = null;
   state.lastDirectorMeta = null;
-  state.intent.locked = false;
+  state.intent.locked = true;
   state.intent.lockedAt = 0;
   state.intent.lockedBranchId = null;
   state.intent.startedAt = 0;
@@ -9698,40 +10066,114 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   }
   wctx.restore();
 
-  // Active highlight.
+  const selectedIds = getSelectedIds().filter((id) => id);
+  const multiSelectMode = selectedIds.length > 1;
   const activeRect = state.activeId ? state.multiRects.get(state.activeId) : null;
-  if (activeRect) {
+
+  if (multiSelectMode && selectedIds.length) {
+    // Multi-select highlight: keep all selected borders identical (no "active" special casing).
     octx.save();
     octx.lineJoin = "round";
+    octx.shadowBlur = 0;
+    octx.strokeStyle = "rgba(255, 212, 0, 0.96)";
+    octx.lineWidth = Math.max(1, Math.round(3.0 * dpr));
+    for (const imageId of selectedIds) {
+      const rect = state.multiRects.get(imageId) || null;
+      if (!rect) continue;
+      const x = rect.x * ms + mox;
+      const y = rect.y * ms + moy;
+      const w = rect.w * ms;
+      const h = rect.h * ms;
+      octx.strokeRect(x - 3, y - 3, w + 6, h + 6);
+    }
+    octx.restore();
+  } else {
+    // Multi-select highlights (non-active).
+    const multiSelected = getSelectedIds().filter((id) => id && id !== state.activeId);
+    if (multiSelected.length) {
+      octx.save();
+      octx.lineJoin = "round";
+      octx.shadowBlur = 0;
+      octx.strokeStyle = "rgba(255, 212, 0, 0.62)";
+      octx.lineWidth = Math.max(1, Math.round(2.2 * dpr));
+      for (const imageId of multiSelected) {
+        const rect = state.multiRects.get(imageId) || null;
+        if (!rect) continue;
+        const x = rect.x * ms + mox;
+        const y = rect.y * ms + moy;
+        const w = rect.w * ms;
+        const h = rect.h * ms;
+        octx.strokeRect(x - 2, y - 2, w + 4, h + 4);
+      }
+      octx.restore();
+    }
 
+    // Active highlight (single selection).
+    if (activeRect) {
+      octx.save();
+      octx.lineJoin = "round";
+
+      const ax = activeRect.x * ms + mox;
+      const ay = activeRect.y * ms + moy;
+      const aw = activeRect.w * ms;
+      const ah = activeRect.h * ms;
+
+      // Outer glow stroke (wide + soft).
+      octx.strokeStyle = "rgba(255, 212, 0, 0.14)";
+      octx.lineWidth = Math.max(1, Math.round(10 * dpr));
+      octx.shadowColor = "rgba(255, 212, 0, 0.16)";
+      octx.shadowBlur = Math.round(44 * dpr);
+      octx.strokeRect(ax - 5, ay - 5, aw + 10, ah + 10);
+
+      // Main border stroke.
+      octx.strokeStyle = "rgba(255, 212, 0, 0.96)";
+      octx.lineWidth = Math.max(1, Math.round(3.4 * dpr));
+      octx.shadowColor = "rgba(255, 212, 0, 0.26)";
+      octx.shadowBlur = Math.round(28 * dpr);
+      octx.strokeRect(ax - 3, ay - 3, aw + 6, ah + 6);
+
+      // Inner crisp stroke for definition.
+      octx.shadowBlur = 0;
+      octx.strokeStyle = "rgba(255, 247, 210, 0.58)";
+      octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+      octx.strokeRect(ax - 1, ay - 1, aw + 2, ah + 2);
+      octx.restore();
+
+      // Freeform resize handles (corner drag). Render only for the active image to keep the canvas clean.
+      const showHandles = state.tool === "pan" || intentModeActive();
+      if (showHandles) {
+        const hs = Math.max(10, Math.round(10 * dpr));
+        const r = Math.round(hs / 2);
+        const corners = [
+          { x: ax, y: ay, cursor: "nw" },
+          { x: ax + aw, y: ay, cursor: "ne" },
+          { x: ax, y: ay + ah, cursor: "sw" },
+          { x: ax + aw, y: ay + ah, cursor: "se" },
+        ];
+        octx.save();
+        octx.shadowColor = "rgba(0, 0, 0, 0.55)";
+        octx.shadowBlur = Math.round(12 * dpr);
+        for (const c of corners) {
+          octx.fillStyle = "rgba(8, 10, 14, 0.86)";
+          octx.strokeStyle = "rgba(255, 212, 0, 0.92)";
+          octx.lineWidth = Math.max(1, Math.round(1.6 * dpr));
+          octx.beginPath();
+          octx.rect(Math.round(c.x - r), Math.round(c.y - r), hs, hs);
+          octx.fill();
+          octx.stroke();
+        }
+        octx.restore();
+      }
+    }
+  }
+
+  if (multiSelectMode && activeRect) {
+    // Keep handles for the active image even when multiple images are selected.
     const ax = activeRect.x * ms + mox;
     const ay = activeRect.y * ms + moy;
     const aw = activeRect.w * ms;
     const ah = activeRect.h * ms;
-
-    // Outer glow stroke (wide + soft).
-    octx.strokeStyle = "rgba(255, 212, 0, 0.14)";
-    octx.lineWidth = Math.max(1, Math.round(10 * dpr));
-    octx.shadowColor = "rgba(255, 212, 0, 0.16)";
-    octx.shadowBlur = Math.round(44 * dpr);
-    octx.strokeRect(ax - 5, ay - 5, aw + 10, ah + 10);
-
-    // Main border stroke.
-    octx.strokeStyle = "rgba(255, 212, 0, 0.96)";
-    octx.lineWidth = Math.max(1, Math.round(3.4 * dpr));
-    octx.shadowColor = "rgba(255, 212, 0, 0.26)";
-    octx.shadowBlur = Math.round(28 * dpr);
-    octx.strokeRect(ax - 3, ay - 3, aw + 6, ah + 6);
-
-    // Inner crisp stroke for definition.
-    octx.shadowBlur = 0;
-    octx.strokeStyle = "rgba(255, 247, 210, 0.58)";
-    octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
-    octx.strokeRect(ax - 1, ay - 1, aw + 2, ah + 2);
-    octx.restore();
-
-    // Freeform resize handles (corner drag). Render only for the active image to keep the canvas clean.
-    const showHandles = state.tool === "pan" || !state.intent?.locked;
+    const showHandles = state.tool === "pan" || intentModeActive();
     if (showHandles) {
       const hs = Math.max(10, Math.round(10 * dpr));
       const r = Math.round(hs / 2);
@@ -9758,72 +10200,70 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   }
 
   // Triplet insights overlays (Extract the Rule / Odd One Out).
-  if (items.length === 3) {
-    const oddId = state.tripletOddOneOutId;
-    if (oddId) {
-      const rect = state.multiRects.get(oddId) || null;
-      if (rect) {
+  const oddId = state.tripletOddOneOutId;
+  if (oddId) {
+    const rect = state.multiRects.get(oddId) || null;
+    if (rect) {
+      octx.save();
+      octx.lineWidth = Math.max(1, Math.round(2.5 * dpr));
+      octx.setLineDash([Math.round(10 * dpr), Math.round(8 * dpr)]);
+      octx.strokeStyle = "rgba(255, 72, 72, 0.86)";
+      octx.shadowColor = "rgba(255, 72, 72, 0.18)";
+      octx.shadowBlur = Math.round(18 * dpr);
+      octx.strokeRect(rect.x + mox - 3, rect.y + moy - 3, rect.w + 6, rect.h + 6);
+      octx.setLineDash([]);
+      octx.restore();
+    }
+  }
+
+  if (state.tripletRuleAnnotations && state.tripletRuleAnnotations.size) {
+    octx.save();
+    octx.lineWidth = Math.max(1, Math.round(2 * dpr));
+    octx.font = `${Math.max(10, Math.round(11 * dpr))}px IBM Plex Mono`;
+    const dotR = Math.max(3, Math.round(5 * dpr));
+    for (const item of items) {
+      if (!item?.id) continue;
+      const rect = state.multiRects.get(item.id) || null;
+      if (!rect) continue;
+      const points = state.tripletRuleAnnotations.get(item.id) || [];
+      for (const pt of points.slice(0, 6)) {
+        const xRaw = Number(pt?.x);
+        const yRaw = Number(pt?.y);
+        if (!Number.isFinite(xRaw) || !Number.isFinite(yRaw)) continue;
+        const x = clamp(xRaw, 0, 1);
+        const y = clamp(yRaw, 0, 1);
+        const cx = rect.x + mox + rect.w * x;
+        const cy = rect.y + moy + rect.h * y;
         octx.save();
-        octx.lineWidth = Math.max(1, Math.round(2.5 * dpr));
-        octx.setLineDash([Math.round(10 * dpr), Math.round(8 * dpr)]);
-        octx.strokeStyle = "rgba(255, 72, 72, 0.86)";
-        octx.shadowColor = "rgba(255, 72, 72, 0.18)";
-        octx.shadowBlur = Math.round(18 * dpr);
-        octx.strokeRect(rect.x + mox - 3, rect.y + moy - 3, rect.w + 6, rect.h + 6);
-        octx.setLineDash([]);
+        octx.shadowColor = "rgba(0, 221, 255, 0.20)";
+        octx.shadowBlur = Math.round(14 * dpr);
+        octx.beginPath();
+        octx.arc(cx, cy, dotR, 0, Math.PI * 2);
+        octx.fillStyle = "rgba(0, 221, 255, 0.14)";
+        octx.strokeStyle = "rgba(0, 221, 255, 0.92)";
+        octx.fill();
+        octx.stroke();
+
+        const label = pt?.label ? clampText(pt.label, 28) : "";
+        if (label) {
+          const padX = Math.round(7 * dpr);
+          const padY = Math.round(5 * dpr);
+          const textW = octx.measureText(label).width;
+          const boxW = Math.round(textW + padX * 2);
+          const boxH = Math.round(20 * dpr);
+          const boxX = Math.round(cx + 10 * dpr);
+          const boxY = Math.round(cy - boxH / 2);
+          octx.fillStyle = "rgba(8, 10, 14, 0.78)";
+          octx.fillRect(boxX, boxY, boxW, boxH);
+          octx.strokeStyle = "rgba(0, 221, 255, 0.34)";
+          octx.strokeRect(boxX, boxY, boxW, boxH);
+          octx.fillStyle = "rgba(0, 221, 255, 0.92)";
+          octx.fillText(label, boxX + padX, boxY + boxH - padY);
+        }
         octx.restore();
       }
     }
-
-    if (state.tripletRuleAnnotations && state.tripletRuleAnnotations.size) {
-      octx.save();
-      octx.lineWidth = Math.max(1, Math.round(2 * dpr));
-      octx.font = `${Math.max(10, Math.round(11 * dpr))}px IBM Plex Mono`;
-      const dotR = Math.max(3, Math.round(5 * dpr));
-      for (const item of items) {
-        if (!item?.id) continue;
-        const rect = state.multiRects.get(item.id) || null;
-        if (!rect) continue;
-        const points = state.tripletRuleAnnotations.get(item.id) || [];
-        for (const pt of points.slice(0, 6)) {
-          const xRaw = Number(pt?.x);
-          const yRaw = Number(pt?.y);
-          if (!Number.isFinite(xRaw) || !Number.isFinite(yRaw)) continue;
-          const x = clamp(xRaw, 0, 1);
-          const y = clamp(yRaw, 0, 1);
-          const cx = rect.x + mox + rect.w * x;
-          const cy = rect.y + moy + rect.h * y;
-          octx.save();
-          octx.shadowColor = "rgba(0, 221, 255, 0.20)";
-          octx.shadowBlur = Math.round(14 * dpr);
-          octx.beginPath();
-          octx.arc(cx, cy, dotR, 0, Math.PI * 2);
-          octx.fillStyle = "rgba(0, 221, 255, 0.14)";
-          octx.strokeStyle = "rgba(0, 221, 255, 0.92)";
-          octx.fill();
-          octx.stroke();
-
-          const label = pt?.label ? clampText(pt.label, 28) : "";
-          if (label) {
-            const padX = Math.round(7 * dpr);
-            const padY = Math.round(5 * dpr);
-            const textW = octx.measureText(label).width;
-            const boxW = Math.round(textW + padX * 2);
-            const boxH = Math.round(20 * dpr);
-            const boxX = Math.round(cx + 10 * dpr);
-            const boxY = Math.round(cy - boxH / 2);
-            octx.fillStyle = "rgba(8, 10, 14, 0.78)";
-            octx.fillRect(boxX, boxY, boxW, boxH);
-            octx.strokeStyle = "rgba(0, 221, 255, 0.34)";
-            octx.strokeRect(boxX, boxY, boxW, boxH);
-            octx.fillStyle = "rgba(0, 221, 255, 0.92)";
-            octx.fillText(label, boxX + padX, boxY + boxH - padY);
-          }
-          octx.restore();
-        }
-      }
-      octx.restore();
-    }
+    octx.restore();
   }
 }
 
@@ -10983,7 +11423,12 @@ function startSpawnTimer() {
               if (paddedHit) hit = paddedHit;
             }
 
-			      if (hit && hit !== state.activeId) setActiveImage(hit).catch(() => {});
+				      if (hit) {
+	              const toggle = Boolean(event.metaKey || event.ctrlKey || (event.shiftKey && state.tool !== "annotate"));
+	              selectCanvasImage(hit, { toggle }).catch(() => {});
+	              // Modifier-click is reserved for multi-select toggling; don't start a drag/tool action.
+	              if (toggle) return;
+	            }
 
 	          if (!hit) {
 	            // Click-to-upload anywhere on the canvas (primary import path).
@@ -11576,6 +12021,52 @@ function installDnD() {
 }
 
 function installUi() {
+  if (els.appMenuToggle && els.appMenu) {
+    const toggle = els.appMenuToggle;
+    const menu = els.appMenu;
+
+    const isOpen = () => !menu.classList.contains("hidden");
+    const close = () => {
+      menu.classList.add("hidden");
+      toggle.setAttribute("aria-expanded", "false");
+    };
+    const open = () => {
+      menu.classList.remove("hidden");
+      toggle.setAttribute("aria-expanded", "true");
+    };
+
+    toggle.addEventListener("click", (event) => {
+      bumpInteraction();
+      event?.stopPropagation?.();
+      if (isOpen()) close();
+      else open();
+    });
+
+    menu.addEventListener("click", (event) => {
+      event?.stopPropagation?.();
+      const btn = event?.target?.closest ? event.target.closest("button[data-menu-close]") : null;
+      if (btn) close();
+    });
+
+    window.addEventListener(
+      "click",
+      (event) => {
+        if (!isOpen()) return;
+        const t = event?.target;
+        if (t && (toggle.contains(t) || menu.contains(t))) return;
+        close();
+      },
+      { capture: true }
+    );
+
+    window.addEventListener("keydown", (event) => {
+      const key = String(event?.key || "");
+      if (key !== "Escape") return;
+      if (!isOpen()) return;
+      close();
+    });
+  }
+
   if (els.newRun) els.newRun.addEventListener("click", () => createRun().catch((e) => console.error(e)));
   if (els.openRun) els.openRun.addEventListener("click", () => openExistingRun().catch((e) => console.error(e)));
   if (els.import) els.import.addEventListener("click", () => importPhotos().catch((e) => console.error(e)));
@@ -11772,37 +12263,6 @@ function installUi() {
       updatePortraitIdle({ fromSettings: true });
       if (state.ptySpawned) {
         invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
-      }
-    });
-  }
-
-  for (const btn of els.toolButtons) {
-    btn.addEventListener("click", () => {
-      bumpInteraction();
-      const tool = btn.dataset.tool;
-      if (tool === "annotate" || tool === "pan" || tool === "lasso" || tool === "designate") {
-        setTool(tool);
-        return;
-      }
-      if (tool === "bg") {
-        applyBackground("white").catch((e) => console.error(e));
-        return;
-      }
-      if (tool === "remove_people") {
-        aiRemovePeople().catch((e) => console.error(e));
-        return;
-      }
-      if (tool === "variations") {
-        runVariations().catch((e) => console.error(e));
-        return;
-      }
-      if (tool === "surprise") {
-        aiSurpriseMe().catch((e) => console.error(e));
-        return;
-      }
-      if (tool === "respawn") {
-        respawnActions();
-        return;
       }
     });
   }
@@ -12014,7 +12474,7 @@ function installUi() {
 	    if (/^[1-9]$/.test(rawKey)) {
         if (intentModeActive()) return;
 	      const digit = rawKey;
-	      const btn = document.querySelector(`.hud-keybar .tool[data-hotkey="${digit}"][data-tool]`);
+	      const btn = document.querySelector(`.action-grid .tool[data-hotkey="${digit}"]`);
 	      if (btn) {
         btn.click();
         return;
@@ -12076,6 +12536,19 @@ async function boot() {
   refreshKeyStatus().catch(() => {});
   updateAlwaysOnVisionReadout();
   renderQuickActions();
+  syncBrandStripHeightVar();
+  if (typeof ResizeObserver === "function" && els.brandStrip) {
+    try {
+      if (brandStripResizeObserver) brandStripResizeObserver.disconnect();
+      brandStripResizeObserver = new ResizeObserver(() => {
+        syncBrandStripHeightVar();
+      });
+      brandStripResizeObserver.observe(els.brandStrip);
+      requestAnimationFrame(() => syncBrandStripHeightVar());
+    } catch {
+      // ignore
+    }
+  }
   ensurePortraitIndex().catch(() => {});
   updatePortraitIdle({ fromSettings: true });
   syncIntentModeClass();
@@ -12135,6 +12608,7 @@ async function boot() {
     state.pendingDiagnose = null;
     state.pendingArgue = null;
     clearPendingReplace();
+    state.runningActionKey = null;
     state.engineImageModelRestore = null;
     setImageFxActive(false);
     updatePortraitIdle();

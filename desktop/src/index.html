@@ -11,12 +11,60 @@
 	      <div id="boot-error" class="boot-error hidden">
 	        App failed to initialize. Check the terminal for errors.
 	      </div>
-	      <div class="brand-strip" aria-label="Brood">
-		        <div class="brand-stack">
-		          <img class="brand-strip-logo" src="./assets/logo.jpeg" alt="Brood" />
-		          <div id="engine-status" class="engine-status">API calls: 0</div>
-		        </div>
-		      </div>
+		      <div class="brand-strip" aria-label="Brood">
+			        <div class="brand-stack">
+			          <img class="brand-strip-logo" src="./assets/logo.jpeg" alt="Brood" />
+			          <div id="engine-status" class="engine-status">API calls: 0</div>
+			        </div>
+              <div class="brand-actions" aria-label="Menu">
+                <button
+                  id="app-menu-toggle"
+                  class="menu-toggle"
+                  type="button"
+                  aria-label="Menu"
+                  aria-haspopup="menu"
+                  aria-expanded="false"
+                >
+                  <svg class="menu-toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                    <path
+                      d="M19.4 15a7.8 7.8 0 0 0 .1-1l2-1.2-2-3.4-2.3.5a8 8 0 0 0-.8-.5L14.8 3h-3.6L9.6 7.4a7 7 0 0 0-.8.5l-2.3-.5-2 3.4 2 1.2a7.8 7.8 0 0 0 0 2l-2 1.2 2 3.4 2.3-.5c.3.2.5.3.8.5L11.2 21h3.6l1.6-4.4c.3-.2.5-.3.8-.5l2.3.5 2-3.4-2-1.2z"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+                <div id="app-menu" class="app-menu hidden" role="menu" aria-label="Menu">
+                  <div class="app-menu-section">
+                    <button id="new-run" type="button" role="menuitem" data-menu-close="1">New Run</button>
+                    <button id="open-run" type="button" role="menuitem" data-menu-close="1">Open Run</button>
+                    <button id="import" type="button" role="menuitem" data-menu-close="1">Import Photos</button>
+                    <button id="export" type="button" role="menuitem" data-menu-close="1">Export</button>
+                    <button id="settings-toggle" type="button" role="menuitem" data-menu-close="1">Settings</button>
+                  </div>
+                  <div class="app-menu-divider" aria-hidden="true"></div>
+                  <label class="app-menu-toggle-row" title="Auto-accept Suggested Ability (max 3)">
+                    <span class="app-menu-toggle-label" aria-hidden="true">AUTO</span>
+                    <input
+                      id="auto-accept-suggested-ability-toggle"
+                      class="toggle-switch"
+                      type="checkbox"
+                      aria-label="Auto-accept suggested ability"
+                    />
+                  </label>
+                </div>
+              </div>
+			      </div>
 		      <main class="workspace">
 	        <section class="stage" aria-label="Canvas">
             <div id="canvas-wrap" class="canvas-wrap">
@@ -84,294 +132,13 @@
                 </div>
               </div>
             </div>
-		            <div id="hud" class="hud" aria-label="Selected Unit">
-		              <div class="hud-keybar" role="toolbar" aria-label="Tools">
-	                <button
-	                  class="tool"
-	                  type="button"
-	                  data-tool="annotate"
-	                  data-hotkey="1"
-	                  title="Annotate (box + instruction)"
-	                  aria-label="Annotate"
-	                >
-	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-	                    <path
-	                      d="M5 6h11v11H5z"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linejoin="round"
-	                    />
-	                    <path
-	                      d="M14.5 4.5l5 5"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                    />
-	                    <path
-	                      d="M13 6l6 6"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                    />
-	                  </svg>
-	                  <span class="tool-hint" aria-hidden="true">1</span>
-	                  <span class="sr-only">Annotate</span>
-	                </button>
-	                <button
-	                  class="tool selected"
-	                  type="button"
-	                  data-tool="pan"
-	                  data-hotkey="2"
-	                  title="Pan / Zoom"
-	                  aria-label="Pan / Zoom"
-	                >
-	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-	                    <path
-	                      d="M12 3v6M12 21v-6M3 12h6M21 12h-6"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="square"
-	                    />
-	                    <path
-	                      d="M12 3l-2 2M12 3l2 2M12 21l-2-2M12 21l2-2M3 12l2-2M3 12l2 2M21 12l-2-2M21 12l-2 2"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="square"
-	                    />
-	                  </svg>
-	                  <span class="tool-hint" aria-hidden="true">2</span>
-	                  <span class="sr-only">Pan</span>
-	                </button>
-	                <button
-	                  class="tool"
-	                  type="button"
-	                  data-tool="remove_people"
-	                  data-hotkey="3"
-	                  title="Remove people from the active image"
-	                  aria-label="Remove people"
-	                >
-	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-	                    <path
-	                      d="M12 12a3.5 3.5 0 1 0-0.01 0"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                    />
-	                    <path
-	                      d="M5 20c1.2-3 4-5 7-5s5.8 2 7 5"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                    />
-	                    <path
-	                      d="M6 6l12 12"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                    />
-	                  </svg>
-	                  <span class="tool-hint" aria-hidden="true">3</span>
-	                  <span class="sr-only">Remove people</span>
-	                </button>
-	                <button
-	                  class="tool"
-	                  type="button"
-	                  data-tool="lasso"
-	                  data-hotkey="4"
-	                  title="Lasso selection"
-	                  aria-label="Lasso selection"
-	                >
-	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-	                    <ellipse cx="12" cy="9.5" rx="6.5" ry="4.5" fill="none" stroke="currentColor" stroke-width="2" />
-	                    <path
-	                      d="M15 13.5c0.9 1.2 1.9 2.6 3.5 4"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                    />
-	                    <path
-	                      d="M19.5 18l1.8 1.8"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                    />
-	                  </svg>
-	                  <span class="tool-hint" aria-hidden="true">4</span>
-	                  <span class="sr-only">Lasso</span>
-	                </button>
-	                <button
-	                  class="tool"
-	                  type="button"
-	                  data-tool="designate"
-	                  data-hotkey="5"
-	                  title="Designate subject/reference/object"
-	                  aria-label="Designate"
-	                >
-	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-	                    <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2" />
-	                    <path
-	                      d="M12 4v3M12 17v3M4 12h3M17 12h3"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                    />
-	                  </svg>
-	                  <span class="tool-hint" aria-hidden="true">5</span>
-	                  <span class="sr-only">Designate</span>
-	                </button>
-	                <button
-	                  class="tool"
-	                  type="button"
-	                  data-tool="bg"
-	                  data-hotkey="6"
-	                  title="Background replace"
-	                  aria-label="Background replace"
-	                >
-	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-	                    <path
-	                      d="M6 7h10v4H6z"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linejoin="round"
-	                    />
-	                    <path
-	                      d="M16 9h2a2 2 0 0 1 2 2v1"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                    />
-	                    <path
-	                      d="M8 11v7h4v-4h3"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                      stroke-linejoin="round"
-	                    />
-	                  </svg>
-	                  <span class="tool-hint" aria-hidden="true">6</span>
-	                  <span class="sr-only">Background</span>
-	                </button>
-			                <button
-			                  class="tool"
-			                  type="button"
-			                  data-tool="surprise"
-			                  data-hotkey="7"
-			                  title="Surprise me"
-		                  aria-label="Surprise me"
-		                >
-		                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-		                    <path
-		                      d="M12 2l1.4 5.6L19 9l-5.6 1.4L12 16l-1.4-5.6L5 9l5.6-1.4L12 2z"
-		                      fill="none"
-		                      stroke="currentColor"
-		                      stroke-width="2"
-		                      stroke-linejoin="round"
-		                    />
-		                    <path
-		                      d="M4 14l0.8 3.2L8 18l-3.2 0.8L4 22l-0.8-3.2L0 18l3.2-0.8L4 14z"
-		                      fill="none"
-		                      stroke="currentColor"
-		                      stroke-width="2"
-		                      stroke-linejoin="round"
-		                    />
-		                  </svg>
-		                  <span class="tool-hint" aria-hidden="true">7</span>
-		                  <span class="sr-only">Surprise me</span>
-		                </button>
-	                <button
-	                  class="tool"
-	                  type="button"
-	                  data-tool="variations"
-	                  data-hotkey="8"
-	                  title="Zero-prompt variations"
-	                  aria-label="Zero-prompt variations"
-	                >
-	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-	                    <path
-	                      d="M4 7h4l8 10h4"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                      stroke-linejoin="round"
-	                    />
-	                    <path
-	                      d="M20 17l-2-2 2-2"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                      stroke-linejoin="round"
-	                    />
-	                    <path
-	                      d="M4 17h4l2.5-3"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                      stroke-linejoin="round"
-	                    />
-	                    <path
-	                      d="M20 7l-2 2 2 2"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                      stroke-linejoin="round"
-	                    />
-	                  </svg>
-	                  <span class="tool-hint" aria-hidden="true">8</span>
-	                  <span class="sr-only">Variations</span>
-	                </button>
-	                <button
-	                  class="tool"
-	                  type="button"
-	                  data-tool="respawn"
-	                  data-hotkey="9"
-	                  title="Respawn action buttons"
-	                  aria-label="Respawn actions"
-	                >
-	                  <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-	                    <path
-	                      d="M21 12a9 9 0 1 1-2.7-6.4"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                    />
-	                    <path
-	                      d="M21 3v6h-6"
-	                      fill="none"
-	                      stroke="currentColor"
-	                      stroke-width="2"
-	                      stroke-linecap="round"
-	                      stroke-linejoin="round"
-	                    />
-	                  </svg>
-	                  <span class="tool-hint" aria-hidden="true">9</span>
-	                  <span class="sr-only">Respawn</span>
-	                </button>
-	              </div>
-		              <div class="hud-shell">
-	                <div class="hud-screen" aria-hidden="true">
-		              <div class="hud-readout">
-		                    <div id="hud-line-unit" class="hud-line">
-	                      <span class="hud-k">UNIT</span>
-	                      <span id="hud-unit-desc" class="hud-v hud-desc"></span>
+			            <div id="hud" class="hud" aria-label="HUD">
+			              <div class="hud-shell">
+		                <div class="hud-screen" aria-hidden="true">
+			              <div class="hud-readout">
+			                    <div id="hud-line-unit" class="hud-line">
+		                      <span class="hud-k">UNIT</span>
+		                      <span id="hud-unit-desc" class="hud-v hud-desc"></span>
 	                    </div>
 	                    <div id="hud-line-director" class="hud-line hud-director-line hidden">
 	                      <span id="hud-director-k" class="hud-k">DIR</span>
@@ -389,104 +156,73 @@
 	                      <span class="hud-k">GEN</span>
 	                      <span id="hud-unit-stat" class="hud-v"></span>
 	                    </div>
+	                  </div>
+	                </div>
+		              </div>
+		            </div>
+                <div
+                  id="canvas-context-suggest"
+                  class="canvas-context-suggest canvas-context-suggest--deck"
+                  aria-hidden="true"
+                >
+                  <button id="canvas-context-suggest-btn" class="canvas-context-suggest-btn" type="button"></button>
+                </div>
+	              <div id="action-deck" class="action-deck" aria-label="Action Deck">
+	                <div id="action-grid" class="action-grid" role="toolbar" aria-label="Action Grid"></div>
+	                <div id="agents-dock" class="agents-dock" aria-label="Agents">
+	                  <div id="portrait-dock" class="portrait-dock">
+                    <div class="agent-portraits">
+                      <div id="agent-slot-primary" class="agent-slot">
+                        <div class="portrait-readout">
+                          <div id="portrait-title" class="portrait-title">Model</div>
+                        </div>
+                        <div class="portrait-frame">
+                          <div id="portrait-avatar" class="portrait-avatar" aria-hidden="true">
+                            <video
+                              id="portrait-video"
+                              class="portrait-video hidden"
+                              muted
+                              loop
+                              autoplay
+                              playsinline
+                              preload="auto"
+                            ></video>
+                          </div>
+                        </div>
+                      </div>
+                      <div id="agent-slot-secondary" class="agent-slot">
+                        <div class="portrait-readout">
+                          <div id="portrait-title-2" class="portrait-title">Model</div>
+                        </div>
+                        <div class="portrait-frame">
+                          <div id="portrait-avatar-2" class="portrait-avatar" aria-hidden="true">
+                            <video
+                              id="portrait-video-2"
+                              class="portrait-video hidden"
+                              muted
+                              loop
+                              autoplay
+                              playsinline
+                              preload="auto"
+                            ></video>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+              <div id="mother-panel" class="mother-overlay panel" aria-label="Mother">
+                <div class="panel-title">Mother</div>
+                <div id="tips-text" class="panel-body muted panel-readout">
+                  Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
+                </div>
+              </div>
             <div id="spawnbar" class="spawnbar hidden" aria-live="polite"></div>
             <div id="toast" class="toast hidden" aria-live="polite"></div>
           </div>
-	          <div id="filmstrip" class="filmstrip hidden" aria-label="Filmstrip"></div>
+		          <div id="filmstrip" class="filmstrip hidden" aria-label="Filmstrip"></div>
 	        </section>
-        <aside class="inspector" aria-label="Inspector">
-	          <div class="inspector-scroll">
-			            <div class="panel panel-quick-actions">
-			              <div class="panel-title panel-title--row">
-			                <span class="panel-title-text">Abilities</span>
-			                <label class="panel-title-toggle" title="Auto-accept Suggested Ability (max 3)">
-			                  <span class="panel-title-toggle-text" aria-hidden="true">AUTO</span>
-			                  <input
-			                    id="auto-accept-suggested-ability-toggle"
-			                    class="toggle-switch"
-			                    type="checkbox"
-			                    aria-label="Auto-accept suggested ability"
-			                  />
-			                </label>
-			              </div>
-			              <div
-			                id="canvas-context-suggest"
-			                class="canvas-context-suggest"
-			                aria-label="Canvas Context Suggestion"
-		                aria-hidden="true"
-		              >
-		                <button id="canvas-context-suggest-btn" class="canvas-context-suggest-btn" type="button"></button>
-		              </div>
-			              <div id="quick-actions" class="panel-body actions" aria-label="Abilities"></div>
-			            </div>
-		            <div class="panel agent-panel">
-		              <div class="panel-title">Agents</div>
-			              <div id="portrait-dock" class="panel-body portrait-dock">
-		                <div class="agent-portraits">
-	                  <div id="agent-slot-primary" class="agent-slot">
-	                    <div class="portrait-readout">
-	                      <div id="portrait-title" class="portrait-title">Model</div>
-                    </div>
-                    <div class="portrait-frame">
-                      <div id="portrait-avatar" class="portrait-avatar" aria-hidden="true">
-                        <video
-                          id="portrait-video"
-                          class="portrait-video hidden"
-                          muted
-                          loop
-                          autoplay
-                          playsinline
-                          preload="auto"
-                        ></video>
-                      </div>
-                    </div>
-                  </div>
-                  <div id="agent-slot-secondary" class="agent-slot">
-                    <div class="portrait-readout">
-                      <div id="portrait-title-2" class="portrait-title">Model</div>
-                    </div>
-                    <div class="portrait-frame">
-                      <div id="portrait-avatar-2" class="portrait-avatar" aria-hidden="true">
-                        <video
-                          id="portrait-video-2"
-                          class="portrait-video hidden"
-                          muted
-                          loop
-                          autoplay
-                          playsinline
-                          preload="auto"
-                        ></video>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-	              </div>
-	            </div>
-	            <div class="panel">
-	              <div class="panel-title">Mother</div>
-	              <div id="tips-text" class="panel-body muted panel-readout">
-	                Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
-	              </div>
-	            </div>
-	          </div>
-	          <div class="inspector-footer" aria-label="Tools">
-	            <div class="panel session-panel">
-	              <div class="panel-body session-card" aria-label="Session Controls">
-	                <div class="session-controls">
-	                  <button id="new-run">New Run</button>
-                  <button id="open-run">Open Run</button>
-                  <button id="import">Import Photos</button>
-                  <button id="export">Export</button>
-                  <button id="settings-toggle">Settings</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </aside>
       </main>
       <div id="settings-drawer" class="drawer hidden" aria-label="Settings">
         <div class="drawer-header">

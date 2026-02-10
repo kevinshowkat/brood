@@ -42,3 +42,12 @@ class ProviderRegistry:
 
     def list(self) -> list[str]:
         return sorted(self._providers.keys())
+
+    def providers(self) -> list[ImageProvider]:
+        """Return provider instances in registry order (best-effort).
+
+        This is mainly used by tooling (e.g., harness runners) that want to extend
+        the default registry with additional providers.
+        """
+
+        return list(self._providers.values())
