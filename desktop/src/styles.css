@@ -789,6 +789,22 @@ button.ghost:hover {
   border-left: 0;
 }
 
+.canvas-wrap.intent-mode .hud,
+.canvas-wrap.intent-mode #spawnbar {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.canvas-wrap.intent-mode .hud {
+  transform: translateX(-50%) translateY(18px);
+}
+
+.canvas-wrap.intent-mode .canvas-bumper {
+  opacity: 0;
+  visibility: hidden;
+}
+
 .image-fx {
   position: absolute;
   left: 0;
@@ -2271,6 +2287,26 @@ button.ghost:hover {
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
   letter-spacing: 0.02em;
+  color: rgba(230, 237, 243, 0.62);
+}
+
+.panel-body.actions .actions-empty.actions-locked {
+  border-style: solid;
+  border-color: rgba(255, 212, 0, 0.35);
+  background: rgba(18, 26, 37, 0.55);
+  color: rgba(255, 212, 0, 0.72);
+}
+
+.actions-locked-title {
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: rgba(255, 212, 0, 0.86);
+  margin-bottom: 6px;
+}
+
+.actions-locked-meta {
+  white-space: pre-line;
+  line-height: 1.35;
   color: rgba(230, 237, 243, 0.62);
 }
 

@@ -23,7 +23,8 @@ Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, an
 This runs the Tauri app in dev mode (`desktop/`) and will spawn the Python engine in the background.
 
 ## Desktop usage
-- Click **Import Photos** (or drag files onto the canvas).
+- Click anywhere on the canvas to import photos at that point (or use **Import Photos**).
+- Mental model for the onboarding flow: starting a StarCraft 2 game as Zerg (choose what to build and where to place it, but using visual media as the "units").
 - Use **Abilities** in the right panel.
 - Use `Multi view` to run 2-photo actions (when exactly 2 photos are loaded). After a 2-photo action completes, Brood switches back to single-image view (output-only).
 - `Diagnose` / `Argue` output appears in the bottom HUD as `DIAG` / `ARG`.

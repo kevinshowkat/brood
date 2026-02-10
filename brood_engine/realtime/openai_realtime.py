@@ -301,6 +301,264 @@ class CanvasContextRealtimeSession:
             self._fatal_error = str(message or "").strip() or "Unknown realtime error."
 
 
+class IntentIconsRealtimeSession:
+    """Background OpenAI Realtime session that streams intent-icon JSON for the spatial canvas."""
+
+    def __init__(self, events: EventWriter) -> None:
+        self._events = events
+        self._model = os.getenv("BROOD_INTENT_REALTIME_MODEL") or os.getenv("OPENAI_INTENT_REALTIME_MODEL")
+        self._model = str(self._model or "").strip() or "gpt-realtime-mini"
+
+        self._api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY_BACKUP")
+        self._disabled = os.getenv("BROOD_INTENT_REALTIME_DISABLED") == "1"
+
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._jobs: queue.Queue[object] = queue.Queue()
+        self._fatal_error: str | None = None
+
+    def start(self) -> tuple[bool, str | None]:
+        if self._disabled:
+            return False, "Realtime intent inference is disabled (BROOD_INTENT_REALTIME_DISABLED=1)."
+        if not self._api_key:
+            return False, "Missing OPENAI_API_KEY (or OPENAI_API_KEY_BACKUP)."
+        try:
+            import websockets  # noqa: F401
+        except Exception:
+            return False, "Missing dependency: websockets (pip install websockets)."
+
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return True, None
+            self._fatal_error = None
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._thread_main, name="brood-intent-realtime", daemon=True)
+            self._thread.start()
+        return True, None
+
+    def stop(self, *, join_timeout_s: float = 2.0) -> None:
+        with self._lock:
+            thread = self._thread
+            self._stop.set()
+            self._jobs.put(_STOP)
+        if thread:
+            thread.join(timeout=max(0.0, float(join_timeout_s)))
+        with self._lock:
+            if self._thread and not self._thread.is_alive():
+                self._thread = None
+
+    def submit_snapshot(self, snapshot_path: Path) -> tuple[bool, str | None]:
+        if self._disabled:
+            return False, "Realtime intent inference is disabled (BROOD_INTENT_REALTIME_DISABLED=1)."
+        if not snapshot_path.exists():
+            return False, f"Snapshot not found: {snapshot_path}"
+        with self._lock:
+            if self._fatal_error:
+                return False, self._fatal_error
+            if not (self._thread and self._thread.is_alive()):
+                return False, "Realtime session not started. Run /intent_rt_start first."
+        job = CanvasContextJob(image_path=str(snapshot_path), submitted_at_ms=int(time.time() * 1000))
+        self._jobs.put(job)
+        return True, None
+
+    def _thread_main(self) -> None:
+        try:
+            asyncio.run(self._async_main())
+        except Exception as exc:
+            msg = f"Realtime session crashed: {exc}"
+            self._set_fatal_error(msg)
+            self._emit_failed(None, msg, fatal=True)
+
+    async def _async_main(self) -> None:
+        import websockets
+
+        ws_url = _openai_realtime_ws_url(self._model)
+        headers = [
+            ("Authorization", f"Bearer {self._api_key}"),
+            _REALTIME_BETA_HEADER,
+        ]
+
+        try:
+            connect_kwargs: dict[str, Any] = {"ping_interval": 20, "ping_timeout": 20}
+            try:
+                sig = inspect.signature(websockets.connect)
+                if "additional_headers" in sig.parameters:
+                    connect_kwargs["additional_headers"] = headers
+                else:
+                    connect_kwargs["extra_headers"] = headers
+            except Exception:
+                connect_kwargs["additional_headers"] = headers
+
+            async with websockets.connect(ws_url, **connect_kwargs) as ws:
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "session.update",
+                            "session": {
+                                "instructions": _intent_icons_instruction(),
+                                "modalities": ["text"],
+                                # JSON-only: keep temperature low for stable schemas.
+                                "temperature": 0.3,
+                                "max_response_output_tokens": 820,
+                            },
+                        }
+                    )
+                )
+                await self._job_loop(ws)
+        except Exception as exc:
+            msg = f"Realtime connection failed: {exc}"
+            self._set_fatal_error(msg)
+            self._emit_failed(None, msg, fatal=True)
+
+    async def _job_loop(self, ws: Any) -> None:
+        while not self._stop.is_set():
+            job = await asyncio.to_thread(self._jobs.get)
+            if job is _STOP:
+                break
+            if not isinstance(job, CanvasContextJob):
+                continue
+
+            # Latest-wins: if several snapshots queued up, keep only the last one.
+            while True:
+                try:
+                    nxt = self._jobs.get_nowait()
+                except queue.Empty:
+                    break
+                if nxt is _STOP:
+                    self._stop.set()
+                    break
+                if isinstance(nxt, CanvasContextJob):
+                    job = nxt
+
+            if self._stop.is_set():
+                break
+            await self._run_job(ws, job)
+
+    async def _run_job(self, ws: Any, job: CanvasContextJob) -> None:
+        data_url = _read_image_as_data_url(Path(job.image_path))
+        context_text = _read_canvas_context_envelope(Path(job.image_path))
+        content: list[dict[str, Any]] = []
+        if context_text:
+            content.append({"type": "input_text", "text": context_text})
+        content.append({"type": "input_image", "image_url": data_url})
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "response": {
+                        "conversation": "none",
+                        "modalities": ["text"],
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": content,
+                            }
+                        ],
+                        "max_output_tokens": 820,
+                    },
+                }
+            )
+        )
+
+        buffer = ""
+        response_id: str | None = None
+        last_emit_s = 0.0
+        started_s = time.monotonic()
+
+        while not self._stop.is_set():
+            if time.monotonic() - started_s > 42.0:
+                msg = "Realtime intent inference timed out."
+                self._set_fatal_error(msg)
+                self._emit_failed(job.image_path, msg, fatal=True)
+                self._stop.set()
+                return
+
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=0.5)
+            except asyncio.TimeoutError:
+                continue
+
+            try:
+                event = json.loads(raw)
+            except Exception:
+                continue
+
+            event_type = event.get("type")
+            if event_type == "error":
+                msg = _format_realtime_error(event)
+                self._set_fatal_error(msg)
+                self._emit_failed(job.image_path, msg, fatal=True)
+                self._stop.set()
+                return
+
+            if event_type == "response.created":
+                resp = event.get("response")
+                if isinstance(resp, dict) and isinstance(resp.get("id"), str):
+                    response_id = resp["id"]
+                continue
+
+            if event_type == "response.output_text.delta":
+                delta = event.get("delta") or event.get("text")
+                if isinstance(delta, str) and delta:
+                    buffer += delta
+                now_s = time.monotonic()
+                if buffer.strip() and now_s - last_emit_s >= 0.25:
+                    last_emit_s = now_s
+                    self._emit_intent_icons(job.image_path, buffer, partial=True)
+                continue
+            if event_type == "response.output_text.done":
+                text = event.get("text") or event.get("output_text")
+                if isinstance(text, str) and text:
+                    buffer += text
+                continue
+
+            if event_type == "response.done":
+                resp = event.get("response")
+                if response_id and isinstance(resp, dict) and isinstance(resp.get("id"), str):
+                    if resp["id"] != response_id:
+                        continue
+                cleaned = buffer.strip()
+                if not cleaned:
+                    cleaned = _extract_realtime_output_text(resp)
+                if not cleaned:
+                    meta = _summarize_realtime_response(resp)
+                    msg = f"Empty realtime intent inference response.{meta}"
+                    self._emit_failed(job.image_path, msg, fatal=True)
+                    self._set_fatal_error(msg)
+                    self._stop.set()
+                    return
+                self._emit_intent_icons(job.image_path, cleaned, partial=False)
+                return
+
+    def _emit_intent_icons(self, image_path: str, text: str, *, partial: bool) -> None:
+        payload: dict[str, Any] = {
+            "image_path": image_path,
+            "text": text,
+            "source": _SOURCE,
+            "model": self._model,
+        }
+        if partial:
+            payload["partial"] = True
+        self._events.emit("intent_icons", **payload)
+
+    def _emit_failed(self, image_path: str | None, error: str, *, fatal: bool) -> None:
+        payload: dict[str, Any] = {
+            "image_path": image_path,
+            "error": error,
+            "source": _SOURCE,
+            "model": self._model,
+        }
+        if fatal:
+            payload["fatal"] = True
+        self._events.emit("intent_icons_failed", **payload)
+
+    def _set_fatal_error(self, message: str) -> None:
+        with self._lock:
+            self._fatal_error = str(message or "").strip() or "Unknown realtime error."
+
+
 def _openai_api_base_url() -> str:
     """OpenAI base URL (no trailing slash), defaulting to the public API."""
     raw = os.getenv("OPENAI_API_BASE") or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
@@ -436,6 +694,126 @@ def _canvas_context_instruction() -> str:
         "Rules: infer the use case from both the image and CONTEXT_ENVELOPE_JSON.timeline_recent (edits). "
         "No fluff, no marketing language. Be specific about composition, lighting, color, materials. "
         "NEXT ACTIONS should serve the hypothesized use case."
+    )
+
+
+def _intent_icons_instruction() -> str:
+    # JSON-only contract for the onboarding "Intent Canvas".
+    return (
+        "You are a realtime Canvas-to-Intent Icon Engine.\n\n"
+        "ROLE\n"
+        "Observe a live visual canvas where users place images.\n"
+        "Your job is NOT to explain intent, guess motivation, or ask questions.\n"
+        "Your job is to surface the user's intent as a set of clear, human-legible ICONS that describe WHAT\n"
+        "they are trying to build and HOW they are choosing to build it.\n\n"
+        "HARD CONSTRAINTS\n"
+        "- Output JSON only. No prose. No labels. No user-facing text.\n"
+        "- The JSON must be syntactically valid (single top-level object).\n"
+        "- Communicate intent exclusively through icons, spatial grouping, highlights, and branching lanes.\n"
+        "- Never infer or expose \"why\".\n"
+        "- Never assume a specific industry/system type.\n"
+        "- If uncertain, present multiple icon paths rather than choosing one.\n\n"
+        "INPUT SIGNALS\n"
+        "You receive:\n"
+        "- A CANVAS SNAPSHOT image (may contain multiple user images placed spatially).\n"
+        "- An optional CONTEXT_ENVELOPE_JSON (input text) that is authoritative for:\n"
+        "  - canvas size\n"
+        "  - per-image positions/sizes/order\n"
+        "  - intent round index and remaining time\n"
+        "  - prior user selections (YES/NO/MAYBE) by branch\n\n"
+        "INTERPRETATION RULES\n"
+        "- Treat images as signals of intent, not meaning.\n"
+        "- Placement implies structure:\n"
+        "  - Left-to-right = flow\n"
+        "  - Top-to-bottom = hierarchy\n"
+        "  - Clusters = coupling\n"
+        "  - Isolation = emphasis\n"
+        "  - Relative size = emphasis/importance\n\n"
+        "OUTPUT GOAL\n"
+        "Continuously emit a minimal, evolving set of INTENT ICONS that describe:\n"
+        "1) WHAT kind of system/action the user is assembling\n"
+        "2) HOW they are choosing to act on that system\n\n"
+        "ICON TAXONOMY (STRICT)\n"
+        "Use only these icon_id values:\n\n"
+        "HOW (Intent Archetypes)\n"
+        "- MAKE\n"
+        "- TRADE\n"
+        "- TEACH\n"
+        "- HEAL\n"
+        "- PLAY\n"
+        "- LEAD\n"
+        "- EXPLORE\n"
+        "- GUARD\n"
+        "- MEASURE_HOW\n"
+        "- ORGANIZE\n\n"
+        "WHAT (System Actions)\n"
+        "- INPUT\n"
+        "- INTERPRET\n"
+        "- DECIDE\n"
+        "- GENERATE\n"
+        "- TRANSFORM\n"
+        "- STORE\n"
+        "- FETCH\n"
+        "- ORCHESTRATE\n"
+        "- PUBLISH\n"
+        "- MEASURE_WHAT\n"
+        "- FEEDBACK\n"
+        "- AGENT\n\n"
+        "Image Workflows (WHAT)\n"
+        "- LISTING_READY\n"
+        "- ON_MODEL\n"
+        "- CREATIVE_DIRECTIONS\n"
+        "- ROOM_STAGING\n\n"
+        "Relations\n"
+        "- FLOW\n"
+        "- DEPENDENCY\n"
+        "- FEEDBACK\n\n"
+        "Checkpoints\n"
+        "- YES_TOKEN\n"
+        "- NO_TOKEN\n"
+        "- MAYBE_TOKEN\n\n"
+        "OUTPUT FORMAT (STRICT JSON)\n"
+        "{\n"
+        "  \"frame_id\": \"<input frame id>\",\n"
+        "  \"schema\": \"brood.intent_icons\",\n"
+        "  \"schema_version\": 1,\n"
+        "  \"intent_icons\": [\n"
+        "    {\n"
+        "      \"icon_id\": \"<from taxonomy>\",\n"
+        "      \"confidence\": 0.0,\n"
+        "      \"position_hint\": \"primary\"\n"
+        "    }\n"
+        "  ],\n"
+        "  \"relations\": [\n"
+        "    {\n"
+        "      \"from_icon\": \"<icon_id>\",\n"
+        "      \"to_icon\": \"<icon_id>\",\n"
+        "      \"relation_type\": \"FLOW\"\n"
+        "    }\n"
+        "  ],\n"
+        "  \"branches\": [\n"
+        "    {\n"
+        "      \"branch_id\": \"<id>\",\n"
+        "      \"icons\": [\"MAKE\", \"GENERATE\"],\n"
+        "      \"lane_position\": \"left\"\n"
+        "    }\n"
+        "  ],\n"
+        "  \"checkpoint\": {\n"
+        "    \"icons\": [\"YES_TOKEN\", \"NO_TOKEN\", \"MAYBE_TOKEN\"],\n"
+        "    \"applies_to\": \"<branch_id or icon cluster>\"\n"
+        "  }\n"
+        "}\n\n"
+        "BEHAVIOR RULES\n"
+        "- Always maintain one primary intent cluster and 1-3 alternative clusters.\n"
+        "- Do not collapse ambiguity too early.\n"
+        "- Increase specificity only after YES_TOKEN is applied.\n"
+        "- Prefer stable human archetypes over technical precision.\n"
+        "- The icons must be understandable without explanation, language, or onboarding.\n\n"
+        "SAFETY\n"
+        "- Do not emit intent icons for illegal or deceptive systems.\n"
+        "- Do not produce impersonation or identity abuse flows.\n"
+        "- Keep all intent representations general-purpose and constructive.\n\n"
+        "Return JSON only."
     )
 
 
