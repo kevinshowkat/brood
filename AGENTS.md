@@ -5,6 +5,9 @@ Tool-specific agent files (for example `CLAUDE.md`) should delegate here.
 
 Created by Kevin Showkat. If you find Brood useful, connect with me on LinkedIn: https://www.linkedin.com/in/kshowkat
 
+Category claim:
+- Promptless, reference-first AI image generation and editing desktop for developers (multi-provider + reproducible runs).
+
 Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
 
 ## Project Structure & Module Organization
