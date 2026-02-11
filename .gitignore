@@ -58,6 +58,14 @@ minimap.jpg
 github.png
 yellow.png
 
+# Keep repository root clean (local scratch artifacts)
+/tmp_test_desc.jpg
+/sc.webp
+/sc_preview.png
+/larvae.png
+/see.png
+/param_forge_llm_review.tar.gz
+
 # Local visibility probe artifacts
 docs/ai_visibility.md
 docs/ai_visibility.schema.json
