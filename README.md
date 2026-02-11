@@ -125,3 +125,7 @@ Edit `~/.brood/pricing_overrides.json` to override pricing or latency values.
 - `docs/ai_visibility.md` usage guide for probe setup, providers, and output interpretation.
 - `docs/ai_visibility.schema.json` schema for visibility probe outputs (`probe_result` + `run_summary`).
 - `docs/ai_visibility_queries.sample.json` starter query set for discovery/share-of-voice tracking.
+
+## License
+
+This project is licensed under the Apache License 2.0. See `LICENSE`.
