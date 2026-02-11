@@ -83,8 +83,6 @@
 			            <div id="image-fx" class="image-fx hidden" aria-hidden="true"></div>
 			            <div id="image-fx-2" class="image-fx hidden" aria-hidden="true"></div>
 			            <canvas id="overlay-canvas" tabindex="0" aria-label="Canvas"></canvas>
-			            <div class="canvas-bumper canvas-bumper--left" aria-hidden="true"></div>
-			            <div class="canvas-bumper canvas-bumper--right" aria-hidden="true"></div>
 	            <div id="designate-menu" class="designate-menu hidden" role="menu" aria-label="Designate">
 	              <button type="button" data-kind="subject">Subject</button>
               <button type="button" data-kind="reference">Reference</button>
@@ -132,45 +130,71 @@
                 </div>
               </div>
             </div>
-			            <div id="hud" class="hud" aria-label="HUD">
-			              <div class="hud-shell">
-		                <div class="hud-screen" aria-hidden="true">
-			              <div class="hud-readout">
-			                    <div id="hud-line-unit" class="hud-line">
-		                      <span class="hud-k">UNIT</span>
-		                      <span id="hud-unit-desc" class="hud-v hud-desc"></span>
-	                    </div>
-	                    <div id="hud-line-director" class="hud-line hud-director-line hidden">
-	                      <span id="hud-director-k" class="hud-k">DIR</span>
-	                      <div id="hud-director-v" class="hud-v hud-director"></div>
-	                    </div>
-	                    <div id="hud-line-desc" class="hud-line">
-	                      <span class="hud-k">DESC</span>
-	                      <span id="hud-unit-name" class="hud-v"></span>
-	                    </div>
-	                    <div id="hud-line-sel" class="hud-line">
-	                      <span class="hud-k">SEL</span>
-	                      <span id="hud-unit-sel" class="hud-v"></span>
+              <div id="mother-panel" class="mother-overlay panel" aria-label="Mother">
+                <div class="panel-title">Mother</div>
+                <div class="mother-body">
+                  <div class="mother-portrait" aria-hidden="true">
+                    <div class="portrait-frame">
+                      <div id="mother-avatar" class="portrait-avatar" data-provider="openai" aria-hidden="true">
+                        <video
+                          id="mother-video"
+                          class="portrait-video hidden"
+                          muted
+                          loop
+                          autoplay
+                          playsinline
+                          preload="auto"
+                        ></video>
+                      </div>
                     </div>
-	                    <div id="hud-line-gen" class="hud-line">
-	                      <span class="hud-k">GEN</span>
-	                      <span id="hud-unit-stat" class="hud-v"></span>
-	                    </div>
-	                  </div>
-	                </div>
-		              </div>
-		            </div>
-                <div
-                  id="canvas-context-suggest"
-                  class="canvas-context-suggest canvas-context-suggest--deck"
-                  aria-hidden="true"
-                >
-                  <button id="canvas-context-suggest-btn" class="canvas-context-suggest-btn" type="button"></button>
+                  </div>
+                  <div id="tips-text" class="panel-body muted panel-readout">
+                    Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
+                  </div>
+                  <div class="mother-actions" aria-label="Mother controls">
+                    <button id="mother-ability-icon" class="mother-ability-icon" type="button" aria-label="Mother ability"></button>
+                    <button id="mother-confirm" class="mother-confirm" type="button">Confirm</button>
+                    <button id="mother-stop" class="mother-stop hidden" type="button">Stop</button>
+                  </div>
                 </div>
-	              <div id="action-deck" class="action-deck" aria-label="Action Deck">
-	                <div id="action-grid" class="action-grid" role="toolbar" aria-label="Action Grid"></div>
-	                <div id="agents-dock" class="agents-dock" aria-label="Agents">
-	                  <div id="portrait-dock" class="portrait-dock">
+              </div>
+
+              <div id="control-strip" class="control-strip" aria-label="HUD and Actions">
+                <div class="canvas-bumper canvas-bumper--left" aria-hidden="true"></div>
+                <div id="minimap" class="minimap" aria-label="Minimap">
+                  <div id="minimap-surface" class="minimap-surface" aria-hidden="true"></div>
+                </div>
+                <div id="hud" class="hud" aria-label="HUD">
+                  <div class="hud-shell">
+                    <div class="hud-screen" aria-hidden="true">
+                      <div class="hud-readout">
+                        <div id="hud-line-unit" class="hud-line">
+                          <span class="hud-k">UNIT</span>
+                          <span id="hud-unit-desc" class="hud-v hud-desc"></span>
+                        </div>
+                        <div id="hud-line-director" class="hud-line hud-director-line hidden">
+                          <span id="hud-director-k" class="hud-k">DIR</span>
+                          <div id="hud-director-v" class="hud-v hud-director"></div>
+                        </div>
+                        <div id="hud-line-desc" class="hud-line">
+                          <span class="hud-k">DESC</span>
+                          <span id="hud-unit-name" class="hud-v"></span>
+                        </div>
+                        <div id="hud-line-sel" class="hud-line">
+                          <span class="hud-k">SEL</span>
+                          <span id="hud-unit-sel" class="hud-v"></span>
+                        </div>
+                        <div id="hud-line-gen" class="hud-line">
+                          <span class="hud-k">GEN</span>
+                          <span id="hud-unit-stat" class="hud-v"></span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div id="action-grid" class="action-grid" role="toolbar" aria-label="Action Grid"></div>
+                <div id="agents-dock" class="agents-dock" aria-label="Agents">
+                  <div id="portrait-dock" class="portrait-dock">
                     <div class="agent-portraits">
                       <div id="agent-slot-primary" class="agent-slot">
                         <div class="portrait-readout">
@@ -211,12 +235,7 @@
                     </div>
                   </div>
                 </div>
-              </div>
-              <div id="mother-panel" class="mother-overlay panel" aria-label="Mother">
-                <div class="panel-title">Mother</div>
-                <div id="tips-text" class="panel-body muted panel-readout">
-                  Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
-                </div>
+                <div class="canvas-bumper canvas-bumper--right" aria-hidden="true"></div>
               </div>
             <div id="spawnbar" class="spawnbar hidden" aria-live="polite"></div>
             <div id="toast" class="toast hidden" aria-live="polite"></div>

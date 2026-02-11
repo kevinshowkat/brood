@@ -9,16 +9,14 @@ const cssPath = join(here, "..", "src", "styles.css");
 const css = readFileSync(cssPath, "utf8");
 
 test("HUD: width/center preserve legacy right-rail pixel geometry", () => {
-  assert.match(css, /--right-rail-w:\s*432px/);
-  assert.match(css, /--hud-w:\s*calc\(\(100% - var\(--right-rail-w\)\) \* 0\.8\)/);
-  assert.match(css, /--hud-x:\s*calc\(\(100% - var\(--right-rail-w\)\) \/ 2\)/);
-  assert.match(css, /\.hud\s*\{[\s\S]*left:\s*var\(--hud-x\)/);
-  assert.match(css, /\.hud\s*\{[\s\S]*width:\s*var\(--hud-w\)/);
+  assert.match(css, /--hud-main-w:\s*clamp\(/);
+  assert.match(css, /--control-strip-h:\s*calc\(var\(--hud-keybar-h\)\s*\+\s*2px\)/);
+  assert.match(css, /\.hud\s*\{[\s\S]*width:\s*var\(--hud-main-w\)/);
+  assert.match(css, /\.control-strip\s*\{[\s\S]*height:\s*var\(--control-strip-h\)/);
 });
 
 test("Bumpers: right bumper reaches screen edge", () => {
-  assert.match(css, /--bumper-right-w:\s*max\(/);
-  assert.match(css, /\.canvas-bumper--right\s*\{[\s\S]*right:\s*0/);
-  assert.match(css, /\.canvas-bumper--right\s*\{[\s\S]*width:\s*var\(--bumper-right-w\)/);
+  assert.match(css, /\.canvas-bumper\s*\{[\s\S]*flex:\s*1\s+1\s+0/);
+  assert.match(css, /\.canvas-bumper\s*\{[\s\S]*height:\s*var\(--control-strip-h\)/);
+  assert.match(css, /\.canvas-bumper--right\s*\{/);
 });
-

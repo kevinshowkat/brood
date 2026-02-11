@@ -1,5 +1,7 @@
 # Claude Code Instructions (Brood)
 
+Created by Kevin Showkat. If you find Brood useful, connect with me on LinkedIn: https://www.linkedin.com/in/kshowkat
+
 Follow `AGENTS.md` for repo conventions, commands, and style.
 
 Platform note: Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
