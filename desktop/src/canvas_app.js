@@ -18,6 +18,12 @@ import { computeActionGridSlots } from "./action_grid_logic.js";
 
 const THUMB_PLACEHOLDER_SRC = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
+const MOTHER_VIDEO_IDLE_SRC = new URL("./assets/mother/mother_idle.mirrored.mp4", import.meta.url).href;
+const MOTHER_VIDEO_WORKING_SRC = new URL("./assets/mother/mother_working.mp4", import.meta.url).href;
+const MOTHER_VIDEO_REALTIME_SRC = new URL("./assets/mother/mother_realtime.mp4", import.meta.url).href;
+const MOTHER_REALTIME_MIN_MS = 4000;
+const MOTHER_USER_HOT_IDLE_MS = 10_000;
+
 const els = {
   runInfo: document.getElementById("run-info"),
   engineStatus: document.getElementById("engine-status"),
@@ -50,6 +56,9 @@ const els = {
   imageFx: document.getElementById("image-fx"),
   imageFx2: document.getElementById("image-fx-2"),
   overlayCanvas: document.getElementById("overlay-canvas"),
+  controlStrip: document.getElementById("control-strip"),
+  minimap: document.getElementById("minimap"),
+  minimapSurface: document.getElementById("minimap-surface"),
   annotatePanel: document.getElementById("annotate-panel"),
   annotateClose: document.getElementById("annotate-close"),
   annotateMeta: document.getElementById("annotate-meta"),
@@ -90,6 +99,12 @@ const els = {
   portraitVideo2: document.getElementById("portrait-video-2"),
   selectionMeta: document.getElementById("selection-meta"),
   tipsText: document.getElementById("tips-text"),
+  motherPanel: document.getElementById("mother-panel"),
+  motherAvatar: document.getElementById("mother-avatar"),
+  motherVideo: document.getElementById("mother-video"),
+  motherAbilityIcon: document.getElementById("mother-ability-icon"),
+  motherConfirm: document.getElementById("mother-confirm"),
+  motherStop: document.getElementById("mother-stop"),
   actionGrid: document.getElementById("action-grid"),
   designateMenu: document.getElementById("designate-menu"),
   imageMenu: document.getElementById("image-menu"),
@@ -103,7 +118,12 @@ const els = {
 
 const settings = {
   memory: localStorage.getItem("brood.memory") === "1",
-  alwaysOnVision: localStorage.getItem("brood.alwaysOnVision") === "1",
+  alwaysOnVision: (() => {
+    const raw = localStorage.getItem("brood.alwaysOnVision");
+    // Default ON: Mother suggestions depend on realtime canvas context.
+    if (raw === null) return true;
+    return raw === "1";
+  })(),
   autoAcceptSuggestedAbility: localStorage.getItem("brood.autoAcceptSuggestedAbility") === "1",
   textModel: localStorage.getItem("brood.textModel") || "gpt-5.2",
   imageModel: localStorage.getItem("brood.imageModel") || "gemini-2.5-flash-image",
@@ -204,6 +224,23 @@ const state = {
   engineImageModelRestore: null, // string|null
   needsRender: false,
   lastInteractionAt: Date.now(),
+  userEvents: [], // [{ seq, at_ms, type, ... }]
+  userEventSeq: 0,
+  mother: {
+    running: false,
+    startedAt: 0,
+    runId: 0,
+    action: null, // string|null
+    status: null, // string|null
+    stopRequested: false,
+    timer: null,
+    rtHoldUntil: 0,
+    rtHoldTimer: null,
+    hotSyncAt: 0,
+  },
+  minimap: {
+    lastSignature: null,
+  },
   spawnNodes: [],
   spawnTimer: null,
   larvaTargets: [], // { turbEl, dispEl, seed }
@@ -297,6 +334,7 @@ const state = {
     indexPromise: null, // Promise<object>|null
     activeKey1: null,
     activeKey2: null,
+    activeKeyMother: null,
     missingToastShown: false,
     loadErrorToastShown: false,
     lastResolveError: null, // string|null (debug aid shown in Settings readout)
@@ -1051,7 +1089,6 @@ function updateAlwaysOnVisionReadout() {
   }
 
   renderMotherReadout();
-  syncAlwaysOnVisionPortrait();
 }
 
 function syncAlwaysOnVisionPortrait() {
@@ -1356,7 +1393,7 @@ async function restoreIntentStateFromRunDir() {
   return false;
 }
 
-const CANVAS_CONTEXT_ENVELOPE_VERSION = 1;
+const CANVAS_CONTEXT_ENVELOPE_VERSION = 2;
 const CANVAS_CONTEXT_ALLOWED_ACTIONS = [
   "Multi view",
   "Single view",
@@ -1478,9 +1515,46 @@ function _stableQuickActionLabel(label) {
 
 function buildCanvasContextEnvelope() {
   const active = getActiveImage();
-  const imageFiles = (state.images || [])
-    .map((item) => basename(item?.path))
-    .filter(Boolean);
+  const wrap = els.canvasWrap;
+  const dpr = getDpr();
+  const canvasCssW = wrap?.clientWidth || 0;
+  const canvasCssH = wrap?.clientHeight || 0;
+
+  ensureFreeformLayoutRectsCss(state.images || [], canvasCssW, canvasCssH);
+
+  const selectedIds = getSelectedIds();
+  const selectedSet = new Set(selectedIds);
+  const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
+  const images = [];
+  for (let idx = 0; idx < z.length; idx += 1) {
+    const imageId = z[idx];
+    if (!imageId) continue;
+    const item = state.imagesById.get(imageId) || null;
+    const rect = state.freeformRects.get(imageId) || null;
+    if (!item?.path || !rect) continue;
+    const x = Number(rect.x) || 0;
+    const y = Number(rect.y) || 0;
+    const w = Math.max(1, Number(rect.w) || 1);
+    const h = Math.max(1, Number(rect.h) || 1);
+    const cx = x + w / 2;
+    const cy = y + h / 2;
+    images.push({
+      id: String(imageId),
+      file: basename(item.path),
+      z: idx,
+      is_active: Boolean(state.activeId && String(state.activeId) === String(imageId)),
+      is_selected: selectedSet.has(String(imageId)),
+      rect_css: { x, y, w, h, cx, cy },
+      rect_norm: {
+        x: canvasCssW ? x / canvasCssW : 0,
+        y: canvasCssH ? y / canvasCssH : 0,
+        w: canvasCssW ? w / canvasCssW : 0,
+        h: canvasCssH ? h / canvasCssH : 0,
+        cx: canvasCssW ? cx / canvasCssW : 0,
+        cy: canvasCssH ? cy / canvasCssH : 0,
+      },
+    });
+  }
 
   const realtimeEnabled = Boolean(state.alwaysOnVision?.enabled);
   const quickActions = (computeQuickActions() || [])
@@ -1508,18 +1582,51 @@ function buildCanvasContextEnvelope() {
     label: node?.label ? String(node.label) : null,
   }));
 
+  const eventsRecent = (Array.isArray(state.userEvents) ? state.userEvents : [])
+    .slice(-32)
+    .map((ev) => {
+      const out = {
+        at_ms: Number(ev?.at_ms) || null,
+        type: ev?.type ? String(ev.type) : null,
+      };
+      for (const key of ["tool", "key", "kind", "image_id", "corner", "canvas_mode", "active_id", "selected_ids", "file"]) {
+        if (ev && Object.prototype.hasOwnProperty.call(ev, key)) {
+          out[key] = ev[key];
+        }
+      }
+      // Best-effort deltas (used by move/resize) but keep it compact.
+      if (ev?.start && ev?.end) {
+        out.start = ev.start;
+        out.end = ev.end;
+      }
+      return out;
+    })
+    .filter((ev) => ev && ev.type);
+
   return {
     schema_version: CANVAS_CONTEXT_ENVELOPE_VERSION,
     generated_at: new Date().toISOString(),
+    canvas: {
+      width_css: canvasCssW,
+      height_css: canvasCssH,
+      width_px: Math.max(0, Math.round(canvasCssW * dpr)),
+      height_px: Math.max(0, Math.round(canvasCssH * dpr)),
+      dpr,
+    },
     canvas_mode: state.canvasMode,
     tool: state.tool,
     n_images: state.images.length,
     active_image: active?.path ? basename(active.path) : null,
-    images: imageFiles,
+    selection: {
+      active_id: state.activeId ? String(state.activeId) : null,
+      selected_ids: selectedIds.slice(0, 3),
+    },
+    images: images.slice(0, 12),
     allowed_abilities: allowedAbilities,
     abilities: quickActions,
     ability_glossary: glossary,
     timeline_recent: timelineRecent,
+    events_recent: eventsRecent,
   };
 }
 
@@ -1982,8 +2089,11 @@ async function runAlwaysOnVisionOnce() {
 
   await ensureRun();
   const stamp = Date.now();
-  const snapshotPath = `${state.runDir}/alwayson-${stamp}.jpg`;
-  await writeAlwaysOnVisionSnapshot(snapshotPath, { maxDim: 768 });
+  const snapshotPath = `${state.runDir}/alwayson-${stamp}.png`;
+  await waitForIntentImagesLoaded({ timeoutMs: 900 });
+  // Ensure the on-screen canvas is up to date before we capture a snapshot.
+  render();
+  await writeIntentSnapshot(snapshotPath, { maxDimPx: 900 });
   await writeCanvasContextEnvelope(snapshotPath).catch((err) => {
     console.warn("Failed to write canvas context envelope:", err);
   });
@@ -4019,26 +4129,80 @@ function startMotherTypeout(text) {
   motherTypeoutTick();
 }
 
+function currentMotherSuggestedAction() {
+  const rec = state.canvasContextSuggestion;
+  if (!rec?.action) return { action: null, why: null, disabledReason: null };
+
+  const action = canonicalizeCanvasContextAction(rec.action, rec.why);
+  if (!action || !isCanvasContextAllowedAction(action)) {
+    return { action: null, why: null, disabledReason: null };
+  }
+  const disabledReason = _canvasContextDisabledReason(action);
+  if (disabledReason) {
+    return { action: null, why: null, disabledReason };
+  }
+  return { action, why: rec.why || null, disabledReason: null };
+}
+
+function syncMotherTakeoverClass() {
+  if (!els.canvasWrap) return;
+  els.canvasWrap.classList.toggle("mother-takeover", Boolean(state.mother?.running));
+}
+
+function renderMotherControls() {
+  syncMotherTakeoverClass();
+
+  const running = Boolean(state.mother?.running);
+  const suggestion = currentMotherSuggestedAction();
+  const canConfirm = Boolean(suggestion?.action) && !running;
+
+  if (els.motherConfirm) {
+    els.motherConfirm.disabled = !canConfirm;
+    els.motherConfirm.title = suggestion?.action ? `Confirm: ${suggestion.action}` : "Waiting for a suggestion…";
+    els.motherConfirm.classList.toggle("hidden", running);
+  }
+  if (els.motherStop) {
+    els.motherStop.classList.toggle("hidden", !running);
+  }
+  if (els.motherAbilityIcon) {
+    els.motherAbilityIcon.disabled = running;
+    els.motherAbilityIcon.title = running
+      ? "Mother is running."
+      : suggestion?.action
+        ? `Suggested: ${suggestion.action}`
+        : "Mother: scan canvas context";
+  }
+
+  syncMotherPortrait();
+}
+
 function buildMotherText() {
+  const mother = state.mother;
+  if (mother?.running) {
+    const action = mother.action ? String(mother.action) : "";
+    const status = mother.status ? String(mother.status) : "Working…";
+    return action ? `MOTHER: ${status}\nACTION: ${action}` : `MOTHER: ${status}`;
+  }
+
+  const suggestion = currentMotherSuggestedAction();
+  if (suggestion?.action) {
+    return `SUGGESTED:\n${suggestion.action}`;
+  }
+
   const aov = state.alwaysOnVision;
   const raw = typeof aov?.lastText === "string" ? aov.lastText.trim() : "";
   const hasOutput = Boolean(raw);
 
   if (aov?.enabled) {
     if (aov.rtState === "connecting" && !aov.pending && !hasOutput) {
-      return "CTX: Connecting…";
+      return "MOTHER: Connecting…";
     }
-    if (aov.pending) return "CTX: ANALYZING…";
+    if (aov.pending) return "MOTHER: Scanning…";
     if (hasOutput) {
       const summary = extractCanvasContextSummary(raw);
-      const top = extractCanvasContextTopAction(raw);
-      const bits = [];
-      if (summary) bits.push(summary);
-      if (top?.action) bits.push(`NEXT: ${top.action}`);
-      const hudText = bits.length ? bits.join(" | ") : _collapseWs(raw);
-      return `CTX: ${hudText}\n\n${raw}`;
+      return summary ? `CONTEXT:\n${summary}` : "CONTEXT: Ready.";
     }
-    return state.images.length ? "CTX: On (waiting…)" : "CTX: On (no images loaded)";
+    return state.images.length ? "MOTHER: On (waiting…)" : "MOTHER: On (no images loaded)";
   }
 
   const fallback = typeof state.lastTipText === "string" ? state.lastTipText.trim() : "";
@@ -4046,6 +4210,7 @@ function buildMotherText() {
 }
 
 function renderMotherReadout() {
+  renderMotherControls();
   if (!els.tipsText) return;
   const next = buildMotherText();
   const changed = next !== lastMotherRenderedText;
@@ -4054,7 +4219,7 @@ function renderMotherReadout() {
   const hasOutput = typeof aov?.lastText === "string" && aov.lastText.trim();
   const shouldTypeout = Boolean(aov?.enabled && isRealtime && hasOutput && !aov.pending);
 
-  els.tipsText.classList.toggle("mother-cursor", Boolean(aov?.enabled));
+  els.tipsText.classList.toggle("mother-cursor", Boolean(aov?.enabled || state.mother?.running));
 
   if (!changed) {
     return;
@@ -4068,6 +4233,338 @@ function renderMotherReadout() {
 
   stopMotherTypeout();
   els.tipsText.textContent = next;
+}
+
+function syncMotherPortrait() {
+  const panel = els.motherPanel;
+  const videoEl = els.motherVideo;
+  if (!videoEl) return;
+
+  const motherRunning = Boolean(state.mother?.running);
+  const aov = state.alwaysOnVision;
+  const now = Date.now();
+  const mother = state.mother;
+  const hasImages = Boolean(state.images && state.images.length);
+  const pending = Boolean(aov?.enabled && aov.pending);
+  const pendingAt = Math.max(0, Number(aov?.pendingAt) || 0);
+
+  // Presentability hack: keep the realtime "pulse" + video visible for a minimum duration
+  // so short calls still read as "alive", and subsequent calls don't restart it.
+  if (!aov?.enabled) {
+    mother.rtHoldUntil = 0;
+    clearTimeout(mother.rtHoldTimer);
+    mother.rtHoldTimer = null;
+  } else if (pending) {
+    const until = (pendingAt || now) + MOTHER_REALTIME_MIN_MS;
+    mother.rtHoldUntil = Math.max(Number(mother.rtHoldUntil) || 0, until);
+    clearTimeout(mother.rtHoldTimer);
+    mother.rtHoldTimer = null;
+  }
+
+  const holdUntil = Math.max(0, Number(mother.rtHoldUntil) || 0);
+  const held = Boolean(aov?.enabled && holdUntil && now < holdUntil);
+  const realtimeActive = Boolean(aov?.enabled && (pending || held));
+  const idleFor = now - (state.lastInteractionAt || 0);
+  const userHot = Boolean(aov?.enabled && hasImages && idleFor < MOTHER_USER_HOT_IDLE_MS);
+  const userHotUntil = Math.max(0, Number(state.lastInteractionAt) || 0) + MOTHER_USER_HOT_IDLE_MS;
+
+  // Only pulse the main canvas when we're in the realtime video mode.
+  const showRealtime = !motherRunning && hasImages && (realtimeActive || userHot);
+  if (els.canvasWrap) {
+    els.canvasWrap.classList.toggle("mother-rt-active", showRealtime);
+  }
+
+  const refreshAts = [];
+  if (!pending) {
+    if (held) refreshAts.push(holdUntil);
+    if (userHot) refreshAts.push(userHotUntil);
+  }
+  const refreshAt = refreshAts.length ? Math.min(...refreshAts) : 0;
+  if (refreshAt && refreshAt > now) {
+    clearTimeout(mother.rtHoldTimer);
+    mother.rtHoldTimer = setTimeout(() => {
+      mother.rtHoldTimer = null;
+      syncMotherPortrait();
+    }, Math.max(30, refreshAt - Date.now() + 24));
+  } else {
+    clearTimeout(mother.rtHoldTimer);
+    mother.rtHoldTimer = null;
+  }
+
+  const mode = motherRunning ? "working" : showRealtime ? "realtime" : "idle";
+  const src =
+    mode === "working" ? MOTHER_VIDEO_WORKING_SRC : mode === "realtime" ? MOTHER_VIDEO_REALTIME_SRC : MOTHER_VIDEO_IDLE_SRC;
+
+  if (panel) panel.classList.toggle("busy", mode !== "idle");
+
+  if (!videoEl.hasAttribute("muted")) videoEl.muted = true;
+  videoEl.loop = true;
+  videoEl.autoplay = true;
+  videoEl.playsInline = true;
+
+  const nextKey = `${mode}:${src}`;
+  const currentSrc = String(videoEl.currentSrc || videoEl.src || "");
+  if (state.portraitMedia.activeKeyMother !== nextKey || (src && currentSrc !== String(src))) {
+    state.portraitMedia.activeKeyMother = nextKey;
+    videoEl.classList.remove("hidden");
+    videoEl.src = src;
+    try {
+      videoEl.currentTime = 0;
+    } catch (_) {}
+    try {
+      videoEl.load();
+    } catch (_) {}
+  }
+
+  try {
+    const p = videoEl.play();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  } catch (_) {}
+}
+
+async function startMotherTakeover() {
+  if (state.mother?.running) return;
+  const suggestion = currentMotherSuggestedAction();
+  const action = suggestion?.action ? String(suggestion.action) : "";
+  if (!action) {
+    showToast("Mother has no suggestion yet. Arrange images and pause for a moment.", "tip", 2600);
+    return;
+  }
+
+  state.mother.running = true;
+  state.mother.startedAt = Date.now();
+  state.mother.runId = (Number(state.mother.runId) || 0) + 1;
+  const runId = state.mother.runId;
+  state.mother.action = action;
+  state.mother.status = "Planning…";
+  state.mother.stopRequested = false;
+  clearTimeout(state.mother.timer);
+  state.mother.timer = null;
+  recordUserEvent("mother_confirm", { action });
+
+  renderMotherReadout();
+  syncMotherPortrait();
+
+  // Stub pipeline: plan -> execute suggested action -> wrap up.
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  try {
+    await sleep(650);
+    if (!state.mother.running || state.mother.stopRequested || state.mother.runId !== runId) return;
+
+    state.mother.status = `Doing: ${action}`;
+    renderMotherReadout();
+    syncMotherPortrait();
+
+    await triggerCanvasContextSuggestedAction(action);
+
+    if (!state.mother.running || state.mother.stopRequested || state.mother.runId !== runId) return;
+    state.mother.status = "Wrapping up…";
+    renderMotherReadout();
+    syncMotherPortrait();
+    await sleep(480);
+  } catch (err) {
+    const msg = err?.message || String(err);
+    state.mother.status = `Failed: ${msg}`;
+    renderMotherReadout();
+    syncMotherPortrait();
+    showToast(msg, "error", 3200);
+  } finally {
+    if (state.mother.runId === runId) {
+      state.mother.running = false;
+      state.mother.stopRequested = false;
+      state.mother.timer = null;
+      state.mother.action = null;
+      state.mother.status = null;
+      renderMotherReadout();
+      syncMotherPortrait();
+    }
+  }
+}
+
+function stopMotherTakeover() {
+  if (!state.mother?.running) return;
+  state.mother.stopRequested = true;
+  state.mother.running = false;
+  state.mother.action = null;
+  state.mother.status = null;
+  clearTimeout(state.mother.timer);
+  state.mother.timer = null;
+  recordUserEvent("mother_stop", {});
+  renderMotherReadout();
+  syncMotherPortrait();
+  showToast("Mother stopped. In-flight engine actions may continue.", "tip", 2800);
+}
+
+function minimapBusyImageIds() {
+  const ids = new Set();
+  const add = (raw) => {
+    const id = String(raw || "").trim();
+    if (id) ids.add(id);
+  };
+  const addMany = (list) => {
+    for (const v of Array.isArray(list) ? list : []) add(v);
+  };
+  const addByPath = (rawPath) => {
+    const path = String(rawPath || "").trim();
+    if (!path) return;
+    const match = (state.images || []).find((it) => it?.id && it?.path && String(it.path) === path) || null;
+    if (match?.id) add(match.id);
+  };
+
+  addByPath(state.describePendingPath);
+  addByPath(state.pendingCanvasDiagnose?.imagePath);
+
+  addMany(state.pendingBlend?.sourceIds);
+  add(state.pendingSwapDna?.structureId);
+  add(state.pendingSwapDna?.surfaceId);
+  addMany(state.pendingBridge?.sourceIds);
+  addMany(state.pendingArgue?.sourceIds);
+  addMany(state.pendingExtractRule?.sourceIds);
+  addMany(state.pendingOddOneOut?.sourceIds);
+  addMany(state.pendingTriforce?.sourceIds);
+  add(state.pendingRecast?.sourceId);
+  add(state.pendingDiagnose?.sourceId);
+  add(state.pendingReplace?.targetId);
+
+  if (state.mother?.running) {
+    addMany(getSelectedIds());
+  }
+  return ids;
+}
+
+function computeMinimapSignature(busyIds) {
+  const parts = [];
+  const wrap = els.canvasWrap;
+  if (wrap) parts.push(`wrap=${Math.round(wrap.clientWidth || 0)}x${Math.round(wrap.clientHeight || 0)}`);
+  const surf = els.minimapSurface;
+  if (surf) parts.push(`surf=${Math.round(surf.clientWidth || 0)}x${Math.round(surf.clientHeight || 0)}`);
+  parts.push(`mode=${state.canvasMode || ""}`);
+  if (state.canvasMode === "multi") {
+    const ms = Number(state.multiView?.scale) || 1;
+    const mx = Math.round(Number(state.multiView?.offsetX) || 0);
+    const my = Math.round(Number(state.multiView?.offsetY) || 0);
+    parts.push(`mv=${Math.round(ms * 1000)},${mx},${my}`);
+  } else {
+    const vs = Number(state.view?.scale) || 1;
+    const vx = Math.round(Number(state.view?.offsetX) || 0);
+    const vy = Math.round(Number(state.view?.offsetY) || 0);
+    parts.push(`v=${Math.round(vs * 1000)},${vx},${vy}`);
+  }
+  parts.push(`n=${state.images.length}`);
+  parts.push(`active=${state.activeId || ""}`);
+  parts.push(`sel=${getSelectedIds().join(",")}`);
+  const busy = busyIds ? Array.from(busyIds).sort().join(",") : "";
+  parts.push(`busy=${busy}`);
+  const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
+  for (const imageId of z) {
+    const rect = imageId ? state.freeformRects.get(imageId) : null;
+    if (!rect) continue;
+    parts.push(
+      `${imageId}:${Math.round(Number(rect.x) || 0)},${Math.round(Number(rect.y) || 0)},${Math.round(
+        Number(rect.w) || 0
+      )},${Math.round(Number(rect.h) || 0)}`
+    );
+  }
+  return parts.join("|");
+}
+
+function renderMinimap() {
+  const surf = els.minimapSurface;
+  const wrap = els.canvasWrap;
+  if (!surf || !wrap) return;
+
+  const canvasCssW = wrap.clientWidth || 0;
+  const canvasCssH = wrap.clientHeight || 0;
+  ensureFreeformLayoutRectsCss(state.images || [], canvasCssW, canvasCssH);
+
+  const busyIds = minimapBusyImageIds();
+  const sig = computeMinimapSignature(busyIds);
+  if (sig && state.minimap?.lastSignature === sig) return;
+  if (state.minimap) state.minimap.lastSignature = sig;
+
+  const surfaceW = surf.clientWidth || 0;
+  const surfaceH = surf.clientHeight || 0;
+  if (!surfaceW || !surfaceH) return;
+
+  const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
+  const rects = [];
+  for (let idx = 0; idx < z.length; idx += 1) {
+    const imageId = z[idx];
+    if (!imageId) continue;
+    const rect = state.freeformRects.get(imageId) || null;
+    if (!rect) continue;
+    rects.push({ imageId: String(imageId), rect, z: idx });
+  }
+
+  surf.innerHTML = "";
+  if (!rects.length) return;
+
+  // Show a stable "god's-eye" view of the full canvas bounds.
+  const worldW = Math.max(1, canvasCssW || 1);
+  const worldH = Math.max(1, canvasCssH || 1);
+  const pad = 6;
+  const availW = Math.max(1, surfaceW - pad * 2);
+  const availH = Math.max(1, surfaceH - pad * 2);
+  const scale = Math.max(0.0001, Math.min(availW / worldW, availH / worldH));
+  const drawW = worldW * scale;
+  const drawH = worldH * scale;
+  const ox = Math.round((surfaceW - drawW) / 2);
+  const oy = Math.round((surfaceH - drawH) / 2);
+
+  const selected = new Set(getSelectedIds());
+  const activeId = state.activeId ? String(state.activeId) : "";
+  const frag = document.createDocumentFragment();
+  for (const rec of rects) {
+    const r = rec.rect;
+    const x = Number(r.x) || 0;
+    const y = Number(r.y) || 0;
+    const w = Math.max(1, Number(r.w) || 1);
+    const h = Math.max(1, Number(r.h) || 1);
+    const rx = Math.round(ox + x * scale);
+    const ry = Math.round(oy + y * scale);
+    const rw = Math.max(1, Math.round(w * scale));
+    const rh = Math.max(1, Math.round(h * scale));
+
+    const el = document.createElement("div");
+    el.className = "minimap-rect";
+    if (selected.has(rec.imageId)) el.classList.add("is-selected");
+    if (activeId && rec.imageId === activeId) el.classList.add("is-active");
+    el.style.left = `${rx}px`;
+    el.style.top = `${ry}px`;
+    el.style.width = `${rw}px`;
+    el.style.height = `${rh}px`;
+    el.style.zIndex = String(10 + rec.z);
+
+    if (busyIds.has(rec.imageId)) {
+      const orb = document.createElement("div");
+      orb.className = "minimap-orb";
+      el.appendChild(orb);
+    }
+
+    frag.appendChild(el);
+  }
+
+  // Viewport indicator (what the user is currently looking at).
+  if (state.canvasMode === "multi") {
+    const ms = Math.max(0.0001, Number(state.multiView?.scale) || 1);
+    const dpr = getDpr();
+    const mxCss = (Number(state.multiView?.offsetX) || 0) / Math.max(dpr, 0.0001);
+    const myCss = (Number(state.multiView?.offsetY) || 0) / Math.max(dpr, 0.0001);
+    const vw = Math.min(worldW, worldW / ms);
+    const vh = Math.min(worldH, worldH / ms);
+    const vx = clamp((-mxCss) / ms, 0, Math.max(0, worldW - vw));
+    const vy = clamp((-myCss) / ms, 0, Math.max(0, worldH - vh));
+
+    const vp = document.createElement("div");
+    vp.className = "minimap-viewport";
+    vp.style.left = `${Math.round(ox + vx * scale)}px`;
+    vp.style.top = `${Math.round(oy + vy * scale)}px`;
+    vp.style.width = `${Math.max(1, Math.round(vw * scale))}px`;
+    vp.style.height = `${Math.max(1, Math.round(vh * scale))}px`;
+    vp.style.zIndex = "999";
+    frag.appendChild(vp);
+  }
+  surf.appendChild(frag);
 }
 
 function setTip(message) {
@@ -4104,6 +4601,29 @@ function setRunInfo(message) {
 
 function bumpInteraction() {
   state.lastInteractionAt = Date.now();
+  // Keep the Mother realtime pulse/video responsive while the user is working.
+  const now = state.lastInteractionAt;
+  const last = Number(state.mother?.hotSyncAt) || 0;
+  if (now - last > 120) {
+    state.mother.hotSyncAt = now;
+    syncMotherPortrait();
+  }
+}
+
+const USER_EVENT_MAX = 72;
+function recordUserEvent(type, fields = {}) {
+  const t = String(type || "").trim();
+  if (!t) return;
+  const entry = {
+    seq: (state.userEventSeq += 1),
+    at_ms: Date.now(),
+    type: t,
+    ...fields,
+  };
+  state.userEvents.push(entry);
+  if (state.userEvents.length > USER_EVENT_MAX) {
+    state.userEvents = state.userEvents.slice(state.userEvents.length - USER_EVENT_MAX);
+  }
 }
 
 function basename(path) {
@@ -4241,6 +4761,21 @@ function canvasCssPointFromEvent(event) {
   const x = event.clientX - rect.left;
   const y = event.clientY - rect.top;
   return { x, y };
+}
+
+function canvasScreenCssToWorldCss(ptCss) {
+  const p = ptCss || {};
+  const x0 = Number(p.x) || 0;
+  const y0 = Number(p.y) || 0;
+  if (state.canvasMode !== "multi") return { x: x0, y: y0 };
+  const ms = Number(state.multiView?.scale) || 1;
+  const dpr = getDpr();
+  const mxCss = (Number(state.multiView?.offsetX) || 0) / Math.max(dpr, 0.0001);
+  const myCss = (Number(state.multiView?.offsetY) || 0) / Math.max(dpr, 0.0001);
+  return {
+    x: (x0 - mxCss) / Math.max(ms, 0.0001),
+    y: (y0 - myCss) / Math.max(ms, 0.0001),
+  };
 }
 
 function showDesignateMenuAt(ptCss) {
@@ -4465,6 +5000,12 @@ async function selectCanvasImage(imageId, { toggle = false } = {}) {
 
   setSelectedIds(next);
   const nextActive = next.includes(id) ? id : next[next.length - 1] || null;
+  recordUserEvent("selection_change", {
+    canvas_mode: state.canvasMode,
+    active_id: nextActive || state.activeId || null,
+    selected_ids: next.slice(0, 3),
+    toggle: Boolean(toggle),
+  });
   if (!nextActive) {
     renderQuickActions();
     renderHudReadout();
@@ -4487,7 +5028,9 @@ function setCanvasMode(mode) {
   // Intent Mode requires the freeform spatial canvas; keep users in multi mode until intent is locked.
   if (intentModeActive() && next !== "multi") return;
   if (state.canvasMode === next) return;
+  const prevMode = state.canvasMode;
   state.canvasMode = next;
+  recordUserEvent("canvas_mode_set", { prev: prevMode, next });
   if (next === "single") {
     const active = String(state.activeId || "").trim();
     setSelectedIds(active ? [active] : []);
@@ -5191,6 +5734,7 @@ function clearSelection() {
 function setTool(tool) {
   const allowed = new Set(["annotate", "pan", "lasso", "designate"]);
   if (!allowed.has(tool)) return;
+  const prevTool = state.tool;
   if (tool !== "annotate") {
     state.annotateDraft = null;
     state.annotateBox = null;
@@ -5201,6 +5745,9 @@ function setTool(tool) {
   if (tool !== "designate") state.pendingDesignation = null;
   hideDesignateMenu();
   state.tool = tool;
+  if (prevTool !== tool) {
+    recordUserEvent("tool_set", { tool });
+  }
   renderQuickActions();
   renderSelectionMeta();
   renderHudReadout();
@@ -6709,7 +7256,10 @@ function renderActionGrid() {
     btn.setAttribute("aria-label", label || key);
 
     if (kind === "ability_multi") btn.classList.add("tool-multi");
-    if (kind === "tool" && state.tool === key) btn.classList.add("selected");
+    if (kind === "tool" && state.tool === key) {
+      btn.classList.add("selected");
+      btn.classList.add("depressed");
+    }
     if (runningKey && runningKey === key) btn.classList.add("depressed");
 
     if (key === "crop_square" && !canCropSquare) {
@@ -6722,6 +7272,17 @@ function renderActionGrid() {
 
     btn.addEventListener("click", (ev) => {
       bumpInteraction();
+      if (state.mother?.running) {
+        showToast("Mother is running. Click Stop to regain control.", "tip", 2200);
+        return;
+      }
+      recordUserEvent("action_grid_press", {
+        key,
+        kind: kind ? String(kind) : null,
+        shift: Boolean(ev?.shiftKey),
+        active_id: state.activeId || null,
+        selected_ids: getSelectedIds().slice(0, 3),
+      });
 
       if (key === "annotate" || key === "pan" || key === "lasso" || key === "designate") {
         setTool(key);
@@ -7150,6 +7711,12 @@ function addImage(item, { select = false } = {}) {
   showDropHint(false);
   scheduleVisualPromptWrite();
   scheduleAlwaysOnVision();
+  recordUserEvent("image_add", {
+    image_id: String(item.id),
+    kind: item.kind ? String(item.kind) : null,
+    file: item.path ? basename(item.path) : null,
+    n_images: state.images.length,
+  });
   if (intentModeActive()) {
     updateEmptyCanvasHint();
     scheduleIntentInference({ immediate: true, reason: "add" });
@@ -7158,6 +7725,7 @@ function addImage(item, { select = false } = {}) {
   if (select || !state.activeId) {
     setActiveImage(item.id).catch(() => {});
   }
+  syncMotherPortrait();
 }
 
 async function removeImageFromCanvas(imageId) {
@@ -7165,6 +7733,11 @@ async function removeImageFromCanvas(imageId) {
   if (!id) return false;
   const item = state.imagesById.get(id) || null;
   if (!item) return false;
+  recordUserEvent("image_remove", {
+    image_id: id,
+    file: item?.path ? basename(item.path) : null,
+    n_images_before: state.images.length,
+  });
 
   hideImageMenu();
   hideDesignateMenu();
@@ -7723,7 +8296,7 @@ async function importPhotosAtCanvasPoint(pointCss) {
 }
 
 async function importPhotos() {
-  await importPhotosAtCanvasPoint(_defaultImportPointCss());
+  await importPhotosAtCanvasPoint(canvasScreenCssToWorldCss(_defaultImportPointCss()));
 }
 
 async function cropSquare({ fromQueue = false } = {}) {
@@ -10015,15 +10588,9 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   }
 
   state.multiRects = computeFreeformRectsPx(canvasW, canvasH);
-  if (state.multiView) {
-    state.multiView.scale = 1;
-    state.multiView.offsetX = 0;
-    state.multiView.offsetY = 0;
-  }
-  // Freeform canvas: multiView transforms are disabled (dragging moves images, not the camera).
-  const ms = 1;
-  const mox = 0;
-  const moy = 0;
+  const ms = Number(state.multiView?.scale) || 1;
+  const mox = Number(state.multiView?.offsetX) || 0;
+  const moy = Number(state.multiView?.offsetY) || 0;
 
   const dpr = getDpr();
   wctx.save();
@@ -11291,6 +11858,7 @@ function render() {
   }
 
   renderIntentOverlay(octx, work.width, work.height);
+  renderMinimap();
 }
 
 function startSpawnTimer() {
@@ -11333,8 +11901,8 @@ function startSpawnTimer() {
 	        return;
 	      }
 	    }
-    importPhotosAtCanvasPoint(_defaultImportPointCss()).catch((err) => console.error(err));
-  });
+	    importPhotosAtCanvasPoint(canvasScreenCssToWorldCss(_defaultImportPointCss())).catch((err) => console.error(err));
+	  });
 
   els.overlayCanvas.addEventListener("contextmenu", (event) => {
     bumpInteraction();
@@ -11733,10 +12301,15 @@ function startSpawnTimer() {
       const wrap = els.canvasWrap;
       const canvasCssW = wrap?.clientWidth || 0;
       const canvasCssH = wrap?.clientHeight || 0;
+      const ms = state.multiView?.scale || 1;
+      const dxCss = (Number(pCss.x) || 0) - state.pointer.startCssX;
+      const dyCss = (Number(pCss.y) || 0) - state.pointer.startCssY;
+      const dxWorld = dxCss / Math.max(ms, 0.0001);
+      const dyWorld = dyCss / Math.max(ms, 0.0001);
       const next = clampFreeformRectCss(
         {
-          x: (Number(startRect.x) || 0) + (Number(pCss.x) || 0) - state.pointer.startCssX,
-          y: (Number(startRect.y) || 0) + (Number(pCss.y) || 0) - state.pointer.startCssY,
+          x: (Number(startRect.x) || 0) + dxWorld,
+          y: (Number(startRect.y) || 0) + dyWorld,
           w: Number(startRect.w) || 1,
           h: Number(startRect.h) || 1,
           autoAspect: false,
@@ -11758,7 +12331,15 @@ function startSpawnTimer() {
       const wrap = els.canvasWrap;
       const canvasCssW = wrap?.clientWidth || 0;
       const canvasCssH = wrap?.clientHeight || 0;
-      const next = resizeFreeformRectFromCorner(startRect, state.pointer.corner, pCss, canvasCssW, canvasCssH);
+      const ms = state.multiView?.scale || 1;
+      const dpr = getDpr();
+      const mxCss = (Number(state.multiView?.offsetX) || 0) / Math.max(dpr, 0.0001);
+      const myCss = (Number(state.multiView?.offsetY) || 0) / Math.max(dpr, 0.0001);
+      const worldPointerCss = {
+        x: ((Number(pCss.x) || 0) - mxCss) / Math.max(ms, 0.0001),
+        y: ((Number(pCss.y) || 0) - myCss) / Math.max(ms, 0.0001),
+      };
+      const next = resizeFreeformRectFromCorner(startRect, state.pointer.corner, worldPointerCss, canvasCssW, canvasCssH);
       state.freeformRects.set(id, next);
       state.pointer.moved = true;
       scheduleVisualPromptWrite();
@@ -11830,6 +12411,9 @@ function startSpawnTimer() {
 		    bumpInteraction();
 		    state.pointer.active = false;
 		    const kind = state.pointer.kind;
+		    const imageId = state.pointer.imageId;
+		    const startRectCss = state.pointer.startRectCss;
+		    const corner = state.pointer.corner;
 		    const importPt = state.pointer.importPointCss;
 		    const moved = Boolean(state.pointer.moved);
 		    state.pointer.kind = null;
@@ -11839,11 +12423,39 @@ function startSpawnTimer() {
 		    state.pointer.importPointCss = null;
 		    state.pointer.moved = false;
 
-		    if (kind === "freeform_import") {
-		      if (!moved && importPt) {
-		        importPhotosAtCanvasPoint(importPt).catch((err) => console.error(err));
+		    if (moved && (kind === "freeform_move" || kind === "freeform_resize") && imageId) {
+		      const start = startRectCss && typeof startRectCss === "object" ? startRectCss : null;
+		      const end = state.freeformRects.get(imageId) || null;
+		      if (start && end) {
+		        recordUserEvent(kind === "freeform_move" ? "image_move" : "image_resize", {
+		          image_id: String(imageId),
+		          corner: corner ? String(corner) : null,
+		          start: {
+		            x: Math.round(Number(start.x) || 0),
+		            y: Math.round(Number(start.y) || 0),
+		            w: Math.round(Number(start.w) || 0),
+		            h: Math.round(Number(start.h) || 0),
+		          },
+		          end: {
+		            x: Math.round(Number(end.x) || 0),
+		            y: Math.round(Number(end.y) || 0),
+		            w: Math.round(Number(end.w) || 0),
+		            h: Math.round(Number(end.h) || 0),
+		          },
+		        });
 		      }
 		    }
+
+			    if (kind === "freeform_import") {
+			      if (!moved && importPt) {
+              const worldPt = canvasScreenCssToWorldCss(importPt);
+			        recordUserEvent("canvas_import_click", {
+			          x: Math.round(Number(worldPt.x) || 0),
+			          y: Math.round(Number(worldPt.y) || 0),
+			        });
+			        importPhotosAtCanvasPoint(worldPt).catch((err) => console.error(err));
+			      }
+			    }
 			    if (state.tool === "annotate") {
 			      const img = getActiveImage();
 	          if (img && state.circleDraft && state.circleDraft.imageId === img.id) {
@@ -11911,16 +12523,128 @@ function startSpawnTimer() {
   els.overlayCanvas.addEventListener("pointerup", finalizePointer);
   els.overlayCanvas.addEventListener("pointercancel", finalizePointer);
 
-  els.overlayCanvas.addEventListener(
-    "wheel",
-    (event) => {
+	  els.overlayCanvas.addEventListener(
+	    "wheel",
+	    (event) => {
+	      bumpInteraction();
+	      if (!state.images || state.images.length === 0) return;
+	      event.preventDefault();
+	
+	      const dpr = getDpr();
+	      // UX: two-finger swipe up/down zooms (not pan). Horizontal swipe pans.
+	      // Holding Option (alt) forces pan (both axes) for when you want to scroll around.
+	      let dx = Number(event.deltaX) || 0;
+	      let dy = Number(event.deltaY) || 0;
+	      // Mouse wheels often emit horizontal scroll as Shift+deltaY.
+	      if (event.shiftKey && Math.abs(dx) < 0.001 && Math.abs(dy) > 0.001) {
+	        dx = dy;
+	        dy = 0;
+	      }
+	      // Normalize deltaMode into CSS pixels.
+	      if (event.deltaMode === 1) {
+	        dx *= 16;
+	        dy *= 16;
+	      } else if (event.deltaMode === 2) {
+	        const wrap = els.canvasWrap;
+	        dx *= wrap?.clientWidth || 1;
+	        dy *= wrap?.clientHeight || 1;
+	      }
+	
+	      const absDx = Math.abs(dx);
+	      const absDy = Math.abs(dy);
+	      const panX = dx * dpr;
+	      const panY = dy * dpr;
+	
+	      if (event.altKey) {
+	        if (state.canvasMode === "multi") {
+	          state.multiView.offsetX = (Number(state.multiView?.offsetX) || 0) - panX;
+	          state.multiView.offsetY = (Number(state.multiView?.offsetY) || 0) - panY;
+	        } else {
+	          state.view.offsetX = (Number(state.view?.offsetX) || 0) - panX;
+	          state.view.offsetY = (Number(state.view?.offsetY) || 0) - panY;
+	        }
+	        renderHudReadout();
+	        requestRender();
+	        return;
+	      }
+	
+	      // Horizontal trackpad scroll pans left/right.
+	      if (absDx > 0.01) {
+	        if (state.canvasMode === "multi") {
+	          state.multiView.offsetX = (Number(state.multiView?.offsetX) || 0) - panX;
+	        } else {
+	          state.view.offsetX = (Number(state.view?.offsetX) || 0) - panX;
+	        }
+	      }
+	
+	      // Ignore tiny vertical noise during a mostly-horizontal gesture.
+	      if (absDy <= 0.01 || absDx > absDy * 1.1) {
+	        renderHudReadout();
+	        requestRender();
+	        return;
+	      }
+	
+	      // Wheel / trackpad pinch: zoom the view (single + freeform multi).
+	      const p = canvasPointFromEvent(event);
+	      const factor = Math.exp(-dy * 0.0012);
+	      if (state.canvasMode === "multi") {
+	        const before = {
+	          x: (p.x - (state.multiView?.offsetX || 0)) / Math.max(state.multiView?.scale || 1, 0.0001),
+	          y: (p.y - (state.multiView?.offsetY || 0)) / Math.max(state.multiView?.scale || 1, 0.0001),
+	        };
+	        const next = clamp((state.multiView?.scale || 1) * factor, 0.05, 40);
+	        state.multiView.scale = next;
+	        state.multiView.offsetX = p.x - before.x * state.multiView.scale;
+	        state.multiView.offsetY = p.y - before.y * state.multiView.scale;
+	      } else {
+	        const before = canvasToImage(p);
+	        const next = clamp(state.view.scale * factor, 0.05, 40);
+	        state.view.scale = next;
+	        state.view.offsetX = p.x - before.x * state.view.scale;
+	        state.view.offsetY = p.y - before.y * state.view.scale;
+	      }
+	      renderHudReadout();
+	      scheduleVisualPromptWrite();
+	      requestRender();
+	    },
+	    { passive: false }
+	  );
+
+    // WKWebView/Safari trackpad pinch-to-zoom is exposed via non-standard gesture events.
+    // If we only listen for wheel+ctrlKey, users can lose pinch zoom.
+    if (!state.gestureZoom) state.gestureZoom = { active: false, lastScale: 1 };
+    const shouldHandleGesture = (event) => {
+      if (!els.overlayCanvas) return false;
+      const cx = Number(event?.clientX);
+      const cy = Number(event?.clientY);
+      if (!Number.isFinite(cx) || !Number.isFinite(cy)) return false;
+      const rect = els.overlayCanvas.getBoundingClientRect();
+      if (!rect?.width || !rect?.height) return false;
+      return cx >= rect.left && cx <= rect.right && cy >= rect.top && cy <= rect.bottom;
+    };
+    const onGestureStart = (event) => {
+      if (!shouldHandleGesture(event)) return;
+      if (!state.images || state.images.length === 0) return;
       bumpInteraction();
-      if (!getActiveImage()) return;
       event.preventDefault();
-      // Freeform canvas uses drag-to-move + corner-resize; disable camera zoom to keep spatial layout stable.
-      if (state.canvasMode === "multi") return;
+      state.gestureZoom.active = true;
+      const s = Number(event?.scale);
+      state.gestureZoom.lastScale = Number.isFinite(s) && s > 0 ? s : 1;
+    };
+    const onGestureChange = (event) => {
+      if (!state.gestureZoom?.active) return;
+      if (!shouldHandleGesture(event)) return;
+      if (!state.images || state.images.length === 0) return;
+      bumpInteraction();
+      event.preventDefault();
+
+      const scaleEvent = Number(event?.scale);
+      const nextScaleEvent = Number.isFinite(scaleEvent) && scaleEvent > 0 ? scaleEvent : 1;
+      const lastScaleEvent = Math.max(0.0001, Number(state.gestureZoom?.lastScale) || 1);
+      state.gestureZoom.lastScale = nextScaleEvent;
+      const factor = nextScaleEvent / lastScaleEvent;
+
       const p = canvasPointFromEvent(event);
-      const factor = Math.exp(-event.deltaY * 0.0012);
       if (state.canvasMode === "multi") {
         const before = {
           x: (p.x - (state.multiView?.offsetX || 0)) / Math.max(state.multiView?.scale || 1, 0.0001),
@@ -11940,10 +12664,23 @@ function startSpawnTimer() {
       renderHudReadout();
       scheduleVisualPromptWrite();
       requestRender();
-    },
-    { passive: false }
-  );
-	}
+    };
+    const onGestureEnd = (event) => {
+      if (!state.gestureZoom?.active) return;
+      if (!shouldHandleGesture(event)) return;
+      bumpInteraction();
+      event.preventDefault();
+      state.gestureZoom.active = false;
+      state.gestureZoom.lastScale = 1;
+    };
+    try {
+      els.overlayCanvas.addEventListener("gesturestart", onGestureStart, { passive: false });
+      els.overlayCanvas.addEventListener("gesturechange", onGestureChange, { passive: false });
+      els.overlayCanvas.addEventListener("gestureend", onGestureEnd, { passive: false });
+    } catch {
+      // ignore
+    }
+		}
 
 function installDnD() {
   if (!els.canvasWrap) return;
@@ -12025,13 +12762,24 @@ function installUi() {
     const toggle = els.appMenuToggle;
     const menu = els.appMenu;
 
-    const isOpen = () => !menu.classList.contains("hidden");
+    let hideTimer = null;
+    const isOpen = () => menu.classList.contains("is-open");
     const close = () => {
-      menu.classList.add("hidden");
+      menu.classList.remove("is-open");
       toggle.setAttribute("aria-expanded", "false");
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => {
+        if (menu.classList.contains("is-open")) return;
+        menu.classList.add("hidden");
+      }, 220);
     };
     const open = () => {
+      clearTimeout(hideTimer);
       menu.classList.remove("hidden");
+      // Ensure the closed-state styles apply for one frame so the drawer can animate.
+      requestAnimationFrame(() => {
+        if (!menu.classList.contains("hidden")) menu.classList.add("is-open");
+      });
       toggle.setAttribute("aria-expanded", "true");
     };
 
@@ -12067,10 +12815,54 @@ function installUi() {
     });
   }
 
-  if (els.newRun) els.newRun.addEventListener("click", () => createRun().catch((e) => console.error(e)));
-  if (els.openRun) els.openRun.addEventListener("click", () => openExistingRun().catch((e) => console.error(e)));
-  if (els.import) els.import.addEventListener("click", () => importPhotos().catch((e) => console.error(e)));
-  if (els.export) els.export.addEventListener("click", () => exportRun().catch((e) => console.error(e)));
+  if (els.newRun)
+    els.newRun.addEventListener("click", () => {
+      bumpInteraction();
+      createRun().catch((e) => console.error(e));
+    });
+  if (els.openRun)
+    els.openRun.addEventListener("click", () => {
+      bumpInteraction();
+      openExistingRun().catch((e) => console.error(e));
+    });
+  if (els.import)
+    els.import.addEventListener("click", () => {
+      bumpInteraction();
+      importPhotos().catch((e) => console.error(e));
+    });
+  if (els.export)
+    els.export.addEventListener("click", () => {
+      bumpInteraction();
+      exportRun().catch((e) => console.error(e));
+    });
+
+  if (els.motherAbilityIcon) {
+    if (!els.motherAbilityIcon.textContent) {
+      els.motherAbilityIcon.textContent = "M";
+    }
+    els.motherAbilityIcon.addEventListener("click", () => {
+      bumpInteraction();
+      recordUserEvent("mother_scan", {});
+      if (!settings.alwaysOnVision) {
+        showToast("Enable Always-On Vision in Settings to activate Mother suggestions.", "tip", 3200);
+        return;
+      }
+      scheduleAlwaysOnVision({ immediate: true });
+      renderMotherReadout();
+    });
+  }
+  if (els.motherConfirm) {
+    els.motherConfirm.addEventListener("click", () => {
+      bumpInteraction();
+      startMotherTakeover().catch(() => {});
+    });
+  }
+  if (els.motherStop) {
+    els.motherStop.addEventListener("click", () => {
+      bumpInteraction();
+      stopMotherTakeover();
+    });
+  }
 
   if (els.canvasContextSuggestBtn) {
     els.canvasContextSuggestBtn.addEventListener("click", () => {
@@ -12089,15 +12881,15 @@ function installUi() {
       if (els.dropHint.classList.contains("hidden")) return;
       event?.preventDefault?.();
       event?.stopPropagation?.();
-      if (event && typeof event.clientX === "number" && typeof event.clientY === "number" && els.canvasWrap) {
-        const rect = els.canvasWrap.getBoundingClientRect();
-        const x = event.clientX - rect.left;
-        const y = event.clientY - rect.top;
-        importPhotosAtCanvasPoint({ x, y }).catch((e) => console.error(e));
-        return;
-      }
-      importPhotosAtCanvasPoint(_defaultImportPointCss()).catch((e) => console.error(e));
-    };
+	      if (event && typeof event.clientX === "number" && typeof event.clientY === "number" && els.canvasWrap) {
+	        const rect = els.canvasWrap.getBoundingClientRect();
+	        const x = event.clientX - rect.left;
+	        const y = event.clientY - rect.top;
+	        importPhotosAtCanvasPoint(canvasScreenCssToWorldCss({ x, y })).catch((e) => console.error(e));
+	        return;
+	      }
+	      importPhotosAtCanvasPoint(canvasScreenCssToWorldCss(_defaultImportPointCss())).catch((e) => console.error(e));
+	    };
     els.dropHint.addEventListener("click", openPicker);
     els.dropHint.addEventListener("keydown", (event) => {
       const key = String(event?.key || "");
@@ -12462,13 +13254,60 @@ function installUi() {
 
 	    if (isEditable || hasModifier) return;
 
-      if (key === "backspace" || key === "delete") {
-        if (state.activeCircle) {
-          const ok = deleteActiveCircle();
-          if (ok) showToast("Circle deleted.", "tip", 1400);
-          return;
+      if (rawKey === "ArrowLeft" || rawKey === "ArrowRight" || rawKey === "ArrowUp" || rawKey === "ArrowDown") {
+        if (!state.images || state.images.length === 0) return;
+        bumpInteraction();
+        event.preventDefault();
+        const dpr = getDpr();
+        const baseStep = Math.round(40 * dpr);
+        const step = event.shiftKey ? baseStep * 3 : baseStep;
+        let dx = 0;
+        let dy = 0;
+        if (rawKey === "ArrowLeft") dx = step;
+        if (rawKey === "ArrowRight") dx = -step;
+        if (rawKey === "ArrowUp") dy = step;
+        if (rawKey === "ArrowDown") dy = -step;
+        if (state.canvasMode === "multi") {
+          state.multiView.offsetX = (Number(state.multiView?.offsetX) || 0) + dx;
+          state.multiView.offsetY = (Number(state.multiView?.offsetY) || 0) + dy;
+        } else {
+          state.view.offsetX = (Number(state.view?.offsetX) || 0) + dx;
+          state.view.offsetY = (Number(state.view?.offsetY) || 0) + dy;
         }
+        renderHudReadout();
+        requestRender();
+        return;
       }
+
+	    if (key === "backspace" || key === "delete") {
+	      if (state.activeCircle) {
+	        const ok = deleteActiveCircle();
+	        if (ok) showToast("Circle deleted.", "tip", 1400);
+	        return;
+      }
+
+      if (state.mother?.running) {
+        showToast("Mother is running. Click Stop to regain control.", "tip", 2200);
+        return;
+      }
+
+      const activeId = String(state.activeId || "").trim();
+      const selected = getSelectedIds().filter(Boolean);
+      const unique = Array.from(new Set(selected.map((v) => String(v || "").trim()).filter(Boolean)));
+      if (!unique.length) return;
+
+      event.preventDefault();
+      // Remove non-active selections first to avoid thrashing the engine's active-image state.
+      const ordered = activeId ? unique.filter((id) => id !== activeId).concat([activeId]) : unique;
+      Promise.resolve()
+        .then(async () => {
+          for (const id of ordered) {
+            await removeImageFromCanvas(id).catch(() => {});
+          }
+        })
+        .catch(() => {});
+      return;
+    }
 
 	    // HUD action grid 1-9.
 	    if (/^[1-9]$/.test(rawKey)) {

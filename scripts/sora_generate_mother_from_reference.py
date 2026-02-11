@@ -57,11 +57,14 @@ DEFAULT_PROMPT_PREFIX = (
 )
 
 DEFAULT_ACTION_TEXT = (
-    "A perfect loop of her pressing both hands against her temples and squeezing her eyes shut, veins of orange "
-    "light crawling up through her neck and across her scalp between the bone spikes, whole body pulsing "
-    "brighter and brighter like she's downloading something awful directly into her brain, then the glow fades "
-    "back down through her chest and arms and she drops her hands and opens those ember eyes again like she "
-    "just absorbed an entire wikipedia."
+    "A perfect loop of her leaning back into this gnarly biomechanical harness that clamps around her "
+    "shoulders, four extra jointed arms unfolding behind her like a spider rig, each one reaching down in "
+    "front of her just below frame doing something different \u2014 one running a fine laser that cuts with "
+    "gorgeous amber light, another stitching with surgical precision trailing tiny glowing threads, a third "
+    "grinding with a whirring bone-drill throwing sparks up into her face, the last one welding resin seams "
+    "that glow like liquid gold \u2014 all working in perfect rhythm while her body sways gently side to side "
+    "and her head dips and tilts tracking each arm's progress on whatever she's building, then the arms fold "
+    "back in and the harness releases and she settles center and still again"
 )
 
 DEFAULT_PROMPT = f"{DEFAULT_PROMPT_PREFIX} {DEFAULT_ACTION_TEXT}"
@@ -496,8 +499,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--seconds",
         type=int,
-        default=10,
-        help="Clip duration seconds for the API (integer).",
+        default=8,
+        choices=[4, 8, 12],
+        help="Clip duration seconds for the API (allowed: 4, 8, 12).",
     )
     parser.add_argument(
         "--size",

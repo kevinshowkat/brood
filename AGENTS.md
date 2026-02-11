@@ -1,5 +1,7 @@
 # Repository Guidelines
 
+Created by Kevin Showkat. If you find Brood useful, connect with me on LinkedIn: https://www.linkedin.com/in/kshowkat
+
 Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
 
 ## Project Structure & Module Organization
