@@ -623,8 +623,8 @@ button.ghost:hover {
   min-width: 0;
 }
 
-	.canvas-wrap {
-	  position: relative;
+.canvas-wrap {
+  position: relative;
 	  flex: 1;
 	  min-height: 260px;
 	  min-width: 0;
@@ -644,11 +644,11 @@ button.ghost:hover {
 	  --control-strip-h: calc(var(--hud-keybar-h) + 2px);
 	  /* Make the HUD narrower (minimap now lives on the left). */
 	  --hud-main-w: clamp(320px, 34vw, 520px);
-	  background:
-	    radial-gradient(circle at 18% 26%, rgba(100, 210, 255, 0.12), transparent 52%),
-	    radial-gradient(circle at 72% 18%, rgba(255, 179, 0, 0.10), transparent 50%),
-	    linear-gradient(180deg, rgba(10, 14, 20, 0.8), rgba(10, 14, 20, 0.92));
-	}
+  background:
+    radial-gradient(circle at 18% 26%, rgba(100, 210, 255, 0.12), transparent 52%),
+    radial-gradient(circle at 72% 18%, rgba(255, 179, 0, 0.10), transparent 50%),
+    linear-gradient(180deg, rgba(10, 14, 20, 0.8), rgba(10, 14, 20, 0.92));
+}
 
 .canvas-wrap::before {
   content: "";
@@ -678,6 +678,7 @@ button.ghost:hover {
 #overlay-canvas {
   pointer-events: auto;
   z-index: 3;
+  cursor: default;
 }
 
 .canvas-context-suggest {
@@ -993,25 +994,25 @@ button.ghost:hover {
   0% {
     opacity: 0.62;
     box-shadow:
-      inset 0 0 0 3px rgba(240, 176, 88, 0.42),
-      inset 0 0 0 9px rgba(240, 176, 88, 0.12),
-      inset 0 0 0 18px rgba(248, 240, 160, 0.06);
+      inset 0 0 0 3px rgba(236, 138, 82, 0.42),
+      inset 0 0 0 9px rgba(236, 138, 82, 0.12),
+      inset 0 0 0 18px rgba(255, 202, 136, 0.06);
     filter: saturate(1.55) contrast(1.1);
   }
   50% {
     opacity: 0.95;
     box-shadow:
-      inset 0 0 0 3px rgba(240, 176, 88, 0.92),
-      inset 0 0 0 9px rgba(240, 176, 88, 0.22),
-      inset 0 0 0 18px rgba(248, 240, 160, 0.12);
+      inset 0 0 0 3px rgba(236, 138, 82, 0.92),
+      inset 0 0 0 9px rgba(236, 138, 82, 0.22),
+      inset 0 0 0 18px rgba(255, 202, 136, 0.12);
     filter: saturate(2.1) contrast(1.15);
   }
   100% {
     opacity: 0.62;
     box-shadow:
-      inset 0 0 0 3px rgba(240, 176, 88, 0.42),
-      inset 0 0 0 9px rgba(240, 176, 88, 0.12),
-      inset 0 0 0 18px rgba(248, 240, 160, 0.06);
+      inset 0 0 0 3px rgba(236, 138, 82, 0.42),
+      inset 0 0 0 9px rgba(236, 138, 82, 0.12),
+      inset 0 0 0 18px rgba(255, 202, 136, 0.06);
     filter: saturate(1.55) contrast(1.1);
   }
 }
@@ -1024,11 +1025,11 @@ button.ghost:hover {
   z-index: 20;
   pointer-events: none;
   border-radius: 14px;
-  border: 2px solid rgba(240, 176, 88, 0.78);
+  border: 2px solid rgba(236, 138, 82, 0.82);
   box-shadow:
-    inset 0 0 0 3px rgba(240, 176, 88, 0.42),
-    inset 0 0 0 9px rgba(240, 176, 88, 0.12),
-    inset 0 0 0 18px rgba(248, 240, 160, 0.06);
+    inset 0 0 0 3px rgba(236, 138, 82, 0.42),
+    inset 0 0 0 9px rgba(236, 138, 82, 0.12),
+    inset 0 0 0 18px rgba(255, 202, 136, 0.06);
   animation: intent-rt-pulse 3.4s ease-in-out infinite;
   mix-blend-mode: normal;
 }
@@ -1175,11 +1176,9 @@ button.ghost:hover {
 
 .action-grid .tool {
   pointer-events: auto;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 6px;
-  padding: 9px 8px 8px;
+  display: grid;
+  place-items: center;
+  padding: 0;
 }
 
 .action-grid .tool-hint {
@@ -1331,12 +1330,12 @@ button.ghost:hover {
 
 .minimap-viewport {
   position: absolute;
-  border: 2px solid rgba(82, 255, 148, 0.92);
-  background: rgba(82, 255, 148, 0.06);
+  border: 2px solid rgba(82, 255, 148, 0.62);
+  background: rgba(82, 255, 148, 0.035);
   border-radius: 8px;
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.72),
-    0 0 16px rgba(82, 255, 148, 0.22),
+    0 0 12px rgba(82, 255, 148, 0.12),
     inset 0 0 0 1px rgba(255, 255, 255, 0.06);
   pointer-events: none;
 }
@@ -1467,10 +1466,12 @@ button.ghost:hover {
   position: absolute;
   top: 12px;
   right: 12px;
-  left: auto;
-  bottom: auto;
   z-index: 8;
-  width: clamp(320px, 30vw, 440px);
+  width: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
   pointer-events: auto;
 }
 
@@ -2371,98 +2372,87 @@ button.ghost:hover {
   color: rgba(230, 237, 243, 0.92);
 }
 
-/* Mother overlay: push the aesthetic from "HUD" to "alien console". */
-#mother-panel {
-  /* Override `.panel { position: relative; }` so the Mother is a true floating overlay. */
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  left: auto;
-  bottom: auto;
-  z-index: 8;
-  width: clamp(320px, 30vw, 440px);
-  pointer-events: auto;
-  border-color: rgba(82, 255, 148, 0.46);
+/* Mother overlay: portrait container + controls panel in the top-right. */
+
+#mother-panel-stack {
+  width: fit-content;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0;
+}
+
+#mother-portrait-shell {
+  --portrait-size: clamp(120px, 12vw, 170px);
+  width: fit-content;
+  margin-left: 0;
+  padding: 8px;
+  border-color: rgba(0, 0, 0, 0.92);
   background:
-    radial-gradient(460px 220px at 22% 8%, rgba(82, 255, 148, 0.16), transparent 62%),
-    radial-gradient(520px 260px at 92% 0%, rgba(197, 107, 255, 0.12), transparent 70%),
-    linear-gradient(180deg, rgba(0, 20, 14, 0.58), rgba(8, 10, 12, 0.92));
+    radial-gradient(320px 170px at 18% 10%, rgba(255, 179, 0, 0.12), transparent 68%),
+    radial-gradient(340px 170px at 86% 8%, rgba(255, 128, 64, 0.10), transparent 70%),
+    linear-gradient(180deg, rgba(30, 22, 10, 0.70), rgba(8, 10, 12, 0.93));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    inset 0 -22px 32px rgba(0, 0, 0, 0.72),
-    0 0 0 1px rgba(82, 255, 148, 0.10),
-    0 0 22px rgba(82, 255, 148, 0.14),
-    0 22px 52px rgba(0, 0, 0, 0.55);
+    inset 0 -18px 26px rgba(0, 0, 0, 0.74),
+    0 14px 28px rgba(0, 0, 0, 0.50);
+}
+
+#mother-portrait-shell .mother-portrait {
+  display: flex;
+  justify-content: center;
+}
+
+#mother-portrait-shell .mother-portrait-frame {
+  border-color: rgba(0, 0, 0, 0.9);
+}
+
+.mother-overlay.busy #mother-portrait-shell .mother-portrait-frame {
+  animation: none;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 0 14px rgba(124, 198, 255, 0.12);
+}
+
+#mother-panel {
+  display: none;
 }
 
 #mother-panel::before {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  background:
-    conic-gradient(
-      from 220deg,
-      rgba(82, 255, 148, 0.0),
-      rgba(82, 255, 148, 0.22),
-      rgba(100, 210, 255, 0.16),
-      rgba(197, 107, 255, 0.18),
-      rgba(82, 255, 148, 0.0)
-    );
-  opacity: 0.18;
-  mix-blend-mode: screen;
-  filter: blur(0.4px);
-  pointer-events: none;
+  content: none;
 }
 
 #mother-panel::after {
-  opacity: 0.10;
-}
-
-#mother-panel .panel-title {
-  color: rgba(205, 255, 232, 0.74);
-  text-shadow:
-    0 1px 0 rgba(0, 0, 0, 0.66),
-    0 0 18px rgba(82, 255, 148, 0.14),
-    0 0 26px rgba(197, 107, 255, 0.10);
-  border-bottom-color: rgba(0, 0, 0, 0.82);
-}
-
-#mother-panel .panel-title::after {
-  background: linear-gradient(90deg, transparent, rgba(82, 255, 148, 0.52), transparent);
-  opacity: 0.82;
+  content: none;
 }
 
 #tips-text {
   font-family: "IBM Plex Mono", monospace;
   letter-spacing: 0.01em;
-  color: rgba(182, 255, 216, 0.82);
+  color: rgba(241, 247, 255, 0.9);
 }
 
-#mother-panel .mother-body {
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+#mother-panel .panel-readout {
+  margin: 0;
+  min-height: 70px;
+  max-height: 220px;
+  overflow: auto;
+  border: 0;
+  border-radius: 12px;
+  background: #000;
+  color: rgba(241, 247, 255, 0.9);
+  text-shadow:
+    0 0 0.8px rgba(0, 0, 0, 0.74),
+    0 0 8px rgba(124, 198, 255, 0.12);
 }
 
-#mother-panel .mother-portrait {
-  --portrait-size: 112px;
-  display: flex;
-  justify-content: flex-end;
-}
-
-#mother-panel .mother-portrait .portrait-frame {
-  border-color: rgba(82, 255, 148, 0.46);
-}
-
-#mother-panel.busy .mother-portrait .portrait-frame {
-  animation: portraitGlow 1.1s ease-in-out infinite;
-}
-
-#mother-panel .mother-actions {
+#mother-panel-stack .mother-actions {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
+  padding: 0;
+  margin-top: 0;
 }
 
 .mother-ability-icon {
@@ -2470,13 +2460,13 @@ button.ghost:hover {
   width: 38px;
   height: 38px;
   border-radius: 12px;
-  border: 1px solid rgba(82, 255, 148, 0.42);
-  border-bottom-color: rgba(0, 0, 0, 0.82);
+  border: 1px solid rgba(255, 179, 0, 0.48);
+  border-bottom-color: rgba(255, 179, 0, 0.48);
   background:
-    radial-gradient(28px 18px at 32% 28%, rgba(82, 255, 148, 0.18), transparent 70%),
-    radial-gradient(34px 22px at 70% 70%, rgba(197, 107, 255, 0.14), transparent 70%),
-    linear-gradient(180deg, rgba(0, 20, 14, 0.70), rgba(6, 8, 12, 0.94));
-  color: rgba(205, 255, 232, 0.92);
+    radial-gradient(28px 18px at 32% 28%, rgba(255, 179, 0, 0.24), transparent 70%),
+    radial-gradient(34px 22px at 70% 70%, rgba(255, 128, 64, 0.14), transparent 70%),
+    linear-gradient(180deg, rgba(30, 20, 10, 0.76), rgba(6, 8, 12, 0.94));
+  color: rgba(255, 233, 188, 0.92);
   cursor: pointer;
   display: grid;
   place-items: center;
@@ -2492,7 +2482,7 @@ button.ghost:hover {
 }
 
 .mother-ability-icon:hover {
-  border-color: rgba(82, 255, 148, 0.62);
+  border-color: rgba(255, 179, 0, 0.72);
   filter: brightness(1.06) saturate(1.05);
 }
 
@@ -2512,7 +2502,6 @@ button.ghost:hover {
 
 .mother-confirm,
 .mother-stop {
-  flex: 1 1 auto;
   min-height: 38px;
   border-radius: 12px;
   padding: 8px 12px;
@@ -2521,13 +2510,13 @@ button.ghost:hover {
   letter-spacing: 0.10em;
   text-transform: uppercase;
   cursor: pointer;
-  border: 1px solid rgba(82, 255, 148, 0.42);
+  border: 1px solid rgba(255, 179, 0, 0.46);
   border-bottom-color: rgba(0, 0, 0, 0.82);
-  color: rgba(205, 255, 232, 0.92);
+  color: rgba(255, 233, 188, 0.92);
   background:
-    radial-gradient(180px 90px at 18% 28%, rgba(82, 255, 148, 0.18), transparent 66%),
-    radial-gradient(220px 110px at 92% 20%, rgba(197, 107, 255, 0.14), transparent 70%),
-    linear-gradient(180deg, rgba(0, 20, 14, 0.72), rgba(6, 8, 12, 0.94));
+    radial-gradient(180px 90px at 18% 28%, rgba(255, 179, 0, 0.20), transparent 66%),
+    radial-gradient(220px 110px at 92% 20%, rgba(255, 128, 64, 0.12), transparent 70%),
+    linear-gradient(180deg, rgba(30, 20, 10, 0.78), rgba(6, 8, 12, 0.94));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.12),
     inset 0 -14px 18px rgba(0, 0, 0, 0.74),
@@ -2539,10 +2528,30 @@ button.ghost:hover {
     box-shadow 0.12s ease;
 }
 
+.mother-confirm {
+  flex: 0 0 auto;
+  width: 38px;
+  padding: 0;
+  font-size: 19px;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: none;
+  color: rgba(82, 255, 148, 0.95);
+  border-color: rgba(82, 255, 148, 0.60);
+  background:
+    radial-gradient(26px 18px at 34% 26%, rgba(82, 255, 148, 0.30), transparent 72%),
+    radial-gradient(30px 22px at 72% 74%, rgba(82, 255, 148, 0.14), transparent 72%),
+    linear-gradient(180deg, rgba(10, 30, 18, 0.82), rgba(6, 8, 12, 0.94));
+}
+
 .mother-confirm:hover,
 .mother-stop:hover {
-  border-color: rgba(82, 255, 148, 0.62);
+  border-color: rgba(255, 179, 0, 0.72);
   filter: brightness(1.05) saturate(1.05);
+}
+
+.mother-confirm:hover {
+  border-color: rgba(82, 255, 148, 0.78);
 }
 
 .mother-confirm:active,
@@ -2561,6 +2570,7 @@ button.ghost:hover {
 }
 
 .mother-stop {
+  flex: 1 1 auto;
   border-color: rgba(255, 143, 143, 0.42);
   color: rgba(255, 210, 210, 0.92);
   background:

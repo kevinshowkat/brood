@@ -20,9 +20,16 @@ const THUMB_PLACEHOLDER_SRC = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yw
 
 const MOTHER_VIDEO_IDLE_SRC = new URL("./assets/mother/mother_idle.mirrored.mp4", import.meta.url).href;
 const MOTHER_VIDEO_WORKING_SRC = new URL("./assets/mother/mother_working.mp4", import.meta.url).href;
+const MOTHER_VIDEO_TAKEOVER_SRC = new URL(
+  "./assets/mother/mother_working_sora-2_720x1280_12s_20260210_160837_v05.mp4",
+  import.meta.url
+).href;
 const MOTHER_VIDEO_REALTIME_SRC = new URL("./assets/mother/mother_realtime.mp4", import.meta.url).href;
 const MOTHER_REALTIME_MIN_MS = 4000;
 const MOTHER_USER_HOT_IDLE_MS = 10_000;
+const MOTHER_TAKEOVER_PREVIEW_MS = 10_000;
+// Minimap world overscan: keep viewport box from filling the minimap immediately when zooming out.
+const MINIMAP_WORLD_OVERSCAN_RATIO = 0.75;
 
 const els = {
   runInfo: document.getElementById("run-info"),
@@ -99,6 +106,7 @@ const els = {
   portraitVideo2: document.getElementById("portrait-video-2"),
   selectionMeta: document.getElementById("selection-meta"),
   tipsText: document.getElementById("tips-text"),
+  motherOverlay: document.getElementById("mother-overlay"),
   motherPanel: document.getElementById("mother-panel"),
   motherAvatar: document.getElementById("mother-avatar"),
   motherVideo: document.getElementById("mother-video"),
@@ -224,6 +232,7 @@ const state = {
   engineImageModelRestore: null, // string|null
   needsRender: false,
   lastInteractionAt: Date.now(),
+  lastMotherHotAt: Date.now(),
   userEvents: [], // [{ seq, at_ms, type, ... }]
   userEventSeq: 0,
   mother: {
@@ -292,6 +301,8 @@ const state = {
     pending: false,
     pendingPath: null,
     pendingAt: 0,
+    contentDirty: false,
+    dirtyReason: null,
     lastSignature: null,
     lastRunAt: 0,
     lastText: null,
@@ -364,18 +375,8 @@ const INTENT_ROUNDS_ENABLED = false; // disable "max rounds" gating
 const INTENT_FORCE_CHOICE_ENABLED = INTENT_TIMER_ENABLED || INTENT_ROUNDS_ENABLED;
 const INTENT_DEBUG_SHOW_CLUSTERS = false; // hide branch-pill debug UI; keep implemented
 
-// StarCraft-like pointer for Intent Mode (data-url SVG cursor).
-const INTENT_IMPORT_CURSOR = (() => {
-  const svg = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">`,
-    `<path d="M4 2 L4 22 L9 17 L13 28 L17 26 L13 16 L22 16 Z" fill="#00f5a0" stroke="#061014" stroke-width="2" stroke-linejoin="round"/>`,
-    `<path d="M6 6 L6 18 L9 15 L12 22 L14 21 L11 14 L18 14 Z" fill="#ffffff" fill-opacity="0.18"/>`,
-    `</svg>`,
-  ].join("");
-  const encoded = encodeURIComponent(svg).replace(/'/g, "%27").replace(/"/g, "%22");
-  // Hotspot near the arrow tip.
-  return `url("data:image/svg+xml,${encoded}") 2 2, default`;
-})();
+// Temporarily disabled custom canvas cursor (kept as a single knob for quick restore).
+const INTENT_IMPORT_CURSOR = "default";
 
 // Intent onboarding overlay icon assets (generated via scripts/gemini_generate_intent_icons.py).
 // Keep a procedural fallback so the app still renders if assets fail to load.
@@ -1945,47 +1946,51 @@ function isForegroundActionRunning() {
 
 function computeCanvasSignature() {
   const parts = [];
-  parts.push(`mode=${state.canvasMode}`);
-  parts.push(`active=${state.activeId || ""}`);
   for (const item of state.images) {
     if (item?.id) parts.push(`id=${item.id}`);
     if (item?.path) parts.push(item.path);
   }
   // Spatial layout is a first-class signal; include freeform rects so background inference
-  // can react to user arrangement (only relevant in multi/freeform mode).
-  if (state.canvasMode === "multi") {
-    const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
-    for (const imageId of z) {
-      const rect = imageId ? state.freeformRects.get(imageId) : null;
-      if (!rect) continue;
-      parts.push(
-        `rect:${imageId}:${Math.round(Number(rect.x) || 0)},${Math.round(Number(rect.y) || 0)},${Math.round(
-          Number(rect.w) || 0
-        )},${Math.round(Number(rect.h) || 0)}`
-      );
-    }
+  // reacts to user arrangement but ignore pure camera/view changes (pan/zoom/selection).
+  const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
+  for (const imageId of z) {
+    const rect = imageId ? state.freeformRects.get(imageId) : null;
+    if (!rect) continue;
+    parts.push(
+      `rect:${imageId}:${Math.round(Number(rect.x) || 0)},${Math.round(Number(rect.y) || 0)},${Math.round(
+        Number(rect.w) || 0
+      )},${Math.round(Number(rect.h) || 0)}`
+    );
   }
   return parts.join("|");
 }
 
-function scheduleAlwaysOnVision({ immediate = false } = {}) {
+function markAlwaysOnVisionDirty(reason = null) {
+  const aov = state.alwaysOnVision;
+  if (!aov) return;
+  aov.contentDirty = true;
+  aov.dirtyReason = reason ? String(reason) : null;
+}
+
+function scheduleAlwaysOnVision({ immediate = false, force = false } = {}) {
   if (!allowAlwaysOnVision()) {
     updateAlwaysOnVisionReadout();
     return;
   }
   clearTimeout(alwaysOnVisionTimer);
+  const forced = Boolean(force);
   const delay = immediate ? 0 : ALWAYS_ON_VISION_DEBOUNCE_MS;
   alwaysOnVisionTimer = setTimeout(() => {
     alwaysOnVisionTimer = null;
     if ("requestIdleCallback" in window) {
       window.requestIdleCallback(
         () => {
-          runAlwaysOnVisionOnce().catch((err) => console.warn("Always-on vision failed:", err));
+          runAlwaysOnVisionOnce({ force: forced }).catch((err) => console.warn("Always-on vision failed:", err));
         },
         { timeout: 1200 }
       );
     } else {
-      runAlwaysOnVisionOnce().catch((err) => console.warn("Always-on vision failed:", err));
+      runAlwaysOnVisionOnce({ force: forced }).catch((err) => console.warn("Always-on vision failed:", err));
     }
   }, delay);
 }
@@ -2059,33 +2064,38 @@ async function writeAlwaysOnVisionSnapshot(outPath, { maxDim = 768 } = {}) {
   return { path: outPath, images: n, width: w, height: h };
 }
 
-async function runAlwaysOnVisionOnce() {
+async function runAlwaysOnVisionOnce({ force = false } = {}) {
   if (!allowAlwaysOnVision()) {
     updateAlwaysOnVisionReadout();
     return false;
   }
   const aov = state.alwaysOnVision;
   if (aov.pending) return false;
+  if (!force && !aov.contentDirty) return false;
 
   const now = Date.now();
   const quietFor = now - (state.lastInteractionAt || 0);
   if (quietFor < ALWAYS_ON_VISION_IDLE_MS) {
-    scheduleAlwaysOnVision();
+    scheduleAlwaysOnVision({ force });
     return false;
   }
   if (isForegroundActionRunning()) {
-    scheduleAlwaysOnVision();
+    scheduleAlwaysOnVision({ force });
     return false;
   }
 
   const since = now - (aov.lastRunAt || 0);
   if (since < ALWAYS_ON_VISION_THROTTLE_MS) {
-    scheduleAlwaysOnVision();
+    scheduleAlwaysOnVision({ force });
     return false;
   }
 
   const signature = computeCanvasSignature();
-  if (signature && aov.lastSignature === signature && aov.lastText) return false;
+  if (!force && signature && aov.lastSignature === signature && aov.lastText) {
+    aov.contentDirty = false;
+    aov.dirtyReason = null;
+    return false;
+  }
 
   await ensureRun();
   const stamp = Date.now();
@@ -2106,6 +2116,8 @@ async function runAlwaysOnVisionOnce() {
   aov.pendingAt = now;
   aov.lastRunAt = now;
   aov.lastSignature = signature;
+  aov.contentDirty = false;
+  aov.dirtyReason = null;
   updateAlwaysOnVisionReadout();
 
   clearTimeout(alwaysOnVisionTimeout);
@@ -2130,6 +2142,7 @@ async function runAlwaysOnVisionOnce() {
     console.warn("Always-on vision dispatch failed:", err);
     aov.pending = false;
     aov.pendingPath = null;
+    aov.contentDirty = true;
     updateAlwaysOnVisionReadout();
     processActionQueue().catch(() => {});
     return false;
@@ -4154,11 +4167,14 @@ function renderMotherControls() {
 
   const running = Boolean(state.mother?.running);
   const suggestion = currentMotherSuggestedAction();
-  const canConfirm = Boolean(suggestion?.action) && !running;
+  // Preview rig: allow takeover even without a current suggestion.
+  const canConfirm = !running;
 
   if (els.motherConfirm) {
     els.motherConfirm.disabled = !canConfirm;
-    els.motherConfirm.title = suggestion?.action ? `Confirm: ${suggestion.action}` : "Waiting for a suggestion…";
+    els.motherConfirm.title = suggestion?.action
+      ? `Confirm: ${suggestion.action}`
+      : "Preview Mother takeover (~10s)";
     els.motherConfirm.classList.toggle("hidden", running);
   }
   if (els.motherStop) {
@@ -4236,9 +4252,8 @@ function renderMotherReadout() {
 }
 
 function syncMotherPortrait() {
-  const panel = els.motherPanel;
+  const overlay = els.motherOverlay || els.motherPanel;
   const videoEl = els.motherVideo;
-  if (!videoEl) return;
 
   const motherRunning = Boolean(state.mother?.running);
   const aov = state.alwaysOnVision;
@@ -4264,9 +4279,9 @@ function syncMotherPortrait() {
   const holdUntil = Math.max(0, Number(mother.rtHoldUntil) || 0);
   const held = Boolean(aov?.enabled && holdUntil && now < holdUntil);
   const realtimeActive = Boolean(aov?.enabled && (pending || held));
-  const idleFor = now - (state.lastInteractionAt || 0);
+  const idleFor = now - (state.lastMotherHotAt || 0);
   const userHot = Boolean(aov?.enabled && hasImages && idleFor < MOTHER_USER_HOT_IDLE_MS);
-  const userHotUntil = Math.max(0, Number(state.lastInteractionAt) || 0) + MOTHER_USER_HOT_IDLE_MS;
+  const userHotUntil = Math.max(0, Number(state.lastMotherHotAt) || 0) + MOTHER_USER_HOT_IDLE_MS;
 
   // Only pulse the main canvas when we're in the realtime video mode.
   const showRealtime = !motherRunning && hasImages && (realtimeActive || userHot);
@@ -4291,16 +4306,25 @@ function syncMotherPortrait() {
     mother.rtHoldTimer = null;
   }
 
-  const mode = motherRunning ? "working" : showRealtime ? "realtime" : "idle";
+  const mode = motherRunning ? "takeover" : showRealtime ? "realtime" : "idle";
   const src =
-    mode === "working" ? MOTHER_VIDEO_WORKING_SRC : mode === "realtime" ? MOTHER_VIDEO_REALTIME_SRC : MOTHER_VIDEO_IDLE_SRC;
+    mode === "takeover"
+      ? MOTHER_VIDEO_TAKEOVER_SRC
+      : mode === "realtime"
+        ? MOTHER_VIDEO_REALTIME_SRC
+        : mode === "working"
+          ? MOTHER_VIDEO_WORKING_SRC
+          : MOTHER_VIDEO_IDLE_SRC;
 
-  if (panel) panel.classList.toggle("busy", mode !== "idle");
+  if (overlay) overlay.classList.toggle("busy", mode !== "idle");
+  if (!videoEl) return;
 
   if (!videoEl.hasAttribute("muted")) videoEl.muted = true;
   videoEl.loop = true;
   videoEl.autoplay = true;
   videoEl.playsInline = true;
+  // Mirror only during Mother takeover so she faces left.
+  videoEl.style.transform = mode === "takeover" ? "scaleX(-1) scale(1.02)" : "scale(1.02)";
 
   const nextKey = `${mode}:${src}`;
   const currentSrc = String(videoEl.currentSrc || videoEl.src || "");
@@ -4325,14 +4349,12 @@ function syncMotherPortrait() {
 async function startMotherTakeover() {
   if (state.mother?.running) return;
   const suggestion = currentMotherSuggestedAction();
-  const action = suggestion?.action ? String(suggestion.action) : "";
-  if (!action) {
-    showToast("Mother has no suggestion yet. Arrange images and pause for a moment.", "tip", 2600);
-    return;
-  }
+  const hasSuggestion = Boolean(suggestion?.action);
+  const action = hasSuggestion ? String(suggestion.action) : "Preview";
 
   state.mother.running = true;
-  state.mother.startedAt = Date.now();
+  const startedAt = Date.now();
+  state.mother.startedAt = startedAt;
   state.mother.runId = (Number(state.mother.runId) || 0) + 1;
   const runId = state.mother.runId;
   state.mother.action = action;
@@ -4347,17 +4369,31 @@ async function startMotherTakeover() {
 
   // Stub pipeline: plan -> execute suggested action -> wrap up.
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const stillRunning = () =>
+    Boolean(state.mother.running && !state.mother.stopRequested && state.mother.runId === runId);
+  const holdPreviewFloor = async () => {
+    while (stillRunning()) {
+      const elapsed = Date.now() - startedAt;
+      const remain = MOTHER_TAKEOVER_PREVIEW_MS - elapsed;
+      if (remain <= 0) return;
+      await sleep(Math.min(180, remain));
+    }
+  };
   try {
     await sleep(650);
-    if (!state.mother.running || state.mother.stopRequested || state.mother.runId !== runId) return;
+    if (!stillRunning()) return;
 
-    state.mother.status = `Doing: ${action}`;
+    state.mother.status = hasSuggestion ? `Doing: ${action}` : "Previewing…";
     renderMotherReadout();
     syncMotherPortrait();
 
-    await triggerCanvasContextSuggestedAction(action);
+    if (hasSuggestion) {
+      await triggerCanvasContextSuggestedAction(action);
+    } else {
+      await sleep(480);
+    }
 
-    if (!state.mother.running || state.mother.stopRequested || state.mother.runId !== runId) return;
+    if (!stillRunning()) return;
     state.mother.status = "Wrapping up…";
     renderMotherReadout();
     syncMotherPortrait();
@@ -4369,6 +4405,12 @@ async function startMotherTakeover() {
     syncMotherPortrait();
     showToast(msg, "error", 3200);
   } finally {
+    if (stillRunning()) {
+      state.mother.status = "Presenting…";
+      renderMotherReadout();
+      syncMotherPortrait();
+      await holdPreviewFloor();
+    }
     if (state.mother.runId === runId) {
       state.mother.running = false;
       state.mother.stopRequested = false;
@@ -4499,9 +4541,13 @@ function renderMinimap() {
   surf.innerHTML = "";
   if (!rects.length) return;
 
-  // Show a stable "god's-eye" view of the full canvas bounds.
-  const worldW = Math.max(1, canvasCssW || 1);
-  const worldH = Math.max(1, canvasCssH || 1);
+  // Show a stable "god's-eye" view of canvas bounds plus a small overscan margin.
+  const worldPadX = Math.max(0, (canvasCssW || 0) * MINIMAP_WORLD_OVERSCAN_RATIO);
+  const worldPadY = Math.max(0, (canvasCssH || 0) * MINIMAP_WORLD_OVERSCAN_RATIO);
+  const worldLeft = -worldPadX;
+  const worldTop = -worldPadY;
+  const worldW = Math.max(1, (canvasCssW || 1) + worldPadX * 2);
+  const worldH = Math.max(1, (canvasCssH || 1) + worldPadY * 2);
   const pad = 6;
   const availW = Math.max(1, surfaceW - pad * 2);
   const availH = Math.max(1, surfaceH - pad * 2);
@@ -4520,8 +4566,8 @@ function renderMinimap() {
     const y = Number(r.y) || 0;
     const w = Math.max(1, Number(r.w) || 1);
     const h = Math.max(1, Number(r.h) || 1);
-    const rx = Math.round(ox + x * scale);
-    const ry = Math.round(oy + y * scale);
+    const rx = Math.round(ox + (x - worldLeft) * scale);
+    const ry = Math.round(oy + (y - worldTop) * scale);
     const rw = Math.max(1, Math.round(w * scale));
     const rh = Math.max(1, Math.round(h * scale));
 
@@ -4550,15 +4596,17 @@ function renderMinimap() {
     const dpr = getDpr();
     const mxCss = (Number(state.multiView?.offsetX) || 0) / Math.max(dpr, 0.0001);
     const myCss = (Number(state.multiView?.offsetY) || 0) / Math.max(dpr, 0.0001);
-    const vw = Math.min(worldW, worldW / ms);
-    const vh = Math.min(worldH, worldH / ms);
-    const vx = clamp((-mxCss) / ms, 0, Math.max(0, worldW - vw));
-    const vy = clamp((-myCss) / ms, 0, Math.max(0, worldH - vh));
+    const vw = Math.min(worldW, (canvasCssW || worldW) / ms);
+    const vh = Math.min(worldH, (canvasCssH || worldH) / ms);
+    const maxVx = worldLeft + Math.max(0, worldW - vw);
+    const maxVy = worldTop + Math.max(0, worldH - vh);
+    const vx = clamp((-mxCss) / ms, worldLeft, maxVx);
+    const vy = clamp((-myCss) / ms, worldTop, maxVy);
 
     const vp = document.createElement("div");
     vp.className = "minimap-viewport";
-    vp.style.left = `${Math.round(ox + vx * scale)}px`;
-    vp.style.top = `${Math.round(oy + vy * scale)}px`;
+    vp.style.left = `${Math.round(ox + (vx - worldLeft) * scale)}px`;
+    vp.style.top = `${Math.round(oy + (vy - worldTop) * scale)}px`;
     vp.style.width = `${Math.max(1, Math.round(vw * scale))}px`;
     vp.style.height = `${Math.max(1, Math.round(vh * scale))}px`;
     vp.style.zIndex = "999";
@@ -4599,8 +4647,9 @@ function setRunInfo(message) {
   els.runInfo.textContent = message;
 }
 
-function bumpInteraction() {
+function bumpInteraction({ motherHot = true } = {}) {
   state.lastInteractionAt = Date.now();
+  if (motherHot) state.lastMotherHotAt = state.lastInteractionAt;
   // Keep the Mother realtime pulse/video responsive while the user is working.
   const now = state.lastInteractionAt;
   const last = Number(state.mother?.hotSyncAt) || 0;
@@ -5061,7 +5110,6 @@ function setCanvasMode(mode) {
   }
   renderSelectionMeta();
   scheduleVisualPromptWrite();
-  scheduleAlwaysOnVision();
   requestRender();
 }
 
@@ -7268,7 +7316,7 @@ function renderActionGrid() {
     }
 
     const icon = actionGridIconFor(key);
-    btn.innerHTML = `${icon}<span class="tool-hint" aria-hidden="true">${hotkey}</span><span class="tool-label" aria-hidden="true">${label}</span>`;
+    btn.innerHTML = `${icon}<span class="tool-hint" aria-hidden="true">${hotkey}</span>`;
 
     btn.addEventListener("click", (ev) => {
       bumpInteraction();
@@ -7688,7 +7736,6 @@ async function setActiveImage(id, { preserveSelection = false } = {}) {
   resetViewToFit();
   requestRender();
   if (state.timelineOpen) renderTimeline();
-  scheduleAlwaysOnVision();
 }
 
 function addImage(item, { select = false } = {}) {
@@ -7710,6 +7757,7 @@ function addImage(item, { select = false } = {}) {
   }
   showDropHint(false);
   scheduleVisualPromptWrite();
+  markAlwaysOnVisionDirty("image_add");
   scheduleAlwaysOnVision();
   recordUserEvent("image_add", {
     image_id: String(item.id),
@@ -7832,6 +7880,8 @@ async function removeImageFromCanvas(imageId) {
     renderFilmstrip();
     renderQuickActions();
     renderHudReadout();
+    state.alwaysOnVision.contentDirty = false;
+    state.alwaysOnVision.dirtyReason = null;
     requestRender();
     return true;
   }
@@ -7840,6 +7890,8 @@ async function removeImageFromCanvas(imageId) {
 
   updateEmptyCanvasHint();
   scheduleVisualPromptWrite();
+  markAlwaysOnVisionDirty("image_remove");
+  scheduleAlwaysOnVision();
   if (intentModeActive()) scheduleIntentInference({ immediate: true, reason: "remove" });
   scheduleIntentStateWrite();
   renderQuickActions();
@@ -7908,6 +7960,7 @@ async function replaceImageInPlace(
 	    requestRender();
 	  }
     scheduleVisualPromptWrite();
+    markAlwaysOnVisionDirty("image_replace");
     scheduleAlwaysOnVision();
 		  return true;
 		}
@@ -9438,6 +9491,9 @@ async function createRun() {
   state.fallbackToFullRead = false;
   fallbackLineOffset = 0;
   resetDescribeQueue();
+  // Run-local interaction history for canvas context envelopes.
+  state.userEvents = [];
+  state.userEventSeq = 0;
   state.images = [];
   state.imagesById.clear();
   state.activeId = null;
@@ -9497,6 +9553,19 @@ async function createRun() {
   state.intent.lastRunAt = 0;
   state.intent.forceChoice = false;
   state.intent.uiHits = [];
+  if (state.alwaysOnVision) {
+    state.alwaysOnVision.pending = false;
+    state.alwaysOnVision.pendingPath = null;
+    state.alwaysOnVision.pendingAt = 0;
+    state.alwaysOnVision.contentDirty = false;
+    state.alwaysOnVision.dirtyReason = null;
+    state.alwaysOnVision.lastSignature = null;
+    state.alwaysOnVision.lastRunAt = 0;
+    state.alwaysOnVision.lastText = null;
+    state.alwaysOnVision.lastMeta = null;
+    state.alwaysOnVision.disabledReason = null;
+    state.alwaysOnVision.rtState = state.alwaysOnVision.enabled ? "connecting" : "off";
+  }
   setRunInfo(`Run: ${state.runDir}`);
   setTip(DEFAULT_TIP);
   setDirectorText(null, null);
@@ -9528,6 +9597,9 @@ async function openExistingRun() {
   state.fallbackToFullRead = false;
   fallbackLineOffset = 0;
   resetDescribeQueue();
+  // Run-local interaction history for canvas context envelopes.
+  state.userEvents = [];
+  state.userEventSeq = 0;
   state.images = [];
   state.imagesById.clear();
   state.activeId = null;
@@ -9587,6 +9659,19 @@ async function openExistingRun() {
   state.intent.lastRunAt = 0;
   state.intent.forceChoice = false;
   state.intent.uiHits = [];
+  if (state.alwaysOnVision) {
+    state.alwaysOnVision.pending = false;
+    state.alwaysOnVision.pendingPath = null;
+    state.alwaysOnVision.pendingAt = 0;
+    state.alwaysOnVision.contentDirty = false;
+    state.alwaysOnVision.dirtyReason = null;
+    state.alwaysOnVision.lastSignature = null;
+    state.alwaysOnVision.lastRunAt = 0;
+    state.alwaysOnVision.lastText = null;
+    state.alwaysOnVision.lastMeta = null;
+    state.alwaysOnVision.disabledReason = null;
+    state.alwaysOnVision.rtState = state.alwaysOnVision.enabled ? "connecting" : "off";
+  }
   setRunInfo(`Run: ${state.runDir}`);
   setTip(DEFAULT_TIP);
   setDirectorText(null, null);
@@ -11872,8 +11957,27 @@ function startSpawnTimer() {
   }, 5000);
 }
 
-  function installCanvasHandlers() {
+function installCanvasHandlers() {
   if (!els.overlayCanvas) return;
+
+  let lastOverlayCursor = null;
+  const setOverlayCursor = (value) => {
+    const next = value || INTENT_IMPORT_CURSOR;
+    if (next === lastOverlayCursor) return;
+    lastOverlayCursor = next;
+    els.overlayCanvas.style.cursor = next;
+  };
+
+  // Keep a stable baseline cursor so the browser arrow does not flash between move events.
+  const resetCanvasCursor = () => {
+    if (!els.overlayCanvas) return;
+    if (!state.pointer?.active) {
+      setOverlayCursor(INTENT_IMPORT_CURSOR);
+    }
+  };
+  resetCanvasCursor();
+  els.overlayCanvas.addEventListener("pointerenter", resetCanvasCursor);
+  els.overlayCanvas.addEventListener("pointerleave", resetCanvasCursor);
 
   els.overlayCanvas.addEventListener("keydown", (event) => {
     const key = String(event?.key || "");
@@ -12226,7 +12330,7 @@ function startSpawnTimer() {
       if (intentActive) {
         const uiHit = hitTestIntentUi(p);
         if (uiHit) {
-          els.overlayCanvas.style.cursor = INTENT_IMPORT_CURSOR;
+          setOverlayCursor(INTENT_IMPORT_CURSOR);
           return;
         }
       }
@@ -12239,8 +12343,7 @@ function startSpawnTimer() {
         if (state.tool === "pan") {
           const handleHit = hitTestAnyFreeformCornerHandle(p, { padPx: Math.round(12 * getDpr()) });
           if (handleHit?.corner) {
-            els.overlayCanvas.style.cursor =
-              handleHit.corner === "nw" || handleHit.corner === "se" ? "nwse-resize" : "nesw-resize";
+            setOverlayCursor(handleHit.corner === "nw" || handleHit.corner === "se" ? "nwse-resize" : "nesw-resize");
             return;
           }
         }
@@ -12248,25 +12351,25 @@ function startSpawnTimer() {
         const hit = hitTestMulti(p);
         // Intent Mode uses an RTS-like pointer; reserve grab/drag cursors for the active drag.
         if (intentActive) {
-          els.overlayCanvas.style.cursor = INTENT_IMPORT_CURSOR;
+          setOverlayCursor(INTENT_IMPORT_CURSOR);
           return;
         }
         if (!hit) {
-          els.overlayCanvas.style.cursor = "crosshair";
+          setOverlayCursor(INTENT_IMPORT_CURSOR);
           return;
         }
         if (state.tool === "pan") {
-          els.overlayCanvas.style.cursor = "grab";
+          setOverlayCursor("grab");
           return;
         }
-        els.overlayCanvas.style.cursor = "";
+        setOverlayCursor(INTENT_IMPORT_CURSOR);
         return;
       }
       if (intentActive) {
-        els.overlayCanvas.style.cursor = INTENT_IMPORT_CURSOR;
+        setOverlayCursor(INTENT_IMPORT_CURSOR);
         return;
       }
-      els.overlayCanvas.style.cursor = "";
+      setOverlayCursor(INTENT_IMPORT_CURSOR);
       return;
     }
 
@@ -12274,12 +12377,12 @@ function startSpawnTimer() {
     if (state.pointer.kind === "freeform_resize") {
       const corner = state.pointer.corner;
       if (corner) {
-        els.overlayCanvas.style.cursor = corner === "nw" || corner === "se" ? "nwse-resize" : "nesw-resize";
+        setOverlayCursor(corner === "nw" || corner === "se" ? "nwse-resize" : "nesw-resize");
       }
     } else if (state.pointer.kind === "freeform_move") {
-      els.overlayCanvas.style.cursor = "grabbing";
+      setOverlayCursor("grabbing");
     } else if (state.pointer.kind === "freeform_import") {
-      els.overlayCanvas.style.cursor = intentModeActive() ? INTENT_IMPORT_CURSOR : "crosshair";
+      setOverlayCursor(INTENT_IMPORT_CURSOR);
     }
 
     bumpInteraction();
@@ -12422,6 +12525,7 @@ function startSpawnTimer() {
 		    state.pointer.startRectCss = null;
 		    state.pointer.importPointCss = null;
 		    state.pointer.moved = false;
+        setOverlayCursor(INTENT_IMPORT_CURSOR);
 
 		    if (moved && (kind === "freeform_move" || kind === "freeform_resize") && imageId) {
 		      const start = startRectCss && typeof startRectCss === "object" ? startRectCss : null;
@@ -12441,9 +12545,11 @@ function startSpawnTimer() {
 		            y: Math.round(Number(end.y) || 0),
 		            w: Math.round(Number(end.w) || 0),
 		            h: Math.round(Number(end.h) || 0),
-		          },
-		        });
+			          },
+			        });
 		      }
+          markAlwaysOnVisionDirty(kind === "freeform_move" ? "image_move" : "image_resize");
+          scheduleAlwaysOnVision();
 		    }
 
 			    if (kind === "freeform_import") {
@@ -12523,11 +12629,11 @@ function startSpawnTimer() {
   els.overlayCanvas.addEventListener("pointerup", finalizePointer);
   els.overlayCanvas.addEventListener("pointercancel", finalizePointer);
 
-	  els.overlayCanvas.addEventListener(
-	    "wheel",
-	    (event) => {
-	      bumpInteraction();
-	      if (!state.images || state.images.length === 0) return;
+  els.overlayCanvas.addEventListener(
+    "wheel",
+    (event) => {
+      bumpInteraction({ motherHot: false });
+      if (!state.images || state.images.length === 0) return;
 	      event.preventDefault();
 	
 	      const dpr = getDpr();
@@ -12625,7 +12731,7 @@ function startSpawnTimer() {
     const onGestureStart = (event) => {
       if (!shouldHandleGesture(event)) return;
       if (!state.images || state.images.length === 0) return;
-      bumpInteraction();
+      bumpInteraction({ motherHot: false });
       event.preventDefault();
       state.gestureZoom.active = true;
       const s = Number(event?.scale);
@@ -12635,7 +12741,7 @@ function startSpawnTimer() {
       if (!state.gestureZoom?.active) return;
       if (!shouldHandleGesture(event)) return;
       if (!state.images || state.images.length === 0) return;
-      bumpInteraction();
+      bumpInteraction({ motherHot: false });
       event.preventDefault();
 
       const scaleEvent = Number(event?.scale);
@@ -12668,7 +12774,7 @@ function startSpawnTimer() {
     const onGestureEnd = (event) => {
       if (!state.gestureZoom?.active) return;
       if (!shouldHandleGesture(event)) return;
-      bumpInteraction();
+      bumpInteraction({ motherHot: false });
       event.preventDefault();
       state.gestureZoom.active = false;
       state.gestureZoom.lastScale = 1;
@@ -12847,7 +12953,7 @@ function installUi() {
         showToast("Enable Always-On Vision in Settings to activate Mother suggestions.", "tip", 3200);
         return;
       }
-      scheduleAlwaysOnVision({ immediate: true });
+      scheduleAlwaysOnVision({ immediate: true, force: true });
       renderMotherReadout();
     });
   }
@@ -12993,6 +13099,8 @@ function installUi() {
         state.alwaysOnVision.pending = false;
         state.alwaysOnVision.pendingPath = null;
         state.alwaysOnVision.pendingAt = 0;
+        state.alwaysOnVision.contentDirty = false;
+        state.alwaysOnVision.dirtyReason = null;
         state.alwaysOnVision.disabledReason = null;
         state.alwaysOnVision.rtState = settings.alwaysOnVision ? "connecting" : "off";
         if (!settings.alwaysOnVision) state.alwaysOnVision.lastText = null;
@@ -13002,6 +13110,7 @@ function installUi() {
       renderQuickActions();
       if (settings.alwaysOnVision) {
         setStatus("Engine: always-on vision enabled");
+        markAlwaysOnVisionDirty("aov_enable");
         ensureEngineSpawned({ reason: "always-on vision" })
           .then((ok) => {
             if (!ok) return;
@@ -13279,16 +13388,29 @@ function installUi() {
         return;
       }
 
-	    if (key === "backspace" || key === "delete") {
+      if (state.mother?.running) {
+        const motherBlockedShortcut =
+          key === "backspace" ||
+          key === "delete" ||
+          key === "l" ||
+          key === "v" ||
+          key === "d" ||
+          key === "b" ||
+          key === "r" ||
+          key === "m" ||
+          key === "f" ||
+          /^[1-9]$/.test(rawKey);
+        if (motherBlockedShortcut) {
+          showToast("Mother is running. Click Stop to regain control.", "tip", 2200);
+        }
+        return;
+      }
+
+      if (key === "backspace" || key === "delete") {
 	      if (state.activeCircle) {
 	        const ok = deleteActiveCircle();
 	        if (ok) showToast("Circle deleted.", "tip", 1400);
 	        return;
-      }
-
-      if (state.mother?.running) {
-        showToast("Mother is running. Click Stop to regain control.", "tip", 2200);
-        return;
       }
 
       const activeId = String(state.activeId || "").trim();
@@ -13425,7 +13547,6 @@ async function boot() {
   new ResizeObserver(() => {
     ensureCanvasSize();
     scheduleVisualPromptWrite();
-    if (intentModeActive()) scheduleIntentInference({ immediate: true, reason: "canvas_resize" });
     requestRender();
   }).observe(els.canvasWrap);
 

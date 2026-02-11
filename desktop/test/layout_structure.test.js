@@ -34,15 +34,22 @@ test("Action Grid: CSS uses hazard stripe frame", () => {
   assert.match(css, /rgba\(255,\s*197,\s*0/);
 });
 
-test("Mother: floating overlay exists in HTML and is positioned top-right in CSS", () => {
+test("Mother: top-right overlay keeps portrait + controls while dialog panel is hidden", () => {
+  assert.match(html, /id=\"mother-overlay\"/);
+  assert.match(html, /id=\"mother-panel-stack\"/);
   assert.match(html, /id=\"mother-panel\"/);
-  assert.match(html, /id=\"mother-panel\"[\s\S]*id=\"tips-text\"/);
+  assert.match(html, /id=\"mother-portrait-shell\"/);
   assert.match(html, /id=\"mother-video\"/);
+  assert.match(html, /id=\"mother-panel\"[\s\S]*id=\"tips-text\"/);
+  assert.match(html, /id=\"mother-panel\"[\s\S]*mother-actions-floating/);
   assert.match(css, /\.mother-overlay\s*\{[\s\S]*position:\s*absolute/);
   assert.match(css, /\.mother-overlay\s*\{[\s\S]*top:\s*12px/);
   assert.match(css, /\.mother-overlay\s*\{[\s\S]*right:\s*12px/);
+  assert.match(css, /\.mother-overlay\s*\{[\s\S]*flex-direction:\s*column/);
+  assert.match(css, /\.mother-overlay\s*\{[\s\S]*align-items:\s*flex-end/);
+  assert.match(css, /#mother-portrait-shell\s*\{/);
+  assert.match(css, /#mother-panel-stack\s*\{[\s\S]*width:\s*fit-content/);
   assert.match(css, /#mother-panel\s*\{/);
-  assert.match(css, /#mother-panel\s*\{[\s\S]*position:\s*absolute/);
-  assert.match(css, /#mother-panel\s*\{[\s\S]*right:\s*12px/);
-  assert.match(css, /conic-gradient/);
+  assert.match(css, /#mother-panel\s*\{[\s\S]*display:\s*none/);
+  assert.match(css, /#mother-panel-stack\s+\.mother-actions\s*\{[\s\S]*justify-content:\s*center/);
 });
