@@ -1,7 +1,7 @@
 {
   "schema_version": "aip-1",
   "schema": {
-    "url": "https://brood.sh/spec/aip-1.schema.json",
+    "url": "https://raw.githubusercontent.com/kevinshowkat/brood/main/docs/aip-1.schema.json",
     "local_path": "docs/aip-1.schema.json",
     "request_def": "#/$defs/IntakeRequest",
     "response_def": "#/$defs/IntakeResponse"
@@ -9,7 +9,7 @@
   "intake_endpoint": "https://6yq5plinssvsog2ozyhnfnscya0qwdzp.lambda-url.us-east-1.on.aws/aip/intake",
   "notes": [
     "This file is repo-side only. AIP requires operating the intake_endpoint on infrastructure you control.",
-    "Replace brood.sh URLs with your actual domain/paths (or leave AIP unused and follow llms.txt fallback entrypoints)."
+    "If you later host schema/intake on a custom domain, update the URLs here (or leave AIP unused and follow llms.txt fallback entrypoints)."
   ],
   "privacy": {
     "purpose": "Return curated entrypoints (files/scripts) and optional context pack URLs; optionally log coarse task tags for aggregate usage.",
