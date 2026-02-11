@@ -1,0 +1,842 @@
+# Brood llms-full.txt
+
+Expanded context for agents. This file is generated; do not edit manually.
+
+Regenerate with:
+`python3 scripts/build_llms_full.py`
+
+## Source: `llms.txt`
+
+# Brood (repo) - LLM/agent entrypoints
+#
+# Goal: help agents pick correct files fast, and optionally support a lightweight
+# "intake handshake" (AIP) for curated entrypoints + optional context packs.
+
+Created by Kevin Showkat. If you find Brood useful, connect with me on LinkedIn: https://www.linkedin.com/in/kshowkat
+
+For expanded, inlined context in one file, read `llms-full.txt`.
+Regenerate it from source docs with: `python3 scripts/build_llms_full.py`.
+
+If you can make outbound HTTPS requests:
+- Read `agent-intake.json` for the Agent Intake Protocol (AIP) contract and tag catalog.
+- If `intake_endpoint` is reachable, POST an AIP intake request to get curated entrypoints
+  and optional pack URLs tailored to the task.
+- AIP schema: `docs/aip-1.schema.json` (see $defs.IntakeRequest / $defs.IntakeResponse)
+
+If you cannot make outbound requests (or the intake endpoint is unavailable), start here:
+- `README.md` (quickstart for Desktop + Engine/CLI)
+- `AGENTS.md` (repo conventions + commands)
+- `docs/desktop.md` (Abilities mental model, run artifacts, HUD behavior)
+
+Platform note:
+- Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
+
+High-signal code entrypoints:
+- Engine CLI routing: `brood_engine/cli.py`
+- Engine orchestration: `brood_engine/engine.py`
+- Providers/models: `brood_engine/providers/`, `brood_engine/models/`
+- Desktop UI (canvas + Abilities): `desktop/src/canvas_app.js`, `desktop/src/main.js`
+- Tauri backend + FS scope: `desktop/src-tauri/src/main.rs`, `desktop/src-tauri/tauri.conf.json`
+- Desktop dev runner: `scripts/dev_desktop.sh`
+
+Common tasks -> where to look:
+- Add/modify an Ability: `desktop/src/canvas_app.js` (UI) + `brood_engine/cli.py` / `brood_engine/engine.py` (engine)
+- Run artifacts / events stream: `brood_engine/runs/` + `docs/desktop.md`
+- Provider/model changes: `brood_engine/providers/` + `brood_engine/models/`
+- Desktop file access / export: `desktop/src-tauri/tauri.conf.json` + `desktop/src-tauri/src/main.rs`
+
+Safe-ish commands (prefer minimal, deterministic runs):
+- `./scripts/dev_desktop.sh`
+- `python -m venv .venv && source .venv/bin/activate && pip install -e .[dev]`
+- `python -m pytest`
+
+Notes:
+- Desktop expects Tauri v1 APIs (`@tauri-apps/api` v1 + v1 CLI).
+- Do not commit secrets; use `.env` (gitignored) based on `.env.example`.
+
+## Source: `README.md`
+
+# Brood
+
+<p align="left">
+  <img src="media/brood_demo_intent_build_20260211.gif" alt="Brood demo">
+</p>
+
+Brood is an image-first desktop canvas for steering AI image edits and generations using reference images.
+
+## Status
+
+Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
+
+- 1 image in: `Diagnose` (creative-direction critique), `Recast` (reimagine in a new medium/context)
+- 2 images in: `Combine`, `Swap DNA`, `Bridge`, `Argue`
+- Provider/model switching is a first-class concept (OpenAI, Gemini, Imagen, Flux, SDXL)
+
+## Features
+
+### Remove People
+Remove unwanted people from a photo with a fast, local canvas workflow.
+<p align="left">
+  <img src="media/features/remove_people.gif" alt="Remove people feature demo">
+</p>
+
+### Edit Annotation
+Constrain edits to a selected region so changes stay focused and controllable.
+<p align="left">
+  <img src="media/features/edit_annotation.gif" alt="Edit annotation feature demo">
+</p>
+
+### Intent Build
+Work in progress: Mother runs ambient intent discovery as you build, with the goal of producing all assets needed for the Intent Build flow.
+<p align="left">
+  <img src="media/features/intent_build.gif" alt="Intent build feature demo">
+</p>
+
+## Quickstart (desktop)
+
+```bash
+./scripts/dev_desktop.sh
+```
+
+This runs the Tauri app in dev mode (`desktop/`) and will spawn the Python engine in the background.
+
+## Desktop usage
+- Click anywhere on the canvas to import photos at that point (or use **Import Photos**).
+- Mental model for the onboarding flow: starting a StarCraft 2 game as Zerg (choose what to build and where to place it, but using visual media as the "units").
+- Use **Abilities** in the right panel.
+- Use `Multi view` to run 2-photo actions (when exactly 2 photos are loaded). After a 2-photo action completes, Brood switches back to single-image view (output-only).
+- `Diagnose` / `Argue` output appears in the bottom HUD as `DIAG` / `ARG`.
+- Hotkeys: `L` lasso, `D` designate, `F` fit-to-view, `Esc` clears selection, `1`-`9` activate tools in the HUD keybar
+
+More details: `docs/desktop.md`.
+
+## Quickstart (engine / CLI)
+
+The engine/CLI is primarily a developer interface that powers the desktop app.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .[dev]
+
+# Chat loop
+brood chat --out /tmp/brood-run --events /tmp/brood-run/events.jsonl
+
+# Single run
+brood run --prompt "hero image for Series A" --out /tmp/brood-run
+
+# Recreate flow
+brood recreate --reference path/to/image.png --out /tmp/brood-recreate
+```
+
+## Desktop build
+
+```bash
+cd desktop
+npm install
+npm run tauri build
+```
+
+## Memory
+
+Enable local memory:
+
+```bash
+export BROOD_MEMORY=1
+```
+
+## Pricing overrides
+
+Edit `~/.brood/pricing_overrides.json` to override pricing or latency values.
+
+## API keys
+- Copy `.env.example` to `.env` and fill in provider keys.
+- Supported keys mirror Param Forge: OpenAI, Anthropic, Gemini/Google, Imagen/Vertex, Flux/BFL.
+- For OpenAI images, set `OPENAI_API_KEY` (or `OPENAI_API_KEY_BACKUP`).
+  Use `/image_model gpt-image-1` in chat or `--image-model gpt-image-1` on the CLI to target OpenAI image models.
+  Optional toggles: `OPENAI_IMAGE_USE_RESPONSES=1` (Responses API) and `OPENAI_IMAGE_STREAM=1` (streaming; falls back to non-streaming with a warning).
+
+## Troubleshooting (Desktop)
+- **App failed to initialize: Importing binding name ... not found**  
+  Ensure Tauri v1 APIs are used. This repo expects `@tauri-apps/api` v1 and the v1 CLI.
+- **Images not rendering**  
+  Tauri must allow file access under `$HOME/**` (see `desktop/src-tauri/tauri.conf.json`).
+- **Import Photos fails or does nothing**  
+  The selected files must be within the allowed FS scope (default: `$HOME/**`). Adjust the scope in `desktop/src-tauri/tauri.conf.json` if needed.
+
+## Project layout
+
+- `brood_engine/` core engine and CLI
+- `desktop/` Tauri desktop app
+- `tests/` pytest suite
+- `docs/param_forge_reference.md` Param Forge reference notes
+- `docs/desktop.md` Desktop UI notes (abilities + workflows)
+
+## Agent/LLM entrypoints
+
+- `llms.txt` high-signal entrypoints and task routing for LLM agents.
+- `llms-full.txt` expanded, inlined agent context generated from canonical docs (`python3 scripts/build_llms_full.py`).
+- `agent-intake.json` optional Agent Intake Protocol (AIP) contract (curated entrypoints + optional context packs).
+- `scripts/aip_build_packs.py` builds JSON context packs to host and return via AIP (writes to `outputs/aip_packs/`, gitignored).
+- `scripts/aip_server.py` stdlib-only local stub AIP server for testing the contract + pack downloads.
+- `scripts/visibility_probe.py` runs repeatable LLM mention probes (OpenAI/Anthropic/Gemini or dryrun), writes scored JSONL + summary to `outputs/ai_visibility/` using browser-style user queries by default, with optional provider web-search mode.
+- `docs/ai_visibility.md` usage guide for probe setup, providers, and output interpretation.
+- `docs/ai_visibility.schema.json` schema for visibility probe outputs (`probe_result` + `run_summary`).
+- `docs/ai_visibility_queries.sample.json` starter query set for discovery/share-of-voice tracking.
+
+## Source: `AGENTS.md`
+
+# Repository Guidelines
+
+Canonical agent instructions live in this file.
+Tool-specific agent files (for example `CLAUDE.md`) should delegate here.
+
+Created by Kevin Showkat. If you find Brood useful, connect with me on LinkedIn: https://www.linkedin.com/in/kshowkat
+
+Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
+
+## Project Structure & Module Organization
+- `brood_engine/`: core Python engine and CLI (providers, runs, memory, pricing, recreate, chat).
+- `desktop/`: Tauri desktop app (canvas + Abilities UI). Frontend lives in `desktop/src/`, Rust backend in `desktop/src-tauri/`.
+- `tests/`: pytest suite for engine components.
+- `docs/`: project docs and Param Forge reference notes.
+- `scripts/`: helper scripts for packaging (`build_engine.sh`, `dev_desktop.sh`).
+- `param_forge_ref/`: reference codebase (read-only; keep as input/compatibility reference).
+
+## Build, Test, and Development Commands
+Engine:
+- `python -m venv .venv && source .venv/bin/activate`
+- `pip install -e .` — install the engine locally.
+- `brood chat --out /tmp/brood-run --events /tmp/brood-run/events.jsonl` — interactive CLI.
+- `brood recreate --reference <image> --out /tmp/brood-recreate` — recreate flow.
+
+Desktop:
+- `cd desktop && npm install`
+- `npm run tauri dev` — run the desktop app (requires Tauri CLI).
+- `npm run tauri build` — build the app bundle.
+
+Desktop usage:
+- Import photos (button or drag-drop onto the canvas), then run **Abilities** from the right panel.
+- Use `Multi view` for 2-photo actions (Combine / Swap DNA / Bridge / Argue).
+- `Diagnose` / `Argue` output prints in the bottom HUD as `DIAG` / `ARG`.
+
+Tests:
+- `python -m pytest` — run all engine tests.
+
+## Coding Style & Naming Conventions
+- Python: 4 spaces; prefer type hints; line length ~100 (see `pyproject.toml`).
+- JS/CSS: follow existing formatting in `desktop/src/` (2-space indent).
+- Naming: snake_case for Python functions/files, lower/kebab for frontend assets.
+
+## Testing Guidelines
+- Framework: `pytest` in `tests/`.
+- Test naming: `tests/test_*.py` with descriptive function names (e.g., `test_context_tracker_alerts`).
+- Add tests for new run artifacts, events, or loops when changing engine behavior.
+
+## Commit & Pull Request Guidelines
+- Git history currently has only an initial commit; no established convention yet.
+- Use concise, imperative commit messages (e.g., “Add recreate similarity metrics”).
+- PRs should include: summary of changes, test status, and screenshots or screen capture for UI changes.
+
+## Configuration & Tips
+- Memory is opt-in: set `BROOD_MEMORY=1` for the engine.
+- Pricing overrides live at `~/.brood/pricing_overrides.json`.
+- Desktop uses a real PTY; keep terminal output stable and machine-readable via `events.jsonl`.
+- Desktop file access requires Tauri FS scope (see `desktop/src-tauri/tauri.conf.json`).
+- API keys are listed in `.env.example` and should be stored in a local `.env` (gitignored).
+
+## Agent/LLM Intake (Optional)
+- `llms.txt` is the agent-facing entrypoints file (high-signal files + task routing).
+- `agent-intake.json` defines an optional Agent Intake Protocol (AIP) contract for a server you run (curated entrypoints + optional context packs). It does nothing unless an agent calls the `intake_endpoint`.
+
+Local test (stdlib-only):
+- Build packs: `python3 scripts/aip_build_packs.py --all --out-dir outputs/aip_packs --write-index`
+- Run stub server: `python3 scripts/aip_server.py --port 8787 --packs-dir outputs/aip_packs`
+
+Privacy guidance:
+- Prefer coarse `task.tags[]`; avoid raw prompts and never send/store secrets.
+- Support opt-out via `telemetry.opt_out: true` and/or `X-Brood-Opt-Out: 1`.
+
+## Source: `docs/desktop.md`
+
+# Desktop App (Tauri)
+
+Supported platform: **macOS only** (Desktop app). There is no web app, and Windows/Linux builds are not supported yet.
+
+The desktop app is image-first: import images, run Abilities, and inspect results in the bottom HUD.
+
+## Core Concepts
+- **Run**: a folder on disk (created under `~/brood_runs/`) that stores inputs, artifacts, receipts, and `events.jsonl`.
+- **Unit**: the currently selected image (shown on the canvas in single view).
+- **Views**:
+  - `Single view`: one image on the canvas, with a filmstrip to browse artifacts.
+  - `Multi view`: tiled layout of all images in the run (used for 2-photo actions).
+
+## Basic Workflow
+1. Click **New Run** (creates a run directory and starts the engine).
+2. Click **Import Photos** or drag-drop onto the canvas (copies files into `run_dir/inputs/`).
+3. Use **Abilities** (right panel) to generate edits/variants.
+4. Use **Export** to write `run_dir/export.html` for a lightweight shareable viewer.
+
+## Abilities
+
+Single-image actions (work in `Single view`):
+- `Diagnose`: creative-director critique. Output appears in the HUD as `DIAG`.
+- `Recast`: reimagine the image in a different medium/context (image output).
+- `Background: White` / `Background: Sweep`: background replacement edits.
+- `Crop: Square`: local crop (no model call).
+- `Variations`: zero-prompt variations of the active image.
+
+Two-image actions (require `Multi view` and **exactly 2** photos loaded):
+- `Combine`: blend the two images into one (`/blend`).
+- `Swap DNA`: structure from one + surface qualities from the other (`/swap_dna`). Shift-click to invert.
+- `Bridge`: synthesize the aesthetic midpoint between two references (`/bridge`).
+- `Argue`: debate which direction is stronger. Output appears in the HUD as `ARG`.
+
+Notes:
+- Some actions auto-switch the **Image Model** (e.g. 2-photo actions prefer `gemini-3-pro-image-preview`). The agent portraits update to match.
+- After a 2-photo action completes, Brood switches back to `Single view` showing the output-only image. Use `Multi view` to return to the tiled layout.
+
+## HUD + Tools
+- The HUD prints `UNIT / DESC / SEL / GEN` for the active image.
+- While `DIAG` / `ARG` text is present, the HUD hides the other lines to stay focused.
+- The HUD keybar (buttons `1`-`9`) activates canvas tools/actions. Common hotkeys:
+  - `L` lasso
+  - `D` designate subject/reference/object
+  - `F` fit-to-view
+  - `Esc` clear selection / close panels
+
+## Files Written To The Run
+- `run_dir/inputs/`: imported photos
+- `run_dir/receipt-*.json`: generation/edit receipts
+- `run_dir/events.jsonl`: event stream consumed by the desktop UI
+- `run_dir/visual_prompt.json`: serialized canvas marks/layout (see `docs/visual_prompting_v0.md`)
+
+## Source: `agent-intake.json`
+
+{
+  "schema_version": "aip-1",
+  "schema": {
+    "url": "https://raw.githubusercontent.com/kevinshowkat/brood/main/docs/aip-1.schema.json",
+    "local_path": "docs/aip-1.schema.json",
+    "request_def": "#/$defs/IntakeRequest",
+    "response_def": "#/$defs/IntakeResponse"
+  },
+  "intake_endpoint": "https://6yq5plinssvsog2ozyhnfnscya0qwdzp.lambda-url.us-east-1.on.aws/aip/intake",
+  "notes": [
+    "This file is repo-side only. AIP requires operating the intake_endpoint on infrastructure you control.",
+    "If you later host schema/intake on a custom domain, update the URLs here (or leave AIP unused and follow llms.txt fallback entrypoints)."
+  ],
+  "privacy": {
+    "purpose": "Return curated entrypoints (files/scripts) and optional context pack URLs; optionally log coarse task tags for aggregate usage.",
+    "expected_logs": [
+      "timestamp",
+      "agent.tool",
+      "agent.tool_version",
+      "task.tags",
+      "repo.ref (if provided)",
+      "response.packs[].id (if any)"
+    ],
+    "do_not_send": [
+      "raw prompts (unless the user explicitly chooses to share them)",
+      "API keys or secrets",
+      "source images / binary artifacts"
+    ],
+    "opt_out": {
+      "request_field": "telemetry.opt_out",
+      "header": "X-Brood-Opt-Out",
+      "header_value": "1"
+    }
+  },
+  "tags": [
+    "desktop-dev",
+    "desktop-quick-actions",
+    "desktop-canvas",
+    "desktop-tauri",
+    "engine-cli",
+    "engine-providers",
+    "engine-recreate",
+    "engine-memory",
+    "engine-events",
+    "tests",
+    "docs"
+  ],
+  "fallback_entrypoints": [
+    {
+      "path": "README.md",
+      "kind": "doc",
+      "why": "Quickstart for desktop + engine/CLI, plus troubleshooting and layout overview.",
+      "priority": 1
+    },
+    {
+      "path": "AGENTS.md",
+      "kind": "doc",
+      "why": "Repo guidelines: structure, build commands, testing, and coding style.",
+      "priority": 1
+    },
+    {
+      "path": "docs/desktop.md",
+      "kind": "doc",
+      "why": "Desktop concepts (Run/Unit/Views), Quick Actions list, HUD behavior, and run artifacts.",
+      "priority": 2
+    },
+    {
+      "path": "brood_engine/cli.py",
+      "kind": "source",
+      "why": "Primary CLI entry: chat/run/recreate/export handlers and argument plumbing.",
+      "priority": 2
+    },
+    {
+      "path": "brood_engine/engine.py",
+      "kind": "source",
+      "why": "Engine orchestration and core execution loop.",
+      "priority": 3
+    },
+    {
+      "path": "desktop/src/canvas_app.js",
+      "kind": "source",
+      "why": "Desktop UI: canvas behaviors and Quick Actions rendering/dispatch.",
+      "priority": 2
+    },
+    {
+      "path": "desktop/src-tauri/src/main.rs",
+      "kind": "source",
+      "why": "Tauri backend glue (commands, app wiring).",
+      "priority": 3
+    },
+    {
+      "path": "desktop/src-tauri/tauri.conf.json",
+      "kind": "config",
+      "why": "FS scope and app configuration (common cause of import/export issues).",
+      "priority": 3
+    },
+    {
+      "path": "scripts/dev_desktop.sh",
+      "kind": "script",
+      "why": "Dev runner that starts the Tauri app and spawns the Python engine.",
+      "priority": 2
+    }
+  ],
+  "tag_catalog": {
+    "desktop-dev": {
+      "description": "Run the desktop app locally; fix build/startup issues.",
+      "entrypoints": [
+        "README.md",
+        "scripts/dev_desktop.sh",
+        "desktop/package.json",
+        "desktop/src-tauri/Cargo.toml",
+        "desktop/src-tauri/src/main.rs"
+      ]
+    },
+    "desktop-quick-actions": {
+      "description": "Change Quick Actions UI/behavior (buttons, dispatch, HUD output).",
+      "entrypoints": [
+        "docs/desktop.md",
+        "desktop/src/canvas_app.js",
+        "desktop/src/index.html",
+        "desktop/src/styles.css",
+        "brood_engine/cli.py",
+        "brood_engine/engine.py"
+      ]
+    },
+    "desktop-canvas": {
+      "description": "Canvas interactions, selections, tools, layout, filmstrip behavior.",
+      "entrypoints": [
+        "desktop/src/canvas_app.js",
+        "desktop/src/styles.css",
+        "docs/desktop.md"
+      ]
+    },
+    "desktop-tauri": {
+      "description": "Tauri backend, FS scope, command wiring, native build issues.",
+      "entrypoints": [
+        "desktop/src-tauri/src/main.rs",
+        "desktop/src-tauri/tauri.conf.json",
+        "README.md"
+      ]
+    },
+    "engine-cli": {
+      "description": "Brood CLI commands and flags (chat/run/recreate/export).",
+      "entrypoints": [
+        "brood_engine/cli.py",
+        "brood_engine/engine.py",
+        "README.md"
+      ]
+    },
+    "engine-providers": {
+      "description": "Provider integrations (OpenAI/Gemini/etc), model routing, API key handling.",
+      "entrypoints": [
+        "brood_engine/providers/",
+        "brood_engine/models/",
+        "README.md",
+        ".env.example"
+      ]
+    },
+    "engine-recreate": {
+      "description": "Recreate flow (reference image in, similarities/edits out).",
+      "entrypoints": [
+        "brood_engine/recreate/",
+        "brood_engine/cli.py"
+      ]
+    },
+    "engine-memory": {
+      "description": "Opt-in memory system, storage, and retrieval logic.",
+      "entrypoints": [
+        "brood_engine/memory/",
+        "README.md"
+      ]
+    },
+    "engine-events": {
+      "description": "Run artifacts + events.jsonl format; stability of event stream consumed by desktop.",
+      "entrypoints": [
+        "brood_engine/runs/",
+        "docs/desktop.md"
+      ]
+    },
+    "tests": {
+      "description": "Pytest coverage for engine components.",
+      "entrypoints": [
+        "tests/",
+        "pyproject.toml"
+      ]
+    },
+    "docs": {
+      "description": "Docs updates (desktop usage, specs, reference notes).",
+      "entrypoints": [
+        "docs/README.md",
+        "docs/desktop.md",
+        "docs/param_forge_reference.md"
+      ]
+    }
+  },
+  "example_request": {
+    "schema_version": "aip-1",
+    "agent": {
+      "tool": "codex",
+      "tool_version": "0.0",
+      "git_user_agent": "git/2.x"
+    },
+    "repo": {
+      "url": "https://github.com/<org-or-user>/brood",
+      "ref": "main"
+    },
+    "task": {
+      "tags": [
+        "desktop-quick-actions",
+        "engine-events"
+      ],
+      "notes": "Need to add a new Quick Action and ensure events.jsonl stays stable."
+    },
+    "telemetry": {
+      "opt_out": false
+    }
+  }
+}
+
+## Source: `docs/aip-1.schema.json`
+
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://brood.sh/spec/aip-1.schema.json",
+  "title": "Agent Intake Protocol (AIP) v1",
+  "description": "A minimal request/response contract for an optional intake endpoint that returns curated repo entrypoints and optional context pack URLs.",
+  "type": "object",
+  "$defs": {
+    "IntakeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "agent",
+        "task"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "aip-1"
+        },
+        "agent": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tool"
+          ],
+          "properties": {
+            "tool": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Agent host/tool identifier, e.g. 'codex', 'cursor', 'claude-code', 'chatgpt'."
+            },
+            "tool_version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "git_user_agent": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Optional git transport UA if available (informational only)."
+            }
+          }
+        },
+        "repo": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Repo URL (optional)."
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Branch/tag/SHA (optional)."
+            }
+          }
+        },
+        "task": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tags"
+          ],
+          "properties": {
+            "tags": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Coarse, privacy-preserving task tags (no raw prompts)."
+            },
+            "notes": {
+              "type": "string",
+              "maxLength": 2000,
+              "description": "Optional high-level notes; should be non-sensitive and non-identifying."
+            }
+          }
+        },
+        "telemetry": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "opt_out": {
+              "type": "boolean",
+              "default": false,
+              "description": "If true, the server should minimize/skip logging."
+            }
+          }
+        }
+      },
+      "examples": [
+        {
+          "schema_version": "aip-1",
+          "agent": {
+            "tool": "codex",
+            "tool_version": "0.0"
+          },
+          "repo": {
+            "url": "https://github.com/<org-or-user>/brood",
+            "ref": "main"
+          },
+          "task": {
+            "tags": [
+              "desktop-quick-actions",
+              "engine-events"
+            ],
+            "notes": "Add a new Ability; keep events.jsonl stable."
+          }
+        }
+      ]
+    },
+    "IntakeResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "entrypoints"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "aip-1"
+        },
+        "session": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 8,
+              "description": "Opaque session id for correlating optional pack downloads/referrals."
+            },
+            "expires_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "entrypoints": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "why"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Workspace-relative path (or a directory path ending in '/')."
+              },
+              "why": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "doc",
+                  "source",
+                  "script",
+                  "config",
+                  "test",
+                  "asset"
+                ]
+              },
+              "priority": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              }
+            }
+          }
+        },
+        "commands": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Optional commands for running/tests; should be safe and deterministic."
+        },
+        "packs": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "url",
+              "purpose"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "url": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Optional context pack URL (can be public or short-lived signed URL)."
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[A-Fa-f0-9]{64}$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "purpose": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              }
+            }
+          }
+        },
+        "notes": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          }
+        },
+        "attribution": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300,
+              "description": "Optional short attribution snippet."
+            },
+            "referral_url": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      "examples": [
+        {
+          "schema_version": "aip-1",
+          "session": {
+            "id": "sess_01HRZ6V9Y2P2Q9Q7"
+          },
+          "entrypoints": [
+            {
+              "path": "docs/desktop.md",
+              "kind": "doc",
+              "why": "Abilities mental model and HUD output semantics.",
+              "priority": 1
+            },
+            {
+              "path": "desktop/src/canvas_app.js",
+              "kind": "source",
+              "why": "Abilities rendering and action dispatch.",
+              "priority": 1
+            },
+            {
+              "path": "brood_engine/cli.py",
+              "kind": "source",
+              "why": "Engine command wiring used by Abilities.",
+              "priority": 2
+            }
+          ],
+          "commands": [
+            "./scripts/dev_desktop.sh",
+            "python -m pytest"
+          ],
+          "packs": [
+            {
+              "id": "desktop-quick-actions",
+              "url": "https://brood.sh/aip/packs/desktop-quick-actions@<ref>.json",
+              "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+              "purpose": "Curated excerpts for Abilities + event stream expectations."
+            }
+          ],
+          "notes": [
+            "Desktop expects Tauri v1 APIs (@tauri-apps/api v1).",
+            "Do not store prompts/secrets in the repo; use .env (gitignored) based on .env.example."
+          ]
+        }
+      ]
+    }
+  }
+}

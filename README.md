@@ -117,6 +117,7 @@ Edit `~/.brood/pricing_overrides.json` to override pricing or latency values.
 ## Agent/LLM entrypoints
 
 - `llms.txt` high-signal entrypoints and task routing for LLM agents.
+- `llms-full.txt` expanded, inlined agent context generated from canonical docs (`python3 scripts/build_llms_full.py`).
 - `agent-intake.json` optional Agent Intake Protocol (AIP) contract (curated entrypoints + optional context packs).
 - `scripts/aip_build_packs.py` builds JSON context packs to host and return via AIP (writes to `outputs/aip_packs/`, gitignored).
 - `scripts/aip_server.py` stdlib-only local stub AIP server for testing the contract + pack downloads.

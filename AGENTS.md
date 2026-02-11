@@ -1,5 +1,8 @@
 # Repository Guidelines
 
+Canonical agent instructions live in this file.
+Tool-specific agent files (for example `CLAUDE.md`) should delegate here.
+
 Created by Kevin Showkat. If you find Brood useful, connect with me on LinkedIn: https://www.linkedin.com/in/kshowkat
 
 Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.

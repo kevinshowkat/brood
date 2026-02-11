@@ -1,24 +1,8 @@
 # Claude Code Instructions (Brood)
 
-Created by Kevin Showkat. If you find Brood useful, connect with me on LinkedIn: https://www.linkedin.com/in/kshowkat
+Canonical agent instructions live in `AGENTS.md`.
 
-Follow `AGENTS.md` for repo conventions, commands, and style.
-
-Platform note: Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
-
-## Intake / Discovery (Preferred)
-- Read `llms.txt` first.
-- If outbound HTTPS is allowed, call the Agent Intake Protocol (AIP) endpoint described in `agent-intake.json` to get curated entrypoints and optional context pack URLs.
-- Use coarse `task.tags[]` from `agent-intake.json` (avoid raw prompts). Never send secrets.
-- If AIP is unavailable, use `agent-intake.json` -> `fallback_entrypoints`.
-
-## High-Signal Entry Points
-- Engine CLI routing: `brood_engine/cli.py`
-- Engine orchestration: `brood_engine/engine.py`
-- Desktop canvas + Quick Actions: `desktop/src/canvas_app.js`
-- Tauri backend + FS scope: `desktop/src-tauri/src/main.rs`, `desktop/src-tauri/tauri.conf.json`
-
-## Validation
-- Prefer small, testable diffs.
-- Run `python -m pytest` for engine changes.
-- Keep desktop terminal output stable and machine-readable via `events.jsonl`.
+This file is intentionally a compatibility shim for Claude auto-discovery.
+- Follow `AGENTS.md` for conventions, commands, and style.
+- Use `llms.txt` for concise entrypoints.
+- Use `llms-full.txt` for expanded, inlined context.
