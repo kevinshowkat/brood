@@ -37,12 +37,16 @@ npm-debug.log*
 !desktop/src/assets/mother/mother_idle.mirrored.mp4
 !desktop/src/assets/mother/mother_working.mp4
 !desktop/src/assets/mother/mother_realtime.mp4
+!desktop/src/assets/mother/mother_working_sora-2_720x1280_12s_20260210_160837_v05.mp4
 
 # Generated artifacts
 outputs/first_light/
 outputs/aip_packs/
 outputs/aip_server/
 outputs/sora_portraits/
+outputs/ai_visibility/
+outputs/sora_mother/*.reference.png
+outputs/sora_mother/*.json
 
 # Generated UI icon intermediates
 desktop/src/assets/intent-icons-sc/raw/
@@ -52,6 +56,13 @@ desktop/src/assets/intent-icons-sc/manifest.json
 bumpers.png
 minimap.jpg
 github.png
+yellow.png
+
+# Local visibility probe artifacts
+docs/ai_visibility.md
+docs/ai_visibility.schema.json
+docs/ai_visibility_queries.sample.json
+scripts/visibility_probe.py
 
 # Editor
 .idea/

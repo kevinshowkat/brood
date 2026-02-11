@@ -130,11 +130,10 @@
                 </div>
               </div>
             </div>
-              <div id="mother-panel" class="mother-overlay panel" aria-label="Mother">
-                <div class="panel-title">Mother</div>
-                <div class="mother-body">
-                  <div class="mother-portrait" aria-hidden="true">
-                    <div class="portrait-frame">
+              <div id="mother-overlay" class="mother-overlay" aria-label="Mother">
+                <div id="mother-portrait-shell" class="mother-portrait-shell panel" aria-hidden="true">
+                  <div class="mother-portrait">
+                    <div class="portrait-frame mother-portrait-frame">
                       <div id="mother-avatar" class="portrait-avatar" data-provider="openai" aria-hidden="true">
                         <video
                           id="mother-video"
@@ -148,12 +147,16 @@
                       </div>
                     </div>
                   </div>
-                  <div id="tips-text" class="panel-body muted panel-readout">
-                    Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
+                </div>
+                <div id="mother-panel-stack" class="mother-panel-stack" aria-label="Mother controls">
+                  <div id="mother-panel" class="mother-panel" aria-label="Mother dialog">
+                    <div id="tips-text" class="panel-body muted panel-readout">
+                      Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
+                    </div>
                   </div>
-                  <div class="mother-actions" aria-label="Mother controls">
+                  <div class="mother-actions mother-actions-floating" aria-label="Mother controls">
                     <button id="mother-ability-icon" class="mother-ability-icon" type="button" aria-label="Mother ability"></button>
-                    <button id="mother-confirm" class="mother-confirm" type="button">Confirm</button>
+                    <button id="mother-confirm" class="mother-confirm" type="button" aria-label="Confirm Mother action">✓</button>
                     <button id="mother-stop" class="mother-stop hidden" type="button">Stop</button>
                   </div>
                 </div>

@@ -100,3 +100,7 @@ Edit `~/.brood/pricing_overrides.json` to override pricing or latency values.
 - `agent-intake.json` optional Agent Intake Protocol (AIP) contract (curated entrypoints + optional context packs).
 - `scripts/aip_build_packs.py` builds JSON context packs to host and return via AIP (writes to `outputs/aip_packs/`, gitignored).
 - `scripts/aip_server.py` stdlib-only local stub AIP server for testing the contract + pack downloads.
+- `scripts/visibility_probe.py` runs repeatable LLM mention probes (OpenAI/Anthropic/Gemini or dryrun), writes scored JSONL + summary to `outputs/ai_visibility/` using browser-style user queries by default, with optional provider web-search mode.
+- `docs/ai_visibility.md` usage guide for probe setup, providers, and output interpretation.
+- `docs/ai_visibility.schema.json` schema for visibility probe outputs (`probe_result` + `run_summary`).
+- `docs/ai_visibility_queries.sample.json` starter query set for discovery/share-of-voice tracking.
