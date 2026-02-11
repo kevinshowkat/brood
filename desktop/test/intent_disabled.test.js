@@ -10,15 +10,22 @@ const cssPath = join(here, "..", "src", "styles.css");
 const app = readFileSync(appPath, "utf8");
 const css = readFileSync(cssPath, "utf8");
 
-test("Intent Canvas: onboarding decider is disabled (HUD + deck visible by default)", () => {
+test("Intent Canvas: onboarding gate stays disabled while ambient inference is enabled", () => {
   assert.match(app, /const INTENT_CANVAS_ENABLED = false/);
-  assert.match(app, /function intentModeActive\(\) \{\n\s*if \(!INTENT_CANVAS_ENABLED\) return false;/);
-  assert.match(app, /intent:\s*\{[\s\S]*locked:\s*true,/);
-  assert.match(app, /state\.intent\.locked = true;/);
-  assert.match(app, /const intentActive = intentModeActive\(\);/);
+  assert.match(app, /const INTENT_AMBIENT_ENABLED = true/);
+  assert.match(app, /intentAmbient:\s*\{/);
+  assert.match(app, /function intentAmbientActive\(\)/);
 });
 
-test("Intent Canvas: CSS still exists but won't hide HUD without intent-mode class", () => {
+test("Intent Canvas: ambient suggestion model uses future-ready asset fields", () => {
+  assert.match(app, /asset_type/);
+  assert.match(app, /asset_key/);
+  assert.match(app, /asset_src/);
+  assert.match(app, /renderAmbientIntentNudges\(/);
+});
+
+test("Intent Canvas: CSS still hides HUD only for explicit intent-mode onboarding", () => {
   assert.match(css, /\.canvas-wrap\.intent-mode\s+\.hud/);
-  assert.match(css, /\.canvas-wrap\.intent-mode\s+\.canvas-bumper/);
+  assert.match(css, /\.canvas-wrap\.intent-mode\s+#spawnbar/);
+  assert.match(css, /\.canvas-wrap\.intent-ambient-rt-active::after/);
 });

@@ -15,6 +15,11 @@ import {
 } from "@tauri-apps/api/fs";
 
 import { computeActionGridSlots } from "./action_grid_logic.js";
+import {
+  mergeAmbientSuggestions,
+  placeAmbientSuggestions,
+  shouldScheduleAmbientIntent,
+} from "./intent_ambient.js";
 
 const THUMB_PLACEHOLDER_SRC = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
@@ -87,11 +92,9 @@ const els = {
   hudDirectorVal: document.getElementById("hud-director-v"),
   hudLineDesc: document.getElementById("hud-line-desc"),
   hudLineSel: document.getElementById("hud-line-sel"),
-  hudLineGen: document.getElementById("hud-line-gen"),
   hudUnitName: document.getElementById("hud-unit-name"),
   hudUnitDesc: document.getElementById("hud-unit-desc"),
   hudUnitSel: document.getElementById("hud-unit-sel"),
-  hudUnitStat: document.getElementById("hud-unit-stat"),
   filmstrip: document.getElementById("filmstrip"),
   spawnbar: document.getElementById("spawnbar"),
   toast: document.getElementById("toast"),
@@ -296,6 +299,26 @@ const state = {
 	    uiHideSuggestion: false,
 	    uiHits: [], // [{ kind, id, rect }]
 	  },
+  intentAmbient: {
+    enabled: true,
+    pending: false,
+    pendingPath: null,
+    pendingAt: 0,
+    pendingFrameId: null,
+    frameSeq: 0,
+    rtState: "off", // "off" | "connecting" | "ready" | "failed"
+    disabledReason: null,
+    lastError: null,
+    lastErrorAt: 0,
+    lastSignature: null,
+    lastRunAt: 0,
+    iconState: null,
+    iconStateAt: 0,
+    touchedImageIds: [],
+    suggestions: [], // [{ id, asset_type, asset_key/src, anchor, confidence, world_rect, created_at_ms, updated_at_ms }]
+    uiHits: [], // [{ kind, id, rect, branchId, assetKey, anchorImageIds }]
+    lastReason: null,
+  },
   alwaysOnVision: {
     enabled: settings.alwaysOnVision,
     pending: false,
@@ -370,10 +393,14 @@ const ENABLE_DRAG_DROP_IMPORT = false;
 // Intent Canvas feature flags. Keep the full implementation in place so we can
 // re-enable specific behaviors without ripping out code.
 const INTENT_CANVAS_ENABLED = false; // disable onboarding intent decider (keep code intact)
+const INTENT_AMBIENT_ENABLED = true; // ambient intent runs in the background while editing
 const INTENT_TIMER_ENABLED = false; // hide LED timer + disable timeout-based force-choice
 const INTENT_ROUNDS_ENABLED = false; // disable "max rounds" gating
 const INTENT_FORCE_CHOICE_ENABLED = INTENT_TIMER_ENABLED || INTENT_ROUNDS_ENABLED;
 const INTENT_DEBUG_SHOW_CLUSTERS = false; // hide branch-pill debug UI; keep implemented
+const INTENT_AMBIENT_MAX_NUDGES = 3;
+const INTENT_AMBIENT_ICON_WORLD_SIZE = 136;
+const INTENT_AMBIENT_FADE_IN_MS = 280;
 
 // Temporarily disabled custom canvas cursor (kept as a single knob for quick restore).
 const INTENT_IMPORT_CURSOR = "default";
@@ -583,13 +610,11 @@ function renderHudReadout() {
     if (els.hudUnitName) els.hudUnitName.textContent = "NO IMAGE";
     if (els.hudUnitDesc) els.hudUnitDesc.textContent = "Tap or drag to add photos";
     if (els.hudUnitSel) els.hudUnitSel.textContent = `imgs:0 · ${sel} · ${state.tool} · ${zoomPct}%`;
-    if (els.hudUnitStat) els.hudUnitStat.textContent = state.ptySpawned ? "ready" : "engine offline";
     if (els.hudLineDirector) els.hudLineDirector.classList.add("hidden");
     if (els.hudDirectorVal) els.hudDirectorVal.textContent = "";
     if (els.hudDirectorKey) els.hudDirectorKey.textContent = "DIR";
     if (els.hudLineDesc) els.hudLineDesc.classList.remove("hidden");
     if (els.hudLineSel) els.hudLineSel.classList.remove("hidden");
-    if (els.hudLineGen) els.hudLineGen.classList.remove("hidden");
     return;
   }
 
@@ -621,27 +646,6 @@ function renderHudReadout() {
   const zoomPct = Math.round(zoomScale * 100);
   if (els.hudUnitSel) els.hudUnitSel.textContent = `imgs:${imgSel} · ${sel} · ${state.tool} · ${zoomPct}%`;
 
-  const meta = img?.receiptMeta || null;
-  const opRaw = meta?.operation || img?.kind || null;
-  const operation = opRaw ? String(opRaw).replace(/_/g, " ").trim() : "";
-  const provider = meta?.provider ? String(meta.provider) : "";
-  const model = meta?.model ? String(meta.model) : "";
-  const gen = provider && model ? `${provider}:${model}` : provider || model || "";
-  const cost = formatUsd(meta?.cost_total_usd);
-  const lat = formatSeconds(meta?.latency_per_image_s);
-  const pieces = [];
-  if (operation) pieces.push(operation);
-  if (gen) pieces.push(gen);
-  if (cost) pieces.push(cost);
-  if (lat) pieces.push(`${lat}/img`);
-  const vmeta = img?.visionDescMeta || null;
-  if (vmeta && (vmeta.source || vmeta.model)) {
-    const src = vmeta.source ? String(vmeta.source).replace(/_vision$/i, "") : "vision";
-    const mdl = vmeta.model ? String(vmeta.model) : "";
-    pieces.push(`vision:${src}${mdl ? `:${mdl}` : ""}`);
-  }
-  if (els.hudUnitStat) els.hudUnitStat.textContent = pieces.length ? pieces.join(" · ") : "—";
-
   const directorRaw = state.lastDirectorText ? String(state.lastDirectorText) : "";
   const directorMeta = state.lastDirectorMeta && typeof state.lastDirectorMeta === "object" ? state.lastDirectorMeta : null;
   const directorKind = directorMeta?.kind ? String(directorMeta.kind) : "";
@@ -662,7 +666,6 @@ function renderHudReadout() {
   // Keep the HUD focused when CD output is present.
   if (els.hudLineDesc) els.hudLineDesc.classList.toggle("hidden", hasDirector);
   if (els.hudLineSel) els.hudLineSel.classList.toggle("hidden", hasDirector);
-  if (els.hudLineGen) els.hudLineGen.classList.toggle("hidden", hasDirector);
 }
 
 // Give vision requests enough time to complete under normal network conditions.
@@ -862,9 +865,9 @@ function _completeDescribeInFlight({
   if (cleanedDesc) {
     // Persist new per-image descriptions into run artifacts.
     scheduleVisualPromptWrite();
-    if (intentModeActive() && state.intent && !state.intent.locked) {
+    if (intentAmbientActive()) {
       // Treat new vision descriptions as an intent signal.
-      scheduleIntentInference({ immediate: true, reason: "describe" });
+      scheduleAmbientIntentInference({ immediate: true, reason: "describe", imageIds: [item?.id] });
     }
   }
   if (getActiveImage()?.path === inflight) renderHudReadout();
@@ -944,6 +947,8 @@ let intentInferenceTimer = null;
 let intentInferenceTimeout = null;
 let intentTicker = null;
 let intentStateWriteTimer = null;
+let intentAmbientInferenceTimer = null;
+let intentAmbientInferenceTimeout = null;
 
 function _collapseWs(text) {
   return String(text || "")
@@ -1180,6 +1185,33 @@ function intentModeActive() {
   return Boolean(state.intent && !state.intent.locked);
 }
 
+function intentAmbientActive() {
+  if (!INTENT_AMBIENT_ENABLED) return false;
+  const ambient = state.intentAmbient;
+  if (!ambient || !ambient.enabled) return false;
+  return true;
+}
+
+function rememberAmbientTouchedImageIds(ids = []) {
+  const ambient = state.intentAmbient;
+  if (!ambient) return;
+  const ordered = [];
+  for (const raw of Array.isArray(ids) ? ids : []) {
+    const id = String(raw || "").trim();
+    if (!id) continue;
+    if (!state.imagesById.has(id)) continue;
+    if (!ordered.includes(id)) ordered.push(id);
+  }
+  if (!ordered.length) return;
+  const prev = Array.isArray(ambient.touchedImageIds) ? ambient.touchedImageIds : [];
+  const merged = [...ordered];
+  for (const id of prev) {
+    if (!id || merged.includes(id)) continue;
+    merged.push(id);
+  }
+  ambient.touchedImageIds = merged.slice(0, 8);
+}
+
 function syncIntentModeClass() {
   if (!els.canvasWrap) return;
   els.canvasWrap.classList.toggle("intent-mode", intentModeActive());
@@ -1191,6 +1223,12 @@ function intentRealtimePulseActive() {
   if (!intent || !intentModeActive()) return false;
   // "Actively sending/receiving" for Intent Canvas: request in flight or session connecting.
   return Boolean(intent.pending || intent.rtState === "connecting");
+}
+
+function intentAmbientRealtimePulseActive() {
+  const ambient = state.intentAmbient;
+  if (!ambient || !intentAmbientActive()) return false;
+  return Boolean(ambient.pending || ambient.rtState === "connecting");
 }
 
 function syncIntentRealtimePortrait() {
@@ -1214,6 +1252,7 @@ function syncIntentRealtimePortrait() {
 function syncIntentRealtimeClass() {
   if (!els.canvasWrap) return;
   els.canvasWrap.classList.toggle("intent-rt-active", intentRealtimePulseActive());
+  els.canvasWrap.classList.toggle("intent-ambient-rt-active", intentAmbientRealtimePulseActive());
   syncIntentRealtimePortrait();
 }
 
@@ -2148,6 +2187,369 @@ async function runAlwaysOnVisionOnce({ force = false } = {}) {
     return false;
   }
   bumpSessionApiCalls();
+  return true;
+}
+
+function _ambientIntentViewportWorldBounds() {
+  const wrap = els.canvasWrap;
+  const canvasCssW = Math.max(1, Number(wrap?.clientWidth) || 1);
+  const canvasCssH = Math.max(1, Number(wrap?.clientHeight) || 1);
+  const dpr = Math.max(0.0001, getDpr());
+
+  if (state.canvasMode === "multi") {
+    const scale = Math.max(0.0001, Number(state.multiView?.scale) || 1);
+    const offsetCssX = (Number(state.multiView?.offsetX) || 0) / dpr;
+    const offsetCssY = (Number(state.multiView?.offsetY) || 0) / dpr;
+    return {
+      minX: (0 - offsetCssX) / scale,
+      minY: (0 - offsetCssY) / scale,
+      maxX: (canvasCssW - offsetCssX) / scale,
+      maxY: (canvasCssH - offsetCssY) / scale,
+    };
+  }
+
+  const scale = Math.max(0.0001, Number(state.view?.scale) || 1);
+  const offsetCssX = (Number(state.view?.offsetX) || 0) / dpr;
+  const offsetCssY = (Number(state.view?.offsetY) || 0) / dpr;
+  return {
+    minX: (0 - offsetCssX) / scale,
+    minY: (0 - offsetCssY) / scale,
+    maxX: (canvasCssW - offsetCssX) / scale,
+    maxY: (canvasCssH - offsetCssY) / scale,
+  };
+}
+
+function _ambientIntentImageRectsWorldMap() {
+  const out = new Map();
+  if (state.canvasMode === "multi") {
+    const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
+    for (const imageId of z) {
+      const key = String(imageId || "").trim();
+      if (!key) continue;
+      const rect = state.freeformRects.get(key);
+      if (!rect) continue;
+      out.set(key, {
+        x: Number(rect.x) || 0,
+        y: Number(rect.y) || 0,
+        w: Math.max(1, Number(rect.w) || 1),
+        h: Math.max(1, Number(rect.h) || 1),
+      });
+    }
+    return out;
+  }
+
+  const active = getActiveImage();
+  if (!active?.id) return out;
+  const iw = Number(active?.img?.naturalWidth || active?.width) || 0;
+  const ih = Number(active?.img?.naturalHeight || active?.height) || 0;
+  if (iw > 0 && ih > 0) {
+    out.set(String(active.id), { x: 0, y: 0, w: iw, h: ih });
+  }
+  return out;
+}
+
+function _ambientUseCaseKeyForBranch(branch) {
+  if (!branch || typeof branch !== "object") return null;
+  const direct = _intentUseCaseKeyFromBranchId(branch.branch_id);
+  if (direct) return direct;
+  const icons = Array.isArray(branch.icons)
+    ? branch.icons.map((v) => String(v || "").trim().toUpperCase()).filter(Boolean)
+    : [];
+  if (icons.includes("GAME_DEV_ASSETS")) return "game_dev_assets";
+  if (icons.includes("STREAMING_CONTENT")) return "streaming_content";
+  if (icons.includes("UI_UX_PROTOTYPING")) return "uiux_prototyping";
+  if (icons.includes("ECOMMERCE_POD")) return "ecommerce_pod";
+  if (icons.includes("CONTENT_ENGINE")) return "content_engine";
+  return null;
+}
+
+function computeAmbientIntentSignature() {
+  const parts = [];
+  const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
+  for (const imageId of z) {
+    const item = imageId ? state.imagesById.get(imageId) : null;
+    const rect = imageId ? state.freeformRects.get(imageId) : null;
+    if (item?.path) parts.push(String(item.path));
+    if (item?.visionDesc) {
+      const v = String(item.visionDesc).replace(/[\r\n\t|]+/g, " ").replace(/\s+/g, " ").trim();
+      if (v) parts.push(`desc:${String(imageId)}:${clampText(v, 56)}`);
+    }
+    if (!rect) continue;
+    parts.push(
+      `rect:${String(imageId)}:${Math.round(Number(rect.x) || 0)},${Math.round(Number(rect.y) || 0)},${Math.round(
+        Number(rect.w) || 0
+      )},${Math.round(Number(rect.h) || 0)}`
+    );
+  }
+  return parts.join("|");
+}
+
+function clearAmbientIntentPending() {
+  const ambient = state.intentAmbient;
+  if (!ambient) return;
+  ambient.pending = false;
+  ambient.pendingPath = null;
+  ambient.pendingAt = 0;
+  ambient.pendingFrameId = null;
+}
+
+function clearAmbientIntentTimers() {
+  clearTimeout(intentAmbientInferenceTimer);
+  intentAmbientInferenceTimer = null;
+  clearTimeout(intentAmbientInferenceTimeout);
+  intentAmbientInferenceTimeout = null;
+}
+
+function resetAmbientIntentState({ keepSuggestions = false } = {}) {
+  const ambient = state.intentAmbient;
+  if (!ambient) return;
+  clearAmbientIntentPending();
+  ambient.frameSeq = 0;
+  ambient.rtState = "off";
+  ambient.disabledReason = null;
+  ambient.lastError = null;
+  ambient.lastErrorAt = 0;
+  ambient.lastSignature = null;
+  ambient.lastRunAt = 0;
+  ambient.iconState = null;
+  ambient.iconStateAt = 0;
+  ambient.touchedImageIds = [];
+  ambient.uiHits = [];
+  ambient.lastReason = null;
+  if (!keepSuggestions) ambient.suggestions = [];
+  clearAmbientIntentTimers();
+}
+
+function rebuildAmbientIntentSuggestions(iconState, { reason = null, nowMs = Date.now() } = {}) {
+  const ambient = state.intentAmbient;
+  if (!ambient) return [];
+
+  const branchesRaw = Array.isArray(iconState?.branches) ? iconState.branches : [];
+  const branches = [];
+  for (const branch of branchesRaw) {
+    if (!branch || typeof branch !== "object") continue;
+    const branchId = String(branch.branch_id || "").trim();
+    if (!branchId) continue;
+    const assetKey = _ambientUseCaseKeyForBranch(branch);
+    if (!assetKey) continue;
+    const confidence = typeof branch.confidence === "number" && Number.isFinite(branch.confidence)
+      ? clamp(Number(branch.confidence) || 0, 0, 1)
+      : null;
+    branches.push({
+      branch_id: branchId,
+      asset_type: "icon",
+      asset_key: assetKey,
+      asset_src: INTENT_UI_ICON_ASSETS.usecases?.[assetKey] || null,
+      confidence,
+      evidence_image_ids: Array.isArray(branch.evidence_image_ids)
+        ? branch.evidence_image_ids.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 3)
+        : [],
+      });
+  }
+
+  if (!branches.length) {
+    const fallback = buildFallbackIntentIconState(iconState?.frame_id || `ambient-${nowMs}`, { reason: "no_branches" });
+    const fb = Array.isArray(fallback?.branches) ? fallback.branches : [];
+    for (const branch of fb) {
+      const branchId = String(branch?.branch_id || "").trim();
+      if (!branchId) continue;
+      const assetKey = _ambientUseCaseKeyForBranch(branch);
+      if (!assetKey) continue;
+      branches.push({
+        branch_id: branchId,
+        asset_type: "icon",
+        asset_key: assetKey,
+        asset_src: INTENT_UI_ICON_ASSETS.usecases?.[assetKey] || null,
+        confidence: null,
+        evidence_image_ids: [],
+      });
+    }
+  }
+
+  const next = placeAmbientSuggestions({
+    branches,
+    imageRectsById: _ambientIntentImageRectsWorldMap(),
+    touchedImageIds: Array.isArray(ambient.touchedImageIds) ? ambient.touchedImageIds : [],
+    viewportWorldBounds: _ambientIntentViewportWorldBounds(),
+    maxSuggestions: INTENT_AMBIENT_MAX_NUDGES,
+    iconWorldSize: INTENT_AMBIENT_ICON_WORLD_SIZE,
+  });
+
+  ambient.suggestions = mergeAmbientSuggestions(ambient.suggestions, next, { nowMs });
+  ambient.lastReason = reason ? String(reason) : ambient.lastReason;
+  return ambient.suggestions;
+}
+
+function applyAmbientIntentFallback(reason, { message = null, hardDisable = false } = {}) {
+  const ambient = state.intentAmbient;
+  if (!ambient) return;
+  const now = Date.now();
+  clearAmbientIntentPending();
+  ambient.rtState = "failed";
+  ambient.disabledReason = hardDisable && message ? String(message) : null;
+  ambient.lastError = message ? String(message) : null;
+  ambient.lastErrorAt = message ? now : 0;
+
+  const frameId = ambient.pendingFrameId || `ambient-fallback-${now}`;
+  ambient.iconState = buildFallbackIntentIconState(frameId, { reason });
+  ambient.iconStateAt = now;
+  rebuildAmbientIntentSuggestions(ambient.iconState, { reason: `fallback:${String(reason || "fallback")}`, nowMs: now });
+  requestRender();
+}
+
+function allowAmbientIntentRealtime() {
+  if (!intentAmbientActive()) return false;
+  if (!state.images.length) return false;
+  if (!state.runDir) return false;
+  if (state.keyStatus && !state.keyStatus.openai) return false;
+  return true;
+}
+
+function scheduleAmbientIntentInference({ immediate = false, reason = null, imageIds = [] } = {}) {
+  const ambient = state.intentAmbient;
+  if (!ambient || !intentAmbientActive()) return false;
+  if (!state.images.length) return false;
+  const why = String(reason || "")
+    .trim()
+    .toLowerCase();
+  if (!shouldScheduleAmbientIntent(why)) return false;
+  rememberAmbientTouchedImageIds(imageIds.length ? imageIds : [state.activeId]);
+
+  clearTimeout(intentAmbientInferenceTimer);
+  const delay = immediate ? 0 : INTENT_INFERENCE_DEBOUNCE_MS;
+  intentAmbientInferenceTimer = setTimeout(() => {
+    intentAmbientInferenceTimer = null;
+    runAmbientIntentInferenceOnce({ reason: why || (immediate ? "immediate" : "debounce") }).catch((err) => {
+      console.warn("Ambient intent inference failed:", err);
+    });
+  }, delay);
+  return true;
+}
+
+async function runAmbientIntentInferenceOnce({ reason = null } = {}) {
+  const ambient = state.intentAmbient;
+  if (!ambient || !intentAmbientActive()) return false;
+  if (!state.images.length) {
+    ambient.suggestions = [];
+    return false;
+  }
+
+  const now = Date.now();
+  const signature = computeAmbientIntentSignature();
+  const since = now - (ambient.lastRunAt || 0);
+  if (signature && signature === ambient.lastSignature && ambient.iconState && since < 12_000 && ambient.rtState === "ready") {
+    return false;
+  }
+  if (since < INTENT_INFERENCE_THROTTLE_MS) {
+    clearTimeout(intentAmbientInferenceTimer);
+    intentAmbientInferenceTimer = setTimeout(() => {
+      intentAmbientInferenceTimer = null;
+      runAmbientIntentInferenceOnce({ reason: "throttle" }).catch((err) => console.warn("Ambient intent inference failed:", err));
+    }, Math.max(80, INTENT_INFERENCE_THROTTLE_MS - since));
+    return false;
+  }
+
+  await ensureRun();
+  if (!allowAmbientIntentRealtime()) {
+    const msg =
+      state.keyStatus && !state.keyStatus.openai ? "Missing OPENAI_API_KEY." : "Intent realtime disabled.";
+    applyAmbientIntentFallback("realtime_disabled", {
+      message: msg,
+      hardDisable: Boolean(state.keyStatus && !state.keyStatus.openai),
+    });
+    appendIntentTrace({
+      kind: "ambient_inference_blocked",
+      reason: msg,
+      signature,
+      rt_state: ambient.rtState,
+    }).catch(() => {});
+    return false;
+  }
+
+  const ok = await ensureEngineSpawned({ reason: "ambient intent inference" });
+  if (!ok) {
+    const msg = "Intent engine unavailable.";
+    applyAmbientIntentFallback("engine_unavailable", { message: msg });
+    appendIntentTrace({
+      kind: "ambient_engine_unavailable",
+      reason: msg,
+      signature,
+      rt_state: ambient.rtState,
+    }).catch(() => {});
+    return false;
+  }
+
+  if (ambient.rtState === "off" || ambient.rtState === "failed") ambient.rtState = "connecting";
+  await invoke("write_pty", { data: "/intent_rt_start\n" }).catch(() => {});
+
+  ambient.frameSeq = (Number(ambient.frameSeq) || 0) + 1;
+  const stamp = Date.now();
+  const frameId = `intent-ambient-${stamp}-${ambient.frameSeq}`;
+  const snapshotPath = `${state.runDir}/intent-ambient-${stamp}.png`;
+
+  await waitForIntentImagesLoaded({ timeoutMs: 900 });
+  render();
+  await writeIntentSnapshot(snapshotPath, { maxDimPx: INTENT_SNAPSHOT_MAX_DIM_PX });
+  let ctxPath = null;
+  await writeIntentContextEnvelope(snapshotPath, frameId)
+    .then((path) => {
+      ctxPath = path;
+    })
+    .catch((err) => {
+      console.warn("Failed to write ambient intent envelope:", err);
+    });
+
+  appendIntentTrace({
+    kind: "ambient_inference_dispatch",
+    reason: reason ? String(reason) : null,
+    frame_id: frameId,
+    snapshot_path: snapshotPath,
+    ctx_path: ctxPath,
+    signature,
+  }).catch(() => {});
+
+  ambient.pending = true;
+  ambient.pendingPath = snapshotPath;
+  ambient.pendingAt = now;
+  ambient.pendingFrameId = frameId;
+  ambient.lastRunAt = now;
+  ambient.lastSignature = signature;
+  ambient.lastReason = reason ? String(reason) : null;
+  requestRender();
+
+  clearTimeout(intentAmbientInferenceTimeout);
+  intentAmbientInferenceTimeout = setTimeout(() => {
+    const cur = state.intentAmbient;
+    if (!cur) return;
+    if (!cur.pending || cur.pendingPath !== snapshotPath) return;
+    const msg = "Intent realtime timed out.";
+    applyAmbientIntentFallback("timeout", { message: msg });
+    appendIntentTrace({
+      kind: "ambient_inference_timeout",
+      reason: msg,
+      frame_id: frameId,
+      snapshot_path: snapshotPath,
+      rt_state: cur.rtState,
+    }).catch(() => {});
+  }, INTENT_INFERENCE_TIMEOUT_MS);
+
+  try {
+    await invoke("write_pty", { data: `/intent_rt ${quoteForPtyArg(snapshotPath)}\n` });
+    bumpSessionApiCalls();
+  } catch (err) {
+    const msg = err?.message ? `Intent realtime failed: ${err.message}` : "Intent realtime failed.";
+    applyAmbientIntentFallback("dispatch_failed", { message: msg });
+    appendIntentTrace({
+      kind: "ambient_inference_dispatch_failed",
+      reason: msg,
+      frame_id: frameId,
+      snapshot_path: snapshotPath,
+      rt_state: ambient.rtState,
+    }).catch(() => {});
+    return false;
+  }
+
+  if (reason) setStatus(`Engine: ambient intent scan (${reason})`);
   return true;
 }
 
@@ -4480,6 +4882,7 @@ function computeMinimapSignature(busyIds) {
   if (wrap) parts.push(`wrap=${Math.round(wrap.clientWidth || 0)}x${Math.round(wrap.clientHeight || 0)}`);
   const surf = els.minimapSurface;
   if (surf) parts.push(`surf=${Math.round(surf.clientWidth || 0)}x${Math.round(surf.clientHeight || 0)}`);
+  parts.push(`mother_takeover=${state.mother?.running ? 1 : 0}`);
   parts.push(`mode=${state.canvasMode || ""}`);
   if (state.canvasMode === "multi") {
     const ms = Number(state.multiView?.scale) || 1;
@@ -4527,6 +4930,8 @@ function renderMinimap() {
   const surfaceW = surf.clientWidth || 0;
   const surfaceH = surf.clientHeight || 0;
   if (!surfaceW || !surfaceH) return;
+  surf.innerHTML = "";
+  if (state.mother?.running) return;
 
   const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
   const rects = [];
@@ -4538,7 +4943,6 @@ function renderMinimap() {
     rects.push({ imageId: String(imageId), rect, z: idx });
   }
 
-  surf.innerHTML = "";
   if (!rects.length) return;
 
   // Show a stable "god's-eye" view of canvas bounds plus a small overscan margin.
@@ -5145,8 +5549,10 @@ function ensureCanvasImageLoaded(item) {
             rect.y = clamp(Math.round(rect.y), margin, Math.max(margin, Math.round(ch - rect.h - margin)));
           }
           scheduleVisualPromptWrite();
+          if (intentAmbientActive()) {
+            scheduleAmbientIntentInference({ immediate: true, reason: "composition_change", imageIds: [item.id] });
+          }
           if (intentModeActive()) {
-            scheduleIntentInference({ immediate: true, reason: "aspect" });
             scheduleIntentStateWrite();
           }
         }
@@ -7765,9 +8171,11 @@ function addImage(item, { select = false } = {}) {
     file: item.path ? basename(item.path) : null,
     n_images: state.images.length,
   });
-  if (intentModeActive()) {
+  if (intentAmbientActive()) {
     updateEmptyCanvasHint();
-    scheduleIntentInference({ immediate: true, reason: "add" });
+    scheduleAmbientIntentInference({ immediate: true, reason: "add", imageIds: [item.id] });
+  }
+  if (intentModeActive()) {
     scheduleIntentStateWrite();
   }
   if (select || !state.activeId) {
@@ -7874,6 +8282,10 @@ async function removeImageFromCanvas(imageId) {
       syncIntentModeClass();
       scheduleIntentStateWrite({ immediate: true });
     }
+    resetAmbientIntentState();
+    if (state.ptySpawned) {
+      invoke("write_pty", { data: "/intent_rt_stop\n" }).catch(() => {});
+    }
     updateEmptyCanvasHint();
     setTip(DEFAULT_TIP);
     setDirectorText(null, null);
@@ -7892,7 +8304,7 @@ async function removeImageFromCanvas(imageId) {
   scheduleVisualPromptWrite();
   markAlwaysOnVisionDirty("image_remove");
   scheduleAlwaysOnVision();
-  if (intentModeActive()) scheduleIntentInference({ immediate: true, reason: "remove" });
+  if (intentAmbientActive()) scheduleAmbientIntentInference({ immediate: true, reason: "remove" });
   scheduleIntentStateWrite();
   renderQuickActions();
   renderHudReadout();
@@ -7959,11 +8371,14 @@ async function replaceImageInPlace(
 	    resetViewToFit();
 	    requestRender();
 	  }
-    scheduleVisualPromptWrite();
-    markAlwaysOnVisionDirty("image_replace");
-    scheduleAlwaysOnVision();
-		  return true;
-		}
+	    scheduleVisualPromptWrite();
+	    markAlwaysOnVisionDirty("image_replace");
+	    scheduleAlwaysOnVision();
+    if (intentAmbientActive()) {
+      scheduleAmbientIntentInference({ immediate: true, reason: "replace", imageIds: [targetId] });
+    }
+			  return true;
+			}
 
 async function setEngineActiveImage(path) {
   if (!path) return;
@@ -8340,6 +8755,12 @@ async function importPhotosAtCanvasPoint(pointCss) {
       updateEmptyCanvasHint();
       scheduleIntentInference({ immediate: true, reason: "import" });
       scheduleIntentStateWrite({ immediate: true });
+    }
+    if (intentAmbientActive()) {
+      const touched = pickedLimited
+        .map((_, idx) => `input-${stamp}-${String(idx).padStart(2, "0")}`)
+        .filter((id) => state.imagesById.has(id));
+      scheduleAmbientIntentInference({ immediate: true, reason: "import", imageIds: touched });
     }
     requestRender();
   } else {
@@ -9553,6 +9974,7 @@ async function createRun() {
   state.intent.lastRunAt = 0;
   state.intent.forceChoice = false;
   state.intent.uiHits = [];
+  resetAmbientIntentState();
   if (state.alwaysOnVision) {
     state.alwaysOnVision.pending = false;
     state.alwaysOnVision.pendingPath = null;
@@ -9576,6 +9998,7 @@ async function createRun() {
   intentInferenceTimeout = null;
   clearTimeout(intentStateWriteTimer);
   intentStateWriteTimer = null;
+  clearAmbientIntentTimers();
   syncIntentModeClass();
   updateEmptyCanvasHint();
   renderFilmstrip();
@@ -9659,6 +10082,7 @@ async function openExistingRun() {
   state.intent.lastRunAt = 0;
   state.intent.forceChoice = false;
   state.intent.uiHits = [];
+  resetAmbientIntentState();
   if (state.alwaysOnVision) {
     state.alwaysOnVision.pending = false;
     state.alwaysOnVision.pendingPath = null;
@@ -9682,6 +10106,7 @@ async function openExistingRun() {
   intentInferenceTimeout = null;
   clearTimeout(intentStateWriteTimer);
   intentStateWriteTimer = null;
+  clearAmbientIntentTimers();
   syncIntentModeClass();
   updateEmptyCanvasHint();
   await restoreIntentStateFromRunDir().catch(() => {});
@@ -9689,6 +10114,9 @@ async function openExistingRun() {
   await spawnEngine();
   await startEventsPolling();
   scheduleVisualPromptWrite({ immediate: true });
+  if (intentAmbientActive() && state.images.length) {
+    scheduleAmbientIntentInference({ immediate: true, reason: "composition_change" });
+  }
   if (state.ptySpawned) setStatus("Engine: ready");
 }
 
@@ -10180,21 +10608,33 @@ async function handleEvent(event) {
     processActionQueue().catch(() => {});
   } else if (event.type === "intent_icons") {
     const intent = state.intent;
-    if (!intent) return;
+    const ambient = state.intentAmbient;
+    if (!intent && !ambient) return;
     const isPartial = Boolean(event.partial);
     const text = event.text;
     const path = event.image_path || null;
 
-    // Ignore stale streaming from older snapshots once we've queued a newer one.
-    if (path && intent.pendingPath && path !== intent.pendingPath) return;
+    // Ignore stale/unsolicited streaming: accept only events for currently pending snapshots.
+    const expectedPaths = [];
+    if (ambient?.pendingPath) expectedPaths.push(String(ambient.pendingPath));
+    if (intent?.pendingPath) expectedPaths.push(String(intent.pendingPath));
+    if (!expectedPaths.length) return;
+    if (!path) return;
+    if (!expectedPaths.includes(String(path))) return;
 
     if (isPartial) {
-      intent.pending = true;
+      if (intent) intent.pending = true;
+      if (ambient) ambient.pending = true;
     } else {
-      intent.pending = false;
-      intent.pendingPath = null;
-      intent.pendingAt = 0;
-      intent.pendingFrameId = null;
+      if (intent) {
+        intent.pending = false;
+        intent.pendingPath = null;
+        intent.pendingAt = 0;
+        intent.pendingFrameId = null;
+      }
+      if (ambient) {
+        clearAmbientIntentPending();
+      }
     }
 
 		    if (typeof text === "string" && text.trim()) {
@@ -10221,10 +10661,10 @@ async function handleEvent(event) {
 		              at: Date.now(),
 		            };
 		            wroteVision = true;
-		            if (intentModeActive()) {
-		              appendIntentTrace({
-		                kind: "vision_description",
-		                image_id: imageId,
+			            if (intentModeActive() || intentAmbientActive()) {
+			              appendIntentTrace({
+			                kind: "vision_description",
+			                image_id: imageId,
 		                image_path: imgItem?.path ? String(imgItem.path) : null,
 		                description: label,
 		                source: event.source || null,
@@ -10239,17 +10679,35 @@ async function handleEvent(event) {
 		          if (getActiveImage()?.id) renderHudReadout();
 		        }
 
-		        intent.iconState = parsed;
-		        intent.iconStateAt = Date.now();
-		        intent.rtState = "ready";
-		        intent.disabledReason = null;
-		        intent.lastError = null;
-		        intent.lastErrorAt = 0;
-		        intent.uiHideSuggestion = false;
-		        // Keep focus stable if possible (unless rejected); otherwise pick the next suggestion.
-		        const picked = pickSuggestedIntentBranch(parsed);
-		        intent.focusBranchId = (picked?.branch_id ? String(picked.branch_id) : "") || pickDefaultIntentFocusBranchId(parsed);
-		        if (!isPartial) {
+			        const parsedAt = Date.now();
+			        if (intent) {
+			          intent.iconState = parsed;
+			          intent.iconStateAt = parsedAt;
+			          intent.rtState = "ready";
+			          intent.disabledReason = null;
+			          intent.lastError = null;
+			          intent.lastErrorAt = 0;
+			          intent.uiHideSuggestion = false;
+			        }
+			        if (ambient) {
+			          ambient.iconState = parsed;
+			          ambient.iconStateAt = parsedAt;
+			          ambient.rtState = "ready";
+			          ambient.disabledReason = null;
+			          ambient.lastError = null;
+			          ambient.lastErrorAt = 0;
+			          if (!isPartial) {
+			            const touched = imageDescs.map((rec) => String(rec?.image_id || "")).filter(Boolean);
+			            if (touched.length) rememberAmbientTouchedImageIds(touched);
+			            rebuildAmbientIntentSuggestions(parsed, { reason: "realtime", nowMs: parsedAt });
+			          }
+			        }
+			        // Keep focus stable if possible (unless rejected); otherwise pick the next suggestion.
+			        const picked = pickSuggestedIntentBranch(parsed);
+			        if (intent) {
+			          intent.focusBranchId = (picked?.branch_id ? String(picked.branch_id) : "") || pickDefaultIntentFocusBranchId(parsed);
+			        }
+			        if (!isPartial) {
 		          const branchIds = Array.isArray(parsed?.branches)
 		            ? parsed.branches.map((b) => (b?.branch_id ? String(b.branch_id) : "")).filter(Boolean)
 		            : [];
@@ -10264,14 +10722,14 @@ async function handleEvent(event) {
 		                }))
 		                .filter((b) => Boolean(b.branch_id))
 		            : [];
-		          appendIntentTrace({
-		            kind: "model_icons",
+			          appendIntentTrace({
+			            kind: "model_icons",
 		            partial: false,
 		            frame_id: parsed?.frame_id ? String(parsed.frame_id) : null,
 		            snapshot_path: path ? String(path) : null,
 		            branch_ids: branchIds,
 		            branch_rank: branchRank.length ? branchRank : null,
-		            focus_branch_id: intent.focusBranchId ? String(intent.focusBranchId) : null,
+			            focus_branch_id: intent?.focusBranchId ? String(intent.focusBranchId) : null,
 		            checkpoint_applies_to: parsed?.checkpoint?.applies_to ? String(parsed.checkpoint.applies_to) : null,
 		            checkpoint_branch_id: picked?.checkpoint_branch_id ? String(picked.checkpoint_branch_id) : null,
 		            ranked_branch_ids: Array.isArray(picked?.ranked_branch_ids) && picked.ranked_branch_ids.length ? picked.ranked_branch_ids : null,
@@ -10280,70 +10738,94 @@ async function handleEvent(event) {
 		            text_len: typeof text === "string" ? text.length : 0,
 		          }).catch(() => {});
 		        }
-		        const total = Math.max(1, Number(intent.totalRounds) || 3);
-		        const round = Math.max(1, Number(intent.round) || 1);
-	        // After the final round proposals arrive, force an explicit YES to proceed.
-	        if (INTENT_FORCE_CHOICE_ENABLED && INTENT_ROUNDS_ENABLED && !isPartial && round >= total && !intent.forceChoice) {
-	          intent.forceChoice = true;
-	          ensureIntentFallbackIconState("final_round");
-	          scheduleIntentStateWrite({ immediate: true });
-	        } else {
-	          if (!INTENT_FORCE_CHOICE_ENABLED) intent.forceChoice = false;
-	          scheduleIntentStateWrite();
-	        }
-	      } else if (!isPartial) {
-	        // Treat invalid JSON as a non-fatal failure: fall back to local branches and keep the UI interactive.
-	        intent.rtState = "failed";
-	        intent.disabledReason = "Intent icons parse failed.";
-	        intent.lastError = intent.disabledReason;
-	        intent.lastErrorAt = Date.now();
-	        intent.uiHideSuggestion = false;
-	        if (!INTENT_FORCE_CHOICE_ENABLED) intent.forceChoice = false;
-	        const icon = ensureIntentFallbackIconState("parse_failed");
-	        if (!intent.focusBranchId) intent.focusBranchId = pickSuggestedIntentBranchId(icon) || pickDefaultIntentFocusBranchId(icon);
-	        appendIntentTrace({
-	          kind: "model_icons_parse_failed",
-	          reason: intent.disabledReason,
-	          snapshot_path: path ? String(path) : null,
-	          text_len: typeof text === "string" ? text.length : 0,
-	          text_snippet: String(text || "").slice(0, 1200),
-	          rt_state: intent.rtState,
-	        }).catch(() => {});
-	        scheduleIntentStateWrite({ immediate: true });
-	      }
+			        if (intent) {
+			          const total = Math.max(1, Number(intent.totalRounds) || 3);
+			          const round = Math.max(1, Number(intent.round) || 1);
+		          // After the final round proposals arrive, force an explicit YES to proceed.
+		          if (INTENT_FORCE_CHOICE_ENABLED && INTENT_ROUNDS_ENABLED && !isPartial && round >= total && !intent.forceChoice) {
+		            intent.forceChoice = true;
+		            ensureIntentFallbackIconState("final_round");
+		            scheduleIntentStateWrite({ immediate: true });
+		          } else {
+		            if (!INTENT_FORCE_CHOICE_ENABLED) intent.forceChoice = false;
+		            scheduleIntentStateWrite();
+		          }
+			        }
+		      } else if (!isPartial) {
+		        // Treat invalid JSON as a non-fatal failure: fall back to local branches and keep the UI interactive.
+		        if (intent) {
+		          intent.rtState = "failed";
+		          intent.disabledReason = "Intent icons parse failed.";
+		          intent.lastError = intent.disabledReason;
+		          intent.lastErrorAt = Date.now();
+		          intent.uiHideSuggestion = false;
+		          if (!INTENT_FORCE_CHOICE_ENABLED) intent.forceChoice = false;
+		          const icon = ensureIntentFallbackIconState("parse_failed");
+		          if (!intent.focusBranchId) intent.focusBranchId = pickSuggestedIntentBranchId(icon) || pickDefaultIntentFocusBranchId(icon);
+		        }
+		        if (ambient) {
+		          applyAmbientIntentFallback("parse_failed", { message: "Intent icons parse failed." });
+		        }
+		        appendIntentTrace({
+		          kind: "model_icons_parse_failed",
+		          reason: intent?.disabledReason || "Intent icons parse failed.",
+		          snapshot_path: path ? String(path) : null,
+		          text_len: typeof text === "string" ? text.length : 0,
+		          text_snippet: String(text || "").slice(0, 1200),
+		          rt_state: intent?.rtState || ambient?.rtState || "failed",
+		        }).catch(() => {});
+		        if (intent) scheduleIntentStateWrite({ immediate: true });
+		      }
 	    }
 
     if (!isPartial) {
       clearTimeout(intentInferenceTimeout);
       intentInferenceTimeout = null;
+      clearTimeout(intentAmbientInferenceTimeout);
+      intentAmbientInferenceTimeout = null;
     }
 
     requestRender();
     renderQuickActions();
   } else if (event.type === "intent_icons_failed") {
     const intent = state.intent;
-    if (!intent) return;
+    const ambient = state.intentAmbient;
+    if (!intent && !ambient) return;
     const path = event.image_path || null;
-    if (path && intent.pendingPath && path !== intent.pendingPath) return;
+    const expectedPaths = [];
+    if (ambient?.pendingPath) expectedPaths.push(String(ambient.pendingPath));
+    if (intent?.pendingPath) expectedPaths.push(String(intent.pendingPath));
+    if (!expectedPaths.length) return;
+    if (!path) return;
+    if (!expectedPaths.includes(String(path))) return;
 
-    intent.pending = false;
-    intent.pendingPath = null;
-    intent.pendingAt = 0;
-    intent.pendingFrameId = null;
+    if (intent) {
+      intent.pending = false;
+      intent.pendingPath = null;
+      intent.pendingAt = 0;
+      intent.pendingFrameId = null;
+    }
+    if (ambient) {
+      clearAmbientIntentPending();
+    }
     clearTimeout(intentInferenceTimeout);
     intentInferenceTimeout = null;
+    clearTimeout(intentAmbientInferenceTimeout);
+    intentAmbientInferenceTimeout = null;
 
     const errRaw = typeof event.error === "string" ? event.error.trim() : "";
     const msg = errRaw ? `Intent inference failed: ${errRaw}` : "Intent inference failed.";
-	    intent.rtState = "failed";
-	    intent.lastError = msg;
-	    intent.lastErrorAt = Date.now();
-	    intent.uiHideSuggestion = false;
+	    if (intent) {
+	      intent.rtState = "failed";
+	      intent.lastError = msg;
+	      intent.lastErrorAt = Date.now();
+	      intent.uiHideSuggestion = false;
+	    }
 	    appendIntentTrace({
 	      kind: "model_icons_failed",
 	      reason: msg,
 	      snapshot_path: path ? String(path) : null,
-	      rt_state: intent.rtState,
+	      rt_state: intent?.rtState || ambient?.rtState || "failed",
 	    }).catch(() => {});
 
     const errLower = errRaw.toLowerCase();
@@ -10355,17 +10837,22 @@ async function handleEvent(event) {
     );
     // Only treat clearly-unrecoverable cases as a "hard" disabled state. Otherwise,
     // keep retrying opportunistically while the user continues arranging images.
-    intent.disabledReason = hardDisable ? msg : null;
+    if (intent) intent.disabledReason = hardDisable ? msg : null;
 
     // Fall back to a local branch set so the user can still lock an intent.
-    ensureIntentFallbackIconState("failed");
-    if (!intent.focusBranchId) {
-      intent.focusBranchId = pickSuggestedIntentBranchId(intent.iconState) || pickDefaultIntentFocusBranchId();
+    if (intent) {
+      ensureIntentFallbackIconState("failed");
+      if (!intent.focusBranchId) {
+        intent.focusBranchId = pickSuggestedIntentBranchId(intent.iconState) || pickDefaultIntentFocusBranchId();
+      }
+    }
+    if (ambient) {
+      applyAmbientIntentFallback("failed", { message: msg, hardDisable });
     }
 
-    if (!INTENT_FORCE_CHOICE_ENABLED) {
+    if (intent && !INTENT_FORCE_CHOICE_ENABLED) {
       intent.forceChoice = false;
-    } else {
+    } else if (intent) {
       // Only force choice if time is up or we're already at the final round gate.
       const total = Math.max(1, Number(intent.totalRounds) || 3);
       const round = Math.max(1, Number(intent.round) || 1);
@@ -10377,12 +10864,15 @@ async function handleEvent(event) {
       }
     }
 
-    scheduleIntentStateWrite({ immediate: true });
+    if (intent) scheduleIntentStateWrite({ immediate: true });
     setStatus(`Engine: ${msg}`, true);
     requestRender();
     renderQuickActions();
 
-    if (!hardDisable && intentModeActive() && !intent.forceChoice) {
+    if (ambient && !hardDisable) {
+      scheduleAmbientIntentInference({ immediate: false, reason: "composition_change" });
+    }
+    if (!hardDisable && intentModeActive() && intent && !intent.forceChoice) {
       scheduleIntentInference({ immediate: false, reason: "retry" });
     }
 	  } else if (event.type === "image_description") {
@@ -10413,17 +10903,21 @@ async function handleEvent(event) {
 	      // Persist the new per-image description into run artifacts.
 	      scheduleVisualPromptWrite();
 	
-	      if (intentModeActive() && state.intent && !state.intent.locked) {
+	      if (intentAmbientActive()) {
 	        appendIntentTrace({
-	          kind: "vision_description",
+	          kind: "ambient_vision_description",
 	          image_path: path,
 	          description: cleaned,
 	          source: event.source || null,
 	          model: event.model || null,
 	        }).catch(() => {});
+	        const touched = state.images
+	          .filter((img) => img?.path === path)
+	          .map((img) => String(img.id || ""))
+	          .filter(Boolean);
 	        // Vision-derived labels are useful intent signals; schedule a refresh so the
 	        // suggested branch can tighten as these descriptions arrive.
-	        scheduleIntentInference({ immediate: true, reason: "describe" });
+	        scheduleAmbientIntentInference({ immediate: true, reason: "describe", imageIds: touched });
 	      }
 	      if (getActiveImage()?.path === path) renderHudReadout();
 	    }
@@ -10934,6 +11428,63 @@ function hitTestIntentUi(ptCanvas) {
     if (ptCanvas.x >= x0 && ptCanvas.x <= x0 + w && ptCanvas.y >= y0 && ptCanvas.y <= y0 + h) return hit;
   }
   return null;
+}
+
+function hitTestAmbientIntentNudge(ptCanvas) {
+  if (state.mother?.running) return null;
+  const ambient = state.intentAmbient;
+  if (!ambient || !ptCanvas) return null;
+  const hits = Array.isArray(ambient.uiHits) ? ambient.uiHits : [];
+  for (let i = hits.length - 1; i >= 0; i -= 1) {
+    const hit = hits[i];
+    const rect = hit?.rect;
+    if (!rect) continue;
+    const x0 = Number(rect.x) || 0;
+    const y0 = Number(rect.y) || 0;
+    const w = Number(rect.w) || 0;
+    const h = Number(rect.h) || 0;
+    if (ptCanvas.x >= x0 && ptCanvas.x <= x0 + w && ptCanvas.y >= y0 && ptCanvas.y <= y0 + h) return hit;
+  }
+  return null;
+}
+
+function activateAmbientIntentNudge(hit) {
+  const ambient = state.intentAmbient;
+  if (!ambient || !hit) return false;
+
+  const branchId = String(hit.branchId || "").trim();
+  const assetKey = String(hit.assetKey || "").trim();
+  const anchorIds = Array.isArray(hit.anchorImageIds)
+    ? hit.anchorImageIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+
+  let selectedId = "";
+  for (const id of anchorIds) {
+    if (state.imagesById.has(id)) {
+      selectedId = id;
+      break;
+    }
+  }
+  if (!selectedId && state.activeId && state.imagesById.has(state.activeId)) {
+    selectedId = String(state.activeId);
+  }
+
+  if (selectedId) {
+    selectCanvasImage(selectedId, { toggle: false }).catch(() => {});
+  }
+  rememberAmbientTouchedImageIds(selectedId ? [selectedId] : anchorIds);
+  scheduleAmbientIntentInference({
+    immediate: true,
+    reason: "composition_change",
+    imageIds: selectedId ? [selectedId] : anchorIds,
+  });
+
+  const usecase = assetKey || _intentUseCaseKeyFromBranchId(branchId);
+  const title = _intentUseCaseTitle(usecase);
+  if (title) {
+    showToast(`Mother nudge: ${title}`, "tip", 1300);
+  }
+  return true;
 }
 
 function _sevenSegSegmentsForDigit(ch) {
@@ -11773,6 +12324,138 @@ function renderIntentOverlay(octx, canvasW, canvasH) {
   intent.uiHits = hits;
 }
 
+function _ambientWorldRectToCanvasRect(rectWorld) {
+  if (!rectWorld) return null;
+  const x = Number(rectWorld.x);
+  const y = Number(rectWorld.y);
+  const w = Number(rectWorld.w);
+  const h = Number(rectWorld.h);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return null;
+  if (w <= 0 || h <= 0) return null;
+  const dpr = getDpr();
+
+  if (state.canvasMode === "multi") {
+    const s = Math.max(0.0001, Number(state.multiView?.scale) || 1);
+    const ox = Number(state.multiView?.offsetX) || 0;
+    const oy = Number(state.multiView?.offsetY) || 0;
+    // Ambient world rects are in CSS-space; map to canvas/device space before rendering and hit testing.
+    return { x: x * dpr * s + ox, y: y * dpr * s + oy, w: w * dpr * s, h: h * dpr * s };
+  }
+
+  const s = Math.max(0.0001, Number(state.view?.scale) || 1);
+  const ox = Number(state.view?.offsetX) || 0;
+  const oy = Number(state.view?.offsetY) || 0;
+  return { x: x * s + ox, y: y * s + oy, w: w * s, h: h * s };
+}
+
+function renderAmbientIntentNudges(octx, canvasW, canvasH) {
+  const ambient = state.intentAmbient;
+  if (!ambient || !intentAmbientActive()) return;
+  if (state.mother?.running) {
+    ambient.uiHits = [];
+    return;
+  }
+  const suggestions = Array.isArray(ambient.suggestions) ? ambient.suggestions : [];
+  if (!suggestions.length) {
+    ambient.uiHits = [];
+    return;
+  }
+
+  const dpr = getDpr();
+  const minPx = Math.max(28, Math.round(72 * dpr));
+  const maxPx = Math.max(minPx, Math.round(164 * dpr));
+  const edge = Math.round(8 * dpr);
+  const now = Date.now();
+  let needsFadeTick = false;
+  const hits = [];
+
+  for (const suggestion of suggestions.slice(0, INTENT_AMBIENT_MAX_NUDGES)) {
+    if (!suggestion || typeof suggestion !== "object") continue;
+    const mapped = _ambientWorldRectToCanvasRect(suggestion.world_rect);
+    if (!mapped) continue;
+
+    const cx = mapped.x + mapped.w * 0.5;
+    const cy = mapped.y + mapped.h * 0.5;
+    const drawSize = clamp(Math.min(mapped.w, mapped.h), minPx, maxPx);
+    if (drawSize <= 2) continue;
+
+    let x = cx - drawSize * 0.5;
+    let y = cy - drawSize * 0.5;
+    x = clamp(x, edge, Math.max(edge, canvasW - drawSize - edge));
+    y = clamp(y, edge, Math.max(edge, canvasH - drawSize - edge));
+
+    const createdAt = Number(suggestion.created_at_ms) || now;
+    const updatedAt = Number(suggestion.updated_at_ms) || createdAt;
+    const fade = clamp((now - createdAt) / INTENT_AMBIENT_FADE_IN_MS, 0.12, 1);
+    if (fade < 0.999) needsFadeTick = true;
+    const refresh = 1 - clamp((now - updatedAt) / 1100, 0, 1);
+    const alpha = clamp(0.26 + 0.62 * fade * (0.84 + refresh * 0.16), 0.18, 0.9);
+
+    const conf = typeof suggestion.confidence === "number" && Number.isFinite(suggestion.confidence)
+      ? clamp(Number(suggestion.confidence), 0, 1)
+      : null;
+    const assetType = String(suggestion.asset_type || "icon");
+    const assetKey = suggestion.asset_key ? String(suggestion.asset_key) : "";
+    const iconImg = assetType === "icon" ? intentUiIcons.usecases?.[assetKey] || null : null;
+
+    octx.save();
+    octx.globalAlpha = alpha;
+    octx.shadowColor = "rgba(0, 0, 0, 0.44)";
+    octx.shadowBlur = Math.round(12 * dpr);
+    octx.fillStyle = "rgba(8, 10, 14, 0.62)";
+    octx.strokeStyle = "rgba(82, 255, 148, 0.24)";
+    octx.lineWidth = Math.max(1, Math.round(1.1 * dpr));
+    octx.beginPath();
+    octx.arc(x + drawSize * 0.5, y + drawSize * 0.5, drawSize * 0.52, 0, Math.PI * 2);
+    octx.fill();
+    octx.stroke();
+    octx.shadowBlur = 0;
+
+    if (assetType === "icon" && iconImg && iconImg.complete && iconImg.naturalWidth > 0) {
+      octx.imageSmoothingEnabled = true;
+      octx.imageSmoothingQuality = "high";
+      octx.drawImage(iconImg, Math.round(x), Math.round(y), Math.round(drawSize), Math.round(drawSize));
+    } else if (assetType === "icon") {
+      _drawIntentUseCaseGlyph(octx, assetKey, x + drawSize * 0.5, y + drawSize * 0.5, drawSize * 0.78, { alpha: 0.9 });
+    } else {
+      // Placeholder for upcoming generated-image nudges.
+      octx.strokeStyle = "rgba(100, 210, 255, 0.68)";
+      octx.lineWidth = Math.max(1, Math.round(1.4 * dpr));
+      octx.strokeRect(
+        Math.round(x + drawSize * 0.18),
+        Math.round(y + drawSize * 0.18),
+        Math.round(drawSize * 0.64),
+        Math.round(drawSize * 0.64)
+      );
+    }
+
+    if (conf !== null) {
+      const barW = Math.max(10, Math.round(drawSize * 0.58));
+      const barH = Math.max(1, Math.round(2 * dpr));
+      const barX = Math.round(x + (drawSize - barW) * 0.5);
+      const barY = Math.round(y + drawSize + Math.max(2, Math.round(3 * dpr)));
+      octx.fillStyle = "rgba(8, 10, 14, 0.62)";
+      octx.fillRect(barX, barY, barW, barH);
+      octx.fillStyle = "rgba(82, 255, 148, 0.68)";
+      octx.fillRect(barX, barY, Math.round(barW * conf), barH);
+    }
+
+    hits.push({
+      kind: "ambient_nudge",
+      id: String(suggestion.id || ""),
+      rect: { x, y, w: drawSize, h: drawSize },
+      branchId: suggestion.branch_id ? String(suggestion.branch_id) : "",
+      assetKey: assetKey || "",
+      anchorImageIds: Array.isArray(suggestion.anchor?.image_ids) ? suggestion.anchor.image_ids.slice(0, 3) : [],
+    });
+
+    octx.restore();
+  }
+
+  ambient.uiHits = hits;
+  if (needsFadeTick) requestRender();
+}
+
 function render() {
   const work = els.workCanvas;
   const overlay = els.overlayCanvas;
@@ -11943,6 +12626,7 @@ function render() {
   }
 
   renderIntentOverlay(octx, work.width, work.height);
+  renderAmbientIntentNudges(octx, work.width, work.height);
   renderMinimap();
 }
 
@@ -12036,11 +12720,18 @@ function installCanvasHandlers() {
 		        state.multiRects = computeFreeformRectsPx(canvas.width, canvas.height);
 		      }
 
-		      const p = canvasPointFromEvent(event);
-		      const pCss = canvasCssPointFromEvent(event);
+			      const p = canvasPointFromEvent(event);
+			      const pCss = canvasCssPointFromEvent(event);
           const intentActive = intentModeActive();
+          const ambientHit = intentAmbientActive() ? hitTestAmbientIntentNudge(p) : null;
 
-	          if (intentActive) {
+          if (ambientHit) {
+            activateAmbientIntentNudge(ambientHit);
+            requestRender();
+            return;
+          }
+
+		          if (intentActive) {
 	            const uiHit = hitTestIntentUi(p);
 	            if (uiHit) {
 	              const kind = String(uiHit.kind || "");
@@ -12325,9 +13016,14 @@ function installCanvasHandlers() {
     const p = canvasPointFromEvent(event);
     const pCss = canvasCssPointFromEvent(event);
 
-    if (!state.pointer.active) {
-      const intentActive = intentModeActive();
-      if (intentActive) {
+	    if (!state.pointer.active) {
+      const ambientHit = intentAmbientActive() ? hitTestAmbientIntentNudge(p) : null;
+      if (ambientHit) {
+        setOverlayCursor("pointer");
+        return;
+      }
+	      const intentActive = intentModeActive();
+	      if (intentActive) {
         const uiHit = hitTestIntentUi(p);
         if (uiHit) {
           setOverlayCursor(INTENT_IMPORT_CURSOR);
@@ -12423,7 +13119,7 @@ function installCanvasHandlers() {
       state.freeformRects.set(id, next);
       state.pointer.moved = true;
       scheduleVisualPromptWrite();
-      if (intentModeActive()) scheduleIntentInference({ reason: "move" });
+      if (intentAmbientActive()) scheduleAmbientIntentInference({ reason: "move", imageIds: [id] });
       requestRender();
       return;
     }
@@ -12446,7 +13142,7 @@ function installCanvasHandlers() {
       state.freeformRects.set(id, next);
       state.pointer.moved = true;
       scheduleVisualPromptWrite();
-      if (intentModeActive()) scheduleIntentInference({ reason: "resize" });
+      if (intentAmbientActive()) scheduleAmbientIntentInference({ reason: "resize", imageIds: [id] });
       requestRender();
       return;
     }

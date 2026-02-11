@@ -1017,6 +1017,42 @@ button.ghost:hover {
   }
 }
 
+@keyframes mother-takeover-pulse {
+  0% {
+    opacity: 0.64;
+    box-shadow:
+      inset 0 0 0 3px rgba(255, 72, 72, 0.44),
+      inset 0 0 0 9px rgba(255, 72, 72, 0.14),
+      inset 0 0 0 18px rgba(255, 128, 128, 0.08);
+    filter: saturate(1.52) contrast(1.08);
+  }
+  50% {
+    opacity: 0.96;
+    box-shadow:
+      inset 0 0 0 3px rgba(255, 72, 72, 0.92),
+      inset 0 0 0 9px rgba(255, 72, 72, 0.24),
+      inset 0 0 0 18px rgba(255, 128, 128, 0.14);
+    filter: saturate(2.05) contrast(1.14);
+  }
+  100% {
+    opacity: 0.64;
+    box-shadow:
+      inset 0 0 0 3px rgba(255, 72, 72, 0.44),
+      inset 0 0 0 9px rgba(255, 72, 72, 0.14),
+      inset 0 0 0 18px rgba(255, 128, 128, 0.08);
+    filter: saturate(1.52) contrast(1.08);
+  }
+}
+
+@keyframes mother-takeover-shimmer {
+  0% {
+    background-position: -18% 0, 0 0;
+  }
+  100% {
+    background-position: 18% 0, 0 0;
+  }
+}
+
 .canvas-wrap.intent-mode.intent-rt-active::after,
 .canvas-wrap.mother-rt-active::after {
   content: "";
@@ -1034,9 +1070,77 @@ button.ghost:hover {
   mix-blend-mode: normal;
 }
 
+.canvas-wrap.mother-takeover::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  border-radius: 14px;
+  border: 2px solid rgba(255, 72, 72, 0.86);
+  background:
+    repeating-linear-gradient(
+      120deg,
+      rgba(255, 255, 255, 0.00) 0px,
+      rgba(255, 255, 255, 0.00) 26px,
+      rgba(255, 255, 255, 0.16) 36px,
+      rgba(255, 255, 255, 0.00) 48px,
+      rgba(255, 255, 255, 0.00) 92px
+    ),
+    rgba(0, 0, 0, 0.10);
+  background-size: 220% 220%, auto;
+  background-position: -18% 0, 0 0;
+  box-shadow:
+    inset 0 0 0 3px rgba(255, 72, 72, 0.44),
+    inset 0 0 0 9px rgba(255, 72, 72, 0.14),
+    inset 0 0 0 18px rgba(255, 128, 128, 0.08);
+  animation:
+    mother-takeover-pulse 2.8s ease-in-out infinite,
+    mother-takeover-shimmer 2400ms linear infinite;
+  mix-blend-mode: normal;
+}
+
+.canvas-wrap.intent-ambient-rt-active::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  border-radius: 14px;
+  border: 1px solid rgba(82, 255, 148, 0.26);
+  box-shadow:
+    inset 0 0 0 1px rgba(82, 255, 148, 0.14),
+    inset 0 0 0 7px rgba(82, 255, 148, 0.05);
+}
+
+.canvas-wrap.mother-takeover.intent-ambient-rt-active::after {
+  border: 2px solid rgba(255, 72, 72, 0.86);
+  background:
+    repeating-linear-gradient(
+      120deg,
+      rgba(255, 255, 255, 0.00) 0px,
+      rgba(255, 255, 255, 0.00) 26px,
+      rgba(255, 255, 255, 0.16) 36px,
+      rgba(255, 255, 255, 0.00) 48px,
+      rgba(255, 255, 255, 0.00) 92px
+    ),
+    rgba(0, 0, 0, 0.10);
+  background-size: 220% 220%, auto;
+  background-position: -18% 0, 0 0;
+  box-shadow:
+    inset 0 0 0 3px rgba(255, 72, 72, 0.44),
+    inset 0 0 0 9px rgba(255, 72, 72, 0.14),
+    inset 0 0 0 18px rgba(255, 128, 128, 0.08);
+  animation:
+    mother-takeover-pulse 2.8s ease-in-out infinite,
+    mother-takeover-shimmer 2400ms linear infinite;
+  mix-blend-mode: normal;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .canvas-wrap.intent-mode.intent-rt-active::after,
-  .canvas-wrap.mother-rt-active::after {
+  .canvas-wrap.mother-rt-active::after,
+  .canvas-wrap.mother-takeover::after {
     animation: none;
     opacity: 0.65;
   }
@@ -1141,6 +1245,10 @@ button.ghost:hover {
 .canvas-wrap.mother-takeover .hud {
   opacity: 0.62;
   filter: saturate(0.65) brightness(0.94);
+}
+
+.canvas-wrap.mother-takeover .hud-readout {
+  opacity: 0;
 }
 
 .canvas-wrap.mother-takeover .action-grid {
@@ -1466,7 +1574,7 @@ button.ghost:hover {
   position: absolute;
   top: 12px;
   right: 12px;
-  z-index: 8;
+  z-index: 24;
   width: auto;
   display: flex;
   flex-direction: column;
