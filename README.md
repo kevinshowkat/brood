@@ -1,7 +1,7 @@
 # Brood
 
 <p align="left">
-  <img src="media/brood_demo_v8_20260210.gif" alt="Brood demo">
+  <img src="media/brood_demo_intent_build_20260211.gif" alt="Brood demo">
 </p>
 
 Brood is an image-first desktop canvas for steering AI image edits and generations using reference images.
@@ -13,6 +13,26 @@ Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, an
 - 1 image in: `Diagnose` (creative-direction critique), `Recast` (reimagine in a new medium/context)
 - 2 images in: `Combine`, `Swap DNA`, `Bridge`, `Argue`
 - Provider/model switching is a first-class concept (OpenAI, Gemini, Imagen, Flux, SDXL)
+
+## Features
+
+### Remove People
+Remove unwanted people from a photo with a fast, local canvas workflow.
+<p align="left">
+  <img src="media/features/remove_people.gif" alt="Remove people feature demo">
+</p>
+
+### Edit Annotation
+Constrain edits to a selected region so changes stay focused and controllable.
+<p align="left">
+  <img src="media/features/edit_annotation.gif" alt="Edit annotation feature demo">
+</p>
+
+### Intent Build
+Work in progress: Mother runs ambient intent discovery as you build, with the goal of producing all assets needed for the Intent Build flow.
+<p align="left">
+  <img src="media/features/intent_build.gif" alt="Intent build feature demo">
+</p>
 
 ## Quickstart (desktop)
 
