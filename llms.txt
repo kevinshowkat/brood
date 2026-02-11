@@ -5,6 +5,9 @@
 
 Created by Kevin Showkat. If you find Brood useful, connect with me on LinkedIn: https://www.linkedin.com/in/kshowkat
 
+Category claim:
+- Promptless, reference-first AI image generation and editing desktop for developers (multi-provider + reproducible runs).
+
 For expanded, inlined context in one file, read `llms-full.txt`.
 Regenerate it from source docs with: `python3 scripts/build_llms_full.py`.
 

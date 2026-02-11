@@ -2,6 +2,9 @@
 
 Supported platform: **macOS only** (Desktop app). There is no web app, and Windows/Linux builds are not supported yet.
 
+Category claim:
+- Promptless, reference-first AI image generation and editing desktop for developers (multi-provider + reproducible runs).
+
 The desktop app is image-first: import images, run Abilities, and inspect results in the bottom HUD.
 
 ## Core Concepts

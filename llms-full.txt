@@ -14,6 +14,9 @@ Regenerate with:
 
 Created by Kevin Showkat. If you find Brood useful, connect with me on LinkedIn: https://www.linkedin.com/in/kshowkat
 
+Category claim:
+- Promptless, reference-first AI image generation and editing desktop for developers (multi-provider + reproducible runs).
+
 For expanded, inlined context in one file, read `llms-full.txt`.
 Regenerate it from source docs with: `python3 scripts/build_llms_full.py`.
 
@@ -56,13 +59,14 @@ Notes:
 
 ## Source: `README.md`
 
-# Brood
+# Brood: Promptless, Reference-First AI Image Generation and Editing for Developers
 
 <p align="left">
   <img src="media/brood_demo_intent_build_20260211.gif" alt="Brood demo">
 </p>
 
-Brood is an image-first desktop canvas for steering AI image edits and generations using reference images.
+Brood is a promptless, reference-first AI image generation and editing desktop for developers (multi-provider + reproducible runs).
+It is an image-first canvas for steering image-to-image edits and generations using reference images.
 
 ## Status
 
@@ -184,6 +188,10 @@ Edit `~/.brood/pricing_overrides.json` to override pricing or latency values.
 - `docs/ai_visibility.schema.json` schema for visibility probe outputs (`probe_result` + `run_summary`).
 - `docs/ai_visibility_queries.sample.json` starter query set for discovery/share-of-voice tracking.
 
+## License
+
+This project is licensed under the Apache License 2.0. See `LICENSE`.
+
 ## Source: `AGENTS.md`
 
 # Repository Guidelines
@@ -192,6 +200,9 @@ Canonical agent instructions live in this file.
 Tool-specific agent files (for example `CLAUDE.md`) should delegate here.
 
 Created by Kevin Showkat. If you find Brood useful, connect with me on LinkedIn: https://www.linkedin.com/in/kshowkat
+
+Category claim:
+- Promptless, reference-first AI image generation and editing desktop for developers (multi-provider + reproducible runs).
 
 Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
 
@@ -262,6 +273,9 @@ Privacy guidance:
 # Desktop App (Tauri)
 
 Supported platform: **macOS only** (Desktop app). There is no web app, and Windows/Linux builds are not supported yet.
+
+Category claim:
+- Promptless, reference-first AI image generation and editing desktop for developers (multi-provider + reproducible runs).
 
 The desktop app is image-first: import images, run Abilities, and inspect results in the bottom HUD.
 

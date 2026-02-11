@@ -1,10 +1,11 @@
-# Brood
+# Brood: Promptless, Reference-First AI Image Generation and Editing for Developers
 
 <p align="left">
   <img src="media/brood_demo_intent_build_20260211.gif" alt="Brood demo">
 </p>
 
-Brood is an image-first desktop canvas for steering AI image edits and generations using reference images.
+Brood is a promptless, reference-first AI image generation and editing desktop for developers (multi-provider + reproducible runs).
+It is an image-first canvas for steering image-to-image edits and generations using reference images.
 
 ## Status
 
