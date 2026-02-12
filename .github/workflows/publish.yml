@@ -45,9 +45,9 @@ jobs:
       - name: Verify tag matches app version
         run: |
           TAG="${GITHUB_REF_NAME}"
-          APP_VERSION="$(node -e 'const fs=require(\"fs\"); const cfg=JSON.parse(fs.readFileSync(\"desktop/src-tauri/tauri.conf.json\",\"utf8\")); process.stdout.write(cfg.package.version);')"
-          DESKTOP_VERSION="$(node -e 'const fs=require(\"fs\"); const pkg=JSON.parse(fs.readFileSync(\"desktop/package.json\",\"utf8\")); process.stdout.write(pkg.version);')"
-          CARGO_VERSION="$(node -e 'const fs=require(\"fs\"); const s=fs.readFileSync(\"desktop/src-tauri/Cargo.toml\",\"utf8\"); const m=s.match(/\\nversion\\s*=\\s*\"([^\"]+)\"/); if(!m) process.exit(2); process.stdout.write(m[1]);')"
+          APP_VERSION="$(node -e 'const fs=require("fs"); const cfg=JSON.parse(fs.readFileSync("desktop/src-tauri/tauri.conf.json","utf8")); process.stdout.write(cfg.package.version);')"
+          DESKTOP_VERSION="$(node -e 'const fs=require("fs"); const pkg=JSON.parse(fs.readFileSync("desktop/package.json","utf8")); process.stdout.write(pkg.version);')"
+          CARGO_VERSION="$(node -e 'const fs=require("fs"); const s=fs.readFileSync("desktop/src-tauri/Cargo.toml","utf8"); const m=s.match(/version\s*=\s*\"([^\"]+)\"/); if(!m) process.exit(2); process.stdout.write(m[1]);')"
           echo "tag=$TAG"
           echo "tauri.conf.json=$APP_VERSION"
           echo "desktop/package.json=$DESKTOP_VERSION"
