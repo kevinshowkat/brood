@@ -84,9 +84,10 @@ jobs:
             echo "No 'Developer ID Application' identity found in build.keychain"
             exit 1
           fi
-          CERT_ID="$(echo "$CERT_INFO" | awk -F'\"' '{print $2}')"
-          echo "APPLE_SIGNING_IDENTITY=$CERT_ID" >> "$GITHUB_ENV"
-          echo "Using signing identity: $CERT_ID"
+          # Use the SHA-1 fingerprint to avoid `codesign` ambiguity when multiple identities share the same name.
+          CERT_SHA="$(echo "$CERT_INFO" | awk '{print $2}')"
+          echo "APPLE_SIGNING_IDENTITY=$CERT_SHA" >> "$GITHUB_ENV"
+          echo "Using signing identity SHA: $CERT_SHA"
 
       - name: Build and publish (signed + notarized DMG)
         uses: tauri-apps/tauri-action@v0
