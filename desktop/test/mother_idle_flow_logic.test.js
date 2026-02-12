@@ -9,37 +9,48 @@ import {
   motherIdleUsesRealtimeVisual,
 } from "../src/mother_idle_flow.js";
 
-test("Mother idle state machine: starts in setup/arming", () => {
-  assert.equal(motherIdleInitialState(), MOTHER_IDLE_STATES.SETUP_ARMING);
+test("Mother idle state machine: starts in observing", () => {
+  assert.equal(motherIdleInitialState(), MOTHER_IDLE_STATES.OBSERVING);
 });
 
-test("Mother idle state machine: follows the requested deterministic flow", () => {
+test("Mother idle state machine: follows the Mother v2 deterministic flow", () => {
   let phase = motherIdleInitialState();
 
   phase = motherIdleTransition(phase, MOTHER_IDLE_EVENTS.IDLE_WINDOW_ELAPSED);
-  assert.equal(phase, MOTHER_IDLE_STATES.IDLE_REALTIME_ACTIVE);
+  assert.equal(phase, MOTHER_IDLE_STATES.WATCHING);
 
-  phase = motherIdleTransition(phase, MOTHER_IDLE_EVENTS.GENERATION_DISPATCHED);
-  assert.equal(phase, MOTHER_IDLE_STATES.GENERATION_DISPATCHED);
+  phase = motherIdleTransition(phase, MOTHER_IDLE_EVENTS.IDLE_WINDOW_ELAPSED);
+  assert.equal(phase, MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING);
 
-  phase = motherIdleTransition(phase, MOTHER_IDLE_EVENTS.GENERATION_INSERTED);
-  assert.equal(phase, MOTHER_IDLE_STATES.WAITING_FOR_USER);
+  phase = motherIdleTransition(phase, MOTHER_IDLE_EVENTS.CONFIRM);
+  assert.equal(phase, MOTHER_IDLE_STATES.DRAFTING);
 
-  phase = motherIdleTransition(phase, MOTHER_IDLE_EVENTS.USER_RESPONSE_TIMEOUT);
-  assert.equal(phase, MOTHER_IDLE_STATES.TAKEOVER);
+  phase = motherIdleTransition(phase, MOTHER_IDLE_EVENTS.DRAFT_READY);
+  assert.equal(phase, MOTHER_IDLE_STATES.OFFERING);
+
+  phase = motherIdleTransition(phase, MOTHER_IDLE_EVENTS.DEPLOY);
+  assert.equal(phase, MOTHER_IDLE_STATES.COMMITTING);
+
+  phase = motherIdleTransition(phase, MOTHER_IDLE_EVENTS.COMMIT_DONE);
+  assert.equal(phase, MOTHER_IDLE_STATES.COOLDOWN);
+
+  phase = motherIdleTransition(phase, MOTHER_IDLE_EVENTS.COOLDOWN_DONE);
+  assert.equal(phase, MOTHER_IDLE_STATES.OBSERVING);
 });
 
-test("Mother idle state machine: user interaction always resets to setup/arming", () => {
+test("Mother idle state machine: user interaction always resets to observing", () => {
   for (const phase of Object.values(MOTHER_IDLE_STATES)) {
     const next = motherIdleTransition(phase, MOTHER_IDLE_EVENTS.USER_INTERACTION);
-    assert.equal(next, MOTHER_IDLE_STATES.SETUP_ARMING);
+    assert.equal(next, MOTHER_IDLE_STATES.OBSERVING);
   }
 });
 
-test("Mother idle state machine: realtime visual only appears in active dispatch window", () => {
-  assert.equal(motherIdleUsesRealtimeVisual(MOTHER_IDLE_STATES.SETUP_ARMING), false);
-  assert.equal(motherIdleUsesRealtimeVisual(MOTHER_IDLE_STATES.IDLE_REALTIME_ACTIVE), true);
-  assert.equal(motherIdleUsesRealtimeVisual(MOTHER_IDLE_STATES.GENERATION_DISPATCHED), true);
-  assert.equal(motherIdleUsesRealtimeVisual(MOTHER_IDLE_STATES.WAITING_FOR_USER), false);
-  assert.equal(motherIdleUsesRealtimeVisual(MOTHER_IDLE_STATES.TAKEOVER), false);
+test("Mother idle state machine: realtime visual appears only during watching", () => {
+  assert.equal(motherIdleUsesRealtimeVisual(MOTHER_IDLE_STATES.OBSERVING), false);
+  assert.equal(motherIdleUsesRealtimeVisual(MOTHER_IDLE_STATES.WATCHING), true);
+  assert.equal(motherIdleUsesRealtimeVisual(MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING), false);
+  assert.equal(motherIdleUsesRealtimeVisual(MOTHER_IDLE_STATES.DRAFTING), false);
+  assert.equal(motherIdleUsesRealtimeVisual(MOTHER_IDLE_STATES.OFFERING), false);
+  assert.equal(motherIdleUsesRealtimeVisual(MOTHER_IDLE_STATES.COMMITTING), false);
+  assert.equal(motherIdleUsesRealtimeVisual(MOTHER_IDLE_STATES.COOLDOWN), false);
 });

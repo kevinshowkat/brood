@@ -118,6 +118,12 @@ def parse_intent(text: str) -> Intent:
             return Intent(action="describe", raw=text, command_args={"path": _parse_single_path_arg(arg)})
         if command == "canvas_context":
             return Intent(action="canvas_context", raw=text, command_args={"path": _parse_single_path_arg(arg)})
+        if command == "intent_infer":
+            return Intent(action="intent_infer", raw=text, command_args={"path": _parse_single_path_arg(arg)})
+        if command == "prompt_compile":
+            return Intent(action="prompt_compile", raw=text, command_args={"path": _parse_single_path_arg(arg)})
+        if command == "mother_generate":
+            return Intent(action="mother_generate", raw=text, command_args={"path": _parse_single_path_arg(arg)})
         if command == "canvas_context_rt_start":
             return Intent(action="canvas_context_rt_start", raw=text, command_args={})
         if command == "canvas_context_rt_stop":

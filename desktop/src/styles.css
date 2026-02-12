@@ -2523,7 +2523,26 @@ button.ghost:hover {
 }
 
 #mother-panel {
-  display: none;
+  width: min(420px, calc(100vw - 44px));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  background:
+    radial-gradient(260px 140px at 14% 12%, rgba(82, 255, 148, 0.12), transparent 72%),
+    radial-gradient(300px 160px at 86% 10%, rgba(100, 210, 255, 0.10), transparent 74%),
+    linear-gradient(180deg, rgba(8, 12, 14, 0.92), rgba(2, 4, 6, 0.96));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -18px 24px rgba(0, 0, 0, 0.58),
+    0 18px 32px rgba(0, 0, 0, 0.52);
+  overflow: hidden;
+}
+
+#mother-panel.mother-hints-visible {
+  border-color: rgba(100, 210, 255, 0.32);
+}
+
+#mother-panel.mother-advanced-visible {
+  border-color: rgba(82, 255, 148, 0.46);
 }
 
 #mother-panel::before {
@@ -2542,16 +2561,105 @@ button.ghost:hover {
 
 #mother-panel .panel-readout {
   margin: 0;
-  min-height: 70px;
-  max-height: 220px;
+  min-height: 72px;
+  max-height: 180px;
   overflow: auto;
   border: 0;
-  border-radius: 12px;
-  background: #000;
+  border-radius: 0;
+  background: transparent;
   color: rgba(241, 247, 255, 0.9);
-  text-shadow:
-    0 0 0.8px rgba(0, 0, 0, 0.74),
-    0 0 8px rgba(124, 198, 255, 0.12);
+  text-shadow: 0 0 0.8px rgba(0, 0, 0, 0.74);
+}
+
+#mother-panel .mother-panel-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.mother-refine-toggle {
+  border: 1px solid rgba(82, 255, 148, 0.36);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(214, 255, 231, 0.92);
+  background: rgba(12, 22, 18, 0.74);
+  cursor: pointer;
+}
+
+.mother-refine-toggle:hover {
+  border-color: rgba(82, 255, 148, 0.64);
+}
+
+.mother-intensity-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mother-intensity-label {
+  min-width: 62px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(184, 201, 217, 0.9);
+}
+
+.mother-intensity {
+  flex: 1;
+  accent-color: rgba(82, 255, 148, 0.95);
+}
+
+.mother-advanced {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(100, 210, 255, 0.22);
+  background: rgba(6, 10, 14, 0.62);
+}
+
+.mother-advanced-row {
+  display: grid;
+  grid-template-columns: 114px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.mother-advanced-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: rgba(191, 210, 226, 0.9);
+}
+
+.mother-advanced select {
+  width: 100%;
+  min-height: 28px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(8, 12, 18, 0.86);
+  color: rgba(232, 242, 250, 0.94);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+}
+
+@media (max-width: 760px) {
+  #mother-panel {
+    width: min(360px, calc(100vw - 24px));
+  }
+  .mother-advanced-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
 }
 
 #mother-panel-stack .mother-actions {
@@ -2851,8 +2959,8 @@ button.ghost:hover {
 #tips-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  background: #000;
-  border-color: rgba(255, 255, 255, 0.14);
+  background: transparent;
+  border-color: transparent;
   box-shadow: none;
   text-shadow: none;
   color: rgba(230, 237, 243, 0.92);
@@ -2861,7 +2969,7 @@ button.ghost:hover {
   line-height: 1.45;
   /* Fixed height: keep the right rail stable as CTX responses stream in. */
   box-sizing: border-box;
-  height: clamp(64px, 11vh, 130px);
+  height: clamp(66px, 10vh, 126px);
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 6px;
