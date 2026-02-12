@@ -1,0 +1,251 @@
+{
+  "schema": "brood.target_user_harness",
+  "schema_version": 1,
+  "defaults": {
+    "adapter": "chat_cli",
+    "max_turns": 12,
+    "max_runtime_s": 900,
+    "max_cost_usd": 6.0,
+    "text_model": "gpt-5.2",
+    "image_model": "gemini-2.5-flash-image",
+    "seed": 42,
+    "require_reflection_each_turn": true
+  },
+  "personas": [
+    {
+      "id": "streetwear_founder",
+      "role": "Indie streetwear founder shipping a drop quickly",
+      "experience": "intermediate",
+      "traits": [
+        "visual-first",
+        "time-constrained",
+        "quality-sensitive"
+      ],
+      "decision_style": "tries quick diagnostics first, then commits to one direction"
+    },
+    {
+      "id": "tattoo_artist",
+      "role": "Tattoo artist exploring a motif system for flash sheets",
+      "experience": "expert",
+      "traits": [
+        "style-consistency",
+        "rule-seeking",
+        "iterative"
+      ],
+      "decision_style": "compares references and extracts principles before generating"
+    },
+    {
+      "id": "solo_creator",
+      "role": "Solo creator preparing a video thumbnail tonight",
+      "experience": "intermediate",
+      "traits": [
+        "speed-sensitive",
+        "attention-seeking",
+        "pragmatic"
+      ],
+      "decision_style": "explores 2-3 variants fast and picks one winner"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "drop_lookbook_rescue",
+      "persona_id": "streetwear_founder",
+      "project_context": "Launch is tomorrow. Existing photos are noisy and flat. Need premium-looking hero outputs that still feel authentic.",
+      "goal": "Create two launch-ready hero images from rough phone captures.",
+      "inputs": [
+        {
+          "id": "hoodie_flatlay",
+          "path": "media/target_users/lookbook/hoodie_flatlay.jpg",
+          "label": "Hoodie flatlay"
+        },
+        {
+          "id": "on_body_hallway",
+          "path": "media/target_users/lookbook/on_body_hallway.jpg",
+          "label": "On-body hallway shot"
+        },
+        {
+          "id": "detail_closeup",
+          "path": "media/target_users/lookbook/detail_closeup.jpg",
+          "label": "Stitch detail closeup"
+        }
+      ],
+      "success_criteria": [
+        "Two candidate outputs exist and are materially different in composition.",
+        "At least one output preserves product details and text/logo legibility.",
+        "The run includes one explicit critique step and one argument-style comparison."
+      ],
+      "required_abilities": [
+        "diagnose",
+        "bridge",
+        "argue"
+      ],
+      "policy": {
+        "max_turns": 10,
+        "max_runtime_s": 720,
+        "max_cost_usd": 4.5,
+        "consecutive_fail_limit": 2
+      },
+      "bootstrap_actions": [
+        {
+          "kind": "command",
+          "command": {
+            "name": "use",
+            "paths": [
+              "media/target_users/lookbook/on_body_hallway.jpg"
+            ]
+          },
+          "reason": "Set a primary image context before generating."
+        },
+        {
+          "kind": "command",
+          "command": {
+            "name": "quality"
+          },
+          "reason": "Persona prefers quality over speed for final launch assets."
+        },
+        {
+          "kind": "command",
+          "command": {
+            "name": "diagnose",
+            "paths": [
+              "media/target_users/lookbook/on_body_hallway.jpg"
+            ]
+          },
+          "reason": "Start with a critical reading of current weaknesses."
+        }
+      ]
+    },
+    {
+      "id": "tattoo_flash_direction_find",
+      "persona_id": "tattoo_artist",
+      "project_context": "Client wants a new creature motif that feels consistent with an existing flash language, but not derivative.",
+      "goal": "Generate one centroid concept and extract an explicit design rule.",
+      "inputs": [
+        {
+          "id": "flash_reference_a",
+          "path": "media/target_users/tattoo/flash_reference_a.jpg",
+          "label": "Reference A"
+        },
+        {
+          "id": "flash_reference_b",
+          "path": "media/target_users/tattoo/flash_reference_b.jpg",
+          "label": "Reference B"
+        },
+        {
+          "id": "rough_sketch",
+          "path": "media/target_users/tattoo/rough_sketch.png",
+          "label": "Sketch"
+        }
+      ],
+      "success_criteria": [
+        "One centroid-style output exists.",
+        "A rule extraction event is present and non-empty.",
+        "Odd-one-out reasoning is logged at least once."
+      ],
+      "required_abilities": [
+        "triforce",
+        "extract_rule",
+        "odd_one_out"
+      ],
+      "policy": {
+        "max_turns": 12,
+        "max_runtime_s": 900,
+        "max_cost_usd": 5.0,
+        "consecutive_fail_limit": 2
+      },
+      "bootstrap_actions": [
+        {
+          "kind": "command",
+          "command": {
+            "name": "triforce",
+            "paths": [
+              "media/target_users/tattoo/flash_reference_a.jpg",
+              "media/target_users/tattoo/flash_reference_b.jpg",
+              "media/target_users/tattoo/rough_sketch.png"
+            ]
+          },
+          "reason": "Generate a midpoint concept from the three inputs."
+        },
+        {
+          "kind": "command",
+          "command": {
+            "name": "extract_rule",
+            "paths": [
+              "media/target_users/tattoo/flash_reference_a.jpg",
+              "media/target_users/tattoo/flash_reference_b.jpg",
+              "media/target_users/tattoo/rough_sketch.png"
+            ]
+          },
+          "reason": "Capture style logic explicitly."
+        }
+      ]
+    },
+    {
+      "id": "creator_thumbnail_pack",
+      "persona_id": "solo_creator",
+      "project_context": "Need click-worthy thumbnails for a new video, using personal face photo plus scene context from the video frame.",
+      "goal": "Produce three viable thumbnail directions and choose one winner.",
+      "inputs": [
+        {
+          "id": "selfie",
+          "path": "media/target_users/creator/selfie.jpg",
+          "label": "Creator selfie"
+        },
+        {
+          "id": "video_frame",
+          "path": "media/target_users/creator/video_frame.jpg",
+          "label": "Video frame"
+        },
+        {
+          "id": "mood_ref",
+          "path": "media/target_users/creator/mood_ref.jpg",
+          "label": "Mood reference"
+        }
+      ],
+      "success_criteria": [
+        "At least three output artifacts are produced.",
+        "At least one comparison argument is logged.",
+        "A final selected direction is recorded in summary."
+      ],
+      "required_abilities": [
+        "swap_dna",
+        "diagnose",
+        "argue"
+      ],
+      "policy": {
+        "max_turns": 12,
+        "max_runtime_s": 780,
+        "max_cost_usd": 5.5,
+        "consecutive_fail_limit": 3
+      },
+      "bootstrap_actions": [
+        {
+          "kind": "command",
+          "command": {
+            "name": "swap_dna",
+            "paths": [
+              "media/target_users/creator/selfie.jpg",
+              "media/target_users/creator/mood_ref.jpg"
+            ]
+          },
+          "reason": "Blend creator identity with a high-performing thumbnail style reference."
+        },
+        {
+          "kind": "command",
+          "command": {
+            "name": "diagnose",
+            "paths": [
+              "media/target_users/creator/video_frame.jpg"
+            ]
+          },
+          "reason": "Identify why the current frame underperforms."
+        },
+        {
+          "kind": "utterance",
+          "text": "Give me two distinct thumbnail directions from these references. Keep face readability high and avoid clutter.",
+          "reason": "Simulate a natural instruction to Mother."
+        }
+      ]
+    }
+  ]
+}

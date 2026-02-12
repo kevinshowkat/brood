@@ -1,0 +1,356 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://brood.dev/schemas/target_user_harness.schema.json",
+  "title": "Brood Target User Harness Config",
+  "type": "object",
+  "required": [
+    "schema",
+    "schema_version",
+    "defaults",
+    "personas",
+    "scenarios"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "brood.target_user_harness"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "defaults": {
+      "$ref": "#/$defs/defaults"
+    },
+    "personas": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/persona"
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/scenario"
+      }
+    }
+  },
+  "$defs": {
+    "defaults": {
+      "type": "object",
+      "required": [
+        "adapter",
+        "max_turns",
+        "max_runtime_s",
+        "max_cost_usd",
+        "text_model",
+        "image_model",
+        "seed"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "enum": [
+            "chat_cli",
+            "desktop_ui"
+          ]
+        },
+        "max_turns": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_runtime_s": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_cost_usd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "text_model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "image_model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "require_reflection_each_turn": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "persona": {
+      "type": "object",
+      "required": [
+        "id",
+        "role",
+        "experience",
+        "traits",
+        "decision_style"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$"
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "experience": {
+          "type": "string",
+          "enum": [
+            "novice",
+            "intermediate",
+            "expert"
+          ]
+        },
+        "traits": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "decision_style": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "required": [
+        "id",
+        "persona_id",
+        "project_context",
+        "inputs",
+        "goal",
+        "success_criteria",
+        "required_abilities"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$"
+        },
+        "persona_id": {
+          "type": "string"
+        },
+        "project_context": {
+          "type": "string",
+          "minLength": 1
+        },
+        "goal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inputs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/input_item"
+          }
+        },
+        "success_criteria": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required_abilities": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": [
+              "describe",
+              "canvas_context",
+              "diagnose",
+              "recast",
+              "blend",
+              "argue",
+              "extract_rule",
+              "odd_one_out",
+              "triforce",
+              "bridge",
+              "swap_dna"
+            ]
+          }
+        },
+        "policy": {
+          "$ref": "#/$defs/policy"
+        },
+        "bootstrap_actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        }
+      }
+    },
+    "input_item": {
+      "type": "object",
+      "required": [
+        "id",
+        "path",
+        "label"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_turns": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_runtime_s": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_cost_usd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "consecutive_fail_limit": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "utterance",
+            "command"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command": {
+          "$ref": "#/$defs/command"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "expects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "utterance"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "text"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "command"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "command"
+            ]
+          }
+        }
+      ]
+    },
+    "command": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": [
+            "use",
+            "describe",
+            "canvas_context",
+            "diagnose",
+            "recast",
+            "blend",
+            "argue",
+            "extract_rule",
+            "odd_one_out",
+            "triforce",
+            "bridge",
+            "swap_dna",
+            "quality",
+            "fast",
+            "cheaper",
+            "better"
+          ]
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "args": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

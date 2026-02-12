@@ -102,6 +102,54 @@ def test_parse_intent_canvas_context_rt_start():
     assert intent.action == "canvas_context_rt_start"
 
 
+def test_parse_intent_intent_infer_path():
+    intent = parse_intent("/intent_infer a.json")
+    assert intent.action == "intent_infer"
+    assert intent.command_args["path"] == "a.json"
+
+
+def test_parse_intent_intent_infer_quoted_path():
+    intent = parse_intent('/intent_infer "/tmp/a b.json"')
+    assert intent.action == "intent_infer"
+    assert intent.command_args["path"] == "/tmp/a b.json"
+
+
+def test_parse_intent_prompt_compile_path():
+    intent = parse_intent("/prompt_compile a.json")
+    assert intent.action == "prompt_compile"
+    assert intent.command_args["path"] == "a.json"
+
+
+def test_parse_intent_prompt_compile_quoted_path():
+    intent = parse_intent('/prompt_compile "/tmp/a b.json"')
+    assert intent.action == "prompt_compile"
+    assert intent.command_args["path"] == "/tmp/a b.json"
+
+
+def test_parse_intent_mother_generate_path():
+    intent = parse_intent("/mother_generate a.json")
+    assert intent.action == "mother_generate"
+    assert intent.command_args["path"] == "a.json"
+
+
+def test_parse_intent_mother_generate_quoted_path():
+    intent = parse_intent('/mother_generate "/tmp/a b.json"')
+    assert intent.action == "mother_generate"
+    assert intent.command_args["path"] == "/tmp/a b.json"
+
+
+def test_parse_intent_intent_infer_preserves_json_payload_spacing():
+    intent = parse_intent("  /intent_infer   /tmp/mother payload.json  ")
+    assert intent.action == "intent_infer"
+    assert intent.command_args["path"] == "/tmp/mother payload.json"
+
+
+def test_parse_intent_prompt_compile_preserves_json_payload_spacing():
+    intent = parse_intent("  /prompt_compile   /tmp/mother compile.json  ")
+    assert intent.action == "prompt_compile"
+    assert intent.command_args["path"] == "/tmp/mother compile.json"
+
+
 def test_parse_intent_canvas_context_rt_stop():
     intent = parse_intent("/canvas_context_rt_stop")
     assert intent.action == "canvas_context_rt_stop"

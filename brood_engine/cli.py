@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import random
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from .chat.intent_parser import parse_intent
 from .chat.refine import extract_model_directive, detect_edit_model, is_edit_request, is_refinement, is_repeat_request
@@ -30,6 +33,21 @@ from .utils import (
     has_flux_key,
     is_flux_model,
 )
+
+MOTHER_CREATIVE_DIRECTIVE = "stunningly awe-inspiring and tearfully joyous"
+MOTHER_TRANSFORMATION_MODES = (
+    "amplify",
+    "transcend",
+    "destabilize",
+    "purify",
+    "hybridize",
+    "mythologize",
+    "monumentalize",
+    "fracture",
+    "romanticize",
+    "alienate",
+)
+MOTHER_DEFAULT_TRANSFORMATION_MODE = "hybridize"
 
 
 def _maybe_warn_missing_flux_key(model: str | None) -> None:
@@ -99,6 +117,526 @@ def _format_recommendation(rec: dict[str, object]) -> str:
         return f"provider_options.{name}={value}"
     return f"{name}={value}"
 
+
+def _load_json_payload(path: Path) -> dict[str, Any] | None:
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _ids_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for raw in value:
+        key = str(raw or "").strip()
+        if key:
+            out.append(key)
+    return out
+
+
+def _normalize_transformation_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    if mode in MOTHER_TRANSFORMATION_MODES:
+        return mode
+    return MOTHER_DEFAULT_TRANSFORMATION_MODE
+
+
+def _optional_transformation_mode(value: Any) -> str | None:
+    mode = str(value or "").strip().lower()
+    if mode in MOTHER_TRANSFORMATION_MODES:
+        return mode
+    return None
+
+
+def _paths_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    raw = str(value).strip()
+    return [raw] if raw else []
+
+
+def _intent_summary_for_mode(mode: str, hints: list[str]) -> str:
+    primary_hint = ""
+    for hint in hints:
+        text = str(hint or "").strip()
+        if text:
+            primary_hint = text
+            break
+    hint_clause = f" from {primary_hint}" if primary_hint else ""
+    templates: dict[str, str] = {
+        "amplify": f"Push the current composition into a cinematic crescendo{hint_clause}.",
+        "transcend": f"Lift the scene into a more transcendent visual world{hint_clause}.",
+        "destabilize": f"Shift the composition toward controlled visual instability without collage artifacts{hint_clause}.",
+        "purify": f"Simplify geometry and light into a calm sculptural image{hint_clause}.",
+        "hybridize": f"Fuse the current references into one coherent composition{hint_clause}.",
+        "mythologize": f"Recast the scene as mythic visual storytelling{hint_clause}.",
+        "monumentalize": f"Turn the scene into a monumental hero composition{hint_clause}.",
+        "fracture": f"Introduce intentional fracture and expressive disruption while keeping scene coherence{hint_clause}.",
+        "romanticize": f"Infuse the composition with intimate emotional warmth{hint_clause}.",
+        "alienate": f"Reframe the scene with uncanny, otherworldly distance{hint_clause}.",
+    }
+    return templates.get(mode, templates[MOTHER_DEFAULT_TRANSFORMATION_MODE])
+
+
+def _payload_image_hints(payload: dict[str, Any]) -> list[str]:
+    images = payload.get("images")
+    if not isinstance(images, list):
+        return []
+    hints: list[str] = []
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+        hints.append(str(image.get("vision_desc") or ""))
+        hints.append(str(image.get("file") or ""))
+    return [hint.strip() for hint in hints if str(hint or "").strip()]
+
+
+def _has_human_signal(hints: list[str]) -> bool:
+    text = " ".join(hints).lower()
+    return any(token in text for token in ("person", "people", "human", "face", "portrait", "selfie", "woman", "man", "child"))
+
+
+def _intent_summary_from_hints(hints: list[str]) -> tuple[str, float]:
+    text = " ".join(str(v or "") for v in hints).lower()
+    if any(k in text for k in ("portrait", "face", "person", "selfie")):
+        return f"{MOTHER_CREATIVE_DIRECTIVE.capitalize()} character synthesis from current composition", 0.82
+    if any(k in text for k in ("product", "object", "device", "item")):
+        return f"{MOTHER_CREATIVE_DIRECTIVE.capitalize()} object-world synthesis from current composition", 0.79
+    if any(k in text for k in ("landscape", "city", "room", "scene", "environment")):
+        return f"{MOTHER_CREATIVE_DIRECTIVE.capitalize()} environmental synthesis from current composition", 0.78
+    return f"{MOTHER_CREATIVE_DIRECTIVE.capitalize()} synthesis from current canvas composition", 0.64
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _image_layout_stats(images: list[Any]) -> tuple[list[str], dict[str, dict[str, float]], bool]:
+    rows: list[dict[str, float | int | str]] = []
+    seen: set[str] = set()
+    for idx, img in enumerate(images):
+        if not isinstance(img, dict):
+            continue
+        image_id = str(img.get("id") or "").strip()
+        if not image_id or image_id in seen:
+            continue
+        seen.add(image_id)
+
+        rect = img.get("rect") if isinstance(img.get("rect"), dict) else None
+        if rect is None and isinstance(img.get("rect_norm"), dict):
+            rect = img.get("rect_norm")
+        if isinstance(rect, dict):
+            x = _safe_float(rect.get("x"), 0.0)
+            y = _safe_float(rect.get("y"), 0.0)
+            w = max(0.0, _safe_float(rect.get("w"), 0.0))
+            h = max(0.0, _safe_float(rect.get("h"), 0.0))
+        else:
+            x = float(idx)
+            y = 0.0
+            w = 0.0
+            h = 0.0
+        area = max(0.0, w * h)
+        rows.append(
+            {
+                "id": image_id,
+                "idx": idx,
+                "x": x,
+                "y": y,
+                "w": w,
+                "h": h,
+                "area": area,
+                "cx": x + (w * 0.5),
+                "cy": y + (h * 0.5),
+            }
+        )
+
+    if not rows:
+        return [], {}, False
+
+    has_rects = any(float(r.get("area") or 0.0) > 0.0 for r in rows)
+    if has_rects:
+        min_x = min(float(r.get("x") or 0.0) for r in rows)
+        min_y = min(float(r.get("y") or 0.0) for r in rows)
+        max_x = max(float(r.get("x") or 0.0) + max(0.0, float(r.get("w") or 0.0)) for r in rows)
+        max_y = max(float(r.get("y") or 0.0) + max(0.0, float(r.get("h") or 0.0)) for r in rows)
+        scene_cx = (min_x + max_x) * 0.5
+        scene_cy = (min_y + max_y) * 0.5
+        scene_diag = max(((max_x - min_x) ** 2 + (max_y - min_y) ** 2) ** 0.5, 1.0)
+        max_area = max(max(0.0, float(r.get("area") or 0.0)) for r in rows)
+    else:
+        scene_cx = 0.0
+        scene_cy = 0.0
+        scene_diag = max(float(len(rows) - 1), 1.0)
+        max_area = 0.0
+
+    layout_by_id: dict[str, dict[str, float]] = {}
+    ranked: list[tuple[str, float, int]] = []
+    for row in rows:
+        image_id = str(row.get("id") or "")
+        idx = int(row.get("idx") or 0)
+        x = float(row.get("x") or 0.0)
+        y = float(row.get("y") or 0.0)
+        w = max(0.0, float(row.get("w") or 0.0))
+        h = max(0.0, float(row.get("h") or 0.0))
+        area = max(0.0, float(row.get("area") or 0.0))
+        cx = float(row.get("cx") or 0.0)
+        cy = float(row.get("cy") or 0.0)
+
+        if has_rects and max_area > 0.0:
+            area_norm = max(0.0, min(1.0, area / max_area))
+            center_dist = ((cx - scene_cx) ** 2 + (cy - scene_cy) ** 2) ** 0.5
+            center_dist_norm = max(0.0, min(1.0, center_dist / scene_diag))
+            prominence = 0.7 * area_norm + 0.3 * (1.0 - center_dist_norm)
+        else:
+            area_norm = 0.0
+            center_dist_norm = max(0.0, min(1.0, float(idx) / scene_diag))
+            prominence = max(0.05, 1.0 - (0.05 * float(idx)))
+
+        layout_by_id[image_id] = {
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h,
+            "area": area,
+            "area_norm": area_norm,
+            "center_dist_norm": center_dist_norm,
+            "prominence": prominence,
+        }
+        ranked.append((image_id, prominence, idx))
+
+    ranked.sort(key=lambda rec: (-float(rec[1]), int(rec[2])))
+    ranked_ids = [str(image_id) for image_id, _, _ in ranked if image_id]
+    return ranked_ids, layout_by_id, has_rects
+
+
+def _pair_overlap_ratio(layout_by_id: dict[str, dict[str, float]], image_a: str, image_b: str) -> float:
+    a = layout_by_id.get(str(image_a or ""))
+    b = layout_by_id.get(str(image_b or ""))
+    if not a or not b:
+        return 0.0
+    ax, ay, aw, ah = float(a.get("x") or 0.0), float(a.get("y") or 0.0), float(a.get("w") or 0.0), float(a.get("h") or 0.0)
+    bx, by, bw, bh = float(b.get("x") or 0.0), float(b.get("y") or 0.0), float(b.get("w") or 0.0), float(b.get("h") or 0.0)
+    if aw <= 0.0 or ah <= 0.0 or bw <= 0.0 or bh <= 0.0:
+        return 0.0
+
+    ix0 = max(ax, bx)
+    iy0 = max(ay, by)
+    ix1 = min(ax + aw, bx + bw)
+    iy1 = min(ay + ah, by + bh)
+    if ix1 <= ix0 or iy1 <= iy0:
+        return 0.0
+    inter = (ix1 - ix0) * (iy1 - iy0)
+    denom = min(aw * ah, bw * bh)
+    if denom <= 0.0:
+        return 0.0
+    return max(0.0, min(1.0, inter / denom))
+
+
+def _preferred_transformation_mode_hint(payload: dict[str, Any]) -> tuple[str | None, float | None]:
+    explicit = _optional_transformation_mode(payload.get("preferred_transformation_mode"))
+    if explicit:
+        return explicit, None
+
+    ambient = payload.get("ambient_intent")
+    if not isinstance(ambient, dict):
+        return None, None
+
+    ambient_explicit = _optional_transformation_mode(
+        ambient.get("preferred_transformation_mode") or ambient.get("transformation_mode")
+    )
+    if ambient_explicit:
+        return ambient_explicit, None
+
+    best_mode: str | None = None
+    best_conf = -1.0
+    candidates = ambient.get("transformation_mode_candidates")
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            mode = _optional_transformation_mode(candidate.get("mode") or candidate.get("transformation_mode"))
+            if not mode:
+                continue
+            conf = _safe_float(candidate.get("confidence"), -1.0)
+            if conf > best_conf:
+                best_conf = conf
+                best_mode = mode
+            if best_mode is None:
+                best_mode = mode
+    if best_mode:
+        return best_mode, (best_conf if best_conf >= 0.0 else None)
+    return None, None
+
+
+def _infer_structured_intent(payload: dict[str, Any]) -> dict[str, Any]:
+    action_version = int(payload.get("action_version") or 0)
+    selected_ids = _ids_list(payload.get("selected_ids"))
+    images = payload.get("images") if isinstance(payload.get("images"), list) else []
+    image_ids = [str((img or {}).get("id") or "").strip() for img in images if isinstance(img, dict)]
+    image_ids = [k for k in image_ids if k]
+    image_id_set = set(image_ids)
+    selected_ids = [image_id for image_id in selected_ids if image_id in image_id_set]
+    active_id_raw = str(payload.get("active_id") or "").strip()
+    active_id = active_id_raw if active_id_raw in image_id_set else ""
+
+    ranked_ids, layout_by_id, has_spatial_layout = _image_layout_stats(images)
+
+    target_ids = selected_ids[:]
+    if not target_ids and active_id:
+        target_ids = [active_id]
+    if not target_ids and ranked_ids:
+        target_ids = [ranked_ids[0]]
+    if not target_ids and image_ids:
+        target_ids = [image_ids[0]]
+    target_set = set(target_ids)
+
+    reference_ids = [img_id for img_id in ranked_ids if img_id not in target_set][:3]
+    if not reference_ids:
+        reference_ids = [img_id for img_id in image_ids if img_id not in target_set][:3]
+    hints = []
+    for img in images:
+        if not isinstance(img, dict):
+            continue
+        hints.append(str(img.get("vision_desc") or ""))
+        hints.append(str(img.get("file") or ""))
+    context_summary = str(payload.get("canvas_context_summary") or "").strip()
+    if context_summary:
+        hints.append(context_summary)
+    _, lane_conf = _intent_summary_from_hints(hints)
+    preferred_mode, preferred_conf = _preferred_transformation_mode_hint(payload)
+    transformation_mode = preferred_mode or MOTHER_DEFAULT_TRANSFORMATION_MODE
+
+    def _first_ranked_not(excluded: set[str]) -> str:
+        for image_id in ranked_ids:
+            if image_id and image_id not in excluded:
+                return image_id
+        return ""
+
+    subject_id = (target_ids[:1] or ranked_ids[:1] or image_ids[:1] or [""])[0]
+    model_id = (reference_ids[:1] or [_first_ranked_not({subject_id})] or [""])[0]
+    overlap_ratio = _pair_overlap_ratio(layout_by_id, subject_id, model_id)
+    summary = _intent_summary_for_mode(transformation_mode, hints)
+
+    if len(image_ids) >= 4:
+        placement = "grid"
+    elif target_ids and reference_ids:
+        placement = "replace" if overlap_ratio >= 0.18 else "adjacent"
+    elif target_ids:
+        placement = "replace"
+    else:
+        placement = "adjacent"
+
+    subject = [subject_id] if subject_id else []
+    model = [model_id] if model_id else []
+    if reference_ids[1:2]:
+        mediator = reference_ids[1:2]
+    else:
+        mediator_id = _first_ranked_not(set(subject + model))
+        mediator = [mediator_id] if mediator_id else model[:1]
+    obj = target_ids[:1] or subject[:1]
+
+    intent_id = f"intent-{action_version}"
+    confidence_raw = lane_conf + (0.05 if selected_ids else 0.0)
+    if preferred_mode:
+        confidence_raw += 0.06
+    if preferred_conf is not None:
+        confidence_raw = max(confidence_raw, 0.52 + (0.38 * max(0.0, min(1.0, preferred_conf))))
+    if has_spatial_layout:
+        confidence_raw += 0.03
+    if overlap_ratio >= 0.15:
+        confidence_raw += 0.02
+    confidence = round(max(0.2, min(0.99, confidence_raw)), 2)
+    return {
+        "intent_id": intent_id,
+        "summary": summary,
+        "creative_directive": MOTHER_CREATIVE_DIRECTIVE,
+        "transformation_mode": transformation_mode,
+        "target_ids": target_ids,
+        "reference_ids": reference_ids,
+        "placement_policy": placement,
+        "confidence": confidence,
+        "roles": {
+            "subject": subject,
+            "model": model,
+            "mediator": mediator,
+            "object": obj,
+        },
+        "alternatives": [
+            {"placement_policy": "adjacent"},
+            {"placement_policy": "grid"},
+        ],
+    }
+
+
+def _compile_prompt(payload: dict[str, Any]) -> dict[str, Any]:
+    action_version = int(payload.get("action_version") or 0)
+    intent = payload.get("intent") if isinstance(payload.get("intent"), dict) else {}
+    roles = intent.get("roles") if isinstance(intent.get("roles"), dict) else {}
+    summary = str(
+        intent.get("summary")
+        or intent.get("label")
+        or f"{MOTHER_CREATIVE_DIRECTIVE.capitalize()} synthesis from current canvas composition"
+    )
+    placement = str(intent.get("placement_policy") or "adjacent")
+    creative_directive = str(
+        payload.get("creative_directive") or intent.get("creative_directive") or MOTHER_CREATIVE_DIRECTIVE
+    ).strip() or MOTHER_CREATIVE_DIRECTIVE
+    transformation_mode = _normalize_transformation_mode(
+        payload.get("transformation_mode") or intent.get("transformation_mode")
+    )
+
+    subject_ids = _ids_list(roles.get("subject"))[:2]
+    model_ids = _ids_list(roles.get("model"))[:2]
+    mediator_ids = _ids_list(roles.get("mediator"))[:2]
+    object_ids = _ids_list(roles.get("object"))[:2]
+    subject = ", ".join(subject_ids) or "primary subject"
+    model = ", ".join(model_ids) or "reference model"
+    mediator = ", ".join(mediator_ids) or "layout mediator"
+    obj = ", ".join(object_ids) or "desired outcome"
+    double_exposure_allowed = transformation_mode in {"destabilize", "fracture", "alienate"}
+    target_ids = _ids_list(intent.get("target_ids") or payload.get("target_ids"))
+    reference_ids = _ids_list(intent.get("reference_ids") or payload.get("reference_ids"))
+    unique_context_ids = []
+    for image_id in target_ids + reference_ids:
+        if image_id not in unique_context_ids:
+            unique_context_ids.append(image_id)
+    multi_image = len(unique_context_ids) > 1
+    input_hints = _payload_image_hints(payload)
+    has_human_inputs = _has_human_signal(input_hints)
+
+    constraints = [
+        "No unintended ghosted human overlays.",
+        (
+            "Allow intentional double-exposure only if it clearly serves the chosen transformation mode."
+            if double_exposure_allowed
+            else "No accidental double-exposure artifacts."
+        ),
+        "No icon-overpaint artifacts or interface residue.",
+        "Preserve source-object integrity when the subject/object role implies continuity.",
+    ]
+    if not has_human_inputs:
+        constraints.append("No extra humans or faces unless clearly present in the input references.")
+
+    multi_image_rules: list[str] = []
+    if multi_image:
+        multi_image_rules.append("Integrate all references into a single coherent scene (not a collage).")
+        if subject_ids and model_ids:
+            multi_image_rules.append(
+                f"Preserve primary subject identity from {', '.join(subject_ids)} and key material/color cues from {', '.join(model_ids)}."
+            )
+        elif target_ids and reference_ids:
+            multi_image_rules.append(
+                f"Preserve identifiable structure from {target_ids[0]} while transferring visual language from {reference_ids[0]}."
+            )
+        multi_image_rules.append("Match perspective, scale, and lighting direction across fused elements.")
+        multi_image_rules.append("Keep one coherent camera framing and focal hierarchy.")
+
+    positive_lines = [
+        "Create one production-ready concept image.",
+        f"Creative directive: {creative_directive}.",
+        f"Transformation mode: {transformation_mode}.",
+        f"Intent summary: {summary}.",
+        "Role anchors:",
+        f"- SUBJECT: {subject}",
+        f"- MODEL: {model}",
+        f"- MEDIATOR: {mediator}",
+        f"- OBJECT: {obj}",
+        f"Placement policy target: {placement}.",
+    ]
+    if multi_image_rules:
+        positive_lines.append("Multi-image fusion rules:")
+        positive_lines.extend(f"- {line}" for line in multi_image_rules)
+    positive_lines.extend(
+        [
+            "Preserve coherence, emotional resonance, strong focal hierarchy, and production-grade lighting.",
+            "Anti-overlay constraints:",
+        ]
+    )
+    positive_lines.extend(f"- {constraint}" for constraint in constraints)
+    positive_lines.append("No visible text, logos-as-text, captions, or watermarks.")
+    positive = "\n".join(positive_lines)
+    negative = (
+        "No text overlays, no watermarks, no collage split-screen, no icon-overpaint artifacts, "
+        "no duplicated heads/limbs, no low-detail mush, no ghosted human overlays, "
+        + ("no extra humans/faces unless present in inputs." if not has_human_inputs else "no unintended extra faces.")
+    )
+    return {
+        "action_version": action_version,
+        "creative_directive": creative_directive,
+        "transformation_mode": transformation_mode,
+        "positive_prompt": positive,
+        "negative_prompt": negative,
+        "compile_constraints": constraints,
+        "generation_params": {
+            "guidance_scale": 7.0,
+            "layout_hint": placement,
+            "seed_strategy": "random",
+            "transformation_mode": transformation_mode,
+        },
+    }
+
+
+def _mother_generate_request(payload: dict[str, Any], state: dict[str, object]) -> tuple[str, dict[str, Any], list[str], dict[str, Any]]:
+    prompt = str(payload.get("prompt") or payload.get("positive_prompt") or "").strip()
+    negative = str(payload.get("negative_prompt") or "").strip()
+    if not prompt:
+        raise ValueError("Mother generate payload missing prompt.")
+    if negative and "avoid:" not in prompt.lower():
+        prompt = f"{prompt}\nAvoid: {negative}".strip()
+
+    settings = _settings_from_state(state)
+    settings["n"] = int(payload.get("n") or 1)
+
+    generation_params = payload.get("generation_params") if isinstance(payload.get("generation_params"), dict) else {}
+    provider_options = dict(settings.get("provider_options") or {})
+    seed_strategy = str(generation_params.get("seed_strategy") or "").strip().lower()
+    if seed_strategy == "random":
+        # Prevent deterministic cache hits when rerolling Mother drafts.
+        settings["seed"] = random.randint(1, 2_147_483_647)
+    elif generation_params.get("seed") is not None:
+        try:
+            settings["seed"] = int(generation_params.get("seed"))
+        except Exception:
+            pass
+    if isinstance(generation_params.get("guidance_scale"), (int, float)):
+        provider_options["guidance_scale"] = float(generation_params.get("guidance_scale"))
+    if isinstance(generation_params.get("layout_hint"), str):
+        provider_options["layout_hint"] = str(generation_params.get("layout_hint"))
+    if isinstance(generation_params.get("transformation_mode"), str):
+        provider_options["transformation_mode"] = str(generation_params.get("transformation_mode"))
+    if provider_options:
+        settings["provider_options"] = provider_options
+
+    init_image = str(payload.get("init_image") or "").strip()
+    reference_images = _paths_list(payload.get("reference_images"))
+    if init_image:
+        settings["init_image"] = init_image
+    if reference_images:
+        settings["reference_images"] = reference_images
+
+    source_images = _paths_list(payload.get("source_images"))
+    if not source_images:
+        source_images = [v for v in [init_image, *reference_images] if v]
+    source_images = [str(Path(path)) for path in source_images if str(path).strip()]
+
+    intent_meta = payload.get("intent") if isinstance(payload.get("intent"), dict) else {}
+    action_meta = {
+        "action": "mother_generate",
+        "intent_id": payload.get("intent_id") or intent_meta.get("intent_id"),
+        "mother_action_version": int(payload.get("action_version") or 0),
+        "transformation_mode": payload.get("transformation_mode") or intent_meta.get("transformation_mode"),
+        "source_images": source_images,
+    }
+    return prompt, settings, source_images, action_meta
+
 def _handle_chat(args: argparse.Namespace) -> int:
     run_dir = Path(args.out)
     events_path = Path(args.events) if args.events else run_dir / "events.jsonl"
@@ -125,7 +663,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
         if intent.action == "help":
             print(
                 "Commands: /profile /text_model /image_model /fast /quality /cheaper "
-                "/better /optimize /recreate /describe /canvas_context /diagnose /recast /use "
+                "/better /optimize /recreate /describe /canvas_context /intent_infer /prompt_compile /mother_generate "
+                "/diagnose /recast /use "
                 "/canvas_context_rt_start /canvas_context_rt_stop /canvas_context_rt "
                 "/intent_rt_start /intent_rt_stop /intent_rt "
                 "/blend /swap_dna /argue /bridge /extract_rule /odd_one_out /triforce /export"
@@ -213,6 +752,151 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 model=inference.model,
             )
             print(inference.text)
+            continue
+        if intent.action == "intent_infer":
+            raw_path = intent.command_args.get("path")
+            if not raw_path:
+                msg = "/intent_infer requires a JSON payload path"
+                engine.events.emit("mother_intent_infer_failed", error=msg, payload_path=None)
+                print(msg)
+                continue
+            payload_path = Path(str(raw_path))
+            if not payload_path.exists():
+                msg = f"Intent infer failed: file not found ({payload_path})"
+                engine.events.emit("mother_intent_infer_failed", error=msg, payload_path=str(payload_path))
+                print(msg)
+                continue
+            payload = _load_json_payload(payload_path)
+            if payload is None:
+                msg = f"Intent infer failed: invalid JSON ({payload_path})"
+                engine.events.emit("mother_intent_infer_failed", error=msg, payload_path=str(payload_path))
+                print(msg)
+                continue
+            intent_payload = _infer_structured_intent(payload)
+            engine.events.emit(
+                "mother_intent_inferred",
+                payload_path=str(payload_path),
+                action_version=int(payload.get("action_version") or 0),
+                intent=intent_payload,
+                source="brood_intent_infer",
+                model="heuristic-v1",
+            )
+            print(json.dumps(intent_payload, ensure_ascii=False))
+            continue
+        if intent.action == "prompt_compile":
+            raw_path = intent.command_args.get("path")
+            if not raw_path:
+                msg = "/prompt_compile requires a JSON payload path"
+                engine.events.emit("mother_prompt_compile_failed", error=msg, payload_path=None)
+                print(msg)
+                continue
+            payload_path = Path(str(raw_path))
+            if not payload_path.exists():
+                msg = f"Prompt compile failed: file not found ({payload_path})"
+                engine.events.emit("mother_prompt_compile_failed", error=msg, payload_path=str(payload_path))
+                print(msg)
+                continue
+            payload = _load_json_payload(payload_path)
+            if payload is None:
+                msg = f"Prompt compile failed: invalid JSON ({payload_path})"
+                engine.events.emit("mother_prompt_compile_failed", error=msg, payload_path=str(payload_path))
+                print(msg)
+                continue
+            compiled = _compile_prompt(payload)
+            engine.events.emit(
+                "mother_prompt_compiled",
+                payload_path=str(payload_path),
+                action_version=int(payload.get("action_version") or 0),
+                compiled=compiled,
+                source="brood_prompt_compile",
+                model="heuristic-v1",
+            )
+            print(compiled.get("positive_prompt", ""))
+            continue
+        if intent.action == "mother_generate":
+            raw_path = intent.command_args.get("path")
+            if not raw_path:
+                msg = "/mother_generate requires a JSON payload path"
+                engine.events.emit(
+                    "generation_failed",
+                    version_id=None,
+                    provider="mother",
+                    model=engine.image_model,
+                    error=msg,
+                )
+                print(msg)
+                continue
+            payload_path = Path(str(raw_path))
+            if not payload_path.exists():
+                msg = f"Mother generate failed: file not found ({payload_path})"
+                engine.events.emit(
+                    "generation_failed",
+                    version_id=None,
+                    provider="mother",
+                    model=engine.image_model,
+                    error=msg,
+                )
+                print(msg)
+                continue
+            payload = _load_json_payload(payload_path)
+            if payload is None:
+                msg = f"Mother generate failed: invalid JSON ({payload_path})"
+                engine.events.emit(
+                    "generation_failed",
+                    version_id=None,
+                    provider="mother",
+                    model=engine.image_model,
+                    error=msg,
+                )
+                print(msg)
+                continue
+
+            try:
+                prompt, settings, source_images, action_meta = _mother_generate_request(payload, state)
+            except ValueError as exc:
+                msg = f"Mother generate failed: {exc}"
+                engine.events.emit(
+                    "generation_failed",
+                    version_id=None,
+                    provider="mother",
+                    model=engine.image_model,
+                    error=msg,
+                )
+                print(msg)
+                continue
+
+            progress_once("Planning Mother draft")
+            plan = engine.preview_plan(prompt, settings)
+            print(
+                f"Mother plan: {plan['images']} image via {plan['provider']}:{plan['model']} "
+                f"size={plan['size']} cached={plan['cached']} refs={len(source_images)}"
+            )
+            ticker = ProgressTicker("Generating Mother draft")
+            ticker.start_ticking()
+            error: Exception | None = None
+            artifacts: list[dict[str, object]] = []
+            try:
+                artifacts = engine.generate(prompt, settings, action_meta)
+            except Exception as exc:
+                error = exc
+            finally:
+                ticker.stop(done=True)
+
+            if not error and artifacts:
+                last_artifact_path = str(artifacts[-1].get("image_path") or last_artifact_path or "")
+
+            if engine.last_fallback_reason:
+                print(f"Model fallback: {engine.last_fallback_reason}")
+            cost_raw = engine.last_cost_latency.get("cost_total_usd") if engine.last_cost_latency else None
+            latency_raw = engine.last_cost_latency.get("latency_per_image_s") if engine.last_cost_latency else None
+            cost = format_cost_generation_cents(cost_raw) or "N/A"
+            latency = format_latency_seconds(latency_raw) or "N/A"
+            print(f"Cost of generation: {ansi_highlight(cost)} | Latency per image: {ansi_highlight(latency)}")
+
+            if error:
+                print(f"Mother generate failed: {error}")
+            else:
+                print("Mother generate complete.")
             continue
         if intent.action == "canvas_context_rt_start":
             if canvas_context_rt is None:

@@ -178,6 +178,37 @@
                     <div id="tips-text" class="panel-body muted panel-readout">
                       Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
                     </div>
+                    <div class="mother-panel-controls">
+                      <button id="mother-refine-toggle" class="mother-refine-toggle hidden" type="button" aria-expanded="false">
+                        Refine structure
+                      </button>
+                      <label id="mother-intensity-wrap" class="mother-intensity-wrap hidden">
+                        <span class="mother-intensity-label">Intensity</span>
+                        <input id="mother-intensity" class="mother-intensity" type="range" min="0" max="100" step="1" value="62" />
+                      </label>
+                      <div id="mother-advanced" class="mother-advanced hidden" aria-label="Mother advanced structure">
+                        <label class="mother-advanced-row">
+                          <span class="mother-advanced-label">Transformation mode</span>
+                          <select id="mother-transformation-mode"></select>
+                        </label>
+                        <label class="mother-advanced-row">
+                          <span class="mother-advanced-label">SUBJECT</span>
+                          <select id="mother-role-subject"></select>
+                        </label>
+                        <label class="mother-advanced-row">
+                          <span class="mother-advanced-label">MODEL</span>
+                          <select id="mother-role-model"></select>
+                        </label>
+                        <label class="mother-advanced-row">
+                          <span class="mother-advanced-label">MEDIATOR</span>
+                          <select id="mother-role-mediator"></select>
+                        </label>
+                        <label class="mother-advanced-row">
+                          <span class="mother-advanced-label">OBJECT</span>
+                          <select id="mother-role-object"></select>
+                        </label>
+                      </div>
+                    </div>
                   </div>
                   <div class="mother-actions mother-actions-floating" aria-label="Mother controls">
                     <button id="mother-ability-icon" class="mother-ability-icon" type="button" aria-label="Mother ability"></button>
