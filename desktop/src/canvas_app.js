@@ -5855,6 +5855,7 @@ async function motherIdleDispatchGeneration({ forcedModel = null, isRetry = fals
   const idle = state.motherIdle;
   if (!idle) return false;
   if (!isRetry && idle.blockedUntilUserInteraction) return false;
+  if (!isRetry && isEngineBusy()) return false;
   if (!isRetry && (idle.hasGeneratedSinceInteraction || idle.pendingDispatchToken)) return false;
   if (isRetry && idle.pendingDispatchToken) return false;
   if (!motherIdleHasArmedCanvas()) return false;
@@ -6039,7 +6040,7 @@ function motherIdleArmFirstTimer() {
 
   const dueAt = Date.now() + MOTHER_IDLE_FIRST_IDLE_MS;
   const delay = Math.max(25, dueAt - Date.now());
-  idle.firstIdleTimer = setTimeout(() => {
+  idle.firstIdleTimer = setTimeout(async () => {
     idle.firstIdleTimer = null;
     if (!motherIdleHasArmedCanvas()) return;
     if (state.mother?.running) return;
@@ -6049,7 +6050,12 @@ function motherIdleArmFirstTimer() {
       return;
     }
     motherIdleTransitionTo(MOTHER_IDLE_EVENTS.IDLE_WINDOW_ELAPSED);
-    motherIdleDispatchGeneration().catch(() => {});
+    const dispatched = await motherIdleDispatchGeneration().catch(() => false);
+    if (dispatched) return;
+    if (!state.motherIdle) return;
+    if (state.motherIdle.phase !== MOTHER_IDLE_STATES.IDLE_REALTIME_ACTIVE) return;
+    motherIdleTransitionTo(MOTHER_IDLE_EVENTS.DISQUALIFY);
+    motherIdleArmFirstTimer();
   }, delay);
 }
 

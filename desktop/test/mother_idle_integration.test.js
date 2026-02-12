@@ -33,12 +33,16 @@ test("Mother wheel: native-style open/close and dispatch hooks are wired", () =>
 test("Mother idle flow: 5s idle gate + 10s no-response takeover are explicit", () => {
   assert.match(app, /MOTHER_IDLE_FIRST_IDLE_MS\s*=\s*5000/);
   assert.match(app, /MOTHER_IDLE_TAKEOVER_IDLE_MS\s*=\s*10_?000/);
+  assert.match(app, /if \(!isRetry && isEngineBusy\(\)\) return false;/);
   assert.match(app, /const dueAt = Date\.now\(\) \+ MOTHER_IDLE_FIRST_IDLE_MS/);
   assert.match(app, /if \(quietFor < MOTHER_IDLE_FIRST_IDLE_MS\)/);
   assert.match(app, /function motherIdleArmTakeoverTimer\(/);
   assert.match(app, /const quietFor = Date\.now\(\) - \(due - MOTHER_IDLE_TAKEOVER_IDLE_MS\)/);
   assert.match(app, /if \(quietFor < MOTHER_IDLE_TAKEOVER_IDLE_MS\)/);
   assert.match(app, /motherIdleTransitionTo\(MOTHER_IDLE_EVENTS\.IDLE_WINDOW_ELAPSED\)/);
+  assert.match(app, /const dispatched = await motherIdleDispatchGeneration\(\)\.catch\(\(\) => false\);/);
+  assert.match(app, /if \(state\.motherIdle\.phase !== MOTHER_IDLE_STATES\.IDLE_REALTIME_ACTIVE\) return;/);
+  assert.match(app, /motherIdleTransitionTo\(MOTHER_IDLE_EVENTS\.DISQUALIFY\);[\s\S]*motherIdleArmFirstTimer\(\);/);
   assert.match(app, /motherIdleTransitionTo\(MOTHER_IDLE_EVENTS\.GENERATION_DISPATCHED\)/);
   assert.match(app, /motherIdleTransitionTo\(MOTHER_IDLE_EVENTS\.GENERATION_INSERTED\)/);
   assert.match(app, /motherIdleTransitionTo\(MOTHER_IDLE_EVENTS\.USER_RESPONSE_TIMEOUT\)/);
