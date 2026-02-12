@@ -15,6 +15,16 @@ Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, an
 - 2 images in: `Combine`, `Swap DNA`, `Bridge`, `Argue`
 - Provider/model switching is a first-class concept (OpenAI, Gemini, Imagen, Flux, SDXL)
 
+## Download (macOS)
+
+Download the latest universal DMG from GitHub Releases:
+- <https://github.com/kevinshowkat/brood/releases>
+
+Install:
+1. Download `Brood_<version>_universal.dmg`.
+2. Open the DMG and drag `Brood.app` into `/Applications`.
+3. If macOS blocks the app, try right-clicking `Brood.app` -> **Open**, or open it via **System Settings** -> **Privacy & Security**.
+
 ## Features
 
 ### Remove People
@@ -122,10 +132,6 @@ Edit `~/.brood/pricing_overrides.json` to override pricing or latency values.
 - `agent-intake.json` optional Agent Intake Protocol (AIP) contract (curated entrypoints + optional context packs).
 - `scripts/aip_build_packs.py` builds JSON context packs to host and return via AIP (writes to `outputs/aip_packs/`, gitignored).
 - `scripts/aip_server.py` stdlib-only local stub AIP server for testing the contract + pack downloads.
-- `scripts/visibility_probe.py` runs repeatable LLM mention probes (OpenAI/Anthropic/Gemini or dryrun), writes scored JSONL + summary to `outputs/ai_visibility/` using browser-style user queries by default, with optional provider web-search mode.
-- `docs/ai_visibility.md` usage guide for probe setup, providers, and output interpretation.
-- `docs/ai_visibility.schema.json` schema for visibility probe outputs (`probe_result` + `run_summary`).
-- `docs/ai_visibility_queries.sample.json` starter query set for discovery/share-of-voice tracking.
 
 ## License
 

@@ -49,8 +49,9 @@ Tests:
 - Add tests for new run artifacts, events, or loops when changing engine behavior.
 
 ## Commit & Pull Request Guidelines
-- Git history currently has only an initial commit; no established convention yet.
 - Use concise, imperative commit messages (e.g., “Add recreate similarity metrics”).
+- Keep commits scoped; avoid mixing engine + desktop + docs unless needed.
+- If changing desktop app version, bump versions in `desktop/package.json`, `desktop/src-tauri/tauri.conf.json`, and `desktop/src-tauri/Cargo.toml` together (CI enforces).
 - PRs should include: summary of changes, test status, and screenshots or screen capture for UI changes.
 
 ## Configuration & Tips
