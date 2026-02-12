@@ -42,6 +42,9 @@ const MOTHER_USER_HOT_IDLE_MS = 10_000;
 const MOTHER_TAKEOVER_PREVIEW_MS = 10_000;
 const MOTHER_IDLE_FIRST_IDLE_MS = 5000;
 const MOTHER_IDLE_TAKEOVER_IDLE_MS = 10_000;
+// Extra grace so Mother doesn't feel jumpy on fresh imports/edits.
+const MOTHER_IDLE_FIRST_IDLE_GRACE_MS = 7000;
+const MOTHER_IDLE_TAKEOVER_GRACE_MS = 20_000;
 const MOTHER_GENERATION_TIMEOUT_MS = 14_000;
 const MOTHER_GENERATION_MODEL = "gemini-2.5-flash-image";
 const MOTHER_GENERATED_SOURCE = "mother_generated";
@@ -985,7 +988,7 @@ function scheduleVisionDescribeAll() {
 
 const ALWAYS_ON_VISION_DEBOUNCE_MS = 900;
 const ALWAYS_ON_VISION_THROTTLE_MS = 12000;
-const ALWAYS_ON_VISION_IDLE_MS = 900;
+const ALWAYS_ON_VISION_IDLE_MS = 5000;
 const ALWAYS_ON_VISION_TIMEOUT_MS = 45000;
 
 let alwaysOnVisionTimer = null;
@@ -4736,8 +4739,7 @@ function syncMotherPortrait() {
   const userHotUntil = Math.max(0, Number(state.lastMotherHotAt) || 0) + MOTHER_USER_HOT_IDLE_MS;
   const idlePhase = state.motherIdle?.phase || motherIdleInitialState();
 
-  // Realtime border/video is now driven by Mother's idle flow and only shows during
-  // the generation dispatch phase window.
+  // Realtime border/video is driven by Mother's idle suggestion flow window.
   const showRealtime = !motherRunning && hasImages && motherIdleUsesRealtimeVisual(idlePhase);
   if (els.canvasWrap) {
     els.canvasWrap.classList.toggle("mother-rt-active", showRealtime);
@@ -5146,9 +5148,9 @@ async function appendMotherSuggestionLog(entry = {}) {
 function motherIdleHasArmedCanvas() {
   if (state.canvasMode !== "multi") return false;
   const base = motherIdleBaseImageItems();
-  if (base.length < 2) return false;
-  const firstTwo = base.slice(0, 2);
-  for (const item of firstTwo) {
+  if (base.length < 1) return false;
+  const required = base.slice(0, Math.min(2, base.length));
+  for (const item of required) {
     const rect = state.freeformRects.get(item.id) || null;
     if (!rect) return false;
     if ((Number(rect.w) || 0) <= 0 || (Number(rect.h) || 0) <= 0) return false;
@@ -5311,7 +5313,7 @@ function motherIdleArmTakeoverTimer() {
   idle.takeoverTimer = null;
 
   const dueAt = motherIdleTakeoverDueAtMs(idle);
-  const delay = Math.max(40, dueAt - Date.now());
+  const delay = Math.max(40, dueAt - Date.now() + MOTHER_IDLE_TAKEOVER_GRACE_MS);
   idle.takeoverTimer = setTimeout(() => {
     idle.takeoverTimer = null;
     if (!state.motherIdle || state.motherIdle.phase !== MOTHER_IDLE_STATES.WAITING_FOR_USER) return;
@@ -5648,7 +5650,7 @@ function motherIdleBuildVisionOnlyPrompt() {
     });
     lines.push(desc);
   }
-  if (lines.length < 2) return null;
+  if (lines.length < 1) return null;
 
   const hypotheses = motherIdlePickIntentHypotheses(lines);
   const primaryMeta = motherIdleUseCasePromptMeta(hypotheses.primary);
@@ -6039,7 +6041,7 @@ function motherIdleArmFirstTimer() {
   if (idle.hasGeneratedSinceInteraction) return;
 
   const dueAt = Date.now() + MOTHER_IDLE_FIRST_IDLE_MS;
-  const delay = Math.max(25, dueAt - Date.now());
+  const delay = Math.max(25, dueAt - Date.now() + MOTHER_IDLE_FIRST_IDLE_GRACE_MS);
   idle.firstIdleTimer = setTimeout(async () => {
     idle.firstIdleTimer = null;
     if (!motherIdleHasArmedCanvas()) return;
