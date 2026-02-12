@@ -3006,6 +3006,119 @@ button.ghost:hover {
   border-color: rgba(255, 95, 95, 0.78);
 }
 
+.mother-wheel-menu {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 12;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  --wheel-open-ms: 220ms;
+}
+
+.mother-wheel-menu::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 46px;
+  height: 46px;
+  border-radius: 999px;
+  transform: translate(-50%, -50%) scale(0.72);
+  border: 1px solid rgba(54, 76, 106, 0.78);
+  border-bottom-color: rgba(0, 0, 0, 0.82);
+  background:
+    radial-gradient(160px 90px at 25% 0%, rgba(100, 210, 255, 0.12), transparent 68%),
+    radial-gradient(180px 110px at 82% 0%, rgba(255, 212, 0, 0.10), transparent 72%),
+    linear-gradient(180deg, rgba(18, 26, 37, 0.96), rgba(6, 8, 12, 0.96));
+  box-shadow:
+    0 22px 52px rgba(0, 0, 0, 0.58),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  opacity: 0;
+  transition:
+    transform var(--wheel-open-ms) cubic-bezier(0.2, 0.85, 0.2, 1),
+    opacity 150ms ease;
+}
+
+.mother-wheel-menu.is-open {
+  pointer-events: auto;
+}
+
+.mother-wheel-menu.is-open::before {
+  transform: translate(-50%, -50%) scale(1);
+  opacity: 1;
+}
+
+.mother-wheel-action {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid rgba(54, 76, 106, 0.68);
+  border-bottom-color: rgba(0, 0, 0, 0.82);
+  background:
+    radial-gradient(120px 70px at 20% 0%, rgba(100, 210, 255, 0.10), transparent 72%),
+    radial-gradient(140px 90px at 88% 0%, rgba(255, 212, 0, 0.08), transparent 74%),
+    linear-gradient(180deg, rgba(18, 26, 37, 0.96), rgba(6, 8, 12, 0.96));
+  color: rgba(230, 237, 243, 0.92);
+  box-shadow:
+    0 20px 36px rgba(0, 0, 0, 0.56),
+    inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  cursor: pointer;
+  transform: translate(-50%, -50%) scale(0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--wheel-open-ms) cubic-bezier(0.2, 0.85, 0.2, 1),
+    opacity 160ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.mother-wheel-menu.is-open .mother-wheel-action {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.mother-wheel-menu.is-open .mother-wheel-action[data-action="add_photo"] {
+  transform: translate(-50%, -50%) translate(0, -74px) scale(1);
+}
+
+.mother-wheel-menu.is-open .mother-wheel-action[data-action="add_role"] {
+  transform: translate(-50%, -50%) translate(66px, 44px) scale(1);
+}
+
+.mother-wheel-action:hover {
+  border-color: rgba(255, 212, 0, 0.62);
+  color: rgba(255, 247, 210, 0.95);
+}
+
+.mother-wheel-action:active {
+  transform: translate(-50%, -50%) scale(0.96);
+}
+
+.mother-wheel-menu.is-open .mother-wheel-action[data-action="add_photo"]:active {
+  transform: translate(-50%, -50%) translate(0, -74px) scale(0.96);
+}
+
+.mother-wheel-menu.is-open .mother-wheel-action[data-action="add_role"]:active {
+  transform: translate(-50%, -50%) translate(66px, 44px) scale(0.96);
+}
+
+.mother-wheel-action svg {
+  width: 19px;
+  height: 19px;
+  display: block;
+  filter:
+    drop-shadow(0 1px 0 rgba(0, 0, 0, 0.72))
+    drop-shadow(0 0 10px rgba(255, 212, 0, 0.18));
+}
+
 .designate-menu button {
   width: 100%;
   background: rgba(18, 26, 37, 0.85);
