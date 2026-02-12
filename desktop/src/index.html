@@ -93,6 +93,31 @@
               <button type="button" data-action="remove">Remove from canvas</button>
               <button class="ghost" type="button" data-action="cancel">Cancel</button>
             </div>
+            <div id="mother-wheel-menu" class="mother-wheel-menu hidden" role="menu" aria-label="Mother wheel menu">
+              <button
+                type="button"
+                class="mother-wheel-action"
+                data-action="add_photo"
+                aria-label="Add photo"
+                title="Add photo"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="mother-wheel-action"
+                data-action="add_role"
+                aria-label="Add role"
+                title="Add role"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2" />
+                  <path d="M12 4v3M12 17v3M4 12h3M17 12h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                </svg>
+              </button>
+            </div>
             <div id="annotate-panel" class="annotate-panel hidden" role="dialog" aria-label="Annotate">
               <div class="annotate-header">
                 <div class="annotate-title">Annotate</div>
