@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Brood creative IDE engine"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
+license = "Apache-2.0"
 authors = [{name = "Brood"}]
 dependencies = [
   "Pillow>=10.0.0",

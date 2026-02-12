@@ -266,12 +266,25 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     agent = req.get("agent") or {}
     task = req.get("task") or {}
-    tags = task.get("tags") or []
 
     if not isinstance(agent, dict) or not agent.get("tool"):
         return _json_response(400, {"error": "missing agent.tool"})
-    if not isinstance(tags, list) or not tags or not all(isinstance(t, str) for t in tags):
-        return _json_response(400, {"error": "missing task.tags[]"})
+    if not isinstance(task, dict):
+        return _json_response(400, {"error": "missing task"})
+    raw_tags = task.get("tags")
+    if raw_tags is None:
+        raw_tags = []
+    if not isinstance(raw_tags, list) or not all(isinstance(t, str) for t in raw_tags):
+        return _json_response(400, {"error": "task.tags[] must be an array of strings when provided"})
+    tags: list[str] = []
+    seen_tags: set[str] = set()
+    for tag in raw_tags:
+        clean = tag.strip()
+        if not clean or clean in seen_tags:
+            continue
+        seen_tags.add(clean)
+        tags.append(clean)
+    tags = tags[:16]
 
     # Opt-out can be signaled either via request body or header.
     opt_out = False
@@ -288,6 +301,25 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     tag_catalog = agent_intake.get("tag_catalog") or {}
     fallback = agent_intake.get("fallback_entrypoints") or []
+    suggested_tags: list[str] = []
+    intake_tags = agent_intake.get("tags") or []
+    if isinstance(intake_tags, list):
+        for tag in intake_tags:
+            if not isinstance(tag, str):
+                continue
+            clean = tag.strip()
+            if not clean or clean in suggested_tags:
+                continue
+            suggested_tags.append(clean)
+    if not suggested_tags and isinstance(tag_catalog, dict):
+        for tag in tag_catalog.keys():
+            if not isinstance(tag, str):
+                continue
+            clean = tag.strip()
+            if not clean or clean in suggested_tags:
+                continue
+            suggested_tags.append(clean)
+    suggested_tags = suggested_tags[:32]
 
     entrypoints: list[dict[str, Any]] = []
     commands: list[str] = []
@@ -383,15 +415,22 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         "schema_version": "aip-1",
         "session": {"id": sid},
         "entrypoints": entrypoints,
+        "suggested_tags": suggested_tags,
     }
     if commands:
         resp["commands"] = commands
     if packs:
         resp["packs"] = packs[:16]
-    resp["notes"] = [
+    notes = [
         "If outbound HTTPS is unavailable, follow llms.txt fallback entrypoints.",
         "This endpoint should avoid storing raw prompts/secrets; prefer coarse task tags.",
     ]
+    if not tags:
+        notes.insert(
+            0,
+            "No task.tags[] were provided; returned fallback entrypoints. Use suggested_tags to narrow a follow-up intake call.",
+        )
+    resp["notes"] = notes
 
     # Structured log for intake.
     if opt_out:
@@ -413,4 +452,3 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         )
 
     return _json_response(200, resp)
-
