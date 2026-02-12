@@ -20,6 +20,13 @@ import {
   placeAmbientSuggestions,
   shouldScheduleAmbientIntent,
 } from "./intent_ambient.js";
+import {
+  MOTHER_IDLE_EVENTS,
+  MOTHER_IDLE_STATES,
+  motherIdleInitialState,
+  motherIdleTransition,
+  motherIdleUsesRealtimeVisual,
+} from "./mother_idle_flow.js";
 
 const THUMB_PLACEHOLDER_SRC = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
@@ -33,6 +40,19 @@ const MOTHER_VIDEO_REALTIME_SRC = new URL("./assets/mother/mother_realtime.mp4",
 const MOTHER_REALTIME_MIN_MS = 4000;
 const MOTHER_USER_HOT_IDLE_MS = 10_000;
 const MOTHER_TAKEOVER_PREVIEW_MS = 10_000;
+const MOTHER_IDLE_FIRST_IDLE_MS = 5000;
+const MOTHER_IDLE_TAKEOVER_IDLE_MS = 10_000;
+const MOTHER_GENERATION_TIMEOUT_MS = 14_000;
+const MOTHER_GENERATION_MODEL = "gemini-2.5-flash-image";
+const MOTHER_GENERATED_SOURCE = "mother_generated";
+const MOTHER_SUGGESTION_LOG_FILENAME = "mother_suggestions.jsonl";
+const MOTHER_INTENT_USECASE_DEFAULT_ORDER = Object.freeze([
+  "streaming_content",
+  "ecommerce_pod",
+  "uiux_prototyping",
+  "game_dev_assets",
+  "content_engine",
+]);
 // Minimap world overscan: keep viewport box from filling the minimap immediately when zooming out.
 const MINIMAP_WORLD_OVERSCAN_RATIO = 0.75;
 
@@ -119,6 +139,7 @@ const els = {
   actionGrid: document.getElementById("action-grid"),
   designateMenu: document.getElementById("designate-menu"),
   imageMenu: document.getElementById("image-menu"),
+  motherWheelMenu: document.getElementById("mother-wheel-menu"),
   quickActions: document.getElementById("quick-actions"),
   timelineToggle: document.getElementById("timeline-toggle"),
   timelineOverlay: document.getElementById("timeline-overlay"),
@@ -207,7 +228,7 @@ const state = {
   tool: "pan",
   pointer: {
     active: false,
-    kind: null, // "freeform_move" | "freeform_resize" | "freeform_import"
+    kind: null, // "freeform_move" | "freeform_resize" | "freeform_import" | "freeform_wheel"
     imageId: null,
     corner: null, // "nw"|"ne"|"sw"|"se"
     startRectCss: null, // { x, y, w, h }
@@ -221,6 +242,12 @@ const state = {
     startOffsetY: 0,
     importPointCss: null, // { x, y }
     moved: false,
+  },
+  wheelMenu: {
+    open: false,
+    hideTimer: null,
+    anchorCss: null, // { x, y } | null
+    anchorWorld: null, // { x, y } | null
   },
   selection: null, // { points: [{x,y}], closed: true }
   lassoDraft: [],
@@ -249,6 +276,26 @@ const state = {
     rtHoldUntil: 0,
     rtHoldTimer: null,
     hotSyncAt: 0,
+  },
+  motherIdle: {
+    phase: motherIdleInitialState(),
+    firstIdleTimer: null,
+    takeoverTimer: null,
+    hasGeneratedSinceInteraction: false,
+    generatedImageId: null,
+    generatedVersionId: null,
+    pendingDispatchToken: 0,
+    dispatchTimeoutTimer: null,
+    pendingPromptLine: null,
+    pendingVersionId: null,
+    ignoredVersionIds: new Set(),
+    waitingSince: 0,
+    pendingSuggestionLog: null, // { request_id, what, why, prompt, source_images, dispatched_at_iso } | null
+    lastSuggestionAt: 0,
+    suppressFailureUntil: 0,
+    retryAttempted: false,
+    lastDispatchModel: null,
+    blockedUntilUserInteraction: false,
   },
   minimap: {
     lastSignature: null,
@@ -394,6 +441,7 @@ const ENABLE_DRAG_DROP_IMPORT = false;
 // re-enable specific behaviors without ripping out code.
 const INTENT_CANVAS_ENABLED = false; // disable onboarding intent decider (keep code intact)
 const INTENT_AMBIENT_ENABLED = true; // ambient intent runs in the background while editing
+const INTENT_AMBIENT_ICON_PLACEMENT_ENABLED = false; // keep ambient inference, disable icon nudges/placement
 const INTENT_TIMER_ENABLED = false; // hide LED timer + disable timeout-based force-choice
 const INTENT_ROUNDS_ENABLED = false; // disable "max rounds" gating
 const INTENT_FORCE_CHOICE_ENABLED = INTENT_TIMER_ENABLED || INTENT_ROUNDS_ENABLED;
@@ -1226,6 +1274,7 @@ function intentRealtimePulseActive() {
 }
 
 function intentAmbientRealtimePulseActive() {
+  if (!INTENT_AMBIENT_ICON_PLACEMENT_ENABLED) return false;
   const ambient = state.intentAmbient;
   if (!ambient || !intentAmbientActive()) return false;
   return Boolean(ambient.pending || ambient.rtState === "connecting");
@@ -1252,7 +1301,8 @@ function syncIntentRealtimePortrait() {
 function syncIntentRealtimeClass() {
   if (!els.canvasWrap) return;
   els.canvasWrap.classList.toggle("intent-rt-active", intentRealtimePulseActive());
-  els.canvasWrap.classList.toggle("intent-ambient-rt-active", intentAmbientRealtimePulseActive());
+  const ambientPulse = INTENT_AMBIENT_ICON_PLACEMENT_ENABLED && intentAmbientRealtimePulseActive();
+  els.canvasWrap.classList.toggle("intent-ambient-rt-active", ambientPulse);
   syncIntentRealtimePortrait();
 }
 
@@ -4684,9 +4734,11 @@ function syncMotherPortrait() {
   const idleFor = now - (state.lastMotherHotAt || 0);
   const userHot = Boolean(aov?.enabled && hasImages && idleFor < MOTHER_USER_HOT_IDLE_MS);
   const userHotUntil = Math.max(0, Number(state.lastMotherHotAt) || 0) + MOTHER_USER_HOT_IDLE_MS;
+  const idlePhase = state.motherIdle?.phase || motherIdleInitialState();
 
-  // Only pulse the main canvas when we're in the realtime video mode.
-  const showRealtime = !motherRunning && hasImages && (realtimeActive || userHot);
+  // Realtime border/video is now driven by Mother's idle flow and only shows during
+  // the generation dispatch phase window.
+  const showRealtime = !motherRunning && hasImages && motherIdleUsesRealtimeVisual(idlePhase);
   if (els.canvasWrap) {
     els.canvasWrap.classList.toggle("mother-rt-active", showRealtime);
   }
@@ -4741,6 +4793,7 @@ function syncMotherPortrait() {
       videoEl.load();
     } catch (_) {}
   }
+  videoEl.classList.remove("hidden");
 
   try {
     const p = videoEl.play();
@@ -4750,6 +4803,9 @@ function syncMotherPortrait() {
 
 async function startMotherTakeover() {
   if (state.mother?.running) return;
+  closeMotherWheelMenu({ immediate: true });
+  clearMotherIdleTimers({ first: true, takeover: true });
+  motherIdleTransitionTo(MOTHER_IDLE_EVENTS.USER_RESPONSE_TIMEOUT);
   const suggestion = currentMotherSuggestedAction();
   const hasSuggestion = Boolean(suggestion?.action);
   const action = hasSuggestion ? String(suggestion.action) : "Preview";
@@ -4836,6 +4892,7 @@ function stopMotherTakeover() {
   recordUserEvent("mother_stop", {});
   renderMotherReadout();
   syncMotherPortrait();
+  motherIdleSyncFromInteraction({ userInteraction: false });
   showToast("Mother stopped. In-flight engine actions may continue.", "tip", 2800);
 }
 
@@ -5051,6 +5108,1006 @@ function setRunInfo(message) {
   els.runInfo.textContent = message;
 }
 
+function isMotherGeneratedImageItem(item) {
+  return String(item?.source || "").trim() === MOTHER_GENERATED_SOURCE;
+}
+
+function motherIdleBaseImageItems() {
+  return (state.images || []).filter((item) => item?.id && !isMotherGeneratedImageItem(item));
+}
+
+function motherSuggestionLogPath() {
+  if (!state.runDir) return null;
+  return `${state.runDir}/${MOTHER_SUGGESTION_LOG_FILENAME}`;
+}
+
+async function appendMotherSuggestionLog(entry = {}) {
+  const logPath = motherSuggestionLogPath();
+  if (!logPath) return false;
+  const line = `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`;
+  try {
+    await writeTextFile(logPath, line, { append: true });
+    return true;
+  } catch (_) {
+    // Fallback for environments where append options are unavailable.
+    let prior = "";
+    try {
+      if (await exists(logPath)) {
+        prior = await readTextFile(logPath);
+      }
+    } catch {
+      prior = "";
+    }
+    await writeTextFile(logPath, `${prior}${line}`);
+    return true;
+  }
+}
+
+function motherIdleHasArmedCanvas() {
+  if (state.canvasMode !== "multi") return false;
+  const base = motherIdleBaseImageItems();
+  if (base.length < 2) return false;
+  const firstTwo = base.slice(0, 2);
+  for (const item of firstTwo) {
+    const rect = state.freeformRects.get(item.id) || null;
+    if (!rect) return false;
+    if ((Number(rect.w) || 0) <= 0 || (Number(rect.h) || 0) <= 0) return false;
+  }
+  return true;
+}
+
+function motherIdleGenerationModelCandidates() {
+  const out = [];
+  const seen = new Set();
+  const push = (raw) => {
+    const model = String(raw || "").trim();
+    if (!model) return;
+    if (providerFromModel(model) !== "gemini") return;
+    if (seen.has(model)) return;
+    seen.add(model);
+    out.push(model);
+  };
+  push(MOTHER_GENERATION_MODEL);
+  push(pickGeminiImageModel());
+  if (providerFromModel(settings.imageModel) === "gemini") push(settings.imageModel);
+  return out.length ? out : [MOTHER_GENERATION_MODEL];
+}
+
+function motherIdlePickRetryModel(lastModel = null) {
+  const current = String(lastModel || "").trim();
+  const candidates = motherIdleGenerationModelCandidates();
+  for (const model of candidates) {
+    if (model !== current) return model;
+  }
+  return null;
+}
+
+function motherIdlePromptLineForPty(prompt) {
+  return String(prompt || "")
+    .replace(/\r?\n+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function motherEventVersionId(event) {
+  const versionId = String(event?.version_id || "").trim();
+  return versionId || null;
+}
+
+function motherIdleRememberIgnoredVersion(versionId) {
+  const idle = state.motherIdle;
+  const normalized = String(versionId || "").trim();
+  if (!idle || !normalized) return;
+  if (!(idle.ignoredVersionIds instanceof Set)) idle.ignoredVersionIds = new Set();
+  idle.ignoredVersionIds.add(normalized);
+  while (idle.ignoredVersionIds.size > 96) {
+    const first = idle.ignoredVersionIds.values().next();
+    if (first.done) break;
+    idle.ignoredVersionIds.delete(first.value);
+  }
+}
+
+function motherIdleIsIgnoredVersion(versionId) {
+  const idle = state.motherIdle;
+  const normalized = String(versionId || "").trim();
+  if (!idle || !normalized) return false;
+  return idle.ignoredVersionIds instanceof Set && idle.ignoredVersionIds.has(normalized);
+}
+
+function motherIdleResetDispatchCorrelation({ rememberPendingVersion = false } = {}) {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  const pendingVersionId = String(idle.pendingVersionId || "").trim();
+  if (rememberPendingVersion && pendingVersionId) {
+    motherIdleRememberIgnoredVersion(pendingVersionId);
+  }
+  idle.pendingVersionId = null;
+  idle.pendingPromptLine = null;
+}
+
+function motherIdleDispatchVersionMatches(versionId) {
+  const idle = state.motherIdle;
+  if (!idle) return false;
+  const expected = String(idle.pendingVersionId || "").trim();
+  if (!expected) return true;
+  const incoming = String(versionId || "").trim();
+  if (!incoming) return true;
+  return incoming === expected;
+}
+
+function motherIdleTrackVersionCreated(event = {}) {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  if (idle.phase !== MOTHER_IDLE_STATES.GENERATION_DISPATCHED) return;
+  if (!idle.pendingDispatchToken) return;
+  const versionId = motherEventVersionId(event);
+  if (!versionId) return;
+  if (!idle.pendingVersionId) {
+    idle.pendingVersionId = versionId;
+    appendMotherSuggestionLog({
+      stage: "version_bound",
+      request_id: idle.pendingSuggestionLog?.request_id || null,
+      model: idle.lastDispatchModel || idle.pendingSuggestionLog?.model || null,
+      version_id: versionId,
+    }).catch(() => {});
+    return;
+  }
+  if (idle.pendingVersionId === versionId) return;
+  motherIdleRememberIgnoredVersion(versionId);
+  appendMotherSuggestionLog({
+    stage: "extra_version_ignored",
+    request_id: idle.pendingSuggestionLog?.request_id || null,
+    model: idle.lastDispatchModel || idle.pendingSuggestionLog?.model || null,
+    expected_version_id: idle.pendingVersionId,
+    ignored_version_id: versionId,
+    ignored_prompt: event?.prompt ? String(event.prompt) : null,
+  }).catch(() => {});
+  console.warn("[mother_suggestion] ignored extra version", {
+    expected_version_id: idle.pendingVersionId,
+    ignored_version_id: versionId,
+  });
+}
+
+function motherIdleTransitionTo(eventName) {
+  if (!state.motherIdle) return motherIdleInitialState();
+  const prev = state.motherIdle.phase;
+  const next = motherIdleTransition(prev, eventName);
+  state.motherIdle.phase = next;
+  if (next !== prev) syncMotherPortrait();
+  return next;
+}
+
+function clearMotherIdleTimers({ first = true, takeover = true } = {}) {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  if (first) {
+    clearTimeout(idle.firstIdleTimer);
+    idle.firstIdleTimer = null;
+  }
+  if (takeover) {
+    clearTimeout(idle.takeoverTimer);
+    idle.takeoverTimer = null;
+  }
+}
+
+function clearMotherIdleDispatchTimeout() {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  clearTimeout(idle.dispatchTimeoutTimer);
+  idle.dispatchTimeoutTimer = null;
+}
+
+function motherIdleTakeoverDueAtMs(idle = state.motherIdle) {
+  const waitingSince = Number(idle?.waitingSince) || 0;
+  const lastInteraction = Number(state.lastInteractionAt) || 0;
+  return Math.max(waitingSince, lastInteraction) + MOTHER_IDLE_TAKEOVER_IDLE_MS;
+}
+
+function motherIdleArmTakeoverTimer() {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  if (idle.phase !== MOTHER_IDLE_STATES.WAITING_FOR_USER) return;
+  clearTimeout(idle.takeoverTimer);
+  idle.takeoverTimer = null;
+
+  const dueAt = motherIdleTakeoverDueAtMs(idle);
+  const delay = Math.max(40, dueAt - Date.now());
+  idle.takeoverTimer = setTimeout(() => {
+    idle.takeoverTimer = null;
+    if (!state.motherIdle || state.motherIdle.phase !== MOTHER_IDLE_STATES.WAITING_FOR_USER) return;
+    const due = motherIdleTakeoverDueAtMs(state.motherIdle);
+    const quietFor = Date.now() - (due - MOTHER_IDLE_TAKEOVER_IDLE_MS);
+    if (quietFor < MOTHER_IDLE_TAKEOVER_IDLE_MS) {
+      motherIdleArmTakeoverTimer();
+      return;
+    }
+    motherIdleTransitionTo(MOTHER_IDLE_EVENTS.USER_RESPONSE_TIMEOUT);
+    startMotherTakeover().catch(() => {});
+  }, delay);
+}
+
+function resetMotherIdleAndWheelState() {
+  clearMotherIdleTimers({ first: true, takeover: true });
+  clearMotherIdleDispatchTimeout();
+  if (state.motherIdle) {
+    state.motherIdle.hasGeneratedSinceInteraction = false;
+    state.motherIdle.generatedImageId = null;
+    state.motherIdle.generatedVersionId = null;
+    state.motherIdle.pendingDispatchToken = 0;
+    state.motherIdle.pendingPromptLine = null;
+    state.motherIdle.pendingVersionId = null;
+    if (state.motherIdle.ignoredVersionIds instanceof Set) state.motherIdle.ignoredVersionIds.clear();
+    state.motherIdle.waitingSince = 0;
+    state.motherIdle.pendingSuggestionLog = null;
+    state.motherIdle.lastSuggestionAt = 0;
+    state.motherIdle.suppressFailureUntil = 0;
+    state.motherIdle.retryAttempted = false;
+    state.motherIdle.lastDispatchModel = null;
+    state.motherIdle.blockedUntilUserInteraction = false;
+    motherIdleTransitionTo(MOTHER_IDLE_EVENTS.RESET);
+  }
+  closeMotherWheelMenu({ immediate: true });
+  if (state.wheelMenu) {
+    state.wheelMenu.anchorCss = null;
+    state.wheelMenu.anchorWorld = null;
+    clearTimeout(state.wheelMenu.hideTimer);
+    state.wheelMenu.hideTimer = null;
+    state.wheelMenu.open = false;
+  }
+  syncMotherPortrait();
+}
+
+function isMotherWheelOpen() {
+  return Boolean(state.wheelMenu?.open);
+}
+
+function closeMotherWheelMenu({ immediate = false } = {}) {
+  const menu = els.motherWheelMenu;
+  const wheel = state.wheelMenu;
+  if (!menu || !wheel) return;
+  clearTimeout(wheel.hideTimer);
+  wheel.hideTimer = null;
+  wheel.open = false;
+  menu.classList.remove("is-open");
+  if (immediate) {
+    menu.classList.add("hidden");
+    return;
+  }
+  wheel.hideTimer = setTimeout(() => {
+    if (state.wheelMenu?.open) return;
+    menu.classList.add("hidden");
+  }, 220);
+}
+
+function openMotherWheelMenuAt(ptCss) {
+  const menu = els.motherWheelMenu;
+  const wrap = els.canvasWrap;
+  if (!menu || !wrap || !ptCss) return false;
+  if (state.mother?.running) return false;
+
+  const xRaw = Number(ptCss.x) || 0;
+  const yRaw = Number(ptCss.y) || 0;
+  const x = clamp(xRaw, 18, Math.max(18, wrap.clientWidth - 18));
+  const y = clamp(yRaw, 18, Math.max(18, wrap.clientHeight - 18));
+
+  clearTimeout(state.wheelMenu.hideTimer);
+  state.wheelMenu.hideTimer = null;
+  state.wheelMenu.open = true;
+  state.wheelMenu.anchorCss = { x, y };
+  state.wheelMenu.anchorWorld = canvasScreenCssToWorldCss({ x, y });
+
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.classList.remove("hidden");
+  requestAnimationFrame(() => {
+    if (!state.wheelMenu?.open) return;
+    menu.classList.add("is-open");
+  });
+  return true;
+}
+
+function motherIdlePickNearestRoleTarget(worldPt) {
+  const world = worldPt && typeof worldPt === "object" ? worldPt : null;
+  const candidates = motherIdleBaseImageItems();
+  if (!candidates.length) return null;
+  if (!world) return candidates[candidates.length - 1] || null;
+
+  let best = null;
+  let bestDist2 = Infinity;
+  for (const item of candidates) {
+    const rect = state.freeformRects.get(item.id) || null;
+    if (!rect) continue;
+    const cx = (Number(rect.x) || 0) + (Number(rect.w) || 0) * 0.5;
+    const cy = (Number(rect.y) || 0) + (Number(rect.h) || 0) * 0.5;
+    const dx = (Number(world.x) || 0) - cx;
+    const dy = (Number(world.y) || 0) - cy;
+    const dist2 = dx * dx + dy * dy;
+    if (dist2 < bestDist2) {
+      best = item;
+      bestDist2 = dist2;
+    }
+  }
+  return best || candidates[candidates.length - 1] || null;
+}
+
+async function seedRoleDesignationFromWheelAnchor() {
+  const world = state.wheelMenu?.anchorWorld || canvasScreenCssToWorldCss(_defaultImportPointCss());
+  const ptCss = state.wheelMenu?.anchorCss || _defaultImportPointCss();
+  const target = motherIdlePickNearestRoleTarget(world);
+  if (!target?.id) {
+    showToast("Add role needs at least one photo.", "tip", 1800);
+    return;
+  }
+
+  if (state.activeId !== target.id) {
+    await setActiveImage(target.id, { preserveSelection: true }).catch(() => {});
+  }
+  setTool("designate");
+
+  const item = state.imagesById.get(target.id) || target;
+  const rect = state.freeformRects.get(target.id) || null;
+  let px = Number(item?.img?.naturalWidth || item?.width) * 0.5 || 0;
+  let py = Number(item?.img?.naturalHeight || item?.height) * 0.5 || 0;
+
+  if (rect && world) {
+    const iw = Math.max(1, Number(item?.img?.naturalWidth || item?.width) || Number(rect.w) || 1);
+    const ih = Math.max(1, Number(item?.img?.naturalHeight || item?.height) || Number(rect.h) || 1);
+    const nx = clamp(((Number(world.x) || 0) - (Number(rect.x) || 0)) / Math.max(1, Number(rect.w) || 1), 0, 1);
+    const ny = clamp(((Number(world.y) || 0) - (Number(rect.y) || 0)) / Math.max(1, Number(rect.h) || 1), 0, 1);
+    px = nx * iw;
+    py = ny * ih;
+  }
+
+  state.pendingDesignation = {
+    imageId: target.id,
+    x: px,
+    y: py,
+    at: Date.now(),
+  };
+  showDesignateMenuAt(ptCss);
+  showToast("Role seeded. Pick Subject, Reference, or Object.", "tip", 2200);
+  requestRender();
+}
+
+async function dispatchMotherWheelAction(action) {
+  const raw = String(action || "").trim();
+  closeMotherWheelMenu({ immediate: false });
+  if (raw) recordUserEvent("mother_wheel_action", { action: raw });
+  if (raw === "add_photo") {
+    const world = state.wheelMenu?.anchorWorld || canvasScreenCssToWorldCss(_defaultImportPointCss());
+    await importPhotosAtCanvasPoint(world);
+    return;
+  }
+  if (raw === "add_role") {
+    await seedRoleDesignationFromWheelAnchor();
+    return;
+  }
+}
+
+function motherIdleUseCasePromptMeta(useCaseKey) {
+  const key = String(useCaseKey || "").trim();
+  if (key === "streaming_content") {
+    return {
+      key,
+      title: _intentUseCaseTitle(key),
+      goal: "creator-facing social/stream visuals that test thumbnail or overlay direction",
+      cue: "bold focal subject, high-contrast framing, headline/overlay-safe composition",
+    };
+  }
+  if (key === "ecommerce_pod") {
+    return {
+      key,
+      title: _intentUseCaseTitle(key),
+      goal: "product/listing-ready composition that tests merch or catalog intent",
+      cue: "clean product hero, sellable lighting, marketplace-friendly framing",
+    };
+  }
+  if (key === "uiux_prototyping") {
+    return {
+      key,
+      title: _intentUseCaseTitle(key),
+      goal: "app/interface concept direction that tests UI or workflow exploration",
+      cue: "screen-first layout, structured hierarchy, legible panel/flow shapes",
+    };
+  }
+  if (key === "game_dev_assets") {
+    return {
+      key,
+      title: _intentUseCaseTitle(key),
+      goal: "game-art direction that tests asset-pack or concept-art workflows",
+      cue: "stylized subject, production-style key art lighting, asset-ready silhouette",
+    };
+  }
+  if (key === "content_engine") {
+    return {
+      key,
+      title: _intentUseCaseTitle(key),
+      goal: "repeatable multi-output brand/system direction",
+      cue: "modular visual system motifs, reusable template logic, channel-ready composition",
+    };
+  }
+  return {
+    key: "streaming_content",
+    title: _intentUseCaseTitle("streaming_content"),
+    goal: "creator-facing social/stream visuals that test thumbnail or overlay direction",
+    cue: "bold focal subject with clean, high-contrast composition",
+  };
+}
+
+function motherIdleInferUseCaseFromVisionLines(lines = []) {
+  const haystack = (Array.isArray(lines) ? lines : [])
+    .map((v) => String(v || "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .trim();
+  if (!haystack) return null;
+
+  const scores = {
+    game_dev_assets: 0,
+    streaming_content: 0,
+    uiux_prototyping: 0,
+    ecommerce_pod: 0,
+    content_engine: 0,
+  };
+  const bump = (key, re, weight) => {
+    if (!key || !re) return;
+    if (!(key in scores)) return;
+    try {
+      if (re.test(haystack)) scores[key] += Number(weight) || 0;
+    } catch {
+      // ignore
+    }
+  };
+
+  bump("game_dev_assets", /\b(sprite|sprites|tileset|texture|textures|concept art|unreal|unity|character sheet|game)\b/i, 3);
+  bump("streaming_content", /\b(instagram|twitch|youtube|tiktok|thumbnail|overlay|emote|stream|social)\b/i, 3);
+  bump("uiux_prototyping", /\b(wireframe|mockup|prototype|user flow|dashboard|app screen|ui|ux)\b/i, 3);
+  bump("ecommerce_pod", /\b(product photo|listing|marketplace|etsy|amazon|shop|merch|packaging|hoodie|mug)\b/i, 3);
+  bump("content_engine", /\b(pipeline|workflow|automation|system|template|brand system|batch)\b/i, 3);
+
+  let bestKey = null;
+  let bestScore = 0;
+  for (const [key, score] of Object.entries(scores)) {
+    const s = Number(score) || 0;
+    if (s > bestScore) {
+      bestScore = s;
+      bestKey = key;
+    }
+  }
+  if (!bestKey || bestScore < 3) return null;
+  return bestKey;
+}
+
+function motherIdlePickIntentHypotheses(visionLines = []) {
+  const candidates = [];
+  const seen = new Set();
+  const push = (key, reason) => {
+    const normalized = String(key || "").trim();
+    if (!normalized) return;
+    if (seen.has(normalized)) return;
+    seen.add(normalized);
+    candidates.push({
+      key: normalized,
+      reason: String(reason || "").trim() || "signal",
+    });
+  };
+
+  const visionHint = motherIdleInferUseCaseFromVisionLines(visionLines);
+  if (visionHint) push(visionHint, "vision_descriptions");
+
+  const iconState = state.intent?.iconState || null;
+  const suggested = pickSuggestedIntentBranch(iconState);
+  const suggestedKey = _intentUseCaseKeyFromBranchId(suggested?.branch_id);
+  if (suggestedKey) push(suggestedKey, suggested?.reason ? `intent_${suggested.reason}` : "intent_branch");
+
+  const focusKey = _intentUseCaseKeyFromBranchId(state.intent?.focusBranchId || state.intent?.lockedBranchId || "");
+  if (focusKey) push(focusKey, "intent_focus");
+
+  if (!candidates.length) {
+    push("streaming_content", "default_fallback");
+  }
+
+  const primary = candidates[0]?.key || "streaming_content";
+  const alternate =
+    candidates.find((entry) => entry.key !== primary)?.key ||
+    MOTHER_INTENT_USECASE_DEFAULT_ORDER.find((key) => key !== primary) ||
+    "ecommerce_pod";
+
+  const whyParts = [];
+  const primaryReason = candidates[0]?.reason || "signal";
+  whyParts.push(`primary ${_intentUseCaseTitle(primary)} via ${primaryReason}`);
+  if (alternate && alternate !== primary) {
+    const altReason = candidates.find((entry) => entry.key === alternate)?.reason || "coverage";
+    whyParts.push(`alternate ${_intentUseCaseTitle(alternate)} via ${altReason}`);
+  }
+
+  return {
+    primary,
+    alternate,
+    reasonText: whyParts.join("; "),
+    signals: candidates.map((entry) => ({
+      use_case: entry.key,
+      title: _intentUseCaseTitle(entry.key),
+      reason: entry.reason,
+    })),
+  };
+}
+
+function motherIdleBuildVisionOnlyPrompt() {
+  const base = motherIdleBaseImageItems();
+  const lines = [];
+  const sourceImages = [];
+  for (const item of base.slice(0, 4)) {
+    const desc = typeof item?.visionDesc === "string" ? item.visionDesc.trim() : "";
+    if (!desc) continue;
+    sourceImages.push({
+      id: String(item.id),
+      file: basename(item.path),
+      vision_desc: desc,
+    });
+    lines.push(desc);
+  }
+  if (lines.length < 2) return null;
+
+  const hypotheses = motherIdlePickIntentHypotheses(lines);
+  const primaryMeta = motherIdleUseCasePromptMeta(hypotheses.primary);
+  const alternateMeta = motherIdleUseCasePromptMeta(hypotheses.alternate);
+  const bullet = lines.slice(0, 4).map((line, idx) => `- Image ${idx + 1}: ${line}`);
+  const prompt = [
+    "Create ONE brand-new exploratory image suggestion that helps discover the user's likely Brood intent lane.",
+    "Use ONLY these image descriptions as context.",
+    "Do not edit, rerender, or recreate any existing user photo.",
+    `Primary lane hypothesis: ${primaryMeta.title} (${primaryMeta.goal}).`,
+    "Focus ONLY on the primary lane for this generation.",
+    `Visual emphasis for this suggestion: ${primaryMeta.cue}.`,
+    "Compose a fresh visual with a clear focal point and clean production lighting.",
+    "Do NOT include any text, letters, words, typography, captions, or watermarks in the image.",
+    "You MAY use non-text visual diagram cues such as arrows, lines, circles, and callout shapes to clarify flow or emphasis.",
+    "Descriptions:",
+    ...bullet,
+    "Output exactly one image.",
+  ].join("\n");
+  const cueText = clampText(lines.slice(0, 2).join(" + "), 280);
+  const what = `Generate one new Mother suggestion image to probe ${primaryMeta.title} intent.`;
+  const why = `${hypotheses.reasonText}; visual cues: ${cueText}`;
+  return {
+    prompt,
+    what,
+    why,
+    sourceImages,
+    intentPrimaryUseCase: primaryMeta.key,
+    intentAlternateUseCase: alternateMeta.key,
+    intentSignals: hypotheses.signals,
+  };
+}
+
+function motherIdleComputePlacementCss() {
+  const wrap = els.canvasWrap;
+  const canvasCssW = wrap?.clientWidth || 0;
+  const canvasCssH = wrap?.clientHeight || 0;
+  if (!canvasCssW || !canvasCssH) return null;
+
+  const base = motherIdleBaseImageItems().slice(0, 2);
+  const rects = base.map((item) => state.freeformRects.get(item.id) || null).filter(Boolean);
+  const tile = Math.round(
+    freeformDefaultTileCss(canvasCssW, canvasCssH, { count: Math.max(3, (state.images?.length || 0) + 1) }) * 0.88
+  );
+  let w = clamp(tile, 170, Math.round(canvasCssW * 0.46));
+  let h = clamp(Math.round(w * 1.06), 170, Math.round(canvasCssH * 0.58));
+  let x = Math.round((canvasCssW - w) * 0.5);
+  let y = Math.round((canvasCssH - h) * 0.5);
+
+  if (rects.length === 2) {
+    const c1x = (Number(rects[0].x) || 0) + (Number(rects[0].w) || 0) * 0.5;
+    const c1y = (Number(rects[0].y) || 0) + (Number(rects[0].h) || 0) * 0.5;
+    const c2x = (Number(rects[1].x) || 0) + (Number(rects[1].w) || 0) * 0.5;
+    const c2y = (Number(rects[1].y) || 0) + (Number(rects[1].h) || 0) * 0.5;
+    const cx = (c1x + c2x) * 0.5;
+    const cy = (c1y + c2y) * 0.5;
+    const spreadX = Math.abs(c1x - c2x);
+    const spreadY = Math.abs(c1y - c2y);
+    const offsetX = Math.max(48, Math.round(Math.max(spreadX * 0.34, canvasCssW * 0.06)));
+    const offsetY = Math.max(36, Math.round(Math.max(spreadY * 0.26, canvasCssH * 0.05)));
+    x = Math.round(cx + offsetX - w * 0.5);
+    y = Math.round(cy - offsetY - h * 0.5);
+  }
+
+  return clampFreeformRectCss({ x, y, w, h, autoAspect: true }, canvasCssW, canvasCssH);
+}
+
+async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null, versionId = null } = {}) {
+  if (!id || !path) return false;
+  const idle = state.motherIdle;
+  if (!idle) return false;
+  const incomingVersionId = String(versionId || "").trim() || null;
+  if (!motherIdleDispatchVersionMatches(incomingVersionId)) {
+    if (incomingVersionId) motherIdleRememberIgnoredVersion(incomingVersionId);
+    appendMotherSuggestionLog({
+      stage: "out_of_band_result_ignored",
+      request_id: idle.pendingSuggestionLog?.request_id || null,
+      expected_version_id: idle.pendingVersionId || null,
+      ignored_version_id: incomingVersionId,
+      ignored_image_id: String(id),
+      ignored_image_path: String(path),
+      ignored_receipt_path: receiptPath ? String(receiptPath) : null,
+    }).catch(() => {});
+    return false;
+  }
+  if (!idle.pendingVersionId && incomingVersionId) {
+    idle.pendingVersionId = incomingVersionId;
+  }
+
+  clearMotherIdleDispatchTimeout();
+  if (idle.generatedImageId && idle.generatedImageId !== id && state.imagesById.has(idle.generatedImageId)) {
+    await removeImageFromCanvas(idle.generatedImageId).catch(() => {});
+  }
+  const rect = motherIdleComputePlacementCss();
+  if (rect) {
+    state.freeformRects.set(id, { ...rect });
+  }
+  if (state.canvasMode !== "multi") {
+    setCanvasMode("multi");
+  }
+  addImage(
+    {
+      id,
+      kind: "engine",
+      source: MOTHER_GENERATED_SOURCE,
+      path,
+      receiptPath,
+      label: basename(path),
+      timelineAction: "Mother Suggestion",
+      timelineParents: [],
+    },
+    { select: true }
+  );
+
+  idle.generatedImageId = id;
+  idle.generatedVersionId = incomingVersionId || String(idle.pendingVersionId || "").trim() || null;
+  idle.pendingDispatchToken = 0;
+  motherIdleResetDispatchCorrelation({ rememberPendingVersion: false });
+  idle.lastSuggestionAt = Date.now();
+  idle.suppressFailureUntil = idle.lastSuggestionAt + 9000;
+  idle.waitingSince = Date.now();
+  idle.retryAttempted = false;
+  idle.lastDispatchModel = null;
+  idle.blockedUntilUserInteraction = false;
+  const pendingLog = idle.pendingSuggestionLog;
+  idle.pendingSuggestionLog = null;
+  appendMotherSuggestionLog({
+    stage: "result",
+    request_id: pendingLog?.request_id || null,
+    model: pendingLog?.model || MOTHER_GENERATION_MODEL,
+    version_id: idle.generatedVersionId,
+    image_id: String(id),
+    image_path: String(path),
+    receipt_path: receiptPath ? String(receiptPath) : null,
+    what: pendingLog?.what || null,
+    why: pendingLog?.why || null,
+    intent_primary_usecase: pendingLog?.intent_primary_usecase || null,
+    intent_alternate_usecase: pendingLog?.intent_alternate_usecase || null,
+    intent_signals: pendingLog?.intent_signals || null,
+  }).catch(() => {});
+  console.info("[mother_suggestion] result", {
+    request_id: pendingLog?.request_id || null,
+    image_id: String(id),
+    image_path: String(path),
+    what: pendingLog?.what || null,
+    why: pendingLog?.why || null,
+    intent_primary_usecase: pendingLog?.intent_primary_usecase || null,
+    intent_alternate_usecase: pendingLog?.intent_alternate_usecase || null,
+  });
+  motherIdleTransitionTo(MOTHER_IDLE_EVENTS.GENERATION_INSERTED);
+  clearMotherIdleTimers({ first: true, takeover: true });
+  motherIdleArmTakeoverTimer();
+  syncMotherPortrait();
+  showToast("Mother added a new suggestion.", "tip", 2000);
+  return true;
+}
+
+function motherIdleHandleGenerationFailed(message = null) {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  clearMotherIdleDispatchTimeout();
+  const pendingLog = idle.pendingSuggestionLog;
+  const pendingVersionId = String(idle.pendingVersionId || "").trim() || null;
+  motherIdleResetDispatchCorrelation({ rememberPendingVersion: true });
+  idle.pendingSuggestionLog = null;
+  idle.pendingDispatchToken = 0;
+  idle.hasGeneratedSinceInteraction = false;
+  idle.generatedVersionId = null;
+  idle.waitingSince = 0;
+  idle.retryAttempted = false;
+  idle.lastDispatchModel = null;
+  idle.blockedUntilUserInteraction = true;
+  motherIdleTransitionTo(MOTHER_IDLE_EVENTS.GENERATION_FAILED);
+  clearMotherIdleTimers({ first: true, takeover: true });
+  state.expectingArtifacts = false;
+  restoreEngineImageModelIfNeeded();
+  setImageFxActive(false);
+  updatePortraitIdle();
+  syncMotherPortrait();
+  appendMotherSuggestionLog({
+    stage: "failed",
+    request_id: pendingLog?.request_id || null,
+    model: pendingLog?.model || MOTHER_GENERATION_MODEL,
+    version_id: pendingVersionId,
+    what: pendingLog?.what || null,
+    why: pendingLog?.why || null,
+    intent_primary_usecase: pendingLog?.intent_primary_usecase || null,
+    intent_alternate_usecase: pendingLog?.intent_alternate_usecase || null,
+    intent_signals: pendingLog?.intent_signals || null,
+    error: message || null,
+  }).catch(() => {});
+  console.warn("[mother_suggestion] failed", {
+    request_id: pendingLog?.request_id || null,
+    error: message || null,
+    what: pendingLog?.what || null,
+    why: pendingLog?.why || null,
+    intent_primary_usecase: pendingLog?.intent_primary_usecase || null,
+    intent_alternate_usecase: pendingLog?.intent_alternate_usecase || null,
+  });
+  if (message) showToast(message, "error", 2600);
+}
+
+async function motherIdleDispatchGeneration({ forcedModel = null, isRetry = false } = {}) {
+  const idle = state.motherIdle;
+  if (!idle) return false;
+  if (!isRetry && idle.blockedUntilUserInteraction) return false;
+  if (!isRetry && (idle.hasGeneratedSinceInteraction || idle.pendingDispatchToken)) return false;
+  if (isRetry && idle.pendingDispatchToken) return false;
+  if (!motherIdleHasArmedCanvas()) return false;
+
+  let suggestionIntent = null;
+  if (isRetry && idle.pendingSuggestionLog?.prompt) {
+    suggestionIntent = {
+      prompt: String(idle.pendingSuggestionLog.prompt || ""),
+      what: String(idle.pendingSuggestionLog.what || ""),
+      why: String(idle.pendingSuggestionLog.why || ""),
+      sourceImages: Array.isArray(idle.pendingSuggestionLog.source_images) ? idle.pendingSuggestionLog.source_images : [],
+      intentPrimaryUseCase: idle.pendingSuggestionLog.intent_primary_usecase || null,
+      intentAlternateUseCase: idle.pendingSuggestionLog.intent_alternate_usecase || null,
+      intentSignals: idle.pendingSuggestionLog.intent_signals || null,
+    };
+  } else {
+    suggestionIntent = motherIdleBuildVisionOnlyPrompt();
+  }
+  if (!suggestionIntent?.prompt) {
+    for (const item of motherIdleBaseImageItems().slice(0, 2)) {
+      if (item?.path && !item?.visionDesc) scheduleVisionDescribe(item.path, { priority: true });
+    }
+    showToast("Mother is waiting for vision context before generating.", "tip", 2200);
+    return false;
+  }
+  const promptLine = motherIdlePromptLineForPty(suggestionIntent.prompt);
+  if (!promptLine) {
+    showToast("Mother suggestion prompt was empty after normalization.", "error", 2600);
+    return false;
+  }
+
+  const ok = await ensureEngineSpawned({ reason: "mother_suggestion" });
+  if (!ok) return false;
+
+  const requestId = `mother-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const selectedModel = String(forcedModel || MOTHER_GENERATION_MODEL).trim() || MOTHER_GENERATION_MODEL;
+  idle.hasGeneratedSinceInteraction = true;
+  idle.pendingDispatchToken = Date.now();
+  motherIdleResetDispatchCorrelation({ rememberPendingVersion: false });
+  idle.pendingPromptLine = promptLine;
+  idle.lastDispatchModel = selectedModel;
+  if (isRetry && idle.pendingSuggestionLog) {
+    const attempts = Array.isArray(idle.pendingSuggestionLog.model_attempts)
+      ? idle.pendingSuggestionLog.model_attempts.map((v) => String(v || "").trim()).filter(Boolean)
+      : [];
+    if (!attempts.includes(selectedModel)) attempts.push(selectedModel);
+    idle.pendingSuggestionLog = {
+      ...idle.pendingSuggestionLog,
+      model: selectedModel,
+      model_attempts: attempts,
+      retry_count: (Number(idle.pendingSuggestionLog.retry_count) || 0) + 1,
+      request_id: requestId,
+      dispatched_at_iso: new Date().toISOString(),
+      prompt_line: promptLine,
+    };
+  } else {
+    idle.pendingSuggestionLog = {
+      request_id: requestId,
+      what: suggestionIntent.what,
+      why: suggestionIntent.why,
+      prompt: suggestionIntent.prompt,
+      prompt_line: promptLine,
+      source_images: suggestionIntent.sourceImages,
+      intent_primary_usecase: suggestionIntent.intentPrimaryUseCase || null,
+      intent_alternate_usecase: suggestionIntent.intentAlternateUseCase || null,
+      intent_signals: suggestionIntent.intentSignals || null,
+      model: selectedModel,
+      model_attempts: [selectedModel],
+      retry_count: 0,
+      dispatched_at_iso: new Date().toISOString(),
+    };
+  }
+  motherIdleTransitionTo(MOTHER_IDLE_EVENTS.GENERATION_DISPATCHED);
+  clearMotherIdleTimers({ first: true, takeover: true });
+  appendMotherSuggestionLog({
+    stage: isRetry ? "dispatch_retry" : "dispatch",
+    request_id: requestId,
+    model: selectedModel,
+    what: suggestionIntent.what,
+    why: suggestionIntent.why,
+    intent_primary_usecase: suggestionIntent.intentPrimaryUseCase || null,
+    intent_alternate_usecase: suggestionIntent.intentAlternateUseCase || null,
+    intent_signals: suggestionIntent.intentSignals || null,
+    source_images: suggestionIntent.sourceImages,
+    prompt: suggestionIntent.prompt,
+    prompt_line: promptLine,
+  }).catch(() => {});
+  console.info(isRetry ? "[mother_suggestion] dispatch_retry" : "[mother_suggestion] dispatch", {
+    request_id: requestId,
+    model: selectedModel,
+    what: suggestionIntent.what,
+    why: suggestionIntent.why,
+    intent_primary_usecase: suggestionIntent.intentPrimaryUseCase || null,
+    intent_alternate_usecase: suggestionIntent.intentAlternateUseCase || null,
+  });
+
+  try {
+    state.expectingArtifacts = true;
+    state.lastAction = "Mother Suggestion";
+    setStatus(isRetry ? "Mother: retrying suggestion…" : "Mother: generating suggestion…");
+    await maybeOverrideEngineImageModel(selectedModel);
+    clearMotherIdleDispatchTimeout();
+    const dispatchToken = Number(idle.pendingDispatchToken) || 0;
+    idle.dispatchTimeoutTimer = setTimeout(async () => {
+      if (!state.motherIdle) return;
+      const current = state.motherIdle;
+      if (current.phase !== MOTHER_IDLE_STATES.GENERATION_DISPATCHED) return;
+      if ((Number(current.pendingDispatchToken) || 0) !== dispatchToken) return;
+      const retryModel =
+        !current.retryAttempted
+          ? motherIdlePickRetryModel(current.lastDispatchModel || current.pendingSuggestionLog?.model || MOTHER_GENERATION_MODEL)
+          : null;
+      appendMotherSuggestionLog({
+        stage: "dispatch_timeout",
+        request_id: current.pendingSuggestionLog?.request_id || null,
+        model: current.lastDispatchModel || current.pendingSuggestionLog?.model || null,
+        version_id: current.pendingVersionId || null,
+        timeout_ms: MOTHER_GENERATION_TIMEOUT_MS,
+      }).catch(() => {});
+      const timedOutVersionId = current.pendingVersionId || null;
+      current.pendingDispatchToken = 0;
+      motherIdleResetDispatchCorrelation({ rememberPendingVersion: true });
+      state.expectingArtifacts = false;
+      restoreEngineImageModelIfNeeded();
+      updatePortraitIdle();
+      setImageFxActive(false);
+      if (retryModel) {
+        current.retryAttempted = true;
+        appendMotherSuggestionLog({
+          stage: "retry_scheduled",
+          request_id: current.pendingSuggestionLog?.request_id || null,
+          from_model: current.lastDispatchModel || current.pendingSuggestionLog?.model || null,
+          to_model: retryModel,
+          version_id: timedOutVersionId,
+          error: `timeout_after_${MOTHER_GENERATION_TIMEOUT_MS}ms`,
+        }).catch(() => {});
+        setStatus(`Engine: Mother retrying with ${retryModel}…`);
+        const retried = await motherIdleDispatchGeneration({ forcedModel: retryModel, isRetry: true }).catch(() => false);
+        if (retried) {
+          renderQuickActions();
+          renderHudReadout();
+          processActionQueue().catch(() => {});
+          return;
+        }
+      }
+      const msg = `Mother suggestion timed out after ${Math.round(MOTHER_GENERATION_TIMEOUT_MS / 1000)}s.`;
+      setStatus(`Engine: ${msg}`, true);
+      motherIdleHandleGenerationFailed(msg);
+      renderQuickActions();
+      renderHudReadout();
+      processActionQueue().catch(() => {});
+    }, MOTHER_GENERATION_TIMEOUT_MS);
+    await invoke("write_pty", { data: `${promptLine}\n` });
+    return true;
+  } catch (err) {
+    console.error(err);
+    state.expectingArtifacts = false;
+    state.engineImageModelRestore = null;
+    appendMotherSuggestionLog({
+      stage: "dispatch_error",
+      request_id: requestId,
+      model: selectedModel,
+      error: err?.message || String(err),
+    }).catch(() => {});
+    motherIdleHandleGenerationFailed("Mother suggestion failed to start.");
+    return false;
+  }
+}
+
+function motherIdleArmFirstTimer() {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  clearTimeout(idle.firstIdleTimer);
+  idle.firstIdleTimer = null;
+  if (idle.blockedUntilUserInteraction) return;
+  if (!motherIdleHasArmedCanvas()) return;
+  if (state.mother?.running) return;
+  if (idle.phase === MOTHER_IDLE_STATES.GENERATION_DISPATCHED) return;
+  if (idle.phase === MOTHER_IDLE_STATES.WAITING_FOR_USER) return;
+  if (idle.phase === MOTHER_IDLE_STATES.TAKEOVER) return;
+  if (idle.hasGeneratedSinceInteraction) return;
+
+  const dueAt = Date.now() + MOTHER_IDLE_FIRST_IDLE_MS;
+  const delay = Math.max(25, dueAt - Date.now());
+  idle.firstIdleTimer = setTimeout(() => {
+    idle.firstIdleTimer = null;
+    if (!motherIdleHasArmedCanvas()) return;
+    if (state.mother?.running) return;
+    const quietFor = Date.now() - (Number(state.lastInteractionAt) || 0);
+    if (quietFor < MOTHER_IDLE_FIRST_IDLE_MS) {
+      motherIdleArmFirstTimer();
+      return;
+    }
+    motherIdleTransitionTo(MOTHER_IDLE_EVENTS.IDLE_WINDOW_ELAPSED);
+    motherIdleDispatchGeneration().catch(() => {});
+  }, delay);
+}
+
+function motherIdleSyncFromInteraction({ userInteraction = false } = {}) {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  if (idle.generatedImageId && !state.imagesById.has(idle.generatedImageId)) {
+    idle.generatedImageId = null;
+    idle.generatedVersionId = null;
+  }
+  if (!motherIdleHasArmedCanvas()) {
+    clearMotherIdleTimers({ first: true, takeover: true });
+    clearMotherIdleDispatchTimeout();
+    if (idle.phase !== MOTHER_IDLE_STATES.GENERATION_DISPATCHED) {
+      idle.hasGeneratedSinceInteraction = false;
+      idle.pendingDispatchToken = 0;
+      motherIdleResetDispatchCorrelation({ rememberPendingVersion: false });
+      idle.generatedVersionId = null;
+      idle.waitingSince = 0;
+      idle.retryAttempted = false;
+      idle.lastDispatchModel = null;
+      motherIdleTransitionTo(MOTHER_IDLE_EVENTS.DISQUALIFY);
+    }
+    syncMotherPortrait();
+    return;
+  }
+  if (state.mother?.running) {
+    clearMotherIdleTimers({ first: true, takeover: true });
+    clearMotherIdleDispatchTimeout();
+    return;
+  }
+
+  if (userInteraction) {
+    closeMotherWheelMenu({ immediate: false });
+    clearMotherIdleTimers({ first: true, takeover: true });
+    if (idle.phase !== MOTHER_IDLE_STATES.GENERATION_DISPATCHED) {
+      idle.hasGeneratedSinceInteraction = false;
+      idle.pendingDispatchToken = 0;
+      motherIdleResetDispatchCorrelation({ rememberPendingVersion: false });
+      idle.generatedVersionId = null;
+      idle.waitingSince = 0;
+      idle.retryAttempted = false;
+      idle.lastDispatchModel = null;
+      idle.blockedUntilUserInteraction = false;
+      motherIdleTransitionTo(MOTHER_IDLE_EVENTS.USER_INTERACTION);
+    }
+  }
+
+  if (idle.phase === MOTHER_IDLE_STATES.WAITING_FOR_USER) {
+    motherIdleArmTakeoverTimer();
+    return;
+  }
+
+  if (idle.phase !== MOTHER_IDLE_STATES.GENERATION_DISPATCHED && !idle.hasGeneratedSinceInteraction) {
+    motherIdleArmFirstTimer();
+  }
+}
+
 function bumpInteraction({ motherHot = true } = {}) {
   state.lastInteractionAt = Date.now();
   if (motherHot) state.lastMotherHotAt = state.lastInteractionAt;
@@ -5061,6 +6118,7 @@ function bumpInteraction({ motherHot = true } = {}) {
     state.mother.hotSyncAt = now;
     syncMotherPortrait();
   }
+  motherIdleSyncFromInteraction({ userInteraction: true });
 }
 
 const USER_EVENT_MAX = 72;
@@ -5514,6 +6572,7 @@ function setCanvasMode(mode) {
   }
   renderSelectionMeta();
   scheduleVisualPromptWrite();
+  motherIdleSyncFromInteraction({ userInteraction: false });
   requestRender();
 }
 
@@ -8181,6 +9240,7 @@ function addImage(item, { select = false } = {}) {
   if (select || !state.activeId) {
     setActiveImage(item.id).catch(() => {});
   }
+  motherIdleSyncFromInteraction({ userInteraction: false });
   syncMotherPortrait();
 }
 
@@ -8292,6 +9352,7 @@ async function removeImageFromCanvas(imageId) {
     renderFilmstrip();
     renderQuickActions();
     renderHudReadout();
+    motherIdleSyncFromInteraction({ userInteraction: false });
     state.alwaysOnVision.contentDirty = false;
     state.alwaysOnVision.dirtyReason = null;
     requestRender();
@@ -8308,6 +9369,7 @@ async function removeImageFromCanvas(imageId) {
   scheduleIntentStateWrite();
   renderQuickActions();
   renderHudReadout();
+  motherIdleSyncFromInteraction({ userInteraction: false });
   requestRender();
   return true;
 }
@@ -8374,6 +9436,7 @@ async function replaceImageInPlace(
 	    scheduleVisualPromptWrite();
 	    markAlwaysOnVisionDirty("image_replace");
 	    scheduleAlwaysOnVision();
+    motherIdleSyncFromInteraction({ userInteraction: false });
     if (intentAmbientActive()) {
       scheduleAmbientIntentInference({ immediate: true, reason: "replace", imageIds: [targetId] });
     }
@@ -8491,6 +9554,7 @@ function buildVisualPrompt() {
   const images = state.images.map((item) => ({
     id: String(item?.id || ""),
     kind: item?.kind ? String(item.kind) : null,
+    source: item?.source ? String(item.source) : "user",
     path: item?.path ? String(item.path) : null,
     label: item?.label ? String(item.label) : null,
     width: Number(item?.img?.naturalWidth || item?.width) || null,
@@ -9954,6 +11018,7 @@ async function createRun() {
   state.lastRecreatePrompt = null;
   state.lastDirectorText = null;
   state.lastDirectorMeta = null;
+  resetMotherIdleAndWheelState();
   state.intent.locked = true;
   state.intent.lockedAt = 0;
   state.intent.lockedBranchId = null;
@@ -10062,6 +11127,7 @@ async function openExistingRun() {
   state.lastRecreatePrompt = null;
   state.lastDirectorText = null;
   state.lastDirectorMeta = null;
+  resetMotherIdleAndWheelState();
   state.intent.locked = true;
   state.intent.lockedAt = 0;
   state.intent.lockedBranchId = null;
@@ -10297,10 +11363,132 @@ async function handleEvent(event) {
     if (!cached) bumpSessionApiCalls();
     return;
   }
+  if (event.type === "version_created") {
+    motherIdleTrackVersionCreated(event);
+    return;
+  }
   if (event.type === "artifact_created") {
     const id = event.artifact_id;
     const path = event.image_path;
     if (!id || !path) return;
+    const eventVersionId = motherEventVersionId(event);
+    const motherDispatchInFlight =
+      state.motherIdle?.phase === MOTHER_IDLE_STATES.GENERATION_DISPATCHED &&
+      Boolean(state.motherIdle?.pendingDispatchToken) &&
+      !state.pendingReplace &&
+      !state.pendingBlend &&
+      !state.pendingSwapDna &&
+      !state.pendingBridge &&
+      !state.pendingArgue &&
+      !state.pendingExtractRule &&
+      !state.pendingOddOneOut &&
+      !state.pendingTriforce &&
+      !state.pendingRecast &&
+      !state.pendingDiagnose &&
+      !state.pendingRecreate;
+    if (motherDispatchInFlight && !motherIdleDispatchVersionMatches(eventVersionId)) {
+      if (eventVersionId) motherIdleRememberIgnoredVersion(eventVersionId);
+      appendMotherSuggestionLog({
+        stage: "out_of_band_result_ignored",
+        request_id: state.motherIdle?.pendingSuggestionLog?.request_id || null,
+        expected_version_id: state.motherIdle?.pendingVersionId || null,
+        ignored_version_id: eventVersionId,
+        ignored_image_id: String(id),
+        ignored_image_path: String(path),
+        ignored_receipt_path: event.receipt_path ? String(event.receipt_path) : null,
+      }).catch(() => {});
+      console.warn("[mother_suggestion] ignored out-of-band artifact during active dispatch", {
+        expected_version_id: state.motherIdle?.pendingVersionId || null,
+        ignored_version_id: eventVersionId,
+        ignored_image_id: String(id),
+      });
+      removeFile(path).catch(() => {});
+      if (event.receipt_path) removeFile(event.receipt_path).catch(() => {});
+      return;
+    }
+    if (motherDispatchInFlight) {
+      const handled = await motherIdleHandleSuggestionArtifact({
+        id,
+        path,
+        receiptPath: event.receipt_path || null,
+        versionId: eventVersionId,
+      }).catch((err) => {
+        console.error(err);
+        return false;
+      });
+      if (handled) {
+        state.expectingArtifacts = false;
+        restoreEngineImageModelIfNeeded();
+        setStatus("Engine: ready");
+        updatePortraitIdle();
+        setImageFxActive(false);
+        renderQuickActions();
+        renderHudReadout();
+        processActionQueue().catch(() => {});
+        return;
+      }
+    }
+    if (eventVersionId && motherIdleIsIgnoredVersion(eventVersionId)) {
+      appendMotherSuggestionLog({
+        stage: "late_result_ignored",
+        ignored_version_id: eventVersionId,
+        ignored_image_id: String(id),
+        ignored_image_path: String(path),
+        ignored_receipt_path: event.receipt_path ? String(event.receipt_path) : null,
+      }).catch(() => {});
+      console.warn("[mother_suggestion] ignored late artifact from blocked version", {
+        ignored_version_id: eventVersionId,
+        ignored_image_id: String(id),
+      });
+      removeFile(path).catch(() => {});
+      if (event.receipt_path) removeFile(event.receipt_path).catch(() => {});
+      return;
+    }
+    const motherIdle = state.motherIdle || null;
+    const noForegroundPending =
+      !state.pendingReplace &&
+      !state.pendingBlend &&
+      !state.pendingSwapDna &&
+      !state.pendingBridge &&
+      !state.pendingArgue &&
+      !state.pendingExtractRule &&
+      !state.pendingOddOneOut &&
+      !state.pendingTriforce &&
+      !state.pendingRecast &&
+      !state.pendingDiagnose &&
+      !state.pendingRecreate;
+    const motherSingleSuggestionGuard =
+      !motherDispatchInFlight &&
+      motherIdle?.phase === MOTHER_IDLE_STATES.WAITING_FOR_USER &&
+      Boolean(motherIdle?.generatedImageId) &&
+      Boolean(motherIdle?.hasGeneratedSinceInteraction) &&
+      noForegroundPending &&
+      String(state.lastAction || "") === "Mother Suggestion" &&
+      Date.now() <= (Number(motherIdle?.lastSuggestionAt) || 0) + 20_000;
+    if (motherSingleSuggestionGuard && String(id) !== String(motherIdle.generatedImageId)) {
+      appendMotherSuggestionLog({
+        stage: "extra_result_ignored",
+        retained_image_id: String(motherIdle.generatedImageId || ""),
+        ignored_image_id: String(id),
+        ignored_image_path: String(path),
+        ignored_receipt_path: event.receipt_path ? String(event.receipt_path) : null,
+      }).catch(() => {});
+      console.info("[mother_suggestion] ignored extra artifact", {
+        retained_image_id: String(motherIdle.generatedImageId || ""),
+        ignored_image_id: String(id),
+      });
+      removeFile(path).catch(() => {});
+      if (event.receipt_path) removeFile(event.receipt_path).catch(() => {});
+      state.expectingArtifacts = false;
+      restoreEngineImageModelIfNeeded();
+      setStatus("Engine: ready");
+      updatePortraitIdle();
+      setImageFxActive(false);
+      renderQuickActions();
+      renderHudReadout();
+      processActionQueue().catch(() => {});
+      return;
+    }
     const blend = state.pendingBlend;
     const swapDna = state.pendingSwapDna;
     const bridge = state.pendingBridge;
@@ -10479,6 +11667,130 @@ async function handleEvent(event) {
     renderHudReadout();
     processActionQueue().catch(() => {});
   } else if (event.type === "generation_failed") {
+    const eventVersionId = motherEventVersionId(event);
+    const wasMotherDispatch =
+      state.motherIdle?.phase === MOTHER_IDLE_STATES.GENERATION_DISPATCHED &&
+      Boolean(state.motherIdle?.pendingDispatchToken);
+    if (wasMotherDispatch) {
+      if (!motherIdleDispatchVersionMatches(eventVersionId)) {
+        if (eventVersionId) motherIdleRememberIgnoredVersion(eventVersionId);
+        appendMotherSuggestionLog({
+          stage: "out_of_band_failed_ignored",
+          request_id: state.motherIdle?.pendingSuggestionLog?.request_id || null,
+          expected_version_id: state.motherIdle?.pendingVersionId || null,
+          ignored_version_id: eventVersionId,
+          error: event.error ? String(event.error) : null,
+        }).catch(() => {});
+        console.warn("[mother_suggestion] ignored out-of-band failure during active dispatch", {
+          expected_version_id: state.motherIdle?.pendingVersionId || null,
+          ignored_version_id: eventVersionId,
+          error: event.error ? String(event.error) : null,
+        });
+        return;
+      }
+      clearMotherIdleDispatchTimeout();
+      const idle = state.motherIdle;
+      const retryModel =
+        idle && !idle.retryAttempted
+          ? motherIdlePickRetryModel(idle.lastDispatchModel || idle.pendingSuggestionLog?.model || MOTHER_GENERATION_MODEL)
+          : null;
+      if (idle && retryModel) {
+        const failedVersionId = idle.pendingVersionId || eventVersionId || null;
+        idle.retryAttempted = true;
+        idle.pendingDispatchToken = 0;
+        motherIdleResetDispatchCorrelation({ rememberPendingVersion: true });
+        state.expectingArtifacts = false;
+        restoreEngineImageModelIfNeeded();
+        appendMotherSuggestionLog({
+          stage: "retry_scheduled",
+          request_id: idle.pendingSuggestionLog?.request_id || null,
+          from_model: idle.lastDispatchModel || idle.pendingSuggestionLog?.model || null,
+          to_model: retryModel,
+          version_id: failedVersionId,
+          error: event.error ? String(event.error) : null,
+        }).catch(() => {});
+        setStatus(`Engine: Mother retrying with ${retryModel}…`);
+        const retried = await motherIdleDispatchGeneration({ forcedModel: retryModel, isRetry: true }).catch(() => false);
+        if (retried) {
+          renderQuickActions();
+          renderHudReadout();
+          processActionQueue().catch(() => {});
+          return;
+        }
+      }
+      const msg = event.error ? `Mother suggestion failed: ${event.error}` : "Mother suggestion failed.";
+      setStatus(`Engine: ${msg}`, true);
+      state.expectingArtifacts = false;
+      restoreEngineImageModelIfNeeded();
+      updatePortraitIdle();
+      setImageFxActive(false);
+      motherIdleHandleGenerationFailed(msg);
+      renderQuickActions();
+      renderHudReadout();
+      processActionQueue().catch(() => {});
+      return;
+    }
+    const motherIdle = state.motherIdle || null;
+    if (eventVersionId && motherIdleIsIgnoredVersion(eventVersionId)) {
+      appendMotherSuggestionLog({
+        stage: "late_failed_ignored",
+        ignored_version_id: eventVersionId,
+        error: event.error ? String(event.error) : null,
+        phase: motherIdle?.phase || null,
+      }).catch(() => {});
+      console.warn("[mother_suggestion] ignored late failure from blocked version", {
+        ignored_version_id: eventVersionId,
+        phase: motherIdle?.phase || null,
+        error: event.error ? String(event.error) : null,
+      });
+      return;
+    }
+    const errText = String(event.error || "").trim();
+    const errLower = errText.toLowerCase();
+    const anyForegroundPending =
+      Boolean(state.pendingReplace) ||
+      Boolean(state.pendingBlend) ||
+      Boolean(state.pendingSwapDna) ||
+      Boolean(state.pendingBridge) ||
+      Boolean(state.pendingTriforce) ||
+      Boolean(state.pendingRecast) ||
+      Boolean(state.pendingDiagnose) ||
+      Boolean(state.pendingArgue) ||
+      Boolean(state.pendingExtractRule) ||
+      Boolean(state.pendingOddOneOut) ||
+      Boolean(state.pendingRecreate) ||
+      Boolean(state.pendingGeneration?.remaining);
+    const motherRecentSuccess =
+      !wasMotherDispatch &&
+      Boolean(motherIdle?.generatedImageId) &&
+      !state.expectingArtifacts &&
+      !anyForegroundPending &&
+      String(state.lastAction || "") === "Mother Suggestion" &&
+      Date.now() <= (Number(motherIdle?.suppressFailureUntil) || 0);
+    const looksLikeNoImageError = /no images?|failed to return|no artifacts?|no output/i.test(errLower);
+    if (motherRecentSuccess && looksLikeNoImageError) {
+      appendMotherSuggestionLog({
+        stage: "spurious_failed_after_success",
+        image_id: String(motherIdle.generatedImageId || ""),
+        error: errText || null,
+        phase: motherIdle?.phase || null,
+        last_action: state.lastAction || null,
+      }).catch(() => {});
+      console.warn("[mother_suggestion] ignored spurious failure after successful artifact", {
+        image_id: String(motherIdle.generatedImageId || ""),
+        phase: motherIdle?.phase || null,
+        error: errText || null,
+      });
+      state.expectingArtifacts = false;
+      restoreEngineImageModelIfNeeded();
+      setStatus("Engine: ready");
+      updatePortraitIdle();
+      setImageFxActive(false);
+      renderQuickActions();
+      renderHudReadout();
+      processActionQueue().catch(() => {});
+      return;
+    }
     const msg = event.error ? `Generation failed: ${event.error}` : "Generation failed.";
     setStatus(`Engine: ${msg}`, true);
     showToast(msg, "error", 3200);
@@ -11203,9 +12515,10 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
 
     // Tile frame.
     wctx.save();
+    const motherGenerated = isMotherGeneratedImageItem(item);
     wctx.lineWidth = Math.max(1, Math.round(1.5 * dpr));
-    wctx.strokeStyle = "rgba(54, 76, 106, 0.58)";
-    wctx.shadowColor = "rgba(0, 0, 0, 0.6)";
+    wctx.strokeStyle = motherGenerated ? "rgba(82, 255, 148, 0.90)" : "rgba(54, 76, 106, 0.58)";
+    wctx.shadowColor = motherGenerated ? "rgba(82, 255, 148, 0.26)" : "rgba(0, 0, 0, 0.6)";
     wctx.shadowBlur = Math.round(10 * dpr);
     wctx.strokeRect(x - 1, y - 1, w + 2, h + 2);
     wctx.restore();
@@ -11215,6 +12528,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   const selectedIds = getSelectedIds().filter((id) => id);
   const multiSelectMode = selectedIds.length > 1;
   const activeRect = state.activeId ? state.multiRects.get(state.activeId) : null;
+  const activeItem = state.activeId ? state.imagesById.get(state.activeId) || null : null;
 
   if (multiSelectMode && selectedIds.length) {
     // Multi-select highlight: keep all selected borders identical (no "active" special casing).
@@ -11258,6 +12572,12 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     if (activeRect) {
       octx.save();
       octx.lineJoin = "round";
+      const activeMother = isMotherGeneratedImageItem(activeItem);
+      const outerStroke = activeMother ? "rgba(82, 255, 148, 0.20)" : "rgba(255, 212, 0, 0.14)";
+      const mainStroke = activeMother ? "rgba(82, 255, 148, 0.94)" : "rgba(255, 212, 0, 0.96)";
+      const mainShadow = activeMother ? "rgba(82, 255, 148, 0.28)" : "rgba(255, 212, 0, 0.26)";
+      const innerStroke = activeMother ? "rgba(208, 255, 226, 0.60)" : "rgba(255, 247, 210, 0.58)";
+      const handleStroke = activeMother ? "rgba(82, 255, 148, 0.92)" : "rgba(255, 212, 0, 0.92)";
 
       const ax = activeRect.x * ms + mox;
       const ay = activeRect.y * ms + moy;
@@ -11265,22 +12585,22 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
       const ah = activeRect.h * ms;
 
       // Outer glow stroke (wide + soft).
-      octx.strokeStyle = "rgba(255, 212, 0, 0.14)";
+      octx.strokeStyle = outerStroke;
       octx.lineWidth = Math.max(1, Math.round(10 * dpr));
-      octx.shadowColor = "rgba(255, 212, 0, 0.16)";
+      octx.shadowColor = mainShadow;
       octx.shadowBlur = Math.round(44 * dpr);
       octx.strokeRect(ax - 5, ay - 5, aw + 10, ah + 10);
 
       // Main border stroke.
-      octx.strokeStyle = "rgba(255, 212, 0, 0.96)";
+      octx.strokeStyle = mainStroke;
       octx.lineWidth = Math.max(1, Math.round(3.4 * dpr));
-      octx.shadowColor = "rgba(255, 212, 0, 0.26)";
+      octx.shadowColor = mainShadow;
       octx.shadowBlur = Math.round(28 * dpr);
       octx.strokeRect(ax - 3, ay - 3, aw + 6, ah + 6);
 
       // Inner crisp stroke for definition.
       octx.shadowBlur = 0;
-      octx.strokeStyle = "rgba(255, 247, 210, 0.58)";
+      octx.strokeStyle = innerStroke;
       octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
       octx.strokeRect(ax - 1, ay - 1, aw + 2, ah + 2);
       octx.restore();
@@ -11301,7 +12621,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
         octx.shadowBlur = Math.round(12 * dpr);
         for (const c of corners) {
           octx.fillStyle = "rgba(8, 10, 14, 0.86)";
-          octx.strokeStyle = "rgba(255, 212, 0, 0.92)";
+          octx.strokeStyle = handleStroke;
           octx.lineWidth = Math.max(1, Math.round(1.6 * dpr));
           octx.beginPath();
           octx.rect(Math.round(c.x - r), Math.round(c.y - r), hs, hs);
@@ -11319,6 +12639,8 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     const ay = activeRect.y * ms + moy;
     const aw = activeRect.w * ms;
     const ah = activeRect.h * ms;
+    const activeMother = isMotherGeneratedImageItem(activeItem);
+    const handleStroke = activeMother ? "rgba(82, 255, 148, 0.92)" : "rgba(255, 212, 0, 0.92)";
     const showHandles = state.tool === "pan" || intentModeActive();
     if (showHandles) {
       const hs = Math.max(10, Math.round(10 * dpr));
@@ -11334,7 +12656,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
       octx.shadowBlur = Math.round(12 * dpr);
       for (const c of corners) {
         octx.fillStyle = "rgba(8, 10, 14, 0.86)";
-        octx.strokeStyle = "rgba(255, 212, 0, 0.92)";
+        octx.strokeStyle = handleStroke;
         octx.lineWidth = Math.max(1, Math.round(1.6 * dpr));
         octx.beginPath();
         octx.rect(Math.round(c.x - r), Math.round(c.y - r), hs, hs);
@@ -11431,6 +12753,7 @@ function hitTestIntentUi(ptCanvas) {
 }
 
 function hitTestAmbientIntentNudge(ptCanvas) {
+  if (!INTENT_AMBIENT_ICON_PLACEMENT_ENABLED) return null;
   if (state.mother?.running) return null;
   const ambient = state.intentAmbient;
   if (!ambient || !ptCanvas) return null;
@@ -11449,6 +12772,7 @@ function hitTestAmbientIntentNudge(ptCanvas) {
 }
 
 function activateAmbientIntentNudge(hit) {
+  if (!INTENT_AMBIENT_ICON_PLACEMENT_ENABLED) return false;
   const ambient = state.intentAmbient;
   if (!ambient || !hit) return false;
 
@@ -12350,6 +13674,10 @@ function _ambientWorldRectToCanvasRect(rectWorld) {
 
 function renderAmbientIntentNudges(octx, canvasW, canvasH) {
   const ambient = state.intentAmbient;
+  if (!INTENT_AMBIENT_ICON_PLACEMENT_ENABLED) {
+    if (ambient) ambient.uiHits = [];
+    return;
+  }
   if (!ambient || !intentAmbientActive()) return;
   if (state.mother?.running) {
     ambient.uiHits = [];
@@ -12694,6 +14022,7 @@ function installCanvasHandlers() {
 
   els.overlayCanvas.addEventListener("contextmenu", (event) => {
     bumpInteraction();
+    closeMotherWheelMenu({ immediate: false });
     if (!getActiveImage()) return;
     event.preventDefault();
     hideDesignateMenu();
@@ -12713,6 +14042,7 @@ function installCanvasHandlers() {
 
   els.overlayCanvas.addEventListener("pointerdown", (event) => {
 	    bumpInteraction();
+		    closeMotherWheelMenu({ immediate: false });
 		    hideDesignateMenu();
 		    if (state.canvasMode === "multi") {
 		      const canvas = els.workCanvas;
@@ -12794,27 +14124,32 @@ function installCanvasHandlers() {
 	            }
 
 	          if (!hit) {
-	            // Click-to-upload anywhere on the canvas (primary import path).
-            els.overlayCanvas.setPointerCapture(event.pointerId);
-            state.pointer.active = true;
-            state.pointer.kind = "freeform_import";
-            state.pointer.imageId = null;
-            state.pointer.corner = null;
-            state.pointer.startX = p.x;
-            state.pointer.startY = p.y;
-            state.pointer.lastX = p.x;
-            state.pointer.lastY = p.y;
-            state.pointer.startCssX = pCss.x;
-            state.pointer.startCssY = pCss.y;
-            state.pointer.importPointCss = { x: pCss.x, y: pCss.y };
-            state.pointer.moved = false;
-            if (intentActive && !state.intent.startedAt) {
-              // Timer starts only after the first image is placed, but we want the user to feel the mode immediately.
-              state.intent.rtState = "connecting";
-            }
-            requestRender();
-            return;
-          }
+	            if (event.button !== 0) return;
+	            els.overlayCanvas.setPointerCapture(event.pointerId);
+	            state.pointer.active = true;
+	            state.pointer.imageId = null;
+	            state.pointer.corner = null;
+	            state.pointer.startX = p.x;
+	            state.pointer.startY = p.y;
+	            state.pointer.lastX = p.x;
+	            state.pointer.lastY = p.y;
+	            state.pointer.startCssX = pCss.x;
+	            state.pointer.startCssY = pCss.y;
+	            state.pointer.importPointCss = { x: pCss.x, y: pCss.y };
+	            state.pointer.moved = false;
+	            if (intentActive) {
+	              // Keep legacy import behavior in forced intent mode.
+	              state.pointer.kind = "freeform_import";
+	              if (!state.intent.startedAt) {
+	                state.intent.rtState = "connecting";
+	              }
+	            } else {
+	              // Empty-space click in normal mode opens the Mother wheel on pointerup.
+	              state.pointer.kind = "freeform_wheel";
+	            }
+	            requestRender();
+	            return;
+	          }
 
 		      if (state.tool === "pan") {
 		        const rectPx = state.multiRects.get(hit) || null;
@@ -13015,6 +14350,12 @@ function installCanvasHandlers() {
   els.overlayCanvas.addEventListener("pointermove", (event) => {
     const p = canvasPointFromEvent(event);
     const pCss = canvasCssPointFromEvent(event);
+    if (!state.pointer.active && state.motherIdle?.phase === MOTHER_IDLE_STATES.WAITING_FOR_USER) {
+      const now = Date.now();
+      if (now - (Number(state.lastInteractionAt) || 0) > 120) {
+        state.lastInteractionAt = now;
+      }
+    }
 
 	    if (!state.pointer.active) {
       const ambientHit = intentAmbientActive() ? hitTestAmbientIntentNudge(p) : null;
@@ -13077,7 +14418,7 @@ function installCanvasHandlers() {
       }
     } else if (state.pointer.kind === "freeform_move") {
       setOverlayCursor("grabbing");
-    } else if (state.pointer.kind === "freeform_import") {
+    } else if (state.pointer.kind === "freeform_import" || state.pointer.kind === "freeform_wheel") {
       setOverlayCursor(INTENT_IMPORT_CURSOR);
     }
 
@@ -13088,7 +14429,7 @@ function installCanvasHandlers() {
 		    state.pointer.lastY = p.y;
 
     // Freeform interactions (multi canvas + pan tool).
-    if (state.pointer.kind === "freeform_import") {
+    if (state.pointer.kind === "freeform_import" || state.pointer.kind === "freeform_wheel") {
       const dist = Math.hypot((Number(pCss.x) || 0) - state.pointer.startCssX, (Number(pCss.y) || 0) - state.pointer.startCssY);
       if (dist > 6) state.pointer.moved = true;
       return;
@@ -13256,6 +14597,15 @@ function installCanvasHandlers() {
 			          y: Math.round(Number(worldPt.y) || 0),
 			        });
 			        importPhotosAtCanvasPoint(worldPt).catch((err) => console.error(err));
+			      }
+			    }
+			    if (kind === "freeform_wheel") {
+			      if (!moved && importPt) {
+			        recordUserEvent("mother_wheel_open", {
+			          x: Math.round(Number(importPt.x) || 0),
+			          y: Math.round(Number(importPt.y) || 0),
+			        });
+			        openMotherWheelMenuAt(importPt);
 			      }
 			    }
 			    if (state.tool === "annotate") {
@@ -13622,6 +14972,37 @@ function installUi() {
       bumpInteraction();
       createRun().catch((e) => console.error(e));
     });
+  if (els.motherWheelMenu) {
+    els.motherWheelMenu.addEventListener("click", (event) => {
+      event?.stopPropagation?.();
+      const btn = event?.target?.closest ? event.target.closest("button[data-action]") : null;
+      if (!btn || !els.motherWheelMenu.contains(btn)) return;
+      bumpInteraction();
+      const action = String(btn.dataset?.action || "").trim();
+      if (!action) return;
+      dispatchMotherWheelAction(action).catch((err) => {
+        console.error(err);
+        showToast(err?.message || "Mother wheel action failed.", "error", 2400);
+      });
+    });
+
+    window.addEventListener(
+      "pointerdown",
+      (event) => {
+        if (!isMotherWheelOpen()) return;
+        const target = event?.target;
+        if (target && els.motherWheelMenu.contains(target)) return;
+        closeMotherWheelMenu({ immediate: false });
+      },
+      { capture: true }
+    );
+
+    window.addEventListener("keydown", (event) => {
+      if (!isMotherWheelOpen()) return;
+      const key = String(event?.key || "");
+      if (key === "Escape") closeMotherWheelMenu({ immediate: false });
+    });
+  }
   if (els.openRun)
     els.openRun.addEventListener("click", () => {
       bumpInteraction();
@@ -14026,6 +15407,10 @@ function installUi() {
     const hasModifier = Boolean(event?.metaKey || event?.ctrlKey || event?.altKey);
 
 		    if (key === "escape") {
+		      if (isMotherWheelOpen()) {
+		        closeMotherWheelMenu({ immediate: false });
+		        return;
+		      }
 		      if (els.settingsDrawer && !els.settingsDrawer.classList.contains("hidden")) {
 		        els.settingsDrawer.classList.add("hidden");
 		        return;
