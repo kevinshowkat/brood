@@ -169,16 +169,52 @@ class _Handler(BaseHTTPRequestHandler):
             return
         agent = req.get("agent") or {}
         task = req.get("task") or {}
-        tags = task.get("tags") or []
         if not isinstance(agent, dict) or not agent.get("tool"):
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "missing agent.tool"})
             return
-        if not isinstance(tags, list) or not tags or not all(isinstance(t, str) for t in tags):
-            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "missing task.tags[]"})
+        if not isinstance(task, dict):
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "missing task"})
             return
+        raw_tags = task.get("tags")
+        if raw_tags is None:
+            raw_tags = []
+        if not isinstance(raw_tags, list) or not all(isinstance(t, str) for t in raw_tags):
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "task.tags[] must be an array of strings when provided"},
+            )
+            return
+        tags: list[str] = []
+        seen_tags: set[str] = set()
+        for tag in raw_tags:
+            clean = tag.strip()
+            if not clean or clean in seen_tags:
+                continue
+            seen_tags.add(clean)
+            tags.append(clean)
+        tags = tags[:16]
 
         intake = self.server.agent_intake  # type: ignore[attr-defined]
         tag_catalog: dict[str, Any] = intake.get("tag_catalog", {})
+        suggested_tags: list[str] = []
+        intake_tags = intake.get("tags", [])
+        if isinstance(intake_tags, list):
+            for tag in intake_tags:
+                if not isinstance(tag, str):
+                    continue
+                clean = tag.strip()
+                if not clean or clean in suggested_tags:
+                    continue
+                suggested_tags.append(clean)
+        if not suggested_tags:
+            for tag in tag_catalog.keys():
+                if not isinstance(tag, str):
+                    continue
+                clean = tag.strip()
+                if not clean or clean in suggested_tags:
+                    continue
+                suggested_tags.append(clean)
+        suggested_tags = suggested_tags[:32]
 
         entrypoints: list[dict[str, Any]] = []
         commands: list[str] = []
@@ -257,15 +293,22 @@ class _Handler(BaseHTTPRequestHandler):
             "schema_version": "aip-1",
             "session": {"id": sess_id},
             "entrypoints": entrypoints[:64],
+            "suggested_tags": suggested_tags,
         }
         if commands:
             resp["commands"] = commands[:32]
         if packs:
             resp["packs"] = packs[:16]
-        resp["notes"] = [
+        notes = [
             "This is a local stub server (stdlib only). For production, add auth/rate-limits and stricter logging hygiene.",
             "If you cannot use AIP, follow llms.txt fallback entrypoints (README.md, AGENTS.md, docs/desktop.md).",
         ]
+        if not tags:
+            notes.insert(
+                0,
+                "No task.tags[] were provided; returned fallback entrypoints. Use suggested_tags to narrow a follow-up intake call.",
+            )
+        resp["notes"] = notes
 
         if not opt_out:
             self._log(
