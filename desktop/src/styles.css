@@ -2496,9 +2496,14 @@ button.ghost:hover {
   gap: 0;
 }
 
+#mother-overlay {
+  --mother-portrait-size: clamp(120px, 12vw, 170px);
+  --mother-advanced-label-width: clamp(72px, 36%, 110px);
+}
+
 #mother-portrait-shell {
-  --portrait-size: clamp(120px, 12vw, 170px);
-  width: fit-content;
+  --portrait-size: var(--mother-portrait-size);
+  width: calc(var(--mother-portrait-size) + 16px);
   margin-left: 0;
   padding: 8px;
   border-color: rgba(0, 0, 0, 0.92);
@@ -2529,7 +2534,7 @@ button.ghost:hover {
 }
 
 #mother-panel {
-  width: min(420px, calc(100vw - 44px));
+  width: calc(var(--mother-portrait-size) + 16px);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 14px;
   background:
@@ -2634,7 +2639,7 @@ button.ghost:hover {
 
 .mother-advanced-row {
   display: grid;
-  grid-template-columns: 114px 1fr;
+  grid-template-columns: var(--mother-advanced-label-width) 1fr;
   align-items: center;
   gap: 8px;
 }
@@ -2659,9 +2664,6 @@ button.ghost:hover {
 }
 
 @media (max-width: 760px) {
-  #mother-panel {
-    width: min(360px, calc(100vw - 24px));
-  }
   .mother-advanced-row {
     grid-template-columns: 1fr;
     gap: 4px;

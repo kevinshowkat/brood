@@ -71,6 +71,7 @@ const MOTHER_SUGGESTION_LOG_FILENAME = "mother_suggestions.jsonl";
 const MOTHER_TRACE_FILENAME = "mother_trace.jsonl";
 const MOTHER_V2_WATCH_IDLE_MS = 800;
 const MOTHER_V2_INTENT_IDLE_MS = 1500;
+const MOTHER_SELECTION_SEMANTIC_DRAG_PX = 10;
 const MOTHER_V2_COOLDOWN_AFTER_COMMIT_MS = 2000;
 const MOTHER_V2_COOLDOWN_AFTER_REJECT_MS = 1200;
 const MOTHER_V2_VISION_RETRY_MS = 220;
@@ -249,6 +250,7 @@ const state = {
   pollInFlight: false,
   eventsByteOffset: 0,
   eventsTail: "",
+  eventsDecoder: new TextDecoder("utf-8"),
   images: [],
   imagesById: new Map(),
   imageEffectTokenByImageId: new Map(), // imageId -> effectTokenId (collapsed visual replacement)
@@ -4959,18 +4961,17 @@ function buildMotherText() {
   const undoAvailable = motherV2CommitUndoAvailable();
 
   if (phase === MOTHER_IDLE_STATES.WATCHING) {
-    return "Mother is watching the arrangement…";
+    return "";
   }
   if (phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
-    if (Array.isArray(idle?.pendingVisionImageIds) && idle.pendingVisionImageIds.length) {
-      return "Mother is reading image context before proposing…";
-    }
-    if (idle?.pendingIntent) return "Mother is forming a proposal…";
-    const sentence = intent ? motherV2ProposalSentence(intent) : "Mother is preparing a proposal.";
+    if (Array.isArray(idle?.pendingVisionImageIds) && idle.pendingVisionImageIds.length) return "";
+    if (idle?.pendingIntent) return "";
+    const sentence = intent ? motherV2ProposalSentence(intent) : "";
+    if (!sentence) return "";
     return `${sentence}\nV confirm  M reject`;
   }
   if (phase === MOTHER_IDLE_STATES.DRAFTING) {
-    if (idle?.pendingPromptCompile) return "Mother is structuring the prompt…";
+    if (idle?.pendingPromptCompile) return "Mother is braiding intent into form…";
     return "Mother is drafting now. No canvas mutation until deploy.\nM cancel";
   }
   if (phase === MOTHER_IDLE_STATES.OFFERING) {
@@ -5003,9 +5004,8 @@ function buildMotherText() {
       return "Mother connecting…";
     }
     if (aov.pending) return "Mother scanning…";
-    if (hasOutput) {
-      const summary = extractCanvasContextSummary(raw);
-      return summary ? `Context:\n${summary}` : "Context ready.";
+    if (phase === MOTHER_IDLE_STATES.OBSERVING && motherIdleHasArmedCanvas()) {
+      return "";
     }
     return "Mother observing. Pause for intent hypothesis.";
   }
@@ -7817,10 +7817,8 @@ function motherIdleSyncFromInteraction({ userInteraction = false, semantic = tru
   }
   if (userInteraction) {
     if (!semantic) {
-      // Viewport-only camera motion should not invalidate intent/glyph/hint state.
-      if (idle.phase === MOTHER_IDLE_STATES.OBSERVING && !state.pointer.active) {
-        motherIdleArmFirstTimer();
-      }
+      // Non-semantic interactions (viewport motion, focus-only selection changes) should not
+      // invalidate Mother state or arm the idle-watch timers.
       return;
     }
     idle.actionVersion = (Number(idle.actionVersion) || 0) + 1;
@@ -13451,6 +13449,7 @@ async function createRun() {
   state.eventsPath = payload.events_path;
   state.eventsByteOffset = 0;
   state.eventsTail = "";
+  state.eventsDecoder = new TextDecoder("utf-8");
   state.fallbackToFullRead = false;
   fallbackLineOffset = 0;
   resetDescribeQueue();
@@ -13563,6 +13562,7 @@ async function openExistingRun() {
   state.eventsPath = `${selected}/events.jsonl`;
   state.eventsByteOffset = 0;
   state.eventsTail = "";
+  state.eventsDecoder = new TextDecoder("utf-8");
   state.fallbackToFullRead = false;
   fallbackLineOffset = 0;
   resetDescribeQueue();
@@ -13801,11 +13801,25 @@ async function pollEventsOnce() {
       offset: state.eventsByteOffset,
       maxBytes: 1024 * 256,
     });
-    const chunk = resp?.chunk || "";
-    const newOffset = resp?.new_offset;
-    if (typeof newOffset === "number") state.eventsByteOffset = newOffset;
-    if (!chunk) return;
-    state.eventsTail += chunk;
+    const chunk = resp?.chunk;
+    const clampedOffset = Number(resp?.clamped_offset);
+    const newOffset = Number(resp?.new_offset);
+    if (Number.isFinite(clampedOffset) && clampedOffset < state.eventsByteOffset) {
+      state.eventsTail = "";
+      state.eventsDecoder = new TextDecoder("utf-8");
+    }
+    if (Number.isFinite(newOffset)) state.eventsByteOffset = newOffset;
+
+    let chunkText = "";
+    if (typeof chunk === "string") {
+      chunkText = chunk;
+    } else if (chunk instanceof Uint8Array) {
+      chunkText = state.eventsDecoder.decode(chunk, { stream: true });
+    } else if (Array.isArray(chunk)) {
+      chunkText = state.eventsDecoder.decode(Uint8Array.from(chunk), { stream: true });
+    }
+    if (!chunkText) return;
+    state.eventsTail += chunkText;
     const lines = state.eventsTail.split("\n");
     state.eventsTail = lines.pop() || "";
     for (const line of lines) {
@@ -13820,6 +13834,8 @@ async function pollEventsOnce() {
   } catch (err) {
     // Command missing or invoke failed; use old approach.
     console.warn("Incremental event reader failed, falling back:", err);
+    state.eventsTail = "";
+    state.eventsDecoder = new TextDecoder("utf-8");
     state.fallbackToFullRead = true;
   } finally {
     state.pollInFlight = false;
@@ -17319,7 +17335,15 @@ function installCanvasHandlers() {
 	  });
 
   els.overlayCanvas.addEventListener("contextmenu", (event) => {
-    bumpInteraction();
+    if (state.pointer.kind === "freeform_move" || state.pointer.kind === "freeform_resize") {
+      const dragDistCss = Math.hypot(
+        (Number(pCss.x) || 0) - state.pointer.startCssX,
+        (Number(pCss.y) || 0) - state.pointer.startCssY
+      );
+      bumpInteraction({ semantic: dragDistCss > MOTHER_SELECTION_SEMANTIC_DRAG_PX });
+    } else {
+      bumpInteraction();
+    }
     closeMotherWheelMenu({ immediate: false });
     if (!getActiveImage()) return;
     event.preventDefault();
@@ -17407,7 +17431,9 @@ function installCanvasHandlers() {
             requestRender();
             return;
           }
-          bumpInteraction();
+          // Initial pointer-down in multi-canvas is often a focus change (selection). Treat as
+          // non-semantic; real arrangement changes are still marked semantic during pointermove.
+          bumpInteraction({ semantic: false });
           const ambientHit = intentAmbientActive() ? hitTestAmbientIntentNudge(p) : null;
 
           if (ambientHit) {
@@ -17852,6 +17878,8 @@ function installCanvasHandlers() {
       const ms = state.multiView?.scale || 1;
       const dxCss = (Number(pCss.x) || 0) - state.pointer.startCssX;
       const dyCss = (Number(pCss.y) || 0) - state.pointer.startCssY;
+      const dragDistCss = Math.hypot(dxCss, dyCss);
+      if (dragDistCss <= MOTHER_SELECTION_SEMANTIC_DRAG_PX) return;
       const dxWorld = dxCss / Math.max(ms, 0.0001);
       const dyWorld = dyCss / Math.max(ms, 0.0001);
       const next = clampFreeformRectCss(
@@ -17883,6 +17911,10 @@ function installCanvasHandlers() {
       const dpr = getDpr();
       const mxCss = (Number(state.multiView?.offsetX) || 0) / Math.max(dpr, 0.0001);
       const myCss = (Number(state.multiView?.offsetY) || 0) / Math.max(dpr, 0.0001);
+      const dxCss = (Number(pCss.x) || 0) - state.pointer.startCssX;
+      const dyCss = (Number(pCss.y) || 0) - state.pointer.startCssY;
+      const dragDistCss = Math.hypot(dxCss, dyCss);
+      if (dragDistCss <= MOTHER_SELECTION_SEMANTIC_DRAG_PX) return;
       const worldPointerCss = {
         x: ((Number(pCss.x) || 0) - mxCss) / Math.max(ms, 0.0001),
         y: ((Number(pCss.y) || 0) - myCss) / Math.max(ms, 0.0001),
@@ -17975,7 +18007,10 @@ function installCanvasHandlers() {
         // Arm Mother idle timers against the settled interaction state (pointer no longer active).
         const motherRoleDrag = kind === "mother_role_drag";
         const effectTokenDrag = kind === "effect_token_drag";
-        if (!motherRoleDrag && !effectTokenDrag) bumpInteraction();
+        if (!motherRoleDrag && !effectTokenDrag) {
+          const selectionOnly = (kind === "freeform_move" || kind === "freeform_resize") && !moved;
+          bumpInteraction({ semantic: !selectionOnly });
+        }
 
 		    if (moved && (kind === "freeform_move" || kind === "freeform_resize") && imageId) {
 		      const start = startRectCss && typeof startRectCss === "object" ? startRectCss : null;
@@ -18991,7 +19026,7 @@ function installUi() {
       if (!thumb || !els.filmstrip.contains(thumb)) return;
       const id = thumb.dataset?.id;
       if (!id) return;
-      bumpInteraction();
+      bumpInteraction({ semantic: false });
       setActiveImage(id).catch(() => {});
     });
   }
