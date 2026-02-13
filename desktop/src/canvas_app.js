@@ -17335,15 +17335,7 @@ function installCanvasHandlers() {
 	  });
 
   els.overlayCanvas.addEventListener("contextmenu", (event) => {
-    if (state.pointer.kind === "freeform_move" || state.pointer.kind === "freeform_resize") {
-      const dragDistCss = Math.hypot(
-        (Number(pCss.x) || 0) - state.pointer.startCssX,
-        (Number(pCss.y) || 0) - state.pointer.startCssY
-      );
-      bumpInteraction({ semantic: dragDistCss > MOTHER_SELECTION_SEMANTIC_DRAG_PX });
-    } else {
-      bumpInteraction();
-    }
+    bumpInteraction();
     closeMotherWheelMenu({ immediate: false });
     if (!getActiveImage()) return;
     event.preventDefault();
@@ -17860,7 +17852,15 @@ function installCanvasHandlers() {
       return;
     }
 
-    bumpInteraction();
+    if (state.pointer.kind === "freeform_move" || state.pointer.kind === "freeform_resize") {
+      const dragDistCss = Math.hypot(
+        (Number(pCss.x) || 0) - state.pointer.startCssX,
+        (Number(pCss.y) || 0) - state.pointer.startCssY
+      );
+      bumpInteraction({ semantic: state.pointer.moved || dragDistCss > MOTHER_SELECTION_SEMANTIC_DRAG_PX });
+    } else {
+      bumpInteraction();
+    }
 
 	    // Freeform interactions (multi canvas + pan tool).
     if (state.pointer.kind === "freeform_import" || state.pointer.kind === "freeform_wheel") {
@@ -17879,7 +17879,7 @@ function installCanvasHandlers() {
       const dxCss = (Number(pCss.x) || 0) - state.pointer.startCssX;
       const dyCss = (Number(pCss.y) || 0) - state.pointer.startCssY;
       const dragDistCss = Math.hypot(dxCss, dyCss);
-      if (dragDistCss <= MOTHER_SELECTION_SEMANTIC_DRAG_PX) return;
+      if (!state.pointer.moved && dragDistCss <= MOTHER_SELECTION_SEMANTIC_DRAG_PX) return;
       const dxWorld = dxCss / Math.max(ms, 0.0001);
       const dyWorld = dyCss / Math.max(ms, 0.0001);
       const next = clampFreeformRectCss(
@@ -17914,7 +17914,7 @@ function installCanvasHandlers() {
       const dxCss = (Number(pCss.x) || 0) - state.pointer.startCssX;
       const dyCss = (Number(pCss.y) || 0) - state.pointer.startCssY;
       const dragDistCss = Math.hypot(dxCss, dyCss);
-      if (dragDistCss <= MOTHER_SELECTION_SEMANTIC_DRAG_PX) return;
+      if (!state.pointer.moved && dragDistCss <= MOTHER_SELECTION_SEMANTIC_DRAG_PX) return;
       const worldPointerCss = {
         x: ((Number(pCss.x) || 0) - mxCss) / Math.max(ms, 0.0001),
         y: ((Number(pCss.y) || 0) - myCss) / Math.max(ms, 0.0001),
