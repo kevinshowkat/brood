@@ -65,6 +65,7 @@ test("Mother v2 separates structured intent from prompt compilation", () => {
   assert.match(app, /await invoke\(\"write_pty\", \{ data: `\/prompt_compile \$\{quoteForPtyArg\(payloadPath\)\}\\n` \}\)/);
   assert.match(app, /function motherV2CollectGenerationImagePaths\(/);
   assert.match(app, /pushMany\(motherIdleBaseImageItems\(\)\.map\(\(item\) => String\(item\?\.id \|\| \"\"\)\.trim\(\)\)\);/);
+  assert.match(app, /if \(!isVisibleCanvasImageId\(id\)\) return;/);
   assert.match(app, /const referenceImages = paths\.slice\(1\);/);
   assert.match(app, /function motherV2DispatchViaImagePayload\(/);
   assert.match(app, /\/mother_generate \$\{quoteForPtyArg\(payloadPath\)\}\\n/);
@@ -179,7 +180,12 @@ test("Mother-generated artifacts still use metadata + green visual treatment", (
 });
 
 test("Mother follow-up inference includes mother-generated images in base context", () => {
-  assert.match(app, /function motherIdleBaseImageItems\(\)\s*\{\s*\/\/ Mother v2 follow-ups should be able to reason over newly generated outputs too\.\s*return \(state\.images \|\| \[\]\)\.filter\(\(item\) => item\?\.id\);\s*\}/);
+  assert.match(app, /function isVisibleCanvasImageId\(/);
+  assert.match(app, /function getVisibleCanvasImages\(/);
+  assert.match(app, /return !isImageEffectTokenized\(id\);/);
+  assert.match(app, /function motherIdleBaseImageItems\(\)\s*\{\s*\/\/ Mother v2 follow-ups should be able to reason over newly generated outputs too\.\s*return getVisibleCanvasImages\(\);\s*\}/);
+  assert.match(app, /const selectedIds = getVisibleSelectedIds\(\)\.map/);
+  assert.match(app, /const activeId = getVisibleActiveId\(\);/);
 });
 
 test("Mother event correlation: binds one dispatch version and ignores stale out-of-band events", () => {
@@ -260,6 +266,14 @@ test("Mother v2 drafting visuals include role-aware context images", () => {
   assert.doesNotMatch(app, /motherSourceIds\.slice\(0,\s*2\)/);
   assert.match(app, /function ensureImageFxOverlays\(/);
   assert.match(app, /const overlays = ensureImageFxOverlays\(Math\.max\(1,\s*targets\.length\)\)/);
+});
+
+test("Effect extraction pending state tracks duplicate source paths per selected tile", () => {
+  assert.match(app, /state\.pendingExtractDna\s*=\s*createPendingEffectExtractionState\(sources\);/);
+  assert.match(app, /state\.pendingSoulLeech\s*=\s*createPendingEffectExtractionState\(sources\);/);
+  assert.match(app, /function consumePendingEffectExtraction\(kind, imagePath\)/);
+  assert.match(app, /consumePendingEffectSourceSlot\(pending,\s*path,\s*Date\.now\(\)\)/);
+  assert.match(app, /if \(unresolvedCount === 0\) \{/);
 });
 
 test("Mother realtime border/video: gated by idle state machine phase", () => {
