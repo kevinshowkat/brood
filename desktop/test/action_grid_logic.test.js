@@ -25,10 +25,10 @@ test("computeActionGridSlots: 1 selected -> single-image abilities (DIAG when AO
     "pan",
     "lasso",
     "designate",
+    "extract_dna",
+    "soul_leech",
     "bg",
-    "remove_people",
     "variations",
-    "recast",
     "diagnose",
   ]);
 });
@@ -75,4 +75,3 @@ test("computeActionGridSlots: 4+ selected -> tools only", () => {
   const slots = computeActionGridSlots({ selectionCount: 4, hasImage: true, alwaysOnVisionEnabled: false });
   assert.deepEqual(slotKeys(slots), ["annotate", "pan", "lasso", "designate", null, null, null, null, null]);
 });
-

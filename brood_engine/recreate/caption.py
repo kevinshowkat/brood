@@ -46,6 +46,24 @@ class TextInference:
     model: str | None = None
 
 
+@dataclass(frozen=True)
+class DnaExtractionInference:
+    palette: list[str]
+    colors: list[str]
+    materials: list[str]
+    summary: str
+    source: str
+    model: str | None = None
+
+
+@dataclass(frozen=True)
+class SoulExtractionInference:
+    emotion: str
+    summary: str
+    source: str
+    model: str | None = None
+
+
 def infer_prompt(reference_path: Path) -> PromptInference:
     try:
         with Image.open(reference_path) as image:
@@ -119,6 +137,28 @@ def infer_argument(path_a: Path, path_b: Path) -> TextInference | None:
     openai = _argue_with_openai(path_a, path_b)
     if openai is not None:
         return openai
+    return None
+
+
+def infer_dna_signature(reference_path: Path) -> DnaExtractionInference | None:
+    """Extract a compact colors/materials "DNA" signature from an image."""
+    openai = _extract_dna_with_openai(reference_path)
+    if openai is not None:
+        return openai
+    gemini = _extract_dna_with_gemini(reference_path)
+    if gemini is not None:
+        return gemini
+    return None
+
+
+def infer_soul_signature(reference_path: Path) -> SoulExtractionInference | None:
+    """Extract the dominant emotional "soul" signature from an image."""
+    openai = _extract_soul_with_openai(reference_path)
+    if openai is not None:
+        return openai
+    gemini = _extract_soul_with_gemini(reference_path)
+    if gemini is not None:
+        return gemini
     return None
 
 
@@ -238,6 +278,35 @@ def _argue_instruction() -> str:
         "<2-3 short sentences>\n\n"
         "NEXT TEST:\n"
         "- <2 bullets>\n"
+    )
+
+
+def _dna_extract_instruction() -> str:
+    return (
+        "Extract this image's visual DNA for transfer.\n"
+        "Focus only on COLORS and MATERIALS that are visually dominant.\n"
+        "Respond with JSON only (no markdown):\n"
+        "{\n"
+        '  "palette": ["#RRGGBB", "..."],\n'
+        '  "colors": ["short color phrases"],\n'
+        '  "materials": ["short material phrases"],\n'
+        '  "summary": "one short sentence for edit transfer"\n'
+        "}\n"
+        "Rules: 3-8 palette entries. 2-8 colors. 2-8 materials. "
+        "Summary must be <= 16 words and directly usable in an edit instruction."
+    )
+
+
+def _soul_extract_instruction() -> str:
+    return (
+        "Extract this image's dominant emotional soul.\n"
+        "Respond with JSON only (no markdown):\n"
+        "{\n"
+        '  "emotion": "single dominant emotion phrase",\n'
+        '  "summary": "one short sentence for edit transfer"\n'
+        "}\n"
+        "Rules: emotion should be concise and concrete (e.g., serene tension, triumphant warmth). "
+        "Summary must be <= 14 words and directly usable in an edit instruction."
     )
 
 
@@ -639,6 +708,116 @@ def _clean_text_inference(text: str, *, max_chars: int | None = None) -> str:
     return cleaned
 
 
+def _strip_code_fence(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("```") and raw.endswith("```"):
+        lines = raw.splitlines()
+        if len(lines) >= 2:
+            body = "\n".join(lines[1:-1]).strip()
+            if body.lower().startswith("json"):
+                body = body[4:].strip()
+            return body
+    return raw
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    raw = _strip_code_fence(text)
+    if not raw:
+        return None
+    candidates = [raw]
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(raw[start : end + 1])
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _coerce_text_list(value: Any, *, max_items: int = 8, max_chars: int = 48) -> list[str]:
+    if value is None:
+        return []
+    items: list[str] = []
+    if isinstance(value, list):
+        for part in value:
+            if isinstance(part, str):
+                items.append(part)
+    elif isinstance(value, str):
+        items.extend(str(value).split(","))
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = " ".join(str(item or "").split()).strip()
+        if not text:
+            continue
+        if len(text) > max_chars:
+            text = text[:max_chars].strip()
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(text)
+        if len(cleaned) >= max_items:
+            break
+    return cleaned
+
+
+def _normalize_hex(value: str) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if not raw.startswith("#"):
+        return None
+    body = raw[1:]
+    if len(body) == 3 and all(ch in "0123456789abcdefABCDEF" for ch in body):
+        body = "".join(ch * 2 for ch in body)
+    if len(body) != 6 or not all(ch in "0123456789abcdefABCDEF" for ch in body):
+        return None
+    return f"#{body.upper()}"
+
+
+def _parse_dna_payload(payload: dict[str, Any]) -> tuple[list[str], list[str], list[str], str] | None:
+    palette_raw = _coerce_text_list(payload.get("palette"), max_items=8, max_chars=12)
+    palette: list[str] = []
+    for item in palette_raw:
+        code = _normalize_hex(item)
+        if not code or code in palette:
+            continue
+        palette.append(code)
+    colors = _coerce_text_list(payload.get("colors"), max_items=8, max_chars=42)
+    materials = _coerce_text_list(payload.get("materials"), max_items=8, max_chars=42)
+    summary_value = payload.get("summary")
+    summary = _clean_text_inference(str(summary_value) if isinstance(summary_value, str) else "", max_chars=180)
+    if not summary:
+        color_part = ", ".join(colors[:3]) if colors else "the extracted palette"
+        material_part = ", ".join(materials[:3]) if materials else "the extracted materials"
+        summary = f"Rebuild with {color_part} and {material_part}."
+    if not palette and not colors and not materials:
+        return None
+    return palette, colors, materials, summary
+
+
+def _parse_soul_payload(payload: dict[str, Any]) -> tuple[str, str] | None:
+    raw_emotion = payload.get("emotion")
+    if not isinstance(raw_emotion, str) or not raw_emotion.strip():
+        raw_emotion = payload.get("primary_emotion")
+    if not isinstance(raw_emotion, str) or not raw_emotion.strip():
+        return None
+    emotion = _clean_text_inference(raw_emotion, max_chars=64)
+    summary_value = payload.get("summary")
+    summary = _clean_text_inference(str(summary_value) if isinstance(summary_value, str) else "", max_chars=180)
+    if not summary:
+        summary = f"Make the scene emotionally {emotion}."
+    return emotion, summary
+
+
 def _diagnose_with_openai(reference_path: Path) -> TextInference | None:
     api_key = _openai_api_key()
     if not api_key:
@@ -890,4 +1069,216 @@ def _argue_with_gemini(path_a: Path, path_b: Path) -> TextInference | None:
                 if cleaned:
                     return TextInference(text=cleaned, source="gemini_vision", model=model)
 
+    return None
+
+
+def _extract_dna_with_openai(reference_path: Path) -> DnaExtractionInference | None:
+    api_key = _openai_api_key()
+    if not api_key:
+        return None
+    model = os.getenv("BROOD_DNA_VISION_MODEL") or os.getenv("OPENAI_DNA_MODEL") or "gpt-4o-mini"
+    image_bytes, mime = _prepare_vision_image(reference_path, max_dim=1024)
+    data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": _dna_extract_instruction()},
+                    {"type": "input_image", "image_url": data_url},
+                ],
+            }
+        ],
+        "max_output_tokens": 380,
+    }
+    endpoint = f"{_openai_api_base()}/responses"
+    try:
+        _, response = _post_openai_json(endpoint, payload, api_key, timeout_s=35.0)
+    except Exception:
+        return None
+    text = _extract_openai_output_text(response)
+    payload_obj = _extract_json_object(text)
+    if not payload_obj:
+        return None
+    parsed = _parse_dna_payload(payload_obj)
+    if not parsed:
+        return None
+    palette, colors, materials, summary = parsed
+    return DnaExtractionInference(
+        palette=palette,
+        colors=colors,
+        materials=materials,
+        summary=summary,
+        source="openai_vision",
+        model=model,
+    )
+
+
+def _extract_soul_with_openai(reference_path: Path) -> SoulExtractionInference | None:
+    api_key = _openai_api_key()
+    if not api_key:
+        return None
+    model = os.getenv("BROOD_SOUL_VISION_MODEL") or os.getenv("OPENAI_SOUL_MODEL") or "gpt-4o-mini"
+    image_bytes, mime = _prepare_vision_image(reference_path, max_dim=1024)
+    data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": _soul_extract_instruction()},
+                    {"type": "input_image", "image_url": data_url},
+                ],
+            }
+        ],
+        "max_output_tokens": 240,
+    }
+    endpoint = f"{_openai_api_base()}/responses"
+    try:
+        _, response = _post_openai_json(endpoint, payload, api_key, timeout_s=35.0)
+    except Exception:
+        return None
+    text = _extract_openai_output_text(response)
+    payload_obj = _extract_json_object(text)
+    if not payload_obj:
+        return None
+    parsed = _parse_soul_payload(payload_obj)
+    if not parsed:
+        return None
+    emotion, summary = parsed
+    return SoulExtractionInference(
+        emotion=emotion,
+        summary=summary,
+        source="openai_vision",
+        model=model,
+    )
+
+
+def _extract_dna_with_gemini(reference_path: Path) -> DnaExtractionInference | None:
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return None
+    try:
+        from google import genai  # type: ignore
+        from google.genai import types  # type: ignore
+    except Exception:
+        return None
+
+    model = os.getenv("BROOD_GEMINI_DNA_MODEL") or os.getenv("BROOD_GEMINI_CAPTION_MODEL") or "gemini-3-pro-preview"
+    image_bytes, mime = _prepare_vision_image(reference_path, max_dim=1024)
+    instruction = _dna_extract_instruction()
+
+    try:
+        client = genai.Client(api_key=api_key)
+        chat = client.chats.create(model=model)
+        parts = [
+            types.Part(inline_data=types.Blob(data=image_bytes, mime_type=mime)),
+            types.Part(text=instruction),
+        ]
+        response = chat.send_message(parts)
+    except Exception:
+        return None
+
+    text = getattr(response, "text", None)
+    payload_obj = _extract_json_object(text) if isinstance(text, str) else None
+    if payload_obj:
+        parsed = _parse_dna_payload(payload_obj)
+        if parsed:
+            palette, colors, materials, summary = parsed
+            return DnaExtractionInference(
+                palette=palette,
+                colors=colors,
+                materials=materials,
+                summary=summary,
+                source="gemini_vision",
+                model=model,
+            )
+
+    candidates = getattr(response, "candidates", []) or []
+    for candidate in candidates:
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) or getattr(candidate, "parts", None) or []
+        for part in parts:
+            chunk = getattr(part, "text", None)
+            if not isinstance(chunk, str) or not chunk.strip():
+                continue
+            payload_obj = _extract_json_object(chunk)
+            if not payload_obj:
+                continue
+            parsed = _parse_dna_payload(payload_obj)
+            if not parsed:
+                continue
+            palette, colors, materials, summary = parsed
+            return DnaExtractionInference(
+                palette=palette,
+                colors=colors,
+                materials=materials,
+                summary=summary,
+                source="gemini_vision",
+                model=model,
+            )
+    return None
+
+
+def _extract_soul_with_gemini(reference_path: Path) -> SoulExtractionInference | None:
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return None
+    try:
+        from google import genai  # type: ignore
+        from google.genai import types  # type: ignore
+    except Exception:
+        return None
+
+    model = os.getenv("BROOD_GEMINI_SOUL_MODEL") or os.getenv("BROOD_GEMINI_CAPTION_MODEL") or "gemini-3-pro-preview"
+    image_bytes, mime = _prepare_vision_image(reference_path, max_dim=1024)
+    instruction = _soul_extract_instruction()
+
+    try:
+        client = genai.Client(api_key=api_key)
+        chat = client.chats.create(model=model)
+        parts = [
+            types.Part(inline_data=types.Blob(data=image_bytes, mime_type=mime)),
+            types.Part(text=instruction),
+        ]
+        response = chat.send_message(parts)
+    except Exception:
+        return None
+
+    text = getattr(response, "text", None)
+    payload_obj = _extract_json_object(text) if isinstance(text, str) else None
+    if payload_obj:
+        parsed = _parse_soul_payload(payload_obj)
+        if parsed:
+            emotion, summary = parsed
+            return SoulExtractionInference(
+                emotion=emotion,
+                summary=summary,
+                source="gemini_vision",
+                model=model,
+            )
+
+    candidates = getattr(response, "candidates", []) or []
+    for candidate in candidates:
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) or getattr(candidate, "parts", None) or []
+        for part in parts:
+            chunk = getattr(part, "text", None)
+            if not isinstance(chunk, str) or not chunk.strip():
+                continue
+            payload_obj = _extract_json_object(chunk)
+            if not payload_obj:
+                continue
+            parsed = _parse_soul_payload(payload_obj)
+            if not parsed:
+                continue
+            emotion, summary = parsed
+            return SoulExtractionInference(
+                emotion=emotion,
+                summary=summary,
+                source="gemini_vision",
+                model=model,
+            )
     return None

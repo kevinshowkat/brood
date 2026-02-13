@@ -73,6 +73,30 @@ def test_parse_intent_bridge_quoted_paths():
     assert intent.command_args["paths"] == ["/tmp/a b.png", "/tmp/c d.png"]
 
 
+def test_parse_intent_extract_dna_basic():
+    intent = parse_intent("/extract_dna a.png b.png")
+    assert intent.action == "extract_dna"
+    assert intent.command_args["paths"] == ["a.png", "b.png"]
+
+
+def test_parse_intent_extract_dna_quoted_paths():
+    intent = parse_intent('/extract_dna "/tmp/a b.png" "/tmp/c d.png"')
+    assert intent.action == "extract_dna"
+    assert intent.command_args["paths"] == ["/tmp/a b.png", "/tmp/c d.png"]
+
+
+def test_parse_intent_soul_leech_basic():
+    intent = parse_intent("/soul_leech a.png")
+    assert intent.action == "soul_leech"
+    assert intent.command_args["paths"] == ["a.png"]
+
+
+def test_parse_intent_soul_leech_quoted_paths():
+    intent = parse_intent('/soul_leech "/tmp/a b.png" "/tmp/c d.png"')
+    assert intent.action == "soul_leech"
+    assert intent.command_args["paths"] == ["/tmp/a b.png", "/tmp/c d.png"]
+
+
 def test_parse_intent_extract_rule_basic():
     intent = parse_intent("/extract_rule a.png b.png c.png")
     assert intent.action == "extract_rule"

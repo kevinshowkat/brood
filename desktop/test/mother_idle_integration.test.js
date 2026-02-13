@@ -157,6 +157,9 @@ test("Mother v2 role glyphs render only during hypothesizing/offering and suppor
   assert.match(app, /function hitTestMotherRoleGlyph\(/);
   assert.match(app, /state\.pointer\.kind = \"mother_role_drag\"/);
   assert.match(app, /motherV2SetRoleIds\(/);
+  assert.match(app, /if \(motherRoleHit && event\.button === 0\) \{[\s\S]*bumpInteraction\(\{ semantic: false \}\);/);
+  assert.match(app, /if \(state\.pointer\.kind === \"mother_role_drag\"\) \{[\s\S]*bumpInteraction\(\{ semantic: false \}\);/);
+  assert.doesNotMatch(app, /els\.overlayCanvas\.addEventListener\(\"pointerdown\", \(event\) => \{\s*bumpInteraction\(\);/);
 });
 
 test("Mother v2 telemetry includes minimal trace fields", () => {
@@ -193,6 +196,8 @@ test("Mother event correlation resets cleanly between runs and allows one timeou
   assert.match(app, /if \(!idle\.pendingVersionId && incomingVersionId\) idle\.pendingVersionId = incomingVersionId;[\s\S]*motherIdleResetDispatchCorrelation\(\{ rememberPendingVersion: true \}\);/);
   assert.match(app, /function motherIdleArmDispatchTimeout\([\s\S]*allowExtension = false[\s\S]*dispatch_timeout_extended/);
   assert.match(app, /motherIdleArmDispatchTimeout\([\s\S]*allowExtension:\s*true/);
+  assert.match(app, /if \(!idle\.pendingPromptCompile \|\| idle\.pendingGeneration \|\| Boolean\(idle\.pendingDispatchToken\)\) \{/);
+  assert.match(app, /kind:\s*\"prompt_compiled_ignored\"/);
 });
 
 test("Mother reject queues a follow-up hypothesis cycle after cooldown", () => {
@@ -240,8 +245,12 @@ test("Vision describe queue drops stale paths on replace/remove to avoid file-no
   assert.match(app, /dropVisionDescribePath\(oldPath,\s*\{ cancelInFlight: true \}\);/);
 });
 
-test("Mother idle re-arms after drag release (pointer finalized before interaction bump)", () => {
-  assert.match(app, /function finalizePointer\(event\)\s*\{[\s\S]*state\.pointer\.active = false;[\s\S]*bumpInteraction\(\);/);
+test("Mother idle re-arms after drag release and keeps role-drag semantic state", () => {
+  assert.match(
+    app,
+    /function finalizePointer\(event\)\s*\{[\s\S]*const motherRoleDrag = kind === \"mother_role_drag\";[\s\S]*const effectTokenDrag = kind === \"effect_token_drag\";[\s\S]*if \(!motherRoleDrag && !effectTokenDrag\) bumpInteraction\(\);/
+  );
+  assert.match(app, /if \(kind === \"mother_role_drag\"\) \{[\s\S]*bumpInteraction\(\{ semantic: false \}\);/);
 });
 
 test("Mother v2 drafting visuals include role-aware context images", () => {

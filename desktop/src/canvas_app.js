@@ -234,6 +234,8 @@ const state = {
   eventsTail: "",
   images: [],
   imagesById: new Map(),
+  imageEffectTokenByImageId: new Map(), // imageId -> effectTokenId (collapsed visual replacement)
+  effectTokensById: new Map(), // effectTokenId -> token payload
   activeId: null,
   selectedIds: [], // imageId[] (multi-select in multi canvas; last entry is "active")
   imageCache: new Map(), // path -> { url: string|null, urlPromise: Promise<string>|null, imgPromise: Promise<HTMLImageElement>|null }
@@ -260,6 +262,8 @@ const state = {
   pendingBlend: null, // { sourceIds: [string, string], startedAt: number }
   pendingSwapDna: null, // { structureId: string, surfaceId: string, startedAt: number }
   pendingBridge: null, // { sourceIds: [string, string], startedAt: number }
+  pendingExtractDna: null, // { sourceIds: string[], startedAt: number }
+  pendingSoulLeech: null, // { sourceIds: string[], startedAt: number }
   pendingArgue: null, // { sourceIds: [string, string], startedAt: number }
   pendingExtractRule: null, // { sourceIds: [string, string, string], startedAt: number }
   pendingOddOneOut: null, // { sourceIds: [string, string, string], startedAt: number }
@@ -291,7 +295,7 @@ const state = {
   tool: "pan",
   pointer: {
     active: false,
-    kind: null, // "freeform_move" | "freeform_resize" | "freeform_import" | "freeform_wheel" | "mother_role_drag"
+    kind: null, // "freeform_move" | "freeform_resize" | "freeform_import" | "freeform_wheel" | "mother_role_drag" | "effect_token_drag"
     imageId: null,
     role: null,
     corner: null, // "nw"|"ne"|"sw"|"se"
@@ -307,6 +311,7 @@ const state = {
     importPointCss: null, // { x, y }
     moved: false,
   },
+  effectTokenDrag: null, // { tokenId, sourceImageId, targetImageId, moved, x, y }
   wheelMenu: {
     open: false,
     hideTimer: null,
@@ -2145,9 +2150,11 @@ function isForegroundActionRunning() {
   return Boolean(
     state.ptySpawning ||
       state.actionQueueActive ||
-      state.pendingBlend ||
+    state.pendingBlend ||
       state.pendingSwapDna ||
       state.pendingBridge ||
+      state.pendingExtractDna ||
+      state.pendingSoulLeech ||
       state.pendingArgue ||
       state.pendingExtractRule ||
       state.pendingOddOneOut ||
@@ -3908,6 +3915,8 @@ const ACTION_IMAGE_MODEL = {
   combine: "gemini-3-pro-image-preview",
   swap_dna: "gemini-3-pro-image-preview",
   bridge: "gemini-3-pro-image-preview",
+  extract_dna_apply: "gemini-2.5-flash-image",
+  soul_leech_apply: "gemini-2.5-flash-image",
   recast: "gemini-3-pro-image-preview",
   remove_people: "gemini-3-pro-image-preview",
 };
@@ -5348,6 +5357,8 @@ function minimapBusyImageIds() {
   add(state.pendingSwapDna?.structureId);
   add(state.pendingSwapDna?.surfaceId);
   addMany(state.pendingBridge?.sourceIds);
+  addMany(state.pendingExtractDna?.sourceIds);
+  addMany(state.pendingSoulLeech?.sourceIds);
   addMany(state.pendingArgue?.sourceIds);
   addMany(state.pendingExtractRule?.sourceIds);
   addMany(state.pendingOddOneOut?.sourceIds);
@@ -8129,6 +8140,300 @@ function getSelectedImagesActiveFirst({ requireCount = null } = {}) {
   return selected;
 }
 
+function effectTokenForImageId(imageId) {
+  const id = String(imageId || "").trim();
+  if (!id) return null;
+  const tokenId = state.imageEffectTokenByImageId.get(id);
+  if (!tokenId) return null;
+  const token = state.effectTokensById.get(tokenId) || null;
+  if (!token) {
+    state.imageEffectTokenByImageId.delete(id);
+    return null;
+  }
+  return token;
+}
+
+function clearEffectTokenForImageId(imageId) {
+  const id = String(imageId || "").trim();
+  if (!id) return;
+  const tokenId = state.imageEffectTokenByImageId.get(id);
+  state.imageEffectTokenByImageId.delete(id);
+  if (!tokenId) return;
+  const token = state.effectTokensById.get(tokenId) || null;
+  if (!token) return;
+  // Keep other bindings if this token was intentionally shared.
+  const stillUsed = Array.from(state.imageEffectTokenByImageId.values()).some((boundId) => String(boundId) === String(tokenId));
+  if (!stillUsed) state.effectTokensById.delete(tokenId);
+}
+
+function clearAllEffectTokens() {
+  state.imageEffectTokenByImageId.clear();
+  state.effectTokensById.clear();
+  state.effectTokenDrag = null;
+}
+
+function createOrUpdateEffectToken({
+  type,
+  imageId,
+  imagePath,
+  palette = [],
+  colors = [],
+  materials = [],
+  emotion = "",
+  summary = "",
+  source = null,
+  model = null,
+} = {}) {
+  const imageKey = String(imageId || "").trim();
+  const tokenType = String(type || "").trim();
+  if (!imageKey || !tokenType) return null;
+  const existing = effectTokenForImageId(imageKey);
+  const tokenId = existing?.id || `fx-${tokenType}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const next = {
+    id: tokenId,
+    type: tokenType,
+    sourceImageId: imageKey,
+    sourceImagePath: String(imagePath || ""),
+    palette: Array.isArray(palette) ? palette.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 8) : [],
+    colors: Array.isArray(colors) ? colors.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 8) : [],
+    materials: Array.isArray(materials) ? materials.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 8) : [],
+    emotion: String(emotion || "").trim(),
+    summary: String(summary || "").trim(),
+    source: source ? String(source) : null,
+    model: model ? String(model) : null,
+    createdAt: existing?.createdAt || Date.now(),
+    updatedAt: Date.now(),
+  };
+  state.effectTokensById.set(tokenId, next);
+  state.imageEffectTokenByImageId.set(imageKey, tokenId);
+  return next;
+}
+
+function effectTokenLabel(token) {
+  const type = String(token?.type || "").trim();
+  if (type === "extract_dna") return "Extract DNA";
+  if (type === "soul_leech") return "Soul Leech";
+  return "Effect";
+}
+
+function buildEffectTokenEditPrompt(token) {
+  const type = String(token?.type || "").trim();
+  if (type === "extract_dna") {
+    const palette = Array.isArray(token?.palette) ? token.palette.filter(Boolean).slice(0, 6) : [];
+    const colors = Array.isArray(token?.colors) ? token.colors.filter(Boolean).slice(0, 6) : [];
+    const materials = Array.isArray(token?.materials) ? token.materials.filter(Boolean).slice(0, 6) : [];
+    const summary = String(token?.summary || "").trim();
+    const parts = [];
+    if (summary) parts.push(summary);
+    if (palette.length) parts.push(`palette anchors: ${palette.join(", ")}`);
+    if (colors.length) parts.push(`dominant colors: ${colors.join(", ")}`);
+    if (materials.length) parts.push(`dominant materials/textures: ${materials.join(", ")}`);
+    const transfer = parts.length ? parts.join(". ") : "transfer the extracted color and material DNA";
+    return (
+      `edit the image: remap this image using extracted DNA from the source reference. ${transfer}. ` +
+      "Preserve subject identity, composition logic, and object boundaries. " +
+      "No collage, no split-screen, no double exposure, no extra humans/faces unless already present, no text overlays."
+    );
+  }
+  if (type === "soul_leech") {
+    const emotion = String(token?.emotion || "").trim();
+    const summary = String(token?.summary || "").trim();
+    const essence = summary || (emotion ? `make the scene emotionally ${emotion}` : "shift the image to the extracted emotional tone");
+    return (
+      `edit the image: ${essence}. Keep scene geometry coherent and photorealistic. ` +
+      "Preserve core subject identity and materials unless the emotional change requires subtle lighting/color shifts. " +
+      "No collage, no split-screen, no double exposure, no text overlays."
+    );
+  }
+  return "edit the image: refine the image with the selected effect token. Output one coherent image.";
+}
+
+async function applyEffectTokenToImage(tokenId, targetId, { fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
+  const token = state.effectTokensById.get(String(tokenId || "").trim()) || null;
+  const target = state.imagesById.get(String(targetId || "").trim()) || null;
+  if (!token || !target?.path) {
+    showToast("Effect apply failed: missing token or target image.", "error", 2600);
+    return;
+  }
+  if (String(token.sourceImageId || "") === String(target.id || "")) {
+    showToast("Drop this token onto a different image.", "tip", 1800);
+    return;
+  }
+
+  const actionLabel = effectTokenLabel(token);
+  const queueKey = `effect_apply:${token.id}:${target.id}`;
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: `${actionLabel} Apply`,
+      key: queueKey,
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => applyEffectTokenToImage(token.id, target.id, { fromQueue: true }),
+    });
+    return;
+  }
+
+  bumpInteraction();
+  await ensureRun();
+  const provider = providerFromModel(
+    token.type === "soul_leech" ? ACTION_IMAGE_MODEL.soul_leech_apply : ACTION_IMAGE_MODEL.extract_dna_apply
+  );
+  setImageFxActive(true, `${actionLabel} Apply`);
+  portraitWorking(`${actionLabel} Apply`, { providerOverride: provider || "gemini" });
+  beginPendingReplace(target.id, `${actionLabel} Apply`, {
+    mode: "effect_token_apply",
+    effect_token_id: token.id,
+    effect_type: token.type,
+    source_image_id: token.sourceImageId || null,
+  });
+
+  try {
+    const ok = await ensureEngineSpawned({ reason: `${actionLabel} apply` });
+    if (!ok) throw new Error("Engine unavailable");
+    await setEngineActiveImage(target.path);
+    const desiredModel = token.type === "soul_leech" ? ACTION_IMAGE_MODEL.soul_leech_apply : ACTION_IMAGE_MODEL.extract_dna_apply;
+    await maybeOverrideEngineImageModel(desiredModel || pickGeminiFastImageModel());
+    state.expectingArtifacts = true;
+    state.lastAction = `${actionLabel} Apply`;
+    setStatus(`Engine: ${actionLabel.toLowerCase()} apply…`);
+    showToast(`${actionLabel}: applying to ${target.label || basename(target.path)}…`, "info", 2200);
+
+    const prompt = buildEffectTokenEditPrompt(token);
+    await invoke("write_pty", { data: `${prompt}\n` });
+  } catch (err) {
+    state.expectingArtifacts = false;
+    state.engineImageModelRestore = null;
+    clearPendingReplace();
+    setImageFxActive(false);
+    updatePortraitIdle();
+    throw err;
+  }
+}
+
+async function runExtractDnaFromSelection({ fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
+  const selected = getSelectedImages();
+  if (!selected.length) {
+    showToast("Extract DNA needs at least one selected image.", "tip", 2400);
+    return;
+  }
+  const sources = selected.filter((item) => item?.path);
+  if (!sources.length) {
+    showToast("Extract DNA failed: missing image paths.", "error", 2600);
+    return;
+  }
+  if (!fromQueue && (isEngineBusy() || isMultiActionRunning() || state.actionQueueActive || state.actionQueue.length)) {
+    const sig = sources.map((item) => String(item.id || "")).join(",");
+    enqueueAction({
+      label: "Extract DNA",
+      key: `extract_dna:${sig}`,
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runExtractDnaFromSelection({ fromQueue: true }),
+    });
+    return;
+  }
+
+  bumpInteraction();
+  if (!state.runDir) await ensureRun();
+  const okEngine = await ensureEngineSpawned({ reason: "extract dna" });
+  if (!okEngine) return;
+  state.pendingExtractDna = {
+    sourceIds: sources.map((item) => String(item.id || "")).filter(Boolean),
+    sourcePaths: sources.map((item) => String(item.path || "")).filter(Boolean),
+    startedAt: Date.now(),
+  };
+  state.lastAction = "Extract DNA";
+  setStatus("Director: extracting DNA…");
+  portraitWorking("Extract DNA", { providerOverride: "openai", clearDirector: false });
+  showToast("Extracting DNA from selected image(s)…", "info", 2200);
+  renderQuickActions();
+  requestRender();
+
+  const args = sources.map((item) => quoteForPtyArg(item.path)).join(" ");
+  try {
+    await invoke("write_pty", { data: `/extract_dna ${args}\n` });
+    bumpSessionApiCalls();
+  } catch (err) {
+    console.error(err);
+    state.pendingExtractDna = null;
+    setStatus(`Director: extract dna failed (${err?.message || err})`, true);
+    showToast("Extract DNA failed to start.", "error", 3200);
+    updatePortraitIdle();
+    renderQuickActions();
+  }
+}
+
+async function runSoulLeechFromSelection({ fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
+  const selected = getSelectedImages();
+  if (!selected.length) {
+    showToast("Soul Leech needs at least one selected image.", "tip", 2400);
+    return;
+  }
+  const sources = selected.filter((item) => item?.path);
+  if (!sources.length) {
+    showToast("Soul Leech failed: missing image paths.", "error", 2600);
+    return;
+  }
+  if (!fromQueue && (isEngineBusy() || isMultiActionRunning() || state.actionQueueActive || state.actionQueue.length)) {
+    const sig = sources.map((item) => String(item.id || "")).join(",");
+    enqueueAction({
+      label: "Soul Leech",
+      key: `soul_leech:${sig}`,
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runSoulLeechFromSelection({ fromQueue: true }),
+    });
+    return;
+  }
+
+  bumpInteraction();
+  if (!state.runDir) await ensureRun();
+  const okEngine = await ensureEngineSpawned({ reason: "soul leech" });
+  if (!okEngine) return;
+  state.pendingSoulLeech = {
+    sourceIds: sources.map((item) => String(item.id || "")).filter(Boolean),
+    sourcePaths: sources.map((item) => String(item.path || "")).filter(Boolean),
+    startedAt: Date.now(),
+  };
+  state.lastAction = "Soul Leech";
+  setStatus("Director: extracting soul…");
+  portraitWorking("Soul Leech", { providerOverride: "openai", clearDirector: false });
+  showToast("Extracting soul from selected image(s)…", "info", 2200);
+  renderQuickActions();
+  requestRender();
+
+  const args = sources.map((item) => quoteForPtyArg(item.path)).join(" ");
+  try {
+    await invoke("write_pty", { data: `/soul_leech ${args}\n` });
+    bumpSessionApiCalls();
+  } catch (err) {
+    console.error(err);
+    state.pendingSoulLeech = null;
+    setStatus(`Director: soul leech failed (${err?.message || err})`, true);
+    showToast("Soul Leech failed to start.", "error", 3200);
+    updatePortraitIdle();
+    renderQuickActions();
+  }
+}
+
+function resolvePendingEffectExtraction(kind, imagePath) {
+  const path = String(imagePath || "").trim();
+  if (!path) return;
+  const isSoul = String(kind || "") === "soul";
+  const pending = isSoul ? state.pendingSoulLeech : state.pendingExtractDna;
+  if (!pending) return;
+  const rawPaths = Array.isArray(pending.sourcePaths) ? pending.sourcePaths : [];
+  pending.sourcePaths = rawPaths.filter((p) => String(p || "").trim() !== path);
+  if (!pending.sourcePaths.length) {
+    if (isSoul) state.pendingSoulLeech = null;
+    else state.pendingExtractDna = null;
+    setStatus(isSoul ? "Director: soul extraction ready" : "Director: dna extraction ready");
+    updatePortraitIdle();
+    renderQuickActions();
+    processActionQueue().catch(() => {});
+  }
+}
+
 async function selectCanvasImage(imageId, { toggle = false } = {}) {
   const id = String(imageId || "").trim();
   if (!id) return;
@@ -8589,6 +8894,8 @@ async function runAutoCanvasDiagnose(signature) {
     state.pendingBlend ||
     state.pendingSwapDna ||
     state.pendingBridge ||
+    state.pendingExtractDna ||
+    state.pendingSoulLeech ||
     state.pendingArgue ||
     state.pendingExtractRule ||
     state.pendingOddOneOut ||
@@ -9855,6 +10162,8 @@ function isMultiActionRunning() {
     state.pendingBlend ||
       state.pendingSwapDna ||
       state.pendingBridge ||
+      state.pendingExtractDna ||
+      state.pendingSoulLeech ||
       state.pendingArgue ||
       state.pendingExtractRule ||
       state.pendingOddOneOut ||
@@ -9875,6 +10184,8 @@ function isEngineBusy() {
       state.pendingBlend ||
       state.pendingSwapDna ||
       state.pendingBridge ||
+      state.pendingExtractDna ||
+      state.pendingSoulLeech ||
       state.pendingArgue ||
       state.pendingExtractRule ||
       state.pendingOddOneOut ||
@@ -10242,6 +10553,8 @@ function _runningKeyFromPendingReplace(pending) {
   const label = pending?.label ? String(pending.label) : "";
   const stable = label.toLowerCase();
   if (stable.includes("remove people")) return "remove_people";
+  if (stable.includes("extract dna")) return "extract_dna";
+  if (stable.includes("soul leech")) return "soul_leech";
   if (stable.includes("surprise")) return "surprise";
   if (stable.includes("studio white") || stable.includes("soft sweep") || stable.includes("background")) return "bg";
   if (stable.includes("annotate")) return "annotate";
@@ -10253,6 +10566,8 @@ function currentRunningActionKey() {
   if (state.pendingBlend) return "combine";
   if (state.pendingBridge) return "bridge";
   if (state.pendingSwapDna) return "swap_dna";
+  if (state.pendingExtractDna) return "extract_dna";
+  if (state.pendingSoulLeech) return "soul_leech";
   if (state.pendingArgue) return "argue";
   if (state.pendingExtractRule) return "extract_rule";
   if (state.pendingOddOneOut) return "odd_one_out";
@@ -10272,6 +10587,8 @@ function actionGridTitleFor(key) {
   if (k === "lasso") return "Lasso selection";
   if (k === "designate") return "Designate subject/reference/object";
   if (k === "bg") return "Background replace (Shift: Sweep)";
+  if (k === "extract_dna") return "Extract DNA: collapse selected image(s) into transferable material/color helix";
+  if (k === "soul_leech") return "Soul Leech: collapse selected image(s) into transferable emotional mask";
   if (k === "remove_people") return "Remove people from the active image";
   if (k === "variations") return "Zero-prompt variations";
   if (k === "diagnose") return "Creative-director diagnosis";
@@ -10322,6 +10639,22 @@ function actionGridIconFor(key) {
       <path d="M6 7h10v4H6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
       <path d="M16 9h2a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
       <path d="M8 11v7h4v-4h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>`;
+  }
+  if (k === "extract_dna") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 4c4 0 6 3 10 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M7 10c4 0 6 3 10 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M7 16c4 0 6 3 10 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M7 4v15M17 7v12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </svg>`;
+  }
+  if (k === "soul_leech") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 8c0-3 2.7-5 6-5s6 2 6 5v5c0 3.7-2.8 6-6 6s-6-2.3-6-6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+      <path d="M9 10h.01M15 10h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M9.5 14c1.8 1.7 3.2 1.7 5 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M12 3v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
     </svg>`;
   }
   if (k === "remove_people") {
@@ -10488,6 +10821,14 @@ function renderActionGrid() {
       if (key === "bg") {
         const style = ev?.shiftKey ? "sweep" : "white";
         applyBackground(style).catch((e) => console.error(e));
+        return;
+      }
+      if (key === "extract_dna") {
+        runExtractDnaFromSelection().catch((e) => console.error(e));
+        return;
+      }
+      if (key === "soul_leech") {
+        runSoulLeechFromSelection().catch((e) => console.error(e));
         return;
       }
       if (key === "remove_people") {
@@ -10950,6 +11291,14 @@ async function removeImageFromCanvas(imageId) {
   // Drop per-image marks.
   state.designationsByImageId.delete(id);
   state.circlesByImageId.delete(id);
+  clearEffectTokenForImageId(id);
+  if (state.effectTokenDrag) {
+    const dragTokenId = String(state.effectTokenDrag.tokenId || "");
+    const dragSourceId = String(state.effectTokenDrag.sourceImageId || "");
+    if (dragSourceId === id || !state.effectTokensById.has(dragTokenId)) {
+      state.effectTokenDrag = null;
+    }
+  }
 
   // Remove from collections.
   state.imagesById.delete(id);
@@ -10992,9 +11341,12 @@ async function removeImageFromCanvas(imageId) {
     state.pendingBlend = null;
     state.pendingSwapDna = null;
     state.pendingBridge = null;
+    state.pendingExtractDna = null;
+    state.pendingSoulLeech = null;
     state.pendingArgue = null;
     state.pendingRecast = null;
     state.pendingDiagnose = null;
+    clearAllEffectTokens();
     clearSelection();
     if (state.intent && !state.intent.locked) {
       state.intent.lockedAt = 0;
@@ -11081,6 +11433,7 @@ async function replaceImageInPlace(
 ) {
   const item = state.imagesById.get(targetId);
   if (!item || !path) return false;
+  clearEffectTokenForImageId(targetId);
   const oldPath = item.path;
   if (oldPath && oldPath !== path) {
     invalidateImageCache(oldPath);
@@ -12696,6 +13049,8 @@ async function createRun() {
   state.pendingBlend = null;
   state.pendingSwapDna = null;
   state.pendingBridge = null;
+  state.pendingExtractDna = null;
+  state.pendingSoulLeech = null;
   state.pendingArgue = null;
   state.pendingExtractRule = null;
   state.pendingOddOneOut = null;
@@ -12707,6 +13062,7 @@ async function createRun() {
   state.tripletRuleAnnotations.clear();
   state.tripletOddOneOutId = null;
   clearImageCache();
+  clearAllEffectTokens();
   state.selection = null;
   state.lassoDraft = [];
   state.annotateDraft = null;
@@ -12804,6 +13160,8 @@ async function openExistingRun() {
   state.pendingBlend = null;
   state.pendingSwapDna = null;
   state.pendingBridge = null;
+  state.pendingExtractDna = null;
+  state.pendingSoulLeech = null;
   state.pendingArgue = null;
   state.pendingExtractRule = null;
   state.pendingOddOneOut = null;
@@ -12816,6 +13174,7 @@ async function openExistingRun() {
   state.tripletOddOneOutId = null;
   renderFilmstrip();
   clearImageCache();
+  clearAllEffectTokens();
   state.selection = null;
   state.lassoDraft = [];
   state.annotateDraft = null;
@@ -13109,10 +13468,18 @@ async function handleEvent(event) {
       });
       return;
     }
-    idle.pendingPromptCompile = false;
-    idle.pendingPromptCompilePath = null;
-    clearTimeout(idle.pendingPromptCompileTimeout);
-    idle.pendingPromptCompileTimeout = null;
+    // Ignore late compile results after local fallback dispatch (prevents duplicate generation requests).
+    if (!idle.pendingPromptCompile || idle.pendingGeneration || Boolean(idle.pendingDispatchToken)) {
+      appendMotherTraceLog({
+        kind: "prompt_compiled_ignored",
+        traceId: idle.telemetry?.traceId || null,
+        actionVersion,
+        pending_prompt_compile: Boolean(idle.pendingPromptCompile),
+        pending_generation: Boolean(idle.pendingGeneration),
+        pending_dispatch_token: Number(idle.pendingDispatchToken) || 0,
+      }).catch(() => {});
+      return;
+    }
     await motherV2DispatchCompiledPrompt(event.compiled || {}).catch((err) => {
       motherIdleHandleGenerationFailed(err?.message || "Mother prompt compile dispatch failed.");
     });
@@ -13152,6 +13519,8 @@ async function handleEvent(event) {
       !state.pendingBlend &&
       !state.pendingSwapDna &&
       !state.pendingBridge &&
+      !state.pendingExtractDna &&
+      !state.pendingSoulLeech &&
       !state.pendingArgue &&
       !state.pendingExtractRule &&
       !state.pendingOddOneOut &&
@@ -13185,6 +13554,8 @@ async function handleEvent(event) {
       !state.pendingBlend &&
       !state.pendingSwapDna &&
       !state.pendingBridge &&
+      !state.pendingExtractDna &&
+      !state.pendingSoulLeech &&
       !state.pendingArgue &&
       !state.pendingExtractRule &&
       !state.pendingOddOneOut &&
@@ -13256,6 +13627,8 @@ async function handleEvent(event) {
       !state.pendingBlend &&
       !state.pendingSwapDna &&
       !state.pendingBridge &&
+      !state.pendingExtractDna &&
+      !state.pendingSoulLeech &&
       !state.pendingArgue &&
       !state.pendingExtractRule &&
       !state.pendingOddOneOut &&
@@ -13570,6 +13943,8 @@ async function handleEvent(event) {
       Boolean(state.pendingBlend) ||
       Boolean(state.pendingSwapDna) ||
       Boolean(state.pendingBridge) ||
+      Boolean(state.pendingExtractDna) ||
+      Boolean(state.pendingSoulLeech) ||
       Boolean(state.pendingTriforce) ||
       Boolean(state.pendingRecast) ||
       Boolean(state.pendingDiagnose) ||
@@ -13617,6 +13992,8 @@ async function handleEvent(event) {
     state.pendingBlend = null;
     state.pendingSwapDna = null;
     state.pendingBridge = null;
+    state.pendingExtractDna = null;
+    state.pendingSoulLeech = null;
     state.pendingTriforce = null;
     state.pendingRecast = null;
     state.pendingDiagnose = null;
@@ -14125,6 +14502,64 @@ async function handleEvent(event) {
     updatePortraitIdle();
     renderQuickActions();
     processActionQueue().catch(() => {});
+  } else if (event.type === "image_dna_extracted") {
+    const path = typeof event.image_path === "string" ? event.image_path : "";
+    const item = path ? state.images.find((it) => it?.path === path) || null : null;
+    if (item?.id) {
+      createOrUpdateEffectToken({
+        type: "extract_dna",
+        imageId: item.id,
+        imagePath: path,
+        palette: Array.isArray(event.palette) ? event.palette : [],
+        colors: Array.isArray(event.colors) ? event.colors : [],
+        materials: Array.isArray(event.materials) ? event.materials : [],
+        summary: typeof event.summary === "string" ? event.summary : "",
+        source: event.source || null,
+        model: event.model || null,
+      });
+      showToast(`DNA extracted: ${item.label || basename(item.path)}`, "tip", 1800);
+      requestRender();
+    }
+    resolvePendingEffectExtraction("dna", path);
+  } else if (event.type === "image_dna_extracted_failed") {
+    const path = typeof event.image_path === "string" ? event.image_path : "";
+    const msg = event.error ? `Extract DNA failed: ${event.error}` : "Extract DNA failed.";
+    showToast(msg, "error", 2600);
+    if (path) resolvePendingEffectExtraction("dna", path);
+    else {
+      state.pendingExtractDna = null;
+      updatePortraitIdle();
+      renderQuickActions();
+      processActionQueue().catch(() => {});
+    }
+  } else if (event.type === "image_soul_extracted") {
+    const path = typeof event.image_path === "string" ? event.image_path : "";
+    const item = path ? state.images.find((it) => it?.path === path) || null : null;
+    if (item?.id) {
+      createOrUpdateEffectToken({
+        type: "soul_leech",
+        imageId: item.id,
+        imagePath: path,
+        emotion: typeof event.emotion === "string" ? event.emotion : "",
+        summary: typeof event.summary === "string" ? event.summary : "",
+        source: event.source || null,
+        model: event.model || null,
+      });
+      showToast(`Soul extracted: ${item.label || basename(item.path)}`, "tip", 1800);
+      requestRender();
+    }
+    resolvePendingEffectExtraction("soul", path);
+  } else if (event.type === "image_soul_extracted_failed") {
+    const path = typeof event.image_path === "string" ? event.image_path : "";
+    const msg = event.error ? `Soul Leech failed: ${event.error}` : "Soul Leech failed.";
+    showToast(msg, "error", 2600);
+    if (path) resolvePendingEffectExtraction("soul", path);
+    else {
+      state.pendingSoulLeech = null;
+      updatePortraitIdle();
+      renderQuickActions();
+      processActionQueue().catch(() => {});
+    }
   } else if (event.type === "triplet_rule") {
     state.pendingExtractRule = null;
     const paths = Array.isArray(event.image_paths) ? event.image_paths : [];
@@ -14290,6 +14725,183 @@ async function handleEvent(event) {
   }
 }
 
+function drawEffectTokenTile(wctx, { token, x, y, w, h, dpr = 1 } = {}) {
+  if (!token) return;
+  const inset = Math.max(3, Math.round(5 * dpr));
+  const ix = x + inset;
+  const iy = y + inset;
+  const iw = Math.max(1, w - inset * 2);
+  const ih = Math.max(1, h - inset * 2);
+  const radius = Math.max(6, Math.round(12 * dpr));
+  const type = String(token.type || "").trim();
+
+  wctx.save();
+  const bg = wctx.createLinearGradient(ix, iy, ix, iy + ih);
+  bg.addColorStop(0, "rgba(10, 13, 20, 0.94)");
+  bg.addColorStop(1, "rgba(5, 7, 12, 0.98)");
+  wctx.fillStyle = bg;
+  wctx.beginPath();
+  wctx.roundRect(Math.round(ix), Math.round(iy), Math.round(iw), Math.round(ih), radius);
+  wctx.fill();
+
+  wctx.strokeStyle = type === "soul_leech" ? "rgba(255, 116, 172, 0.72)" : "rgba(94, 236, 255, 0.72)";
+  wctx.lineWidth = Math.max(1, Math.round(1.6 * dpr));
+  wctx.stroke();
+
+  if (type === "extract_dna") {
+    const palette = Array.isArray(token.palette) && token.palette.length
+      ? token.palette
+      : ["#6EF8FF", "#8FB9FF", "#B8FFB0", "#FFD36E"];
+    const cx = ix + iw * 0.5;
+    const top = iy + ih * 0.16;
+    const bot = iy + ih * 0.84;
+    const amp = Math.max(5, iw * 0.17);
+    const steps = 18;
+    wctx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+    for (let i = 0; i <= steps; i += 1) {
+      const t = i / Math.max(1, steps);
+      const yy = top + (bot - top) * t;
+      const phase = t * Math.PI * 4.0;
+      const dx = Math.sin(phase) * amp;
+      const cA = palette[i % palette.length];
+      const cB = palette[(i + 1) % palette.length];
+      wctx.fillStyle = cA;
+      wctx.beginPath();
+      wctx.arc(cx - dx, yy, Math.max(1.6, 2.4 * dpr), 0, Math.PI * 2);
+      wctx.fill();
+      wctx.fillStyle = cB;
+      wctx.beginPath();
+      wctx.arc(cx + dx, yy, Math.max(1.6, 2.4 * dpr), 0, Math.PI * 2);
+      wctx.fill();
+      if (i < steps) {
+        const t2 = (i + 1) / Math.max(1, steps);
+        const yy2 = top + (bot - top) * t2;
+        const dx2 = Math.sin(t2 * Math.PI * 4.0) * amp;
+        wctx.strokeStyle = "rgba(210, 235, 255, 0.42)";
+        wctx.beginPath();
+        wctx.moveTo(cx - dx, yy);
+        wctx.lineTo(cx + dx2, yy2);
+        wctx.stroke();
+      }
+    }
+    wctx.fillStyle = "rgba(224, 239, 255, 0.9)";
+    wctx.font = `${Math.max(10, Math.round(11 * dpr))}px IBM Plex Mono`;
+    wctx.textAlign = "center";
+    wctx.textBaseline = "bottom";
+    wctx.fillText("DNA", Math.round(ix + iw * 0.5), Math.round(iy + ih - Math.max(8, 10 * dpr)));
+  } else {
+    const cx = ix + iw * 0.5;
+    const cy = iy + ih * 0.48;
+    const mw = iw * 0.44;
+    const mh = ih * 0.52;
+    wctx.save();
+    wctx.translate(cx, cy);
+    wctx.beginPath();
+    wctx.moveTo(-mw * 0.62, -mh * 0.4);
+    wctx.quadraticCurveTo(0, -mh * 0.86, mw * 0.62, -mh * 0.4);
+    wctx.lineTo(mw * 0.48, mh * 0.42);
+    wctx.quadraticCurveTo(0, mh * 0.68, -mw * 0.48, mh * 0.42);
+    wctx.closePath();
+    const mg = wctx.createLinearGradient(0, -mh * 0.8, 0, mh * 0.8);
+    mg.addColorStop(0, "rgba(255, 201, 228, 0.94)");
+    mg.addColorStop(1, "rgba(255, 133, 186, 0.78)");
+    wctx.fillStyle = mg;
+    wctx.fill();
+    wctx.strokeStyle = "rgba(255, 231, 242, 0.86)";
+    wctx.lineWidth = Math.max(1, Math.round(1.3 * dpr));
+    wctx.stroke();
+
+    wctx.fillStyle = "rgba(23, 14, 20, 0.92)";
+    wctx.beginPath();
+    wctx.ellipse(-mw * 0.2, -mh * 0.07, mw * 0.12, mh * 0.09, 0, 0, Math.PI * 2);
+    wctx.ellipse(mw * 0.2, -mh * 0.07, mw * 0.12, mh * 0.09, 0, 0, Math.PI * 2);
+    wctx.fill();
+    wctx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+    wctx.strokeStyle = "rgba(23, 14, 20, 0.82)";
+    wctx.beginPath();
+    wctx.arc(0, mh * 0.08, mw * 0.19, 0.08 * Math.PI, 0.92 * Math.PI, false);
+    wctx.stroke();
+    wctx.restore();
+
+    const emotion = String(token.emotion || "").trim();
+    if (emotion) {
+      wctx.fillStyle = "rgba(255, 223, 239, 0.92)";
+      wctx.font = `${Math.max(9, Math.round(10 * dpr))}px IBM Plex Mono`;
+      wctx.textAlign = "center";
+      wctx.textBaseline = "bottom";
+      wctx.fillText(clampText(emotion, 20), Math.round(ix + iw * 0.5), Math.round(iy + ih - Math.max(8, 10 * dpr)));
+    }
+  }
+  wctx.restore();
+}
+
+function hitTestEffectToken(ptCanvas) {
+  if (!ptCanvas || state.canvasMode !== "multi") return null;
+  const ms = Number(state.multiView?.scale) || 1;
+  const mx = Number(state.multiView?.offsetX) || 0;
+  const my = Number(state.multiView?.offsetY) || 0;
+  const x = (Number(ptCanvas.x) - mx) / Math.max(ms, 0.0001);
+  const y = (Number(ptCanvas.y) - my) / Math.max(ms, 0.0001);
+  const order = Array.isArray(state.freeformZOrder) && state.freeformZOrder.length
+    ? state.freeformZOrder
+    : Array.from(state.multiRects.keys());
+  for (let i = order.length - 1; i >= 0; i -= 1) {
+    const imageId = String(order[i] || "").trim();
+    if (!imageId) continue;
+    const token = effectTokenForImageId(imageId);
+    if (!token) continue;
+    const rect = state.multiRects.get(imageId) || null;
+    if (!rect) continue;
+    if (x < rect.x || x > rect.x + rect.w) continue;
+    if (y < rect.y || y > rect.y + rect.h) continue;
+    return { tokenId: token.id, imageId, token, rect };
+  }
+  return null;
+}
+
+function renderEffectTokenDragOverlay(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
+  const drag = state.effectTokenDrag;
+  if (!drag) return;
+  const dpr = getDpr();
+  const targetId = String(drag.targetImageId || "").trim();
+  if (targetId) {
+    const rect = state.multiRects.get(targetId) || null;
+    if (rect) {
+      const x = rect.x * ms + mox;
+      const y = rect.y * ms + moy;
+      const w = rect.w * ms;
+      const h = rect.h * ms;
+      octx.save();
+      octx.strokeStyle = "rgba(82, 255, 148, 0.92)";
+      octx.lineWidth = Math.max(1, Math.round(2.2 * dpr));
+      octx.setLineDash([Math.round(8 * dpr), Math.round(6 * dpr)]);
+      octx.shadowColor = "rgba(82, 255, 148, 0.18)";
+      octx.shadowBlur = Math.round(18 * dpr);
+      octx.strokeRect(Math.round(x - 3), Math.round(y - 3), Math.round(w + 6), Math.round(h + 6));
+      octx.restore();
+    }
+  }
+
+  const token = state.effectTokensById.get(String(drag.tokenId || "").trim()) || null;
+  if (!token) return;
+  const cx = Number(drag.x) || 0;
+  const cy = Number(drag.y) || 0;
+  const size = Math.max(24, Math.round(36 * dpr));
+  octx.save();
+  octx.fillStyle = token.type === "soul_leech" ? "rgba(255, 133, 186, 0.9)" : "rgba(94, 236, 255, 0.9)";
+  octx.shadowColor = "rgba(0, 0, 0, 0.42)";
+  octx.shadowBlur = Math.round(10 * dpr);
+  octx.beginPath();
+  octx.roundRect(Math.round(cx - size * 0.5), Math.round(cy - size * 0.5), size, size, Math.round(8 * dpr));
+  octx.fill();
+  octx.fillStyle = "rgba(8, 10, 14, 0.92)";
+  octx.font = `${Math.max(9, Math.round(10 * dpr))}px IBM Plex Mono`;
+  octx.textAlign = "center";
+  octx.textBaseline = "middle";
+  octx.fillText(token.type === "soul_leech" ? "SOUL" : "DNA", Math.round(cx), Math.round(cy + 1 * dpr));
+  octx.restore();
+}
+
 function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   const items = state.images || [];
   for (const item of items) {
@@ -14318,7 +14930,10 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     const y = rect.y * ms + moy;
     const w = rect.w * ms;
     const h = rect.h * ms;
-    if (item?.img) {
+    const effectToken = imageId ? effectTokenForImageId(imageId) : null;
+    if (effectToken) {
+      drawEffectTokenTile(wctx, { token: effectToken, x, y, w, h, dpr });
+    } else if (item?.img) {
       wctx.drawImage(item.img, x, y, w, h);
     } else {
       const g = wctx.createLinearGradient(x, y, x, y + h);
@@ -14486,6 +15101,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   }
 
   renderMotherRoleGlyphs(octx, { ms, mox, moy });
+  renderEffectTokenDragOverlay(octx, { ms, mox, moy });
 
   // Triplet insights overlays (Extract the Rule / Odd One Out).
   const oddId = state.tripletOddOneOutId;
@@ -16024,8 +16640,7 @@ function installCanvasHandlers() {
   });
 
   els.overlayCanvas.addEventListener("pointerdown", (event) => {
-	    bumpInteraction();
-		    closeMotherWheelMenu({ immediate: false });
+			    closeMotherWheelMenu({ immediate: false });
 		    hideDesignateMenu();
 		    if (state.canvasMode === "multi") {
 		      const canvas = els.workCanvas;
@@ -16037,15 +16652,9 @@ function installCanvasHandlers() {
 			      const pCss = canvasCssPointFromEvent(event);
           const intentActive = intentModeActive();
           const motherRoleHit = motherV2InInteractivePhase() && motherV2IsAdvancedVisible() ? hitTestMotherRoleGlyph(p) : null;
-          const ambientHit = intentAmbientActive() ? hitTestAmbientIntentNudge(p) : null;
-
-          if (ambientHit) {
-            activateAmbientIntentNudge(ambientHit);
-            requestRender();
-            return;
-          }
 
           if (motherRoleHit && event.button === 0) {
+            bumpInteraction({ semantic: false });
             els.overlayCanvas.setPointerCapture(event.pointerId);
             state.pointer.active = true;
             state.pointer.kind = "mother_role_drag";
@@ -16066,6 +16675,39 @@ function installCanvasHandlers() {
                 targetImageId: String(motherRoleHit.imageId || ""),
               };
             }
+            requestRender();
+            return;
+          }
+          const effectTokenHit = hitTestEffectToken(p);
+          if (effectTokenHit && event.button === 0) {
+            bumpInteraction({ semantic: false });
+            els.overlayCanvas.setPointerCapture(event.pointerId);
+            state.pointer.active = true;
+            state.pointer.kind = "effect_token_drag";
+            state.pointer.imageId = String(effectTokenHit.imageId || "");
+            state.pointer.startX = p.x;
+            state.pointer.startY = p.y;
+            state.pointer.lastX = p.x;
+            state.pointer.lastY = p.y;
+            state.pointer.startCssX = pCss.x;
+            state.pointer.startCssY = pCss.y;
+            state.pointer.moved = false;
+            state.effectTokenDrag = {
+              tokenId: String(effectTokenHit.tokenId || ""),
+              sourceImageId: String(effectTokenHit.imageId || ""),
+              targetImageId: "",
+              moved: false,
+              x: p.x,
+              y: p.y,
+            };
+            requestRender();
+            return;
+          }
+          bumpInteraction();
+          const ambientHit = intentAmbientActive() ? hitTestAmbientIntentNudge(p) : null;
+
+          if (ambientHit) {
+            activateAmbientIntentNudge(ambientHit);
             requestRender();
             return;
           }
@@ -16281,6 +16923,7 @@ function installCanvasHandlers() {
 	      }
 	      return;
 		    }
+        bumpInteraction();
 		    const img = getActiveImage();
 		    if (!img) return;
         const p = canvasPointFromEvent(event);
@@ -16366,10 +17009,15 @@ function installCanvasHandlers() {
       }
     }
 
-	    if (!state.pointer.active) {
+    if (!state.pointer.active) {
       const roleHit = motherV2InInteractivePhase() && motherV2IsAdvancedVisible() ? hitTestMotherRoleGlyph(p) : null;
       if (roleHit) {
         setOverlayCursor("pointer");
+        return;
+      }
+      const effectTokenHit = hitTestEffectToken(p);
+      if (effectTokenHit) {
+        setOverlayCursor("grab");
         return;
       }
       const ambientHit = intentAmbientActive() ? hitTestAmbientIntentNudge(p) : null;
@@ -16432,30 +17080,50 @@ function installCanvasHandlers() {
       }
     } else if (state.pointer.kind === "freeform_move") {
       setOverlayCursor("grabbing");
+    } else if (state.pointer.kind === "effect_token_drag") {
+      setOverlayCursor("grabbing");
     } else if (state.pointer.kind === "freeform_import" || state.pointer.kind === "freeform_wheel") {
       setOverlayCursor(INTENT_IMPORT_CURSOR);
     }
 
-    bumpInteraction();
-    const dx = p.x - state.pointer.startX;
+	    const dx = p.x - state.pointer.startX;
 		    const dy = p.y - state.pointer.startY;
 		    state.pointer.lastX = p.x;
 		    state.pointer.lastY = p.y;
 
     if (state.pointer.kind === "mother_role_drag") {
-      const drag = state.motherIdle?.roleGlyphDrag || null;
-      const dist = Math.hypot(dx, dy);
-      if (dist > 4) state.pointer.moved = true;
+      bumpInteraction({ semantic: false });
+	      const drag = state.motherIdle?.roleGlyphDrag || null;
+	      const dist = Math.hypot(dx, dy);
+	      if (dist > 4) state.pointer.moved = true;
       if (drag) {
         drag.moved = Boolean(state.pointer.moved);
         const hit = hitTestMulti(p);
         drag.targetImageId = hit ? String(hit) : "";
       }
+	      requestRender();
+	      return;
+	    }
+    if (state.pointer.kind === "effect_token_drag") {
+      bumpInteraction({ semantic: false });
+      const drag = state.effectTokenDrag;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 4) state.pointer.moved = true;
+      if (drag) {
+        drag.moved = Boolean(state.pointer.moved);
+        drag.x = p.x;
+        drag.y = p.y;
+        const dropHit = hitTestMulti(p);
+        const sourceId = String(drag.sourceImageId || "");
+        drag.targetImageId = dropHit && String(dropHit) !== sourceId ? String(dropHit) : "";
+      }
       requestRender();
       return;
     }
 
-    // Freeform interactions (multi canvas + pan tool).
+    bumpInteraction();
+
+	    // Freeform interactions (multi canvas + pan tool).
     if (state.pointer.kind === "freeform_import" || state.pointer.kind === "freeform_wheel") {
       const dist = Math.hypot((Number(pCss.x) || 0) - state.pointer.startCssX, (Number(pCss.y) || 0) - state.pointer.startCssY);
       if (dist > 6) state.pointer.moved = true;
@@ -16580,7 +17248,7 @@ function installCanvasHandlers() {
         const roleKey = state.pointer.role;
 		    const startRectCss = state.pointer.startRectCss;
 		    const corner = state.pointer.corner;
-		    const importPt = state.pointer.importPointCss;
+        const importPt = state.pointer.importPointCss;
 		    const moved = Boolean(state.pointer.moved);
 		    state.pointer.active = false;
 		    state.pointer.kind = null;
@@ -16592,7 +17260,9 @@ function installCanvasHandlers() {
 		    state.pointer.moved = false;
         setOverlayCursor(INTENT_IMPORT_CURSOR);
         // Arm Mother idle timers against the settled interaction state (pointer no longer active).
-		    bumpInteraction();
+        const motherRoleDrag = kind === "mother_role_drag";
+        const effectTokenDrag = kind === "effect_token_drag";
+        if (!motherRoleDrag && !effectTokenDrag) bumpInteraction();
 
 		    if (moved && (kind === "freeform_move" || kind === "freeform_resize") && imageId) {
 		      const start = startRectCss && typeof startRectCss === "object" ? startRectCss : null;
@@ -16639,6 +17309,7 @@ function installCanvasHandlers() {
 			      }
 			    }
           if (kind === "mother_role_drag") {
+            bumpInteraction({ semantic: false });
             const idle = state.motherIdle;
             const role = String(roleKey || idle?.roleGlyphDrag?.role || "").trim();
             const fromImageId = String(imageId || idle?.roleGlyphDrag?.imageId || "").trim();
@@ -16669,6 +17340,32 @@ function installCanvasHandlers() {
             if (idle) idle.roleGlyphDrag = null;
             renderMotherReadout();
             requestRender();
+          }
+          if (kind === "effect_token_drag") {
+            bumpInteraction({ semantic: false });
+            const drag = state.effectTokenDrag || null;
+            const tokenId = String(drag?.tokenId || "").trim();
+            const sourceImageId = String(drag?.sourceImageId || "").trim();
+            const dropHit = hitTestMulti(canvasPointFromEvent(event));
+            const toImageId =
+              dropHit && String(dropHit || "").trim() !== sourceImageId ? String(dropHit || "").trim() : "";
+            state.effectTokenDrag = null;
+            if (!tokenId || !sourceImageId) {
+              requestRender();
+            } else if (!moved) {
+              clearEffectTokenForImageId(sourceImageId);
+              showToast("Effect dismissed. Source image restored.", "tip", 1800);
+              requestRender();
+            } else if (toImageId) {
+              applyEffectTokenToImage(tokenId, toImageId).catch((err) => {
+                console.error(err);
+                showToast(err?.message || "Effect apply failed.", "error", 2600);
+              });
+              requestRender();
+            } else {
+              showToast("Drop the token onto another image to apply.", "tip", 1800);
+              requestRender();
+            }
           }
 			    if (state.tool === "annotate") {
 			      const img = getActiveImage();
@@ -17644,6 +18341,8 @@ function installUi() {
           key === "r" ||
           key === "m" ||
           key === "f" ||
+          key === "x" ||
+          key === "j" ||
           /^[1-9]$/.test(rawKey);
         if (motherBlockedShortcut) {
           showToast("Mother is running. Click Stop to regain control.", "tip", 2200);
@@ -17735,6 +18434,14 @@ function installUi() {
       setTool("lasso");
       return;
     }
+    if (key === "x") {
+      runExtractDnaFromSelection().catch((e) => console.error(e));
+      return;
+    }
+    if (key === "j") {
+      runSoulLeechFromSelection().catch((e) => console.error(e));
+      return;
+    }
     if (key === "v") {
       setTool("pan");
       return;
@@ -17749,7 +18456,11 @@ function installUi() {
       return;
     }
     if (key === "r") {
-      runVariations().catch((e) => console.error(e));
+      if (event.shiftKey) {
+        runRecast().catch((e) => console.error(e));
+      } else {
+        runVariations().catch((e) => console.error(e));
+      }
       return;
     }
     if (key === "m") {
@@ -17852,6 +18563,8 @@ async function boot() {
     state.pendingBlend = null;
     state.pendingSwapDna = null;
     state.pendingBridge = null;
+    state.pendingExtractDna = null;
+    state.pendingSoulLeech = null;
     state.pendingRecast = null;
     state.pendingDiagnose = null;
     state.pendingArgue = null;
