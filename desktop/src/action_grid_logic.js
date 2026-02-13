@@ -20,10 +20,10 @@ export function computeActionGridSlots({
 
   if (n === 1) {
     const abilities = [
-      { key: "bg", label: "BG", kind: "ability", hotkey: "5" },
-      { key: "remove_people", label: "Clean", kind: "ability", hotkey: "6" },
-      { key: "variations", label: "Vars", kind: "ability", hotkey: "7" },
-      { key: "recast", label: "Recast", kind: "ability", hotkey: "8" },
+      { key: "extract_dna", label: "DNA", kind: "ability", hotkey: "5" },
+      { key: "soul_leech", label: "Soul", kind: "ability", hotkey: "6" },
+      { key: "bg", label: "BG", kind: "ability", hotkey: "7" },
+      { key: "variations", label: "Vars", kind: "ability", hotkey: "8" },
       alwaysOnVisionEnabled
         ? { key: "crop_square", label: "Square", kind: "ability", hotkey: "9" }
         : { key: "diagnose", label: "DIAG", kind: "ability", hotkey: "9" },
@@ -62,4 +62,3 @@ export function computeActionGridSlots({
   // 4+ selected: only keep the base tools visible.
   return slots;
 }
-

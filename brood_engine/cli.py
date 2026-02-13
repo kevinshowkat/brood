@@ -16,7 +16,14 @@ from .chat.refine import extract_model_directive, detect_edit_model, is_edit_req
 from .cli_progress import progress_once, ProgressTicker, elapsed_line
 from .engine import BroodEngine
 from .realtime.openai_realtime import CanvasContextRealtimeSession, IntentIconsRealtimeSession
-from .recreate.caption import infer_description, infer_diagnosis, infer_argument, infer_canvas_context
+from .recreate.caption import (
+    infer_description,
+    infer_diagnosis,
+    infer_argument,
+    infer_canvas_context,
+    infer_dna_signature,
+    infer_soul_signature,
+)
 from .recreate.triplet import infer_triplet_rule, infer_triplet_odd_one_out
 from .runs.export import export_html
 from .reasoning import (
@@ -667,7 +674,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 "/diagnose /recast /use "
                 "/canvas_context_rt_start /canvas_context_rt_stop /canvas_context_rt "
                 "/intent_rt_start /intent_rt_stop /intent_rt "
-                "/blend /swap_dna /argue /bridge /extract_rule /odd_one_out /triforce /export"
+                "/blend /swap_dna /argue /bridge /extract_dna /soul_leech /extract_rule /odd_one_out /triforce /export"
             )
             continue
         if intent.action == "set_profile":
@@ -1224,6 +1231,98 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 model=inference.model,
             )
             print(inference.text)
+            continue
+        if intent.action == "extract_dna":
+            paths = intent.command_args.get("paths") or []
+            if not isinstance(paths, list) or len(paths) < 1:
+                print("Usage: /extract_dna <image_a> [image_b ...]")
+                continue
+            resolved_paths: list[Path] = []
+            missing = False
+            for raw in paths:
+                path = Path(str(raw))
+                if not path.exists():
+                    print(f"Extract DNA failed: file not found ({path})")
+                    missing = True
+                    break
+                resolved_paths.append(path)
+            if missing:
+                continue
+
+            for path in resolved_paths:
+                inference = None
+                try:
+                    inference = infer_dna_signature(path)
+                except Exception:
+                    inference = None
+                if inference is None:
+                    msg = "Extract DNA unavailable (missing keys or vision client)."
+                    engine.events.emit(
+                        "image_dna_extracted_failed",
+                        image_path=str(path),
+                        error=msg,
+                    )
+                    print(msg)
+                    continue
+                engine.events.emit(
+                    "image_dna_extracted",
+                    image_path=str(path),
+                    palette=inference.palette,
+                    colors=inference.colors,
+                    materials=inference.materials,
+                    summary=inference.summary,
+                    source=inference.source,
+                    model=inference.model,
+                )
+                summary = inference.summary.strip() if inference.summary else ""
+                print(f"DNA extracted ({path.name})")
+                if summary:
+                    print(f"- {summary}")
+            continue
+        if intent.action == "soul_leech":
+            paths = intent.command_args.get("paths") or []
+            if not isinstance(paths, list) or len(paths) < 1:
+                print("Usage: /soul_leech <image_a> [image_b ...]")
+                continue
+            resolved_paths: list[Path] = []
+            missing = False
+            for raw in paths:
+                path = Path(str(raw))
+                if not path.exists():
+                    print(f"Soul Leech failed: file not found ({path})")
+                    missing = True
+                    break
+                resolved_paths.append(path)
+            if missing:
+                continue
+
+            for path in resolved_paths:
+                inference = None
+                try:
+                    inference = infer_soul_signature(path)
+                except Exception:
+                    inference = None
+                if inference is None:
+                    msg = "Soul Leech unavailable (missing keys or vision client)."
+                    engine.events.emit(
+                        "image_soul_extracted_failed",
+                        image_path=str(path),
+                        error=msg,
+                    )
+                    print(msg)
+                    continue
+                engine.events.emit(
+                    "image_soul_extracted",
+                    image_path=str(path),
+                    emotion=inference.emotion,
+                    summary=inference.summary,
+                    source=inference.source,
+                    model=inference.model,
+                )
+                summary = inference.summary.strip() if inference.summary else ""
+                print(f"Soul extracted ({path.name})")
+                if summary:
+                    print(f"- {summary}")
             continue
         if intent.action == "extract_rule":
             paths = intent.command_args.get("paths") or []

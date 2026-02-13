@@ -150,6 +150,10 @@ def parse_intent(text: str) -> Intent:
             return Intent(action="argue", raw=text, command_args={"paths": _parse_path_args(arg)})
         if command == "bridge":
             return Intent(action="bridge", raw=text, command_args={"paths": _parse_path_args(arg)})
+        if command == "extract_dna":
+            return Intent(action="extract_dna", raw=text, command_args={"paths": _parse_path_args(arg)})
+        if command == "soul_leech":
+            return Intent(action="soul_leech", raw=text, command_args={"paths": _parse_path_args(arg)})
         if command == "extract_rule":
             return Intent(action="extract_rule", raw=text, command_args={"paths": _parse_path_args(arg)})
         if command == "odd_one_out":
