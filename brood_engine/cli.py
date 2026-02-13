@@ -1238,15 +1238,19 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 print("Usage: /extract_dna <image_a> [image_b ...]")
                 continue
             resolved_paths: list[Path] = []
-            missing = False
             for raw in paths:
                 path = Path(str(raw))
                 if not path.exists():
-                    print(f"Extract DNA failed: file not found ({path})")
-                    missing = True
-                    break
+                    msg = f"Extract DNA failed: file not found ({path})"
+                    engine.events.emit(
+                        "image_dna_extracted_failed",
+                        image_path=str(path),
+                        error=msg,
+                    )
+                    print(msg)
+                    continue
                 resolved_paths.append(path)
-            if missing:
+            if not resolved_paths:
                 continue
 
             for path in resolved_paths:
@@ -1285,15 +1289,19 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 print("Usage: /soul_leech <image_a> [image_b ...]")
                 continue
             resolved_paths: list[Path] = []
-            missing = False
             for raw in paths:
                 path = Path(str(raw))
                 if not path.exists():
-                    print(f"Soul Leech failed: file not found ({path})")
-                    missing = True
-                    break
+                    msg = f"Soul Leech failed: file not found ({path})"
+                    engine.events.emit(
+                        "image_soul_extracted_failed",
+                        image_path=str(path),
+                        error=msg,
+                    )
+                    print(msg)
+                    continue
                 resolved_paths.append(path)
-            if missing:
+            if not resolved_paths:
                 continue
 
             for path in resolved_paths:

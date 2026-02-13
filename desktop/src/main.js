@@ -61,13 +61,20 @@ const state = {
   runDir: null,
   eventsPath: null,
   eventsOffset: 0,
+  eventsByteOffset: 0,
+  eventsTail: "",
+  eventsDecoder: new TextDecoder("utf-8"),
+  fallbackToFullRead: false,
+  pollInFlight: false,
   artifacts: new Map(),
+  galleryCardById: new Map(),
   selected: new Set(),
   placeholders: [],
   flickerTimer: null,
   ptyReady: false,
   poller: null,
   blobUrls: new Map(),
+  receiptCache: new Map(),
   pendingEchoes: [],
   echoBuffer: "",
   controlBuffer: "",
@@ -1344,7 +1351,14 @@ async function createRun() {
     state.runDir = payload.run_dir;
     state.eventsPath = payload.events_path;
     state.eventsOffset = 0;
+    state.eventsByteOffset = 0;
+    state.eventsTail = "";
+    state.fallbackToFullRead = false;
+    state.pollInFlight = false;
     state.artifacts.clear();
+    state.placeholders = [];
+    state.galleryCardById.clear();
+    state.receiptCache.clear();
     state.selected.clear();
     state.lastError = null;
     state.goalChipsShown = false;
@@ -1353,6 +1367,7 @@ async function createRun() {
     state.goalSelections.clear();
     state.goalAnalyzeInFlight = false;
     resetOptimizeState();
+    renderGallery();
     hideGoalChips();
     if (detailEl) {
       detailEl.textContent = "";
@@ -1395,7 +1410,14 @@ async function openRun() {
   state.runDir = selected;
   state.eventsPath = `${selected}/events.jsonl`;
   state.eventsOffset = 0;
+  state.eventsByteOffset = 0;
+  state.eventsTail = "";
+  state.fallbackToFullRead = false;
+  state.pollInFlight = false;
   state.artifacts.clear();
+  state.placeholders = [];
+  state.galleryCardById.clear();
+  state.receiptCache.clear();
   state.selected.clear();
   state.lastError = null;
   state.goalChipsShown = false;
@@ -1404,6 +1426,7 @@ async function openRun() {
   state.goalSelections.clear();
   state.goalAnalyzeInFlight = false;
   resetOptimizeState();
+  renderGallery();
   hideGoalChips();
   if (detailEl) {
     detailEl.textContent = "";
@@ -1428,25 +1451,112 @@ async function startWatching() {
 
 async function pollEvents() {
   if (state.poller) return;
-  state.poller = setInterval(async () => {
-    const existsNow = await exists(state.eventsPath);
-    if (!existsNow) return;
-    await readEvents().catch(() => {});
+  state.poller = setInterval(() => {
+    pollEventsOnce().catch(() => {});
   }, 750);
 }
 
+async function pollEventsOnce() {
+  if (!state.eventsPath) return;
+  if (state.pollInFlight) return;
+  state.pollInFlight = true;
+  try {
+    const existsNow = await exists(state.eventsPath);
+    if (!existsNow) return;
+    await readEvents();
+  } finally {
+    state.pollInFlight = false;
+  }
+}
+
 async function readEvents() {
-  const content = await readTextFile(state.eventsPath);
-  const lines = content.trim().split("\n").filter(Boolean);
-  for (let i = state.eventsOffset; i < lines.length; i += 1) {
+  if (!state.eventsPath) return;
+  if (state.fallbackToFullRead) {
+    await readEventsFallback();
+    return;
+  }
+  try {
+    const resp = await invoke("read_file_since", {
+      path: state.eventsPath,
+      offset: state.eventsByteOffset,
+      maxBytes: 1024 * 256,
+    });
+    const chunk = resp?.chunk;
+    const clampedOffset = Number(resp?.clamped_offset);
+    const newOffset = Number(resp?.new_offset);
+    if (Number.isFinite(clampedOffset) && clampedOffset < state.eventsByteOffset) {
+      state.eventsTail = "";
+      state.eventsDecoder = new TextDecoder("utf-8");
+    }
+    let chunkText = "";
+    if (typeof chunk === "string") {
+      chunkText = chunk;
+    } else if (chunk instanceof Uint8Array) {
+      chunkText = state.eventsDecoder.decode(chunk, { stream: true });
+    } else if (Array.isArray(chunk)) {
+      chunkText = state.eventsDecoder.decode(Uint8Array.from(chunk), { stream: true });
+    }
+    if (Number.isFinite(newOffset)) {
+      state.eventsByteOffset = newOffset;
+    }
+    if (!chunkText) return;
+    state.eventsTail += chunkText;
+    const lines = state.eventsTail.split("\n");
+    state.eventsTail = lines.pop() || "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        handleEvent(JSON.parse(trimmed));
+      } catch {
+        // ignore malformed lines
+      }
+    }
+  } catch (err) {
+    console.warn("Incremental event reader failed, falling back:", err);
+    state.eventsTail = "";
+    state.eventsDecoder = new TextDecoder("utf-8");
+    state.fallbackToFullRead = true;
+    await readEventsFallback();
+  }
+}
+
+async function readEventsFallback() {
+  const data = await readBinaryFile(state.eventsPath);
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  const decoder = new TextDecoder("utf-8");
+  let start = Math.max(0, Number(state.eventsByteOffset) || 0);
+  if (start > bytes.length) {
+    start = bytes.length;
+    state.eventsTail = "";
+  }
+  let chunk = bytes.slice(start);
+  if (start > 0 && bytes[start - 1] !== 0x0a && !state.eventsTail) {
+    const newlineIdx = chunk.indexOf(0x0a);
+    if (newlineIdx === -1) {
+      state.eventsByteOffset = bytes.length;
+      return;
+    }
+    chunk = chunk.slice(newlineIdx + 1);
+  }
+  if (chunk.length === 0) {
+    state.eventsByteOffset = bytes.length;
+    return;
+  }
+  state.eventsTail += decoder.decode(chunk);
+  const lines = state.eventsTail.split("\n");
+  state.eventsTail = lines.pop() || "";
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
     try {
-      const event = JSON.parse(lines[i]);
+      const event = JSON.parse(trimmed);
       handleEvent(event);
     } catch {
       // ignore malformed lines
     }
   }
-  state.eventsOffset = lines.length;
+  state.eventsByteOffset = bytes.length;
 }
 
 function handleEvent(event) {
@@ -1472,10 +1582,16 @@ function handleEvent(event) {
     };
     state.artifacts.set(event.artifact_id, artifact);
     if (state.placeholders.length > 0) {
-      state.placeholders.pop();
+      state.placeholders.shift();
+      removeOnePlaceholderCard();
+    }
+    if (artifact.receipt_path) {
+      state.receiptCache.delete(artifact.receipt_path);
     }
     state.goalChipsAutoHold = false;
-    renderGallery();
+    upsertArtifactCard(artifact);
+    updateGallerySelectionClasses();
+    renderDetail();
     if (shouldAutoShowGoalChips()) {
       showGoalChips();
     }
@@ -1531,6 +1647,7 @@ async function loadReceiptsFallback() {
         const payload = JSON.parse(receipt);
         const artifacts = payload.artifacts || {};
         const artifactId = entry.name.replace("receipt-", "").replace(".json", "");
+        state.receiptCache.delete(entry.path);
         state.artifacts.set(artifactId, {
           artifact_id: artifactId,
           image_path: artifacts.image_path,
@@ -1545,37 +1662,75 @@ async function loadReceiptsFallback() {
   renderGallery();
 }
 
-function renderGallery() {
-  galleryEl.innerHTML = "";
-  for (const placeholder of state.placeholders) {
-    const card = document.createElement("div");
-    card.className = "card placeholder";
-    const frame = document.createElement("div");
-    frame.className = "placeholder-frame";
-    if (placeholder.width && placeholder.height) {
-      frame.style.aspectRatio = `${placeholder.width} / ${placeholder.height}`;
-    }
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    meta.textContent = placeholder.width && placeholder.height ? `generating • ${placeholder.width}x${placeholder.height}` : "generating";
-    card.appendChild(frame);
-    card.appendChild(meta);
+function createPlaceholderCard(placeholder) {
+  const card = document.createElement("div");
+  card.className = "card placeholder";
+  const frame = document.createElement("div");
+  frame.className = "placeholder-frame";
+  if (placeholder.width && placeholder.height) {
+    frame.style.aspectRatio = `${placeholder.width} / ${placeholder.height}`;
+  }
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent =
+    placeholder.width && placeholder.height
+      ? `generating • ${placeholder.width}x${placeholder.height}`
+      : "generating";
+  card.appendChild(frame);
+  card.appendChild(meta);
+  return card;
+}
+
+function createArtifactCard(artifact) {
+  const card = document.createElement("div");
+  card.className = "card" + (state.selected.has(artifact.artifact_id) ? " selected" : "");
+  card.dataset.artifactId = artifact.artifact_id;
+  const img = document.createElement("img");
+  img.src = convertFileSrc(artifact.image_path);
+  img.onerror = () => {
+    loadImageBinary(artifact.image_path, img).catch(() => {});
+  };
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = `${artifact.version_id} • ${artifact.artifact_id}`;
+  card.appendChild(img);
+  card.appendChild(meta);
+  card.addEventListener("click", () => toggleSelect(artifact.artifact_id));
+  return card;
+}
+
+function removeOnePlaceholderCard() {
+  const card = galleryEl.querySelector(".card.placeholder");
+  if (card) card.remove();
+}
+
+function upsertArtifactCard(artifact) {
+  if (!artifact?.artifact_id) return;
+  const existing = state.galleryCardById.get(artifact.artifact_id);
+  const card = createArtifactCard(artifact);
+  if (existing) {
+    existing.replaceWith(card);
+  } else {
     galleryEl.appendChild(card);
   }
+  state.galleryCardById.set(artifact.artifact_id, card);
+}
+
+function updateGallerySelectionClasses() {
+  for (const [artifactId, card] of state.galleryCardById.entries()) {
+    card.classList.toggle("selected", state.selected.has(artifactId));
+  }
+}
+
+function renderGallery() {
+  galleryEl.innerHTML = "";
+  state.galleryCardById.clear();
+  for (const placeholder of state.placeholders) {
+    galleryEl.appendChild(createPlaceholderCard(placeholder));
+  }
   for (const artifact of state.artifacts.values()) {
-    const card = document.createElement("div");
-    card.className = "card" + (state.selected.has(artifact.artifact_id) ? " selected" : "");
-    const img = document.createElement("img");
-    img.src = convertFileSrc(artifact.image_path);
-    img.onerror = () => {
-      loadImageBinary(artifact.image_path, img).catch(() => {});
-    };
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    meta.textContent = `${artifact.version_id} • ${artifact.artifact_id}`;
-    card.appendChild(img);
-    card.appendChild(meta);
-    card.addEventListener("click", () => toggleSelect(artifact.artifact_id));
+    const card = createArtifactCard(artifact);
+    state.galleryCardById.set(artifact.artifact_id, card);
     galleryEl.appendChild(card);
   }
   renderDetail();
@@ -1620,6 +1775,34 @@ async function loadImageBinary(path, imgEl) {
   }
 }
 
+async function loadReceiptDetail(artifact) {
+  const empty = { detail: "", promptText: "" };
+  const receiptPath = artifact?.receipt_path;
+  if (!receiptPath) return empty;
+  const cached = state.receiptCache.get(receiptPath);
+  if (cached) return cached;
+
+  const receipt = await readTextFile(receiptPath).catch(() => null);
+  if (!receipt) return empty;
+  try {
+    const payload = JSON.parse(receipt);
+    const requestPayload =
+      payload.provider_request?.payload ??
+      payload.provider_request?.payloads ??
+      payload.provider_request ??
+      payload.request ??
+      {};
+    const parsed = {
+      detail: JSON.stringify(requestPayload, null, 2),
+      promptText: payload.request?.prompt || "",
+    };
+    state.receiptCache.set(receiptPath, parsed);
+    return parsed;
+  } catch {
+    return empty;
+  }
+}
+
 async function renderDetail() {
   detailEl.innerHTML = "";
   const selectedIds = Array.from(state.selected);
@@ -1637,24 +1820,9 @@ async function renderDetail() {
   if (selectedIds.length === 1) {
     const artifact = state.artifacts.get(selectedIds[0]);
     if (!artifact) return;
-    const receipt = await readTextFile(artifact.receipt_path).catch(() => null);
-    let detail = "";
-    let promptText = "";
-    if (receipt) {
-      try {
-        const payload = JSON.parse(receipt);
-        const requestPayload =
-          payload.provider_request?.payload ??
-          payload.provider_request?.payloads ??
-          payload.provider_request ??
-          payload.request ??
-          {};
-        detail = JSON.stringify(requestPayload, null, 2);
-        promptText = payload.request?.prompt || "";
-      } catch {
-        detail = "";
-      }
-    }
+    const receiptDetail = await loadReceiptDetail(artifact);
+    const detail = receiptDetail.detail || "";
+    const promptText = receiptDetail.promptText || "";
     detailEl.innerHTML = `
       <div><strong>${artifact.artifact_id}</strong></div>
       <div class="meta">${artifact.image_path}</div>
@@ -1689,7 +1857,8 @@ function toggleSelect(artifactId) {
     if (state.selected.size >= 4) return;
     state.selected.add(artifactId);
   }
-  renderGallery();
+  updateGallerySelectionClasses();
+  renderDetail();
 }
 
 function flicker() {

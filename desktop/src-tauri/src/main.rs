@@ -368,9 +368,8 @@ fn read_file_since(path: String, offset: u64, max_bytes: Option<u64>) -> Result<
     // Read up to `limit` bytes to avoid giant allocations if the offset gets reset incorrectly.
     file.take(limit).read_to_end(&mut buffer).map_err(|e| e.to_string())?;
     let new_offset = safe_offset + buffer.len() as u64;
-    let chunk = String::from_utf8_lossy(&buffer).to_string();
     Ok(serde_json::json!({
-        "chunk": chunk,
+        "chunk": buffer,
         "new_offset": new_offset,
         "file_len": file_len,
         "clamped_offset": safe_offset,
