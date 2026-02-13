@@ -59,7 +59,7 @@ test("Mother v2 separates structured intent from prompt compilation", () => {
   assert.match(app, /idle\.pendingVisionImageIds = visionGate\.missingIds\.slice\(\);/);
   assert.match(app, /scheduleVisionDescribe\(item\.path,\s*\{ priority: true \}\);/);
   assert.match(app, /motherV2RequestIntentInference\(\)\.catch\(\(\) => \{\}\);/);
-  assert.match(app, /Mother is reading image context before proposing…/);
+  assert.match(app, /setStatus\(\"Mother: reading image context…\"\);/);
   assert.match(app, /await invoke\(\"write_pty\", \{ data: `\/intent_infer \$\{quoteForPtyArg\(payloadPath\)\}\\n` \}\)/);
   assert.match(app, /function motherV2RequestPromptCompile\(/);
   assert.match(app, /await invoke\(\"write_pty\", \{ data: `\/prompt_compile \$\{quoteForPtyArg\(payloadPath\)\}\\n` \}\)/);
@@ -84,17 +84,17 @@ test("Mother v2 separates structured intent from prompt compilation", () => {
 
 test("Mother v2 layered panel exposes sentence-first default and on-demand structure controls", () => {
   assert.match(html, /id=\"mother-refine-toggle\"/);
-  assert.match(html, /id=\"mother-intensity\"/);
+  assert.doesNotMatch(html, /id=\"mother-intensity\"/);
   assert.match(html, /id=\"mother-advanced\"/);
   assert.match(html, /id=\"mother-transformation-mode\"/);
   assert.match(html, /id=\"mother-role-subject\"/);
   assert.match(html, /id=\"mother-role-model\"/);
   assert.match(html, /id=\"mother-role-mediator\"/);
   assert.match(html, /id=\"mother-role-object\"/);
-  assert.match(app, /return `\$\{sentence\}\\nV confirm  M reject`;/);
+  assert.match(app, /function motherV2ProposalIconsHtml\(/);
   assert.match(app, /if \(mode === \"hybridize\"\) \{[\s\S]*if \(uniqueIds\.size >= 3\) return \"Fuse all references into one coherent visual world\.\";/);
   assert.match(app, /function motherV2SyncLayeredPanel\(/);
-  assert.match(app, /mother-refine-toggle|Refine structure/);
+  assert.match(app, /els\.motherRefineToggle\.classList\.add\(\"hidden\"\);/);
 });
 
 test("Mother confirm/reject buttons do not reset interaction state before handling", () => {
@@ -254,7 +254,7 @@ test("Vision describe queue drops stale paths on replace/remove to avoid file-no
 test("Mother idle re-arms after drag release and keeps role-drag semantic state", () => {
   assert.match(
     app,
-    /function finalizePointer\(event\)\s*\{[\s\S]*const motherRoleDrag = kind === \"mother_role_drag\";[\s\S]*const effectTokenDrag = kind === \"effect_token_drag\";[\s\S]*if \(!motherRoleDrag && !effectTokenDrag\) bumpInteraction\(\);/
+    /function finalizePointer\(event\)\s*\{[\s\S]*const motherRoleDrag = kind === \"mother_role_drag\";[\s\S]*const effectTokenDrag = kind === \"effect_token_drag\";[\s\S]*if \(!motherRoleDrag && !effectTokenDrag\) \{[\s\S]*bumpInteraction\(\{ semantic: !selectionOnly \}\);/
   );
   assert.match(app, /if \(kind === \"mother_role_drag\"\) \{[\s\S]*bumpInteraction\(\{ semantic: false \}\);/);
 });
