@@ -26,7 +26,7 @@ Primary files:
 - The scheduler refuses to run while foreground actions are running (generation, replace, etc.).
 - Snapshot generation:
   - Builds a small collage (up to 6 images) on a temporary canvas.
-  - Encodes to JPEG and writes to the current `runDir` as `alwayson-<timestamp>.jpg`.
+  - Encodes to PNG and writes to the current `runDir` as `alwayson-<timestamp>.png`.
   - Dispatches realtime commands to the engine PTY:
     - `/canvas_context_rt_start`
     - `/canvas_context_rt <snapshotPath>`
