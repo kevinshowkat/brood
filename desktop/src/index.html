@@ -176,17 +176,14 @@
                 </div>
                 <div id="mother-panel-stack" class="mother-panel-stack" aria-label="Mother controls">
                   <div id="mother-panel" class="mother-panel" aria-label="Mother dialog">
-                    <div id="tips-text" class="panel-body muted panel-readout">
-                      Use <span class="kbd">L</span> to lasso your product, then click <span class="kbd">Studio White</span>.
+                    <div class="mother-state-row">
+                      <span id="mother-state" class="mother-state" aria-live="polite">Watching</span>
                     </div>
+                    <div id="tips-text" class="panel-body muted panel-readout"></div>
                     <div class="mother-panel-controls">
                       <button id="mother-refine-toggle" class="mother-refine-toggle hidden" type="button" aria-expanded="false">
                         Refine structure
                       </button>
-                      <label id="mother-intensity-wrap" class="mother-intensity-wrap hidden">
-                        <span class="mother-intensity-label">Intensity</span>
-                        <input id="mother-intensity" class="mother-intensity" type="range" min="0" max="100" step="1" value="62" />
-                      </label>
                       <div id="mother-advanced" class="mother-advanced hidden" aria-label="Mother advanced structure">
                         <label class="mother-advanced-row">
                           <span class="mother-advanced-label">Transformation mode</span>
@@ -212,9 +209,15 @@
                     </div>
                   </div>
                   <div class="mother-actions mother-actions-floating" aria-label="Mother controls">
-                    <button id="mother-ability-icon" class="mother-ability-icon" type="button" aria-label="Mother ability"></button>
-                    <button id="mother-confirm" class="mother-confirm" type="button" aria-label="Confirm Mother action">✓</button>
-                    <button id="mother-stop" class="mother-stop hidden" type="button">Stop</button>
+                    <div class="mother-action">
+                      <button id="mother-ability-icon" class="mother-ability-icon" type="button" aria-label="Next">→</button>
+                    </div>
+                    <div class="mother-action">
+                      <button id="mother-confirm" class="mother-confirm" type="button" aria-label="Draft">✓</button>
+                    </div>
+                    <div class="mother-action">
+                      <button id="mother-stop" class="mother-stop hidden" type="button" aria-label="Dismiss">✕</button>
+                    </div>
                   </div>
                 </div>
               </div>

@@ -115,6 +115,18 @@ const MOTHER_V2_PROPOSAL_BY_MODE = Object.freeze({
   romanticize: "Soften the scene into intimate emotional warmth.",
   alienate: "Shift the familiar into a precise uncanny atmosphere.",
 });
+const MOTHER_V2_PROPOSAL_ICON_ACCENT_BY_MODE = Object.freeze({
+  amplify: "rgba(99, 224, 255, 0.96)",
+  transcend: "rgba(132, 189, 255, 0.96)",
+  destabilize: "rgba(255, 145, 114, 0.96)",
+  purify: "rgba(126, 255, 209, 0.96)",
+  hybridize: "rgba(255, 224, 120, 0.96)",
+  mythologize: "rgba(189, 162, 255, 0.96)",
+  monumentalize: "rgba(255, 196, 136, 0.96)",
+  fracture: "rgba(255, 127, 164, 0.96)",
+  romanticize: "rgba(255, 160, 203, 0.96)",
+  alienate: "rgba(152, 255, 174, 0.96)",
+});
 const MOTHER_INTENT_USECASE_DEFAULT_ORDER = Object.freeze([
   "streaming_content",
   "ecommerce_pod",
@@ -198,13 +210,12 @@ const els = {
   portraitAvatar2: document.getElementById("portrait-avatar-2"),
   portraitVideo2: document.getElementById("portrait-video-2"),
   selectionMeta: document.getElementById("selection-meta"),
+  motherState: document.getElementById("mother-state"),
   tipsText: document.getElementById("tips-text"),
   motherOverlay: document.getElementById("mother-overlay"),
   motherPanelStack: document.getElementById("mother-panel-stack"),
   motherPanel: document.getElementById("mother-panel"),
   motherRefineToggle: document.getElementById("mother-refine-toggle"),
-  motherIntensityWrap: document.getElementById("mother-intensity-wrap"),
-  motherIntensity: document.getElementById("mother-intensity"),
   motherAdvanced: document.getElementById("mother-advanced"),
   motherTransformationMode: document.getElementById("mother-transformation-mode"),
   motherRoleSubject: document.getElementById("mother-role-subject"),
@@ -4722,6 +4733,7 @@ let motherTypeoutTimer = null;
 let motherTypeoutTarget = "";
 let motherTypeoutIndex = 0;
 let motherGlitchTimer = null;
+let motherReadoutFadeTimer = null;
 
 function stopMotherGlitchLoop() {
   clearTimeout(motherGlitchTimer);
@@ -4765,6 +4777,19 @@ function stopMotherTypeout() {
   motherTypeoutTarget = "";
   motherTypeoutIndex = 0;
   if (els.tipsText) els.tipsText.classList.remove("mother-typing");
+}
+
+function motherV2TriggerReadoutFade() {
+  if (!els.tipsText) return;
+  clearTimeout(motherReadoutFadeTimer);
+  els.tipsText.classList.remove("mother-readout-fade");
+  // Force reflow so the fade restarts on each readout change.
+  void els.tipsText.offsetWidth; // eslint-disable-line no-unused-expressions
+  els.tipsText.classList.add("mother-readout-fade");
+  motherReadoutFadeTimer = setTimeout(() => {
+    if (!els.tipsText) return;
+    els.tipsText.classList.remove("mother-readout-fade");
+  }, 280);
 }
 
 function motherTypeoutTick() {
@@ -4830,36 +4855,44 @@ function renderMotherControls() {
 
   const idle = state.motherIdle || null;
   const phase = idle?.phase || motherIdleInitialState();
+  const proposalModes = motherV2ProposalModes(idle?.intent || null);
   const undoAvailable = motherV2CommitUndoAvailable();
+  const canNextProposal = phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING && proposalModes.length > 1;
   const canConfirm = phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING || phase === MOTHER_IDLE_STATES.OFFERING;
   const canReject = undoAvailable || phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING || phase === MOTHER_IDLE_STATES.OFFERING || phase === MOTHER_IDLE_STATES.DRAFTING;
+  const nextLabel = "Next";
+  const nextTitle = canNextProposal ? "Cycle to next proposal" : "No alternate proposal available";
   const confirmTitle =
     phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING
-      ? "Confirm intent and start draft (V)"
+      ? "Confirm proposal and start draft"
       : phase === MOTHER_IDLE_STATES.OFFERING
-        ? "Deploy selected draft (V)"
+        ? "Deploy selected draft"
         : "Mother confirm";
   const rejectTitle = undoAvailable
     ? "Undo last Mother commit"
     : phase === MOTHER_IDLE_STATES.DRAFTING
-      ? "Cancel drafting (M)"
-      : "Reject or dismiss (M)";
+      ? "Cancel drafting"
+      : "Reject or dismiss proposal";
 
   if (els.motherConfirm) {
     els.motherConfirm.disabled = !canConfirm;
     els.motherConfirm.title = confirmTitle;
-    els.motherConfirm.textContent = "V";
+    els.motherConfirm.textContent = "✓";
+    els.motherConfirm.setAttribute("aria-label", confirmTitle);
     els.motherConfirm.classList.toggle("hidden", false);
   }
   if (els.motherStop) {
     els.motherStop.disabled = !canReject;
     els.motherStop.title = rejectTitle;
-    els.motherStop.textContent = undoAvailable ? "Undo" : "M";
+    els.motherStop.textContent = undoAvailable ? "↶" : "✕";
+    els.motherStop.setAttribute("aria-label", rejectTitle);
     els.motherStop.classList.toggle("hidden", false);
   }
   if (els.motherAbilityIcon) {
-    els.motherAbilityIcon.disabled = phase === MOTHER_IDLE_STATES.DRAFTING || phase === MOTHER_IDLE_STATES.COMMITTING;
-    els.motherAbilityIcon.title = "Mother: force canvas context scan";
+    els.motherAbilityIcon.disabled = !canNextProposal;
+    els.motherAbilityIcon.title = nextTitle;
+    els.motherAbilityIcon.textContent = "→";
+    els.motherAbilityIcon.setAttribute("aria-label", canNextProposal ? nextLabel : `${nextLabel} unavailable`);
   }
 
   syncMotherPortrait();
@@ -4918,18 +4951,9 @@ function motherV2SyncLayeredPanel() {
     els.motherPanelStack.classList.toggle("mother-panel-advanced", advancedVisible);
   }
   if (els.motherRefineToggle) {
-    els.motherRefineToggle.classList.toggle("hidden", !interactive || !hasIntent);
+    els.motherRefineToggle.classList.add("hidden");
     els.motherRefineToggle.setAttribute("aria-expanded", advancedVisible ? "true" : "false");
     els.motherRefineToggle.textContent = advancedVisible ? "Hide structure" : "Refine structure";
-  }
-  if (els.motherIntensityWrap) {
-    els.motherIntensityWrap.classList.toggle("hidden", !(phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING && hasIntent));
-  }
-  if (els.motherIntensity) {
-    const val = clamp(Number(idle.intensity) || 62, 0, 100);
-    if (Number(els.motherIntensity.value) !== val) {
-      els.motherIntensity.value = String(Math.round(val));
-    }
   }
   if (els.motherAdvanced) {
     els.motherAdvanced.classList.toggle("hidden", !advancedVisible || !hasIntent);
@@ -4955,7 +4979,6 @@ function motherV2SyncLayeredPanel() {
 function buildMotherText() {
   const idle = state.motherIdle || null;
   const phase = idle?.phase || motherIdleInitialState();
-  const intent = idle?.intent && typeof idle.intent === "object" ? idle.intent : null;
   const drafts = Array.isArray(idle?.drafts) ? idle.drafts : [];
   const cooldownMs = Math.max(0, (Number(idle?.cooldownUntil) || 0) - Date.now());
   const undoAvailable = motherV2CommitUndoAvailable();
@@ -4966,29 +4989,26 @@ function buildMotherText() {
   if (phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
     if (Array.isArray(idle?.pendingVisionImageIds) && idle.pendingVisionImageIds.length) return "";
     if (idle?.pendingIntent) return "";
-    const sentence = intent ? motherV2ProposalSentence(intent) : "";
-    if (!sentence) return "";
-    return `${sentence}\nV confirm  M reject`;
+    return "";
   }
   if (phase === MOTHER_IDLE_STATES.DRAFTING) {
-    if (idle?.pendingPromptCompile) return "Mother is braiding intent into form…";
-    return "Mother is drafting now. No canvas mutation until deploy.\nM cancel";
+    return "";
   }
   if (phase === MOTHER_IDLE_STATES.OFFERING) {
     const draftCount = drafts.length;
-    return `Draft ready (${draftCount}). V deploy, M reject, R reroll.`;
+    return `Draft ready (${draftCount}). ✓ deploy, ✕ reject, R reroll.`;
   }
   if (phase === MOTHER_IDLE_STATES.COMMITTING) {
     return "Committing draft to canvas…";
   }
   if (phase === MOTHER_IDLE_STATES.COOLDOWN) {
     const sec = (cooldownMs / 1000).toFixed(1);
-    const undo = undoAvailable ? "\nUNDO READY (M)" : "";
+    const undo = undoAvailable ? "\nUNDO READY" : "";
     return `Cooling down ${sec}s${undo}`;
   }
 
   if (!state.images.length) {
-    return "Mother is observing. Add images to begin.";
+    return "";
   }
   if (motherV2InCooldown()) {
     const sec = (cooldownMs / 1000).toFixed(1);
@@ -5007,11 +5027,32 @@ function buildMotherText() {
     if (phase === MOTHER_IDLE_STATES.OBSERVING && motherIdleHasArmedCanvas()) {
       return "";
     }
-    return "Mother observing. Pause for intent hypothesis.";
+    return "Pause for intent hypothesis.";
   }
 
   const fallback = typeof state.lastTipText === "string" ? state.lastTipText.trim() : "";
-  return fallback || "Mother observing.";
+  return fallback || "Pause for intent hypothesis.";
+}
+
+function motherV2StatusText() {
+  const idle = state.motherIdle || null;
+  const phase = idle?.phase || motherIdleInitialState();
+  const drafts = Array.isArray(idle?.drafts) ? idle.drafts : [];
+  if (phase === MOTHER_IDLE_STATES.OBSERVING || phase === MOTHER_IDLE_STATES.WATCHING) return "";
+  if (phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
+    if (Array.isArray(idle?.pendingVisionImageIds) && idle.pendingVisionImageIds.length) return "Proposing";
+    if (idle?.pendingIntent) return "Proposing";
+    if (idle?.intent && typeof idle.intent === "object") return "Proposed";
+    return "Proposing";
+  }
+  if (phase === MOTHER_IDLE_STATES.DRAFTING) return "Drafting 1/1";
+  if (phase === MOTHER_IDLE_STATES.OFFERING) return `Offer ${Math.max(1, drafts.length || 0)}`;
+  if (phase === MOTHER_IDLE_STATES.COMMITTING) return "Deploying";
+  if (phase === MOTHER_IDLE_STATES.COOLDOWN) {
+    const cooldownMs = Math.max(0, (Number(idle?.cooldownUntil) || 0) - Date.now());
+    return `Cooldown ${(cooldownMs / 1000).toFixed(1)}s`;
+  }
+  return "";
 }
 
 function renderMotherReadout() {
@@ -5019,29 +5060,49 @@ function renderMotherReadout() {
   if (!els.tipsText) return;
   motherV2SyncLayeredPanel();
   const next = buildMotherText();
-  const changed = next !== lastMotherRenderedText;
   const aov = state.alwaysOnVision;
   const isRealtime = String(aov?.lastMeta?.source || "") === "openai_realtime";
   const hasOutput = typeof aov?.lastText === "string" && aov.lastText.trim();
   const phase = state.motherIdle?.phase || motherIdleInitialState();
+  const proposalIconsHtml = motherV2ProposalIconsHtml(state.motherIdle?.intent || null, { phase });
+  const draftStatusHtml = motherV2DraftStatusHtml({ phase });
+  const statusText = motherV2StatusText();
+  const readoutHtml = proposalIconsHtml || draftStatusHtml;
+  const renderKey = readoutHtml || next;
+  const changed = renderKey !== lastMotherRenderedText;
   const shouldTypeout = Boolean(
     phase === MOTHER_IDLE_STATES.OBSERVING && aov?.enabled && isRealtime && hasOutput && !aov.pending
   );
 
-  els.tipsText.classList.toggle("mother-cursor", Boolean(aov?.enabled || state.mother?.running));
+  if (els.motherState) {
+    els.motherState.textContent = statusText;
+    els.motherState.setAttribute("data-phase", String(phase || ""));
+    const stateRow = els.motherState.closest(".mother-state-row");
+    if (stateRow) {
+      stateRow.classList.toggle("hidden", !statusText);
+    }
+  }
+  els.tipsText.classList.remove("mother-cursor");
 
   if (!changed) {
     return;
   }
 
-  lastMotherRenderedText = next;
+  lastMotherRenderedText = renderKey;
   if (shouldTypeout) {
+    motherV2TriggerReadoutFade();
     startMotherTypeout(next);
     return;
   }
 
   stopMotherTypeout();
+  if (readoutHtml) {
+    els.tipsText.innerHTML = readoutHtml;
+    motherV2TriggerReadoutFade();
+    return;
+  }
   els.tipsText.textContent = next;
+  motherV2TriggerReadoutFade();
 }
 
 function syncMotherPortrait() {
@@ -5353,7 +5414,7 @@ async function startMotherTakeover() {
     showToast("Mother cooling down.", "tip", 1400);
     return;
   }
-  showToast("Mother is observing. Arrange images, then pause.", "tip", 1800);
+  showToast("Arrange images, then pause for intent.", "tip", 1800);
 }
 
 function stopMotherTakeover() {
@@ -5749,6 +5810,162 @@ function motherV2ProposalSentence(intent) {
     if (uniqueIds.size >= 3) return "Fuse all references into one coherent visual world.";
   }
   return MOTHER_V2_PROPOSAL_BY_MODE[mode] || MOTHER_V2_PROPOSAL_BY_MODE[MOTHER_V2_DEFAULT_TRANSFORMATION_MODE];
+}
+
+function motherV2EnsureProposalCandidates(intentPayload = null) {
+  const intent = intentPayload && typeof intentPayload === "object" ? intentPayload : null;
+  if (!intent) return intent;
+  const modes = [];
+  const pushMode = (rawMode) => {
+    const mode = motherV2MaybeTransformationMode(rawMode);
+    if (!mode) return;
+    if (!modes.includes(mode)) modes.push(mode);
+  };
+  for (const entry of Array.isArray(intent.transformation_mode_candidates) ? intent.transformation_mode_candidates : []) {
+    pushMode(entry?.mode || entry?.transformation_mode);
+  }
+  const current = motherV2MaybeTransformationMode(intent.transformation_mode);
+  if (current && !modes.includes(current)) modes.unshift(current);
+  const baseMode = current || modes[0] || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE;
+  const baseIdx = Math.max(0, MOTHER_V2_TRANSFORMATION_MODES.indexOf(baseMode));
+  for (let offset = 0; offset < MOTHER_V2_TRANSFORMATION_MODES.length && modes.length < 3; offset += 1) {
+    const idx = (baseIdx + offset) % MOTHER_V2_TRANSFORMATION_MODES.length;
+    const candidate = MOTHER_V2_TRANSFORMATION_MODES[idx];
+    if (!candidate || modes.includes(candidate)) continue;
+    modes.push(candidate);
+  }
+  intent.transformation_mode_candidates = modes.map((mode) => ({
+    mode,
+    confidence: null,
+  }));
+  if (!motherV2MaybeTransformationMode(intent.transformation_mode) && modes.length) {
+    intent.transformation_mode = modes[0];
+  }
+  return intent;
+}
+
+function motherV2ProposalModes(intentPayload = null) {
+  const intent = intentPayload && typeof intentPayload === "object" ? intentPayload : null;
+  if (!intent) return [];
+  const modes = [];
+  const pushMode = (rawMode) => {
+    const mode = motherV2MaybeTransformationMode(rawMode);
+    if (!mode) return;
+    if (!modes.includes(mode)) modes.push(mode);
+  };
+  const rawCandidates = Array.isArray(intent.transformation_mode_candidates) ? intent.transformation_mode_candidates : [];
+  for (const entry of rawCandidates) {
+    pushMode(entry?.mode || entry?.transformation_mode);
+  }
+  const current = motherV2MaybeTransformationMode(intent.transformation_mode);
+  if (current && !modes.includes(current)) modes.unshift(current);
+  if (!modes.length) modes.push(current || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE);
+  return modes;
+}
+
+function motherV2ProposalIconAccent(mode) {
+  const normalizedMode = motherV2NormalizeTransformationMode(mode);
+  return MOTHER_V2_PROPOSAL_ICON_ACCENT_BY_MODE[normalizedMode] || "rgba(230, 237, 243, 0.94)";
+}
+
+function motherV2ProposalModeLabel(mode) {
+  const normalizedMode = motherV2NormalizeTransformationMode(mode);
+  return normalizedMode.replace(/_/g, " ").replace(/\b([a-z])/g, (m) => m.toUpperCase());
+}
+
+function motherV2ProposalIconSvg(mode) {
+  const normalizedMode = motherV2NormalizeTransformationMode(mode);
+  let inner = "";
+  if (normalizedMode === "amplify") {
+    inner = '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.6v3.2M12 18.2v3.2M2.6 12h3.2M18.2 12h3.2M5.3 5.3l2.2 2.2M16.5 16.5l2.2 2.2M18.7 5.3l-2.2 2.2M7.5 16.5l-2.2 2.2"/>';
+  } else if (normalizedMode === "transcend") {
+    inner = '<path d="M12 20.6V6.3"/><path d="M7.8 10.4L12 6.2l4.2 4.2"/><path d="M4 18.2c2.2-1.7 4.9-2.6 8-2.6s5.8.9 8 2.6"/>';
+  } else if (normalizedMode === "destabilize") {
+    inner = '<path d="M12 3.4l7.8 8.6L12 20.6 4.2 12z"/><path d="M8.1 8.2l2.4 2.1-2.6 2.3 2.6 2.2"/><path d="M14.8 7.7l-2.1 2 2.2 2.1-2.3 2.2"/>';
+  } else if (normalizedMode === "purify") {
+    inner = '<path d="M12 4.2c2.8 3 4.8 5.8 4.8 8.3a4.8 4.8 0 1 1-9.6 0c0-2.5 2-5.3 4.8-8.3z"/><path d="M12 9.2v5.8"/><path d="M9.3 12.1h5.4"/>';
+  } else if (normalizedMode === "hybridize") {
+    inner = '<circle cx="9" cy="12" r="4.4"/><circle cx="15" cy="12" r="4.4"/><path d="M12 7.6v8.8"/>';
+  } else if (normalizedMode === "mythologize") {
+    inner = '<circle cx="12" cy="12" r="8"/><path d="M12 6.1l1.7 3.4 3.8.6-2.8 2.7.7 3.8L12 14.8 8.6 16.6l.7-3.8-2.8-2.7 3.8-.6z"/>';
+  } else if (normalizedMode === "monumentalize") {
+    inner = '<path d="M4.5 19.5h15"/><path d="M6.4 18.8V7.6h3.1v11.2M10.6 18.8V5.8h2.8v13M14.5 18.8V7.6h3.1v11.2"/><path d="M5.6 5.8h12.8"/>';
+  } else if (normalizedMode === "fracture") {
+    inner = '<path d="M5 3.6h14v16.8H5z"/><path d="M13.8 4.7 10.6 10h2.4l-3 4.1 1.2 5.8"/>';
+  } else if (normalizedMode === "romanticize") {
+    inner = '<path d="M12 20.4c-5.2-3.6-8-6.4-8-9.7 0-2.2 1.8-4 4-4 1.7 0 3.1.8 4 2.1.9-1.3 2.3-2.1 4-2.1 2.2 0 4 1.8 4 4 0 3.3-2.8 6.1-8 9.7z"/>';
+  } else if (normalizedMode === "alienate") {
+    inner = '<path d="M2.8 12s3.3-5.2 9.2-5.2 9.2 5.2 9.2 5.2-3.3 5.2-9.2 5.2-9.2-5.2-9.2-5.2z"/><circle cx="12" cy="12" r="2.4"/><path d="M18.6 4.6l1.9-1.9M5.4 19.4l-1.9 1.9"/>';
+  } else {
+    inner = '<circle cx="12" cy="12" r="4.2"/>';
+  }
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${inner}</svg>`;
+}
+
+function motherV2ProposalIconsHtml(intentPayload = null, { phase = null } = {}) {
+  const statePhase = phase || state.motherIdle?.phase || motherIdleInitialState();
+  if (statePhase !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) return "";
+  const intent = intentPayload && typeof intentPayload === "object" ? intentPayload : null;
+  if (!intent) return "";
+  const modes = motherV2ProposalModes(intent);
+  if (!modes.length) return "";
+  const activeNormalized = motherV2NormalizeTransformationMode(intent.transformation_mode || modes[0]);
+  const activeMode = modes.includes(activeNormalized) ? activeNormalized : modes[0];
+  const label = motherV2ProposalModeLabel(activeMode);
+  const description = motherV2ProposalSentence({ transformation_mode: activeMode });
+  const tooltip = `${label}: ${description}`;
+  const accent = motherV2ProposalIconAccent(activeMode);
+  const icon = motherV2ProposalIconSvg(activeMode);
+  const chip = `<span class="mother-proposal-icon is-active" data-mode="${escapeHtml(activeMode)}" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}" style="--proposal-accent:${escapeHtml(accent)}">${icon}</span>`;
+  return `<div class="mother-proposal-icons" aria-label="Proposal option">${chip}</div>`;
+}
+
+function motherV2DraftStatusIconSvg(kind = "drafting") {
+  const iconKind = String(kind || "drafting").trim();
+  let inner = "";
+  if (iconKind === "braiding") {
+    inner = '<path d="M4.8 8c2.9 0 3.3 7.8 7.2 7.8s4.3-7.8 7.2-7.8"/><path d="M4.8 16c2.9 0 3.3-7.8 7.2-7.8s4.3 7.8 7.2 7.8"/><circle cx="4.8" cy="8" r="1.2"/><circle cx="4.8" cy="16" r="1.2"/><circle cx="19.2" cy="8" r="1.2"/><circle cx="19.2" cy="16" r="1.2"/>';
+  } else {
+    inner = '<path d="M4.6 5.2h10.2M4.6 9.5h8.4M4.6 13.8h6.8"/><path d="M14.2 14.4 19 9.6l2.4 2.4-4.8 4.8-3 1z"/><path d="M18 8.2l2.8 2.8"/>';
+  }
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${inner}</svg>`;
+}
+
+function motherV2DraftStatusHtml({ phase = null } = {}) {
+  const statePhase = phase || state.motherIdle?.phase || motherIdleInitialState();
+  if (statePhase !== MOTHER_IDLE_STATES.DRAFTING) return "";
+  const idle = state.motherIdle || null;
+  const isBraiding = Boolean(idle?.pendingPromptCompile);
+  const iconKind = isBraiding ? "braiding" : "drafting";
+  const accent = isBraiding ? "rgba(143, 222, 255, 0.95)" : "rgba(145, 238, 184, 0.95)";
+  const tooltip = isBraiding
+    ? "Mother is braiding intent into form."
+    : "Mother is drafting now. No canvas mutation until deploy.";
+  const icon = motherV2DraftStatusIconSvg(iconKind);
+  return `<div class="mother-phase-icons" aria-label="${escapeHtml(tooltip)}"><span class="mother-phase-icon is-${escapeHtml(iconKind)}" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}" style="--phase-accent:${escapeHtml(accent)}">${icon}</span></div>`;
+}
+
+function motherV2CycleProposal(step = 1) {
+  const idle = state.motherIdle;
+  if (!idle || !idle.intent || typeof idle.intent !== "object") return false;
+  if ((idle.phase || motherIdleInitialState()) !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) return false;
+  const modes = motherV2ProposalModes(idle.intent);
+  if (modes.length < 2) return false;
+  const activeMode = motherV2NormalizeTransformationMode(idle.intent.transformation_mode || modes[0]);
+  const activeIdx = Math.max(0, modes.indexOf(activeMode));
+  const dir = Number(step) < 0 ? -1 : 1;
+  const nextIdx = (activeIdx + dir + modes.length) % modes.length;
+  const nextMode = modes[nextIdx];
+  if (!nextMode || nextMode === activeMode) return false;
+  idle.intent.transformation_mode = nextMode;
+  idle.intent.summary = motherV2ProposalSentence({
+    ...idle.intent,
+    transformation_mode: nextMode,
+  });
+  motherV2RevealHints({ engaged: true, ms: 1900 });
+  renderMotherReadout();
+  requestRender();
+  return true;
 }
 
 function motherV2IntentContextSignature(intentPayload = null) {
@@ -7343,6 +7560,7 @@ function motherV2ApplyIntent(intentPayload = {}, { source = "local" } = {}) {
       : null;
   normalizedIntent = motherV2DiversifyIntentForRejectFollowup(normalizedIntent);
   normalizedIntent = motherV2SanitizeIntentImageIds(normalizedIntent);
+  normalizedIntent = motherV2EnsureProposalCandidates(normalizedIntent);
   idle.intent = normalizedIntent;
   motherV2NormalizeRoles(normalizedIntent?.roles || null);
   idle.pendingIntent = false;
@@ -7674,7 +7892,7 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
     intent_id: idle.intent?.intent_id || null,
     placement_policy: idle.intent?.placement_policy || null,
   }).catch(() => {});
-  showToast("Mother draft ready. V deploy, M dismiss, R reroll.", "tip", 2200);
+  showToast("Mother draft ready. ✓ deploy, ✕ dismiss, R reroll.", "tip", 2200);
   requestRender();
   return true;
 }
@@ -13870,6 +14088,15 @@ async function handleEvent(event) {
   if (event.type === "mother_intent_inferred") {
     const idle = state.motherIdle;
     if (!idle) return;
+    if (!idle.pendingIntent) {
+      appendMotherTraceLog({
+        kind: "intent_inferred_ignored",
+        traceId: idle.telemetry?.traceId || null,
+        actionVersion: Number(idle.actionVersion) || 0,
+        reason: "not_pending",
+      }).catch(() => {});
+      return;
+    }
     const actionVersion = Number(event.action_version) || 0;
     if (actionVersion !== (Number(idle.actionVersion) || 0)) {
       motherV2MarkStale({
@@ -18558,17 +18785,23 @@ function installUi() {
 
   if (els.motherAbilityIcon) {
     if (!els.motherAbilityIcon.textContent) {
-      els.motherAbilityIcon.textContent = "M";
+      els.motherAbilityIcon.textContent = "→";
     }
     els.motherAbilityIcon.addEventListener("click", () => {
-      bumpInteraction();
-      recordUserEvent("mother_scan", {});
-      if (!settings.alwaysOnVision) {
-        showToast("Enable Always-On Vision in Settings to activate Mother suggestions.", "tip", 3200);
+      // Cycling proposals should not invalidate intent hypothesis state.
+      bumpInteraction({ semantic: false });
+      const cycled = motherV2CycleProposal(1);
+      if (cycled) {
+        recordUserEvent("mother_next_proposal", {});
+      } else {
+        const phase = state.motherIdle?.phase || motherIdleInitialState();
+        if (phase !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
+          showToast("Next proposal appears during intent hypothesis.", "tip", 1800);
+        } else {
+          showToast("No additional proposals available.", "tip", 1600);
+        }
         return;
       }
-      scheduleAlwaysOnVision({ immediate: true, force: true });
-      renderMotherReadout();
     });
   }
   if (els.motherConfirm) {
@@ -18604,16 +18837,6 @@ function installUi() {
       bumpInteraction();
       motherV2SetAdvancedOpen(!Boolean(state.motherIdle?.advancedOpen));
     });
-  }
-  if (els.motherIntensity) {
-    const onIntensity = () => {
-      const idle = state.motherIdle;
-      if (!idle) return;
-      idle.intensity = clamp(Number(els.motherIntensity.value) || 62, 0, 100);
-      renderMotherReadout();
-    };
-    els.motherIntensity.addEventListener("input", onIntensity);
-    els.motherIntensity.addEventListener("change", onIntensity);
   }
 
   const onAdvancedRoleChange = (roleKey, value) => {

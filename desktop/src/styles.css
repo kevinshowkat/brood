@@ -1583,9 +1583,9 @@ button.ghost:hover {
   z-index: 24;
   width: auto;
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
+  flex-direction: row-reverse;
+  align-items: flex-start;
+  gap: 0;
   pointer-events: auto;
 }
 
@@ -2494,11 +2494,32 @@ button.ghost:hover {
   flex-direction: column;
   align-items: flex-end;
   gap: 0;
+  position: relative;
+  isolation: isolate;
+  margin-right: 0;
+  z-index: 3;
+}
+
+#mother-panel-stack::before {
+  content: none;
+}
+
+#mother-panel-stack::after {
+  content: none;
 }
 
 #mother-overlay {
   --mother-portrait-size: clamp(120px, 12vw, 170px);
+  --mother-panel-size: clamp(95px, 9vw, 130px);
+  --mother-action-size: 28px;
+  --mother-confirm-size: 28px;
   --mother-advanced-label-width: clamp(72px, 36%, 110px);
+  --mother-card-border: rgba(0, 0, 0, 0.92);
+  --mother-card-border-low: rgba(0, 0, 0, 0.97);
+  --mother-card-bg-a: rgba(30, 22, 10, 0.72);
+  --mother-card-bg-b: rgba(8, 10, 12, 0.94);
+  --mother-card-accent-warm: rgba(255, 179, 0, 0.14);
+  --mother-card-accent-cool: rgba(100, 210, 255, 0.10);
 }
 
 #mother-portrait-shell {
@@ -2515,6 +2536,8 @@ button.ghost:hover {
     inset 0 1px 0 rgba(255, 255, 255, 0.12),
     inset 0 -18px 26px rgba(0, 0, 0, 0.74),
     0 14px 28px rgba(0, 0, 0, 0.50);
+  position: relative;
+  z-index: 2;
 }
 
 #mother-portrait-shell .mother-portrait {
@@ -2534,26 +2557,79 @@ button.ghost:hover {
 }
 
 #mother-panel {
-  width: calc(var(--mother-portrait-size) + 16px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 14px;
+  width: var(--mother-panel-size);
+  border: 1px solid var(--mother-card-border);
+  border-bottom-color: var(--mother-card-border-low);
+  border-radius: 12px;
   background:
-    radial-gradient(260px 140px at 14% 12%, rgba(82, 255, 148, 0.12), transparent 72%),
-    radial-gradient(300px 160px at 86% 10%, rgba(100, 210, 255, 0.10), transparent 74%),
-    linear-gradient(180deg, rgba(8, 12, 14, 0.92), rgba(2, 4, 6, 0.96));
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.035) 0px,
+      rgba(255, 255, 255, 0.035) 1px,
+      transparent 2px,
+      transparent 4px
+    ),
+    radial-gradient(220px 90px at 14% 8%, var(--mother-card-accent-warm), transparent 72%),
+    radial-gradient(240px 100px at 86% 12%, var(--mother-card-accent-cool), transparent 74%),
+    linear-gradient(180deg, var(--mother-card-bg-a), var(--mother-card-bg-b));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    inset 0 -18px 24px rgba(0, 0, 0, 0.58),
-    0 18px 32px rgba(0, 0, 0, 0.52);
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -12px 16px rgba(0, 0, 0, 0.56),
+    0 12px 22px rgba(0, 0, 0, 0.40);
   overflow: hidden;
+  position: relative;
+  isolation: isolate;
+}
+
+#mother-panel .mother-state-row {
+  padding: 6px 8px 4px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.74);
+  position: relative;
+  z-index: 1;
+}
+
+#mother-panel .mother-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(76, 96, 120, 0.64);
+  border-bottom-color: rgba(12, 18, 24, 0.92);
+  background: linear-gradient(180deg, rgba(20, 28, 38, 0.78), rgba(8, 12, 18, 0.90));
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(219, 231, 244, 0.94);
+}
+
+#mother-panel .mother-state[data-phase="intent_hypothesizing"] {
+  border-color: rgba(255, 186, 122, 0.56);
+  color: rgba(255, 229, 198, 0.96);
+}
+
+#mother-panel .mother-state[data-phase="drafting"] {
+  border-color: rgba(128, 216, 252, 0.58);
+  color: rgba(193, 239, 255, 0.96);
+}
+
+#mother-panel .mother-state[data-phase="offering"] {
+  border-color: rgba(126, 233, 168, 0.56);
+  color: rgba(196, 255, 224, 0.96);
+}
+
+#mother-panel .mother-state[data-phase="cooldown"] {
+  border-color: rgba(214, 132, 162, 0.5);
+  color: rgba(255, 203, 222, 0.94);
 }
 
 #mother-panel.mother-hints-visible {
-  border-color: rgba(100, 210, 255, 0.32);
+  border-color: rgba(255, 186, 122, 0.62);
 }
 
 #mother-panel.mother-advanced-visible {
-  border-color: rgba(82, 255, 148, 0.46);
+  border-color: rgba(128, 216, 252, 0.62);
 }
 
 #mother-panel::before {
@@ -2567,28 +2643,33 @@ button.ghost:hover {
 #tips-text {
   font-family: "IBM Plex Mono", monospace;
   letter-spacing: 0.01em;
-  color: rgba(241, 247, 255, 0.9);
+  color: rgba(236, 228, 244, 0.94);
 }
 
 #mother-panel .panel-readout {
   margin: 0;
-  min-height: 72px;
-  max-height: 180px;
+  min-height: 58px;
+  max-height: 114px;
   overflow: auto;
   border: 0;
   border-radius: 0;
   background: transparent;
-  color: rgba(241, 247, 255, 0.9);
-  text-shadow: 0 0 0.8px rgba(0, 0, 0, 0.74);
+  color: rgba(228, 236, 245, 0.95);
+  text-shadow: none;
+  position: relative;
+  z-index: 1;
 }
 
 #mother-panel .mother-panel-controls {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px 10px 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.22);
+  gap: 6px;
+  padding: 6px 8px 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.72);
+  background:
+    linear-gradient(180deg, rgba(24, 30, 38, 0.72), rgba(9, 12, 18, 0.90));
+  position: relative;
+  z-index: 1;
 }
 
 .mother-refine-toggle {
@@ -2608,33 +2689,15 @@ button.ghost:hover {
   border-color: rgba(82, 255, 148, 0.64);
 }
 
-.mother-intensity-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.mother-intensity-label {
-  min-width: 62px;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: rgba(184, 201, 217, 0.9);
-}
-
-.mother-intensity {
-  flex: 1;
-  accent-color: rgba(82, 255, 148, 0.95);
-}
-
 .mother-advanced {
   display: grid;
   gap: 6px;
   padding: 8px;
   border-radius: 10px;
-  border: 1px solid rgba(100, 210, 255, 0.22);
-  background: rgba(6, 10, 14, 0.62);
+  border: 1px solid rgba(183, 112, 222, 0.44);
+  background:
+    radial-gradient(180px 90px at 18% 18%, rgba(214, 122, 220, 0.20), transparent 74%),
+    linear-gradient(180deg, rgba(40, 11, 56, 0.72), rgba(18, 6, 28, 0.84));
 }
 
 .mother-advanced-row {
@@ -2649,16 +2712,16 @@ button.ghost:hover {
   font-size: 10px;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: rgba(191, 210, 226, 0.9);
+  color: rgba(225, 192, 241, 0.92);
 }
 
 .mother-advanced select {
   width: 100%;
   min-height: 28px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(8, 12, 18, 0.86);
-  color: rgba(232, 242, 250, 0.94);
+  border: 1px solid rgba(196, 126, 226, 0.42);
+  background: rgba(20, 7, 31, 0.88);
+  color: rgba(236, 228, 244, 0.96);
   font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
 }
@@ -2672,32 +2735,70 @@ button.ghost:hover {
 
 #mother-panel-stack .mother-actions {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
-  gap: 10px;
-  padding: 0;
-  margin-top: 0;
+  gap: 4px;
+  width: max(var(--mother-panel-size), 104px);
+  padding: 5px 5px 4px;
+  margin-top: -3px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.92);
+  border-bottom-color: rgba(0, 0, 0, 0.97);
+  background:
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.03) 0px,
+      rgba(255, 255, 255, 0.03) 1px,
+      transparent 2px,
+      transparent 4px
+    ),
+    radial-gradient(140px 62px at 20% 14%, rgba(255, 179, 0, 0.11), transparent 72%),
+    radial-gradient(160px 68px at 84% 18%, rgba(100, 210, 255, 0.10), transparent 74%),
+    linear-gradient(180deg, rgba(11, 15, 21, 0.9), rgba(6, 9, 14, 0.95));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -10px 14px rgba(0, 0, 0, 0.52),
+    0 10px 18px rgba(0, 0, 0, 0.36);
+}
+
+.mother-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: var(--mother-action-size);
+}
+
+.mother-action-label {
+  font-family: "IBM Plex Mono", monospace;
+  width: 34px;
+  font-size: 7px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(214, 225, 238, 0.9);
+  line-height: 1.05;
+  text-align: center;
+  white-space: normal;
 }
 
 .mother-ability-icon {
   flex: 0 0 auto;
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 179, 0, 0.48);
-  border-bottom-color: rgba(255, 179, 0, 0.48);
+  width: var(--mother-action-size);
+  height: var(--mother-action-size);
+  border-radius: 8px;
+  border: 1px solid rgba(108, 130, 156, 0.70);
+  border-bottom-color: rgba(26, 38, 54, 0.90);
   background:
-    radial-gradient(28px 18px at 32% 28%, rgba(255, 179, 0, 0.24), transparent 70%),
-    radial-gradient(34px 22px at 70% 70%, rgba(255, 128, 64, 0.14), transparent 70%),
-    linear-gradient(180deg, rgba(30, 20, 10, 0.76), rgba(6, 8, 12, 0.94));
-  color: rgba(255, 233, 188, 0.92);
+    radial-gradient(18px 12px at 26% 20%, rgba(255, 255, 255, 0.16), transparent 72%),
+    linear-gradient(180deg, rgba(32, 42, 56, 0.96), rgba(11, 16, 24, 0.98));
+  color: rgba(229, 236, 245, 0.96);
   cursor: pointer;
   display: grid;
   place-items: center;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    inset 0 -12px 18px rgba(0, 0, 0, 0.74),
-    0 14px 22px rgba(0, 0, 0, 0.44);
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -8px 12px rgba(0, 0, 0, 0.46),
+    0 8px 14px rgba(0, 0, 0, 0.28);
   transition:
     transform 0.12s ease,
     border-color 0.12s ease,
@@ -2706,45 +2807,46 @@ button.ghost:hover {
 }
 
 .mother-ability-icon:hover {
-  border-color: rgba(255, 179, 0, 0.72);
-  filter: brightness(1.06) saturate(1.05);
+  border-color: rgba(255, 186, 122, 0.74);
+  filter: brightness(1.08);
 }
 
 .mother-ability-icon:active {
   transform: translateY(1px);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.10),
-    inset 0 -10px 16px rgba(0, 0, 0, 0.76),
-    0 12px 20px rgba(0, 0, 0, 0.42);
+    inset 0 -6px 10px rgba(0, 0, 0, 0.54);
 }
 
 .mother-ability-icon:disabled {
-  opacity: 0.55;
+  opacity: 0.45;
   cursor: not-allowed;
-  filter: saturate(0.65);
+  filter: saturate(0.45);
 }
 
 .mother-confirm,
 .mother-stop {
-  min-height: 38px;
-  border-radius: 12px;
-  padding: 8px 12px;
+  min-height: var(--mother-action-size);
+  width: var(--mother-action-size);
+  border-radius: 8px;
+  padding: 0;
   font-family: "IBM Plex Mono", monospace;
-  font-size: 12px;
-  letter-spacing: 0.10em;
-  text-transform: uppercase;
+  font-size: 15px;
+  letter-spacing: 0;
+  text-transform: none;
   cursor: pointer;
-  border: 1px solid rgba(255, 179, 0, 0.46);
-  border-bottom-color: rgba(0, 0, 0, 0.82);
-  color: rgba(255, 233, 188, 0.92);
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(108, 130, 156, 0.70);
+  border-bottom-color: rgba(26, 38, 54, 0.90);
+  color: rgba(223, 232, 241, 0.95);
   background:
-    radial-gradient(180px 90px at 18% 28%, rgba(255, 179, 0, 0.20), transparent 66%),
-    radial-gradient(220px 110px at 92% 20%, rgba(255, 128, 64, 0.12), transparent 70%),
-    linear-gradient(180deg, rgba(30, 20, 10, 0.78), rgba(6, 8, 12, 0.94));
+    radial-gradient(18px 12px at 26% 20%, rgba(255, 255, 255, 0.16), transparent 72%),
+    linear-gradient(180deg, rgba(32, 42, 56, 0.96), rgba(11, 16, 24, 0.98));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    inset 0 -14px 18px rgba(0, 0, 0, 0.74),
-    0 16px 24px rgba(0, 0, 0, 0.46);
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -8px 12px rgba(0, 0, 0, 0.46),
+    0 8px 14px rgba(0, 0, 0, 0.28);
   transition:
     transform 0.12s ease,
     border-color 0.12s ease,
@@ -2754,28 +2856,29 @@ button.ghost:hover {
 
 .mother-confirm {
   flex: 0 0 auto;
-  width: 38px;
+  width: var(--mother-action-size);
+  min-height: var(--mother-action-size);
   padding: 0;
-  font-size: 19px;
+  font-size: 15px;
   line-height: 1;
   letter-spacing: 0;
   text-transform: none;
-  color: rgba(82, 255, 148, 0.95);
-  border-color: rgba(82, 255, 148, 0.60);
+  color: rgba(173, 244, 204, 0.98);
+  border-color: rgba(122, 220, 172, 0.70);
+  border-bottom-color: rgba(70, 144, 108, 0.84);
   background:
-    radial-gradient(26px 18px at 34% 26%, rgba(82, 255, 148, 0.30), transparent 72%),
-    radial-gradient(30px 22px at 72% 74%, rgba(82, 255, 148, 0.14), transparent 72%),
-    linear-gradient(180deg, rgba(10, 30, 18, 0.82), rgba(6, 8, 12, 0.94));
+    radial-gradient(18px 12px at 26% 20%, rgba(212, 255, 232, 0.18), transparent 72%),
+    linear-gradient(180deg, rgba(30, 56, 44, 0.95), rgba(12, 24, 19, 0.98));
 }
 
 .mother-confirm:hover,
 .mother-stop:hover {
-  border-color: rgba(255, 179, 0, 0.72);
-  filter: brightness(1.05) saturate(1.05);
+  border-color: rgba(180, 198, 222, 0.80);
+  filter: brightness(1.08);
 }
 
 .mother-confirm:hover {
-  border-color: rgba(82, 255, 148, 0.78);
+  border-color: rgba(122, 220, 172, 0.84);
 }
 
 .mother-confirm:active,
@@ -2783,27 +2886,35 @@ button.ghost:hover {
   transform: translateY(1px);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.10),
-    inset 0 -10px 16px rgba(0, 0, 0, 0.78),
-    0 12px 20px rgba(0, 0, 0, 0.44);
+    inset 0 -6px 10px rgba(0, 0, 0, 0.54);
 }
 
 .mother-confirm:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: not-allowed;
-  filter: saturate(0.65);
+  filter: saturate(0.5);
 }
 
 .mother-stop {
-  flex: 1 1 auto;
-  border-color: rgba(255, 143, 143, 0.42);
-  color: rgba(255, 210, 210, 0.92);
+  flex: 0 0 auto;
+  border-color: rgba(228, 124, 150, 0.64);
+  border-bottom-color: rgba(130, 62, 80, 0.86);
+  color: rgba(255, 213, 226, 0.94);
   background:
-    radial-gradient(180px 90px at 18% 28%, rgba(255, 143, 143, 0.20), transparent 66%),
-    linear-gradient(180deg, rgba(36, 10, 10, 0.72), rgba(6, 8, 12, 0.94));
+    radial-gradient(18px 12px at 26% 20%, rgba(255, 226, 236, 0.14), transparent 72%),
+    linear-gradient(180deg, rgba(54, 28, 38, 0.96), rgba(22, 13, 18, 0.99));
 }
 
 .mother-stop:hover {
-  border-color: rgba(255, 143, 143, 0.72);
+  border-color: rgba(239, 138, 168, 0.84);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #mother-panel,
+  #mother-panel::before,
+  #mother-panel::after {
+    animation: none;
+  }
 }
 
 .portrait-dock {
@@ -2985,6 +3096,227 @@ button.ghost:hover {
   scrollbar-width: thin;
   position: relative;
   isolation: isolate;
+}
+
+@keyframes mother-readout-fade {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 5px, 0);
+    filter: blur(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    filter: blur(0);
+  }
+}
+
+#tips-text.mother-readout-fade {
+  animation: mother-readout-fade 220ms cubic-bezier(0.25, 0.8, 0.3, 1);
+}
+
+#tips-text .mother-proposal-icons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  white-space: normal;
+}
+
+@keyframes mother-proposal-focus-in {
+  0% {
+    opacity: 0;
+    filter: blur(8px) saturate(1.18);
+    transform: translate3d(0, 7px, 0) scale(0.9);
+  }
+  65% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0) saturate(1);
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+#tips-text .mother-proposal-icon {
+  --proposal-accent: rgba(230, 237, 243, 0.94);
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  border: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--proposal-accent);
+  background:
+    radial-gradient(28px 28px at 50% 50%, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.0) 72%),
+    radial-gradient(56px 38px at 50% 100%, rgba(80, 102, 132, 0.14), rgba(80, 102, 132, 0) 76%);
+  box-shadow: none;
+  opacity: 0;
+  filter: blur(10px) saturate(1.12);
+  transform: translate3d(0, 8px, 0) scale(0.86);
+  animation: mother-proposal-focus-in 420ms cubic-bezier(0.22, 0.8, 0.3, 1) forwards;
+}
+
+#tips-text .mother-proposal-icon::before {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(170, 189, 214, 0.34);
+}
+
+#tips-text .mother-proposal-icon::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: 999px;
+  border: 1px solid rgba(85, 106, 136, 0.24);
+}
+
+#tips-text .mother-proposal-icon svg {
+  width: 30px;
+  height: 30px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#tips-text .mother-proposal-icon.is-active {
+  color: var(--proposal-accent);
+}
+
+#tips-text .mother-proposal-icon.is-active::before {
+  border-color: rgba(201, 220, 244, 0.44);
+}
+
+#tips-text .mother-proposal-icon.is-active::after {
+  border-color: rgba(94, 117, 149, 0.34);
+}
+
+#tips-text .mother-phase-icons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+}
+
+@keyframes mother-phase-focus-in {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 7px, 0) scale(0.92);
+    filter: blur(6px) saturate(1.06);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0) saturate(1);
+  }
+}
+
+#tips-text .mother-phase-icon {
+  --phase-accent: rgba(230, 237, 243, 0.94);
+  min-width: 92px;
+  height: 38px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  color: var(--phase-accent);
+  border: 0;
+  border-top: 1px solid rgba(174, 194, 221, 0.26);
+  border-bottom: 1px solid rgba(71, 90, 117, 0.42);
+  border-radius: 6px;
+  clip-path: none;
+  background:
+    radial-gradient(72px 26px at 50% 0%, rgba(170, 196, 228, 0.09), rgba(170, 196, 228, 0) 75%),
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.03) 0px,
+      rgba(255, 255, 255, 0.03) 1px,
+      transparent 2px,
+      transparent 4px
+    ),
+    linear-gradient(180deg, rgba(25, 33, 44, 0.42), rgba(10, 14, 20, 0.14));
+  box-shadow: none;
+  opacity: 0;
+  transform: translate3d(0, 7px, 0) scale(0.92);
+  filter: blur(6px) saturate(1.06);
+  animation: mother-phase-focus-in 360ms cubic-bezier(0.22, 0.8, 0.3, 1) forwards;
+}
+
+#tips-text .mother-phase-icon::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(214, 227, 246, 0.3), transparent);
+  opacity: 0.7;
+}
+
+#tips-text .mother-phase-icon svg {
+  width: 27px;
+  height: 27px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.85;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#tips-text .mother-phase-icon.is-braiding {
+  border-top-style: dashed;
+  border-bottom-style: dashed;
+  background:
+    radial-gradient(72px 26px at 50% 0%, rgba(128, 216, 252, 0.14), rgba(128, 216, 252, 0) 75%),
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.03) 0px,
+      rgba(255, 255, 255, 0.03) 1px,
+      transparent 2px,
+      transparent 4px
+    ),
+    linear-gradient(180deg, rgba(16, 29, 40, 0.40), rgba(8, 14, 20, 0.13));
+}
+
+#tips-text .mother-phase-icon.is-drafting {
+  background:
+    radial-gradient(72px 26px at 50% 0%, rgba(126, 233, 168, 0.12), rgba(126, 233, 168, 0) 75%),
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.03) 0px,
+      rgba(255, 255, 255, 0.03) 1px,
+      transparent 2px,
+      transparent 4px
+    ),
+    linear-gradient(180deg, rgba(19, 36, 31, 0.40), rgba(8, 17, 14, 0.13));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #tips-text.mother-readout-fade {
+    animation: none;
+  }
+  #tips-text .mother-proposal-icon {
+    animation: none;
+    opacity: 1;
+    filter: none;
+    transform: none;
+  }
+  #tips-text .mother-phase-icon {
+    animation: none;
+    opacity: 1;
+    filter: none;
+    transform: none;
+  }
 }
 
 /* Mother panel "cosmic storm" glitches (subtle + infrequent). */
