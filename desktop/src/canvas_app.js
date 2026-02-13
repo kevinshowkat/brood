@@ -15,11 +15,27 @@ import {
 } from "@tauri-apps/api/fs";
 
 import { computeActionGridSlots } from "./action_grid_logic.js";
+import { createEffectsRuntime } from "./effects_runtime.js";
+import { effectTypeFromTokenType } from "./effect_specs.js";
 import {
   mergeAmbientSuggestions,
   placeAmbientSuggestions,
   shouldScheduleAmbientIntent,
 } from "./intent_ambient.js";
+import {
+  EFFECT_TOKEN_LIFECYCLE,
+  beginEffectTokenApply,
+  beginEffectTokenDrag,
+  cancelEffectTokenDrag,
+  consumePendingEffectSourceSlot,
+  consumeEffectToken,
+  createEffectTokenState,
+  createPendingEffectExtractionState,
+  effectTokenCanDispatchApply,
+  isValidEffectDrop,
+  recoverEffectTokenApply,
+  updateEffectTokenDrag,
+} from "./effect_interactions.js";
 import {
   MOTHER_IDLE_EVENTS,
   MOTHER_IDLE_STATES,
@@ -137,6 +153,7 @@ const els = {
   canvasWrap: document.getElementById("canvas-wrap"),
   dropHint: document.getElementById("drop-hint"),
   workCanvas: document.getElementById("work-canvas"),
+  effectsCanvas: document.getElementById("effects-canvas"),
   imageFx: document.getElementById("image-fx"),
   imageFx2: document.getElementById("image-fx-2"),
   overlayCanvas: document.getElementById("overlay-canvas"),
@@ -312,6 +329,7 @@ const state = {
     moved: false,
   },
   effectTokenDrag: null, // { tokenId, sourceImageId, targetImageId, moved, x, y }
+  effectTokenApplyLocks: new Map(), // tokenId -> { dispatchId, targetImageId, queued, startedAt }
   wheelMenu: {
     open: false,
     hideTimer: null,
@@ -653,6 +671,7 @@ const INTENT_TRACE_FILENAME = "intent_trace.jsonl";
 let visualPromptWriteTimer = null;
 let intentTraceSeq = 0;
 let intentRealtimePortraitBusy = false;
+let effectsRuntime = null;
 
 function _intentTracePath() {
   if (!state.runDir) return null;
@@ -1266,7 +1285,7 @@ function updateAlwaysOnVisionReadout() {
     const cleaned = aov.lastText.trim();
     text = cleaned.length > 1400 ? `${cleaned.slice(0, 1399).trimEnd()}\n…` : cleaned;
   } else {
-    text = state.images.length ? "On (waiting…)" : "On (no images loaded)";
+    text = getVisibleCanvasImages().length ? "On (waiting…)" : "On (no images loaded)";
   }
 
   if (els.alwaysOnVisionReadout) {
@@ -1351,7 +1370,7 @@ function syncAlwaysOnVisionPortrait() {
 function allowAlwaysOnVision() {
   if (intentModeActive()) return false;
   if (!state.alwaysOnVision?.enabled) return false;
-  if (!state.images.length) return false;
+  if (!getVisibleCanvasImages().length) return false;
   if (!state.runDir) return false;
   // Fail fast before dispatch if we know required keys are missing.
   if (state.keyStatus) {
@@ -1736,7 +1755,8 @@ function _stableQuickActionLabel(label) {
 }
 
 function buildCanvasContextEnvelope() {
-  const active = getActiveImage();
+  const activeId = getVisibleActiveId();
+  const active = activeId ? state.imagesById.get(activeId) || null : null;
   const wrap = els.canvasWrap;
   const dpr = getDpr();
   const canvasCssW = wrap?.clientWidth || 0;
@@ -1744,13 +1764,14 @@ function buildCanvasContextEnvelope() {
 
   ensureFreeformLayoutRectsCss(state.images || [], canvasCssW, canvasCssH);
 
-  const selectedIds = getSelectedIds();
+  const selectedIds = getVisibleSelectedIds();
   const selectedSet = new Set(selectedIds);
   const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
   const images = [];
   for (let idx = 0; idx < z.length; idx += 1) {
-    const imageId = z[idx];
+    const imageId = String(z[idx] || "").trim();
     if (!imageId) continue;
+    if (!isVisibleCanvasImageId(imageId)) continue;
     const item = state.imagesById.get(imageId) || null;
     const rect = state.freeformRects.get(imageId) || null;
     if (!item?.path || !rect) continue;
@@ -1764,7 +1785,7 @@ function buildCanvasContextEnvelope() {
       id: String(imageId),
       file: basename(item.path),
       z: idx,
-      is_active: Boolean(state.activeId && String(state.activeId) === String(imageId)),
+      is_active: Boolean(activeId && String(activeId) === String(imageId)),
       is_selected: selectedSet.has(String(imageId)),
       rect_css: { x, y, w, h, cx, cy },
       rect_norm: {
@@ -1825,6 +1846,8 @@ function buildCanvasContextEnvelope() {
     })
     .filter((ev) => ev && ev.type);
 
+  const visibleImageCount = getVisibleCanvasImages().length;
+
   return {
     schema_version: CANVAS_CONTEXT_ENVELOPE_VERSION,
     generated_at: new Date().toISOString(),
@@ -1837,10 +1860,10 @@ function buildCanvasContextEnvelope() {
     },
     canvas_mode: state.canvasMode,
     tool: state.tool,
-    n_images: state.images.length,
+    n_images: visibleImageCount,
     active_image: active?.path ? basename(active.path) : null,
     selection: {
-      active_id: state.activeId ? String(state.activeId) : null,
+      active_id: activeId ? String(activeId) : null,
       selected_ids: selectedIds.slice(0, 3),
     },
     images: images.slice(0, 12),
@@ -2170,13 +2193,17 @@ function isForegroundActionRunning() {
 function computeCanvasSignature() {
   const parts = [];
   for (const item of state.images) {
-    if (item?.id) parts.push(`id=${item.id}`);
+    const id = String(item?.id || "").trim();
+    if (!id || !isVisibleCanvasImageId(id)) continue;
+    parts.push(`id=${id}`);
     if (item?.path) parts.push(item.path);
   }
   // Spatial layout is a first-class signal; include freeform rects so background inference
   // reacts to user arrangement but ignore pure camera/view changes (pan/zoom/selection).
   const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
-  for (const imageId of z) {
+  for (const imageIdRaw of z) {
+    const imageId = String(imageIdRaw || "").trim();
+    if (!imageId || !isVisibleCanvasImageId(imageId)) continue;
     const rect = imageId ? state.freeformRects.get(imageId) : null;
     if (!rect) continue;
     parts.push(
@@ -2219,7 +2246,7 @@ function scheduleAlwaysOnVision({ immediate = false, force = false } = {}) {
 }
 
 async function writeAlwaysOnVisionSnapshot(outPath, { maxDim = 768 } = {}) {
-  const items = state.images.filter((it) => it?.path).slice(0, 6);
+  const items = getVisibleCanvasImages().filter((it) => it?.path).slice(0, 6);
   for (const item of items) ensureCanvasImageLoaded(item);
   const n = items.length;
   if (!n) return null;
@@ -2450,9 +2477,11 @@ function _ambientUseCaseKeyForBranch(branch) {
 function computeAmbientIntentSignature() {
   const parts = [];
   const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
-  for (const imageId of z) {
-    const item = imageId ? state.imagesById.get(imageId) : null;
-    const rect = imageId ? state.freeformRects.get(imageId) : null;
+  for (const imageIdRaw of z) {
+    const imageId = String(imageIdRaw || "").trim();
+    if (!imageId || !isVisibleCanvasImageId(imageId)) continue;
+    const item = state.imagesById.get(imageId) || null;
+    const rect = state.freeformRects.get(imageId) || null;
     if (item?.path) parts.push(String(item.path));
     if (item?.visionDesc) {
       const v = String(item.visionDesc).replace(/[\r\n\t|]+/g, " ").replace(/\s+/g, " ").trim();
@@ -2583,7 +2612,7 @@ function applyAmbientIntentFallback(reason, { message = null, hardDisable = fals
 
 function allowAmbientIntentRealtime() {
   if (!intentAmbientActive()) return false;
-  if (!state.images.length) return false;
+  if (!getVisibleCanvasImages().length) return false;
   if (!state.runDir) return false;
   if (state.keyStatus && !state.keyStatus.openai) return false;
   return true;
@@ -2592,7 +2621,7 @@ function allowAmbientIntentRealtime() {
 function scheduleAmbientIntentInference({ immediate = false, reason = null, imageIds = [] } = {}) {
   const ambient = state.intentAmbient;
   if (!ambient || !intentAmbientActive()) return false;
-  if (!state.images.length) return false;
+  if (!getVisibleCanvasImages().length) return false;
   const why = String(reason || "")
     .trim()
     .toLowerCase();
@@ -2613,7 +2642,7 @@ function scheduleAmbientIntentInference({ immediate = false, reason = null, imag
 async function runAmbientIntentInferenceOnce({ reason = null } = {}) {
   const ambient = state.intentAmbient;
   if (!ambient || !intentAmbientActive()) return false;
-  if (!state.images.length) {
+  if (!getVisibleCanvasImages().length) {
     ambient.suggestions = [];
     return false;
   }
@@ -2739,7 +2768,7 @@ async function runAmbientIntentInferenceOnce({ reason = null } = {}) {
 
 function allowIntentRealtime() {
   if (!intentModeActive()) return false;
-  if (!state.images.length) return false;
+  if (!getVisibleCanvasImages().length) return false;
   if (!state.runDir) return false;
   const intent = state.intent;
   if (!intent) return false;
@@ -2774,8 +2803,10 @@ function computeIntentSignature() {
     parts.push(`sel:${r}:${bid}:${tok}`);
   }
   const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
-  for (const imageId of z) {
-    const item = imageId ? state.imagesById.get(imageId) : null;
+  for (const imageIdRaw of z) {
+    const imageId = String(imageIdRaw || "").trim();
+    if (!imageId || !isVisibleCanvasImageId(imageId)) continue;
+    const item = state.imagesById.get(imageId) || null;
     if (item?.path) parts.push(item.path);
     if (item?.visionDesc) {
       const v = sigSafe(item.visionDesc, 40);
@@ -2796,7 +2827,7 @@ function scheduleIntentInference({ immediate = false, reason = null } = {}) {
   if (!intentModeActive()) return;
   const intent = state.intent;
   if (!intent || intent.forceChoice) return;
-  if (!state.images.length) return;
+  if (!getVisibleCanvasImages().length) return;
 
   clearTimeout(intentInferenceTimer);
   const delay = immediate ? 0 : INTENT_INFERENCE_DEBOUNCE_MS;
@@ -2818,7 +2849,7 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
     intent.pendingFrameId = null;
     return false;
   }
-  if (!state.images.length) return false;
+  if (!getVisibleCanvasImages().length) return false;
 
   const now = Date.now();
   if (!intent.startedAt) {
@@ -3007,7 +3038,7 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
 }
 
 async function waitForIntentImagesLoaded({ timeoutMs = 900 } = {}) {
-  const items = (state.images || []).filter((it) => it?.path).slice(0, 6);
+  const items = getVisibleCanvasImages().filter((it) => it?.path).slice(0, 6);
   for (const item of items) ensureCanvasImageLoaded(item);
   const deadline = Date.now() + Math.max(60, Number(timeoutMs) || 900);
   while (Date.now() < deadline) {
@@ -3061,7 +3092,8 @@ function buildIntentContextEnvelope(frameId) {
   const images = [];
   const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
   for (let idx = 0; idx < z.length; idx += 1) {
-    const imageId = z[idx];
+    const imageId = String(z[idx] || "").trim();
+    if (!imageId || !isVisibleCanvasImageId(imageId)) continue;
     const item = imageId ? state.imagesById.get(imageId) : null;
     const rect = imageId ? state.freeformRects.get(imageId) : null;
     if (!item?.path || !rect) continue;
@@ -5114,9 +5146,9 @@ async function motherV2CommitSelectedDraft() {
   if (!idle) return false;
   const draft = motherV2CurrentDraft();
   if (!draft?.path) return false;
-  const intent = idle.intent && typeof idle.intent === "object" ? idle.intent : {};
+  const intent = motherV2SanitizeIntentImageIds(idle.intent && typeof idle.intent === "object" ? idle.intent : {}) || {};
   const targetIds = Array.isArray(intent.target_ids) ? intent.target_ids.map((v) => String(v || "").trim()).filter(Boolean) : [];
-  const targetId = targetIds[0] || (state.activeId ? String(state.activeId) : null);
+  const targetId = targetIds[0] || getVisibleActiveId();
   const policy = String(intent.placement_policy || "adjacent").trim() || "adjacent";
   const beforeTarget = targetId && state.imagesById.has(targetId)
     ? (() => {
@@ -5368,7 +5400,7 @@ function minimapBusyImageIds() {
   add(state.pendingReplace?.targetId);
 
   if (state.mother?.running) {
-    addMany(getSelectedIds());
+    addMany(getVisibleSelectedIds());
   }
   return ids;
 }
@@ -5392,14 +5424,16 @@ function computeMinimapSignature(busyIds) {
     const vy = Math.round(Number(state.view?.offsetY) || 0);
     parts.push(`v=${Math.round(vs * 1000)},${vx},${vy}`);
   }
-  parts.push(`n=${state.images.length}`);
-  parts.push(`active=${state.activeId || ""}`);
-  parts.push(`sel=${getSelectedIds().join(",")}`);
+  parts.push(`n=${getVisibleCanvasImages().length}`);
+  parts.push(`active=${getVisibleActiveId() || ""}`);
+  parts.push(`sel=${getVisibleSelectedIds().join(",")}`);
   const busy = busyIds ? Array.from(busyIds).sort().join(",") : "";
   parts.push(`busy=${busy}`);
   const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
-  for (const imageId of z) {
-    const rect = imageId ? state.freeformRects.get(imageId) : null;
+  for (const imageIdRaw of z) {
+    const imageId = String(imageIdRaw || "").trim();
+    if (!imageId || !isVisibleCanvasImageId(imageId)) continue;
+    const rect = state.freeformRects.get(imageId) || null;
     if (!rect) continue;
     parts.push(
       `${imageId}:${Math.round(Number(rect.x) || 0)},${Math.round(Number(rect.y) || 0)},${Math.round(
@@ -5433,8 +5467,9 @@ function renderMinimap() {
   const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
   const rects = [];
   for (let idx = 0; idx < z.length; idx += 1) {
-    const imageId = z[idx];
+    const imageId = String(z[idx] || "").trim();
     if (!imageId) continue;
+    if (!isVisibleCanvasImageId(imageId)) continue;
     const rect = state.freeformRects.get(imageId) || null;
     if (!rect) continue;
     rects.push({ imageId: String(imageId), rect, z: idx });
@@ -5458,8 +5493,8 @@ function renderMinimap() {
   const ox = Math.round((surfaceW - drawW) / 2);
   const oy = Math.round((surfaceH - drawH) / 2);
 
-  const selected = new Set(getSelectedIds());
-  const activeId = state.activeId ? String(state.activeId) : "";
+  const selected = new Set(getVisibleSelectedIds());
+  const activeId = String(getVisibleActiveId() || "");
   const frag = document.createDocumentFragment();
   for (const rec of rects) {
     const r = rec.rect;
@@ -5554,7 +5589,7 @@ function isMotherGeneratedImageItem(item) {
 
 function motherIdleBaseImageItems() {
   // Mother v2 follow-ups should be able to reason over newly generated outputs too.
-  return (state.images || []).filter((item) => item?.id);
+  return getVisibleCanvasImages();
 }
 
 function motherV2NormalizeTransformationMode(rawMode) {
@@ -5575,6 +5610,35 @@ function motherV2CurrentTransformationMode() {
   return motherV2NormalizeTransformationMode(mode);
 }
 
+function motherV2NormalizeImageIdList(list = []) {
+  const out = [];
+  for (const raw of Array.isArray(list) ? list : []) {
+    const id = String(raw || "").trim();
+    if (!id) continue;
+    if (!isVisibleCanvasImageId(id)) continue;
+    if (!out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+function motherV2SanitizeIntentImageIds(intentPayload = null) {
+  if (!intentPayload || typeof intentPayload !== "object") return null;
+  const roles = intentPayload.roles && typeof intentPayload.roles === "object"
+    ? {
+        subject: motherV2NormalizeImageIdList(intentPayload.roles.subject),
+        model: motherV2NormalizeImageIdList(intentPayload.roles.model),
+        mediator: motherV2NormalizeImageIdList(intentPayload.roles.mediator),
+        object: motherV2NormalizeImageIdList(intentPayload.roles.object),
+      }
+    : null;
+  return {
+    ...intentPayload,
+    target_ids: motherV2NormalizeImageIdList(intentPayload.target_ids),
+    reference_ids: motherV2NormalizeImageIdList(intentPayload.reference_ids),
+    ...(roles ? { roles } : {}),
+  };
+}
+
 function motherV2RoleContextIds({ limit = 6 } = {}) {
   const maxCount = Number.isFinite(Number(limit)) && Number(limit) > 0
     ? Math.floor(Number(limit))
@@ -5583,7 +5647,7 @@ function motherV2RoleContextIds({ limit = 6 } = {}) {
   const pushId = (rawId) => {
     const normalized = String(rawId || "").trim();
     if (!normalized) return;
-    if (!state.imagesById.has(normalized)) return;
+    if (!isVisibleCanvasImageId(normalized)) return;
     if (ids.includes(normalized)) return;
     ids.push(normalized);
   };
@@ -5606,8 +5670,8 @@ function motherV2RoleContextIds({ limit = 6 } = {}) {
     if (pushMany(intent.target_ids)) return ids;
     if (pushMany(intent.reference_ids)) return ids;
   }
-  if (pushMany(getSelectedIds())) return ids;
-  pushId(state.activeId);
+  if (pushMany(getVisibleSelectedIds())) return ids;
+  pushId(getVisibleActiveId());
   return ids;
 }
 
@@ -5669,6 +5733,7 @@ function motherV2ProposalSentence(intent) {
       for (const raw of Array.isArray(list) ? list : []) {
         const id = String(raw || "").trim();
         if (!id) continue;
+        if (!isVisibleCanvasImageId(id)) continue;
         uniqueIds.add(id);
       }
     };
@@ -5693,6 +5758,7 @@ function motherV2IntentContextSignature(intentPayload = null) {
     for (const raw of Array.isArray(list) ? list : []) {
       const id = String(raw || "").trim();
       if (!id) continue;
+      if (!isVisibleCanvasImageId(id)) continue;
       ids.add(id);
     }
   };
@@ -5721,7 +5787,7 @@ function motherV2IntentImageSetSignature(intentPayload = null) {
 }
 
 function motherV2IntentRequiredImageIds() {
-  const selected = getSelectedIds().map((v) => String(v || "").trim()).filter(Boolean);
+  const selected = getVisibleSelectedIds().map((v) => String(v || "").trim()).filter(Boolean);
   const images = motherIdleBaseImageItems().map((item) => {
     const rect = state.freeformRects.get(item.id) || null;
     return {
@@ -5737,7 +5803,7 @@ function motherV2IntentRequiredImageIds() {
     };
   });
   const rankedIds = motherV2RankImageIdsByProminence(images);
-  const activeId = String(state.activeId || "").trim();
+  const activeId = String(getVisibleActiveId() || "").trim();
 
   const targetIds = selected.length ? selected.slice(0, 3) : activeId ? [activeId] : rankedIds.slice(0, 1);
   const targetSet = new Set(targetIds);
@@ -5947,12 +6013,20 @@ async function appendMotherTraceLog(entry = {}) {
 }
 
 function motherV2RoleMapClone() {
+  const normalize = (list) =>
+    Array.from(
+      new Set(
+        (Array.isArray(list) ? list : [])
+          .map((v) => String(v || "").trim())
+          .filter((id) => Boolean(id) && isVisibleCanvasImageId(id))
+      )
+    );
   const base = state.motherIdle?.roles || {};
   return {
-    subject: Array.isArray(base.subject) ? base.subject.map((v) => String(v || "")).filter(Boolean) : [],
-    model: Array.isArray(base.model) ? base.model.map((v) => String(v || "")).filter(Boolean) : [],
-    mediator: Array.isArray(base.mediator) ? base.mediator.map((v) => String(v || "")).filter(Boolean) : [],
-    object: Array.isArray(base.object) ? base.object.map((v) => String(v || "")).filter(Boolean) : [],
+    subject: normalize(base.subject),
+    model: normalize(base.model),
+    mediator: normalize(base.mediator),
+    object: normalize(base.object),
   };
 }
 
@@ -5963,7 +6037,7 @@ function motherV2NormalizeRoles(nextRoles = null) {
   const out = { subject: [], model: [], mediator: [], object: [] };
   for (const key of MOTHER_V2_ROLE_KEYS) {
     const list = Array.isArray(source[key]) ? source[key] : [];
-    out[key] = Array.from(new Set(list.map((v) => String(v || "").trim()).filter(Boolean)));
+    out[key] = Array.from(new Set(list.map((v) => String(v || "").trim()).filter((id) => Boolean(id) && isVisibleCanvasImageId(id))));
   }
   idle.roles = out;
 }
@@ -5997,14 +6071,20 @@ function motherV2RoleIds(roleKey) {
   const idle = state.motherIdle;
   if (!idle) return [];
   const list = Array.isArray(idle.roles?.[roleKey]) ? idle.roles[roleKey] : [];
-  return list.map((v) => String(v || "")).filter(Boolean);
+  return list.map((v) => String(v || "").trim()).filter((id) => Boolean(id) && isVisibleCanvasImageId(id));
 }
 
 function motherV2SetRoleIds(roleKey, imageIds) {
   const idle = state.motherIdle;
   if (!idle) return;
   if (!MOTHER_V2_ROLE_KEYS.includes(roleKey)) return;
-  idle.roles[roleKey] = Array.from(new Set((Array.isArray(imageIds) ? imageIds : []).map((v) => String(v || "").trim()).filter(Boolean)));
+  idle.roles[roleKey] = Array.from(
+    new Set(
+      (Array.isArray(imageIds) ? imageIds : [])
+        .map((v) => String(v || "").trim())
+        .filter((id) => Boolean(id) && isVisibleCanvasImageId(id))
+    )
+  );
 }
 
 function motherV2ResetInteractionState() {
@@ -7196,7 +7276,8 @@ function motherV2IntentPayload() {
   const wrap = els.canvasWrap;
   const canvasCssW = Math.max(1, Number(wrap?.clientWidth) || 1);
   const canvasCssH = Math.max(1, Number(wrap?.clientHeight) || 1);
-  const selectedIds = getSelectedIds().map((v) => String(v || "").trim()).filter(Boolean);
+  const selectedIds = getVisibleSelectedIds().map((v) => String(v || "").trim()).filter(Boolean);
+  const activeId = getVisibleActiveId();
   const ambientBranches = motherV2AmbientIntentHints(3);
   const ambientModeHints = motherV2AmbientTransformationModeHints();
   const canvasSummary = motherV2CanvasContextSummaryHint();
@@ -7232,7 +7313,7 @@ function motherV2IntentPayload() {
     creative_directive_instruction: MOTHER_CREATIVE_DIRECTIVE_SENTENCE,
     preferred_transformation_mode: motherV2PreferredTransformationModeHint(),
     intensity: clamp(Number(idle?.intensity) || 62, 0, 100),
-    active_id: state.activeId ? String(state.activeId) : null,
+    active_id: activeId ? String(activeId) : null,
     selected_ids: selectedIds,
     canvas_context_summary: canvasSummary || null,
     ambient_intent: (ambientBranches.length || ambientModeHints.preferredMode)
@@ -7261,8 +7342,9 @@ function motherV2ApplyIntent(intentPayload = {}, { source = "local" } = {}) {
         }
       : null;
   normalizedIntent = motherV2DiversifyIntentForRejectFollowup(normalizedIntent);
+  normalizedIntent = motherV2SanitizeIntentImageIds(normalizedIntent);
   idle.intent = normalizedIntent;
-  motherV2NormalizeRoles(intentPayload?.roles || null);
+  motherV2NormalizeRoles(normalizedIntent?.roles || null);
   idle.pendingIntent = false;
   idle.pendingIntentPath = null;
   clearTimeout(idle.pendingIntentTimeout);
@@ -7342,16 +7424,19 @@ async function motherV2RequestIntentInference() {
 async function motherV2RequestPromptCompile() {
   const idle = state.motherIdle;
   if (!idle || !idle.intent) return null;
+  const sanitizedIntent = motherV2SanitizeIntentImageIds(idle.intent) || idle.intent;
+  const activeId = getVisibleActiveId();
+  const selectedIds = getVisibleSelectedIds().map((v) => String(v || "").trim()).filter(Boolean);
   const payload = {
     schema: "brood.mother.prompt_compile.v1",
     action_version: Number(idle.actionVersion) || 0,
-    intent: idle.intent,
+    intent: sanitizedIntent,
     roles: motherV2RoleMapClone(),
-    creative_directive: String(idle.intent?.creative_directive || "").trim() || MOTHER_CREATIVE_DIRECTIVE,
-    transformation_mode: motherV2NormalizeTransformationMode(idle.intent?.transformation_mode),
+    creative_directive: String(sanitizedIntent?.creative_directive || "").trim() || MOTHER_CREATIVE_DIRECTIVE,
+    transformation_mode: motherV2NormalizeTransformationMode(sanitizedIntent?.transformation_mode),
     intensity: clamp(Number(idle.intensity) || 62, 0, 100),
-    active_id: state.activeId ? String(state.activeId) : null,
-    selected_ids: getSelectedIds().map((v) => String(v || "").trim()).filter(Boolean),
+    active_id: activeId ? String(activeId) : null,
+    selected_ids: selectedIds,
     images: motherIdleBaseImageItems().map((item) => ({
       id: String(item.id || ""),
       file: basename(item.path || ""),
@@ -7399,6 +7484,7 @@ function motherV2CollectGenerationImagePaths() {
   const push = (raw) => {
     const id = String(raw || "").trim();
     if (!id) return;
+    if (!isVisibleCanvasImageId(id)) return;
     if (ids.includes(id)) return;
     ids.push(id);
   };
@@ -7412,10 +7498,10 @@ function motherV2CollectGenerationImagePaths() {
   pushMany(roles.object);
   pushMany(intent.target_ids);
   pushMany(intent.reference_ids);
-  pushMany(getSelectedIds());
+  pushMany(getVisibleSelectedIds());
   // Always include full canvas context so follow-ups can evolve beyond a small role subset.
   pushMany(motherIdleBaseImageItems().map((item) => String(item?.id || "").trim()));
-  if (!ids.length && state.activeId) push(state.activeId);
+  if (!ids.length) push(getVisibleActiveId());
 
   const paths = [];
   for (const imageId of ids) {
@@ -7440,13 +7526,14 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "") {
   const idle = state.motherIdle;
   if (!idle) return false;
   const imagePayload = motherV2CollectGenerationImagePaths();
+  const sanitizedIntent = motherV2SanitizeIntentImageIds(idle.intent) || idle.intent || null;
   const payload = {
     schema: "brood.mother.generate.v1",
     action_version: Number(idle.actionVersion) || 0,
-    intent_id: idle.intent?.intent_id || null,
-    intent: idle.intent || null,
-    transformation_mode: motherV2NormalizeTransformationMode(idle.intent?.transformation_mode),
-    creative_directive: String(idle.intent?.creative_directive || "").trim() || MOTHER_CREATIVE_DIRECTIVE,
+    intent_id: sanitizedIntent?.intent_id || idle.intent?.intent_id || null,
+    intent: sanitizedIntent,
+    transformation_mode: motherV2NormalizeTransformationMode(sanitizedIntent?.transformation_mode),
+    creative_directive: String(sanitizedIntent?.creative_directive || "").trim() || MOTHER_CREATIVE_DIRECTIVE,
     prompt: promptLine,
     positive_prompt: String(compiled?.positive_prompt || "").trim(),
     negative_prompt: String(compiled?.negative_prompt || "").trim(),
@@ -7822,6 +7909,32 @@ function getDpr() {
   return Math.max(1, Math.min(window.devicePixelRatio || 1, 3));
 }
 
+function getMultiViewTransform() {
+  return {
+    scale: Math.max(0.0001, Number(state.multiView?.scale) || 1),
+    offsetX: Number(state.multiView?.offsetX) || 0,
+    offsetY: Number(state.multiView?.offsetY) || 0,
+  };
+}
+
+function multiRectToScreenRect(rect, transform = getMultiViewTransform()) {
+  if (!rect) return null;
+  const x = Number(rect.x);
+  const y = Number(rect.y);
+  const w = Number(rect.w);
+  const h = Number(rect.h);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return null;
+  const scale = Math.max(0.0001, Number(transform?.scale) || 1);
+  const offsetX = Number(transform?.offsetX) || 0;
+  const offsetY = Number(transform?.offsetY) || 0;
+  return {
+    x: x * scale + offsetX,
+    y: y * scale + offsetY,
+    w: w * scale,
+    h: h * scale,
+  };
+}
+
 let lastHudHeightCssPx = null;
 let hudResizeObserver = null;
 function syncHudHeightVar() {
@@ -7863,9 +7976,18 @@ function ensureCanvasSize() {
   if (els.workCanvas.width !== width || els.workCanvas.height !== height) {
     els.workCanvas.width = width;
     els.workCanvas.height = height;
+    if (els.effectsCanvas) {
+      els.effectsCanvas.width = width;
+      els.effectsCanvas.height = height;
+    }
     els.overlayCanvas.width = width;
     els.overlayCanvas.height = height;
+    if (effectsRuntime) {
+      effectsRuntime.resize({ width, height, dpr });
+    }
     resetViewToFit();
+  } else if (effectsRuntime) {
+    effectsRuntime.resize({ width, height, dpr });
   }
 }
 
@@ -8101,6 +8223,27 @@ function getSelectedIds() {
   return out;
 }
 
+function isVisibleCanvasImageId(imageId) {
+  const id = String(imageId || "").trim();
+  if (!id) return false;
+  if (!state.imagesById.has(id)) return false;
+  return !isImageEffectTokenized(id);
+}
+
+function getVisibleCanvasImages() {
+  return (state.images || []).filter((item) => isVisibleCanvasImageId(item?.id));
+}
+
+function getVisibleSelectedIds() {
+  return getSelectedIds().filter((id) => isVisibleCanvasImageId(id));
+}
+
+function getVisibleActiveId() {
+  const activeId = String(state.activeId || "").trim();
+  if (!activeId) return null;
+  return isVisibleCanvasImageId(activeId) ? activeId : null;
+}
+
 function setSelectedIds(nextIds) {
   const out = [];
   for (const id of Array.isArray(nextIds) ? nextIds : []) {
@@ -8153,6 +8296,12 @@ function effectTokenForImageId(imageId) {
   return token;
 }
 
+function isImageEffectTokenized(imageId) {
+  const token = effectTokenForImageId(imageId);
+  if (!token) return false;
+  return String(token.lifecycle || "") !== EFFECT_TOKEN_LIFECYCLE.CONSUMED;
+}
+
 function clearEffectTokenForImageId(imageId) {
   const id = String(imageId || "").trim();
   if (!id) return;
@@ -8163,13 +8312,31 @@ function clearEffectTokenForImageId(imageId) {
   if (!token) return;
   // Keep other bindings if this token was intentionally shared.
   const stillUsed = Array.from(state.imageEffectTokenByImageId.values()).some((boundId) => String(boundId) === String(tokenId));
-  if (!stillUsed) state.effectTokensById.delete(tokenId);
+  if (!stillUsed) {
+    state.effectTokensById.delete(tokenId);
+    state.effectTokenApplyLocks.delete(String(tokenId));
+  }
 }
 
 function clearAllEffectTokens() {
   state.imageEffectTokenByImageId.clear();
   state.effectTokensById.clear();
+  state.effectTokenApplyLocks.clear();
   state.effectTokenDrag = null;
+}
+
+function syncSelectionForTokenizedImages() {
+  const selected = getSelectedIds();
+  const visibleSelected = selected.filter((id) => isVisibleCanvasImageId(id));
+  if (visibleSelected.length !== selected.length) {
+    setSelectedIds(visibleSelected.slice(-3));
+  }
+
+  const activeId = String(state.activeId || "").trim();
+  if (activeId && isVisibleCanvasImageId(activeId)) return;
+  const fallbackSelected = visibleSelected[visibleSelected.length - 1] || null;
+  const fallbackAny = getVisibleCanvasImages().slice(-1)[0]?.id || null;
+  state.activeId = String(fallbackSelected || fallbackAny || "").trim() || null;
 }
 
 function createOrUpdateEffectToken({
@@ -8189,23 +8356,28 @@ function createOrUpdateEffectToken({
   if (!imageKey || !tokenType) return null;
   const existing = effectTokenForImageId(imageKey);
   const tokenId = existing?.id || `fx-${tokenType}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-  const next = {
+  const next = createEffectTokenState({
     id: tokenId,
     type: tokenType,
     sourceImageId: imageKey,
     sourceImagePath: String(imagePath || ""),
-    palette: Array.isArray(palette) ? palette.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 8) : [],
-    colors: Array.isArray(colors) ? colors.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 8) : [],
-    materials: Array.isArray(materials) ? materials.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 8) : [],
-    emotion: String(emotion || "").trim(),
-    summary: String(summary || "").trim(),
-    source: source ? String(source) : null,
-    model: model ? String(model) : null,
+    palette,
+    colors,
+    materials,
+    emotion,
+    summary,
+    source,
+    model,
     createdAt: existing?.createdAt || Date.now(),
-    updatedAt: Date.now(),
-  };
+  });
+  if (!next) return null;
   state.effectTokensById.set(tokenId, next);
   state.imageEffectTokenByImageId.set(imageKey, tokenId);
+  state.effectTokenApplyLocks.delete(tokenId);
+  syncSelectionForTokenizedImages();
+  renderQuickActions();
+  renderHudReadout();
+  renderSelectionMeta();
   return next;
 }
 
@@ -8230,8 +8402,10 @@ function buildEffectTokenEditPrompt(token) {
     if (materials.length) parts.push(`dominant materials/textures: ${materials.join(", ")}`);
     const transfer = parts.length ? parts.join(". ") : "transfer the extracted color and material DNA";
     return (
-      `edit the image: remap this image using extracted DNA from the source reference. ${transfer}. ` +
-      "Preserve subject identity, composition logic, and object boundaries. " +
+      "edit the image in place. keep the target subject class, silhouette, geometry, and object boundaries unchanged. " +
+      `apply the extracted dna as style/material transfer only: ${transfer}. ` +
+      "dna is metaphorical here, not literal content. " +
+      "Do not replace the target with the source subject. Do not turn the subject into a DNA strand, helix, genome icon, or abstract ribbon. " +
       "No collage, no split-screen, no double exposure, no extra humans/faces unless already present, no text overlays."
     );
   }
@@ -8248,32 +8422,77 @@ function buildEffectTokenEditPrompt(token) {
   return "edit the image: refine the image with the selected effect token. Output one coherent image.";
 }
 
-async function applyEffectTokenToImage(tokenId, targetId, { fromQueue = false } = {}) {
-  if (!requireIntentUnlocked()) return;
-  const token = state.effectTokensById.get(String(tokenId || "").trim()) || null;
-  const target = state.imagesById.get(String(targetId || "").trim()) || null;
-  if (!token || !target?.path) {
-    showToast("Effect apply failed: missing token or target image.", "error", 2600);
-    return;
+async function applyEffectTokenToImage(tokenId, targetId, { fromQueue = false, dispatchId = null } = {}) {
+  const dispatchIdOverride = Number(dispatchId) || null;
+  const tokenKey = String(tokenId || "").trim();
+  const targetKey = String(targetId || "").trim();
+  const token = state.effectTokensById.get(tokenKey) || null;
+  if (!requireIntentUnlocked()) {
+    state.effectTokenApplyLocks.delete(tokenKey);
+    if (token && String(token.lifecycle || "") === EFFECT_TOKEN_LIFECYCLE.APPLYING) {
+      recoverEffectTokenApply(token);
+      requestRender();
+    }
+    return false;
   }
-  if (String(token.sourceImageId || "") === String(target.id || "")) {
+  const target = state.imagesById.get(targetKey) || null;
+  if (!token || !target?.path) {
+    state.effectTokenApplyLocks.delete(tokenKey);
+    if (token && String(token.lifecycle || "") === EFFECT_TOKEN_LIFECYCLE.APPLYING) {
+      recoverEffectTokenApply(token);
+      requestRender();
+    }
+    showToast("Effect apply failed: missing token or target image.", "error", 2600);
+    return false;
+  }
+  if (!isValidEffectDrop(token.sourceImageId, target.id)) {
+    state.effectTokenApplyLocks.delete(tokenKey);
+    if (String(token.lifecycle || "") === EFFECT_TOKEN_LIFECYCLE.APPLYING) {
+      recoverEffectTokenApply(token);
+      requestRender();
+    }
     showToast("Drop this token onto a different image.", "tip", 1800);
-    return;
+    return false;
+  }
+
+  let lock = state.effectTokenApplyLocks.get(tokenKey) || null;
+  if (dispatchIdOverride && lock && Number(lock.dispatchId) !== dispatchIdOverride) {
+    return false;
+  }
+  if (dispatchIdOverride && !lock) {
+    return false;
+  }
+  if (!lock) {
+    const dispatchId = beginEffectTokenApply(token, targetKey, Date.now());
+    if (!dispatchId) return false;
+    lock = {
+      dispatchId,
+      targetImageId: targetKey,
+      queued: false,
+      startedAt: Date.now(),
+    };
+    state.effectTokenApplyLocks.set(tokenKey, lock);
+    requestRender();
+  }
+  if (!effectTokenCanDispatchApply(token, lock.dispatchId, targetKey)) {
+    return false;
   }
 
   const actionLabel = effectTokenLabel(token);
   const queueKey = `effect_apply:${token.id}:${target.id}`;
   if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    lock.queued = true;
     enqueueAction({
       label: `${actionLabel} Apply`,
       key: queueKey,
       priority: ACTION_QUEUE_PRIORITY.user,
-      run: () => applyEffectTokenToImage(token.id, target.id, { fromQueue: true }),
+      run: () => applyEffectTokenToImage(token.id, target.id, { fromQueue: true, dispatchId: lock.dispatchId }),
     });
-    return;
+    return true;
   }
 
-  bumpInteraction();
+  lock.queued = false;
+  bumpInteraction({ semantic: false });
   await ensureRun();
   const provider = providerFromModel(
     token.type === "soul_leech" ? ACTION_IMAGE_MODEL.soul_leech_apply : ACTION_IMAGE_MODEL.extract_dna_apply
@@ -8285,6 +8504,7 @@ async function applyEffectTokenToImage(tokenId, targetId, { fromQueue = false } 
     effect_token_id: token.id,
     effect_type: token.type,
     source_image_id: token.sourceImageId || null,
+    effect_token_dispatch_id: lock.dispatchId,
   });
 
   try {
@@ -8300,13 +8520,76 @@ async function applyEffectTokenToImage(tokenId, targetId, { fromQueue = false } 
 
     const prompt = buildEffectTokenEditPrompt(token);
     await invoke("write_pty", { data: `${prompt}\n` });
+    return true;
   } catch (err) {
     state.expectingArtifacts = false;
     state.engineImageModelRestore = null;
     clearPendingReplace();
+    state.effectTokenApplyLocks.delete(tokenKey);
+    recoverEffectTokenApply(token);
     setImageFxActive(false);
     updatePortraitIdle();
+    requestRender();
     throw err;
+  }
+}
+
+function effectTokenGlyphSizeForRect(rect) {
+  const w = Number(rect?.w) || 0;
+  const h = Number(rect?.h) || 0;
+  return clamp(Math.min(w, h) * 0.35, 40, 116);
+}
+
+function effectTokenDisplaySizeForRect(rect, effectType) {
+  const normalized = effectTypeFromTokenType(effectType || "extract_dna");
+  const base = effectTokenGlyphSizeForRect(rect);
+  if (normalized === "extract_dna") return clamp(base * 1.75, 70, 203);
+  return base;
+}
+
+function effectTokenDefaultDragSize(effectType) {
+  const normalized = effectTypeFromTokenType(effectType || "extract_dna");
+  return normalized === "extract_dna" ? 130 : 74;
+}
+
+async function animateThenApplyEffectToken({
+  tokenId,
+  targetImageId,
+  dispatchId,
+  fromX,
+  fromY,
+} = {}) {
+  const token = state.effectTokensById.get(String(tokenId || "").trim()) || null;
+  const targetId = String(targetImageId || "").trim();
+  if (!token || !targetId) return;
+  const targetRect = state.multiRects.get(targetId) || null;
+  if (effectsRuntime && targetRect) {
+    const transform = getMultiViewTransform();
+    const targetScreenRect = multiRectToScreenRect(targetRect, transform);
+    const effectType = effectTypeFromTokenType(token.type);
+    await effectsRuntime.playDropIntoTarget({
+      tokenId: token.id,
+      effectType,
+      fromX: Number(fromX) || 0,
+      fromY: Number(fromY) || 0,
+      targetRect: targetScreenRect,
+      size: effectTokenDisplaySizeForRect(targetScreenRect, effectType),
+      data: token,
+    });
+  }
+
+  const current = state.effectTokensById.get(String(tokenId || "").trim()) || null;
+  if (!current) return;
+  if (!effectTokenCanDispatchApply(current, dispatchId, targetId)) return;
+  try {
+    await applyEffectTokenToImage(current.id, targetId, { dispatchId: Number(dispatchId) || 0 });
+  } catch (err) {
+    console.error(err);
+    state.effectTokenApplyLocks.delete(String(current.id));
+    recoverEffectTokenApply(current);
+    showToast(err?.message || "Effect apply failed.", "error", 2600);
+    requestRender();
+    return;
   }
 }
 
@@ -8337,11 +8620,10 @@ async function runExtractDnaFromSelection({ fromQueue = false } = {}) {
   if (!state.runDir) await ensureRun();
   const okEngine = await ensureEngineSpawned({ reason: "extract dna" });
   if (!okEngine) return;
-  state.pendingExtractDna = {
-    sourceIds: sources.map((item) => String(item.id || "")).filter(Boolean),
-    sourcePaths: sources.map((item) => String(item.path || "")).filter(Boolean),
-    startedAt: Date.now(),
-  };
+  for (const src of sources) {
+    if (src?.id) clearEffectTokenForImageId(src.id);
+  }
+  state.pendingExtractDna = createPendingEffectExtractionState(sources);
   state.lastAction = "Extract DNA";
   setStatus("Director: extracting DNA…");
   portraitWorking("Extract DNA", { providerOverride: "openai", clearDirector: false });
@@ -8390,11 +8672,10 @@ async function runSoulLeechFromSelection({ fromQueue = false } = {}) {
   if (!state.runDir) await ensureRun();
   const okEngine = await ensureEngineSpawned({ reason: "soul leech" });
   if (!okEngine) return;
-  state.pendingSoulLeech = {
-    sourceIds: sources.map((item) => String(item.id || "")).filter(Boolean),
-    sourcePaths: sources.map((item) => String(item.path || "")).filter(Boolean),
-    startedAt: Date.now(),
-  };
+  for (const src of sources) {
+    if (src?.id) clearEffectTokenForImageId(src.id);
+  }
+  state.pendingSoulLeech = createPendingEffectExtractionState(sources);
   state.lastAction = "Soul Leech";
   setStatus("Director: extracting soul…");
   portraitWorking("Soul Leech", { providerOverride: "openai", clearDirector: false });
@@ -8416,15 +8697,14 @@ async function runSoulLeechFromSelection({ fromQueue = false } = {}) {
   }
 }
 
-function resolvePendingEffectExtraction(kind, imagePath) {
+function consumePendingEffectExtraction(kind, imagePath) {
   const path = String(imagePath || "").trim();
-  if (!path) return;
   const isSoul = String(kind || "") === "soul";
   const pending = isSoul ? state.pendingSoulLeech : state.pendingExtractDna;
-  if (!pending) return;
-  const rawPaths = Array.isArray(pending.sourcePaths) ? pending.sourcePaths : [];
-  pending.sourcePaths = rawPaths.filter((p) => String(p || "").trim() !== path);
-  if (!pending.sourcePaths.length) {
+  if (!pending) return null;
+  if (!path) return null;
+  const { matchedImageId, unresolvedCount } = consumePendingEffectSourceSlot(pending, path, Date.now());
+  if (unresolvedCount === 0) {
     if (isSoul) state.pendingSoulLeech = null;
     else state.pendingExtractDna = null;
     setStatus(isSoul ? "Director: soul extraction ready" : "Director: dna extraction ready");
@@ -8432,6 +8712,144 @@ function resolvePendingEffectExtraction(kind, imagePath) {
     renderQuickActions();
     processActionQueue().catch(() => {});
   }
+
+  return matchedImageId;
+}
+
+function resolveExtractionEventImageIdByPath(imagePath) {
+  const path = String(imagePath || "").trim();
+  if (!path) return null;
+
+  const activeId = String(state.activeId || "").trim();
+  if (activeId) {
+    const active = state.imagesById.get(activeId) || null;
+    if (active?.path && String(active.path) === path) return activeId;
+  }
+
+  const selected = getSelectedIds().map((id) => String(id || "").trim()).filter(Boolean);
+  for (const id of selected) {
+    const item = state.imagesById.get(id) || null;
+    if (item?.path && String(item.path) === path) return id;
+  }
+
+  const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder.slice().reverse() : [];
+  for (const rawId of z) {
+    const id = String(rawId || "").trim();
+    if (!id) continue;
+    const item = state.imagesById.get(id) || null;
+    if (item?.path && String(item.path) === path) return id;
+  }
+
+  const images = Array.isArray(state.images) ? state.images.slice().reverse() : [];
+  for (const item of images) {
+    const id = String(item?.id || "").trim();
+    if (!id) continue;
+    if (item?.path && String(item.path) === path) return id;
+  }
+  return null;
+}
+
+function pendingEffectUnresolvedSlots(pending) {
+  if (!pending || typeof pending !== "object") return [];
+  const slots = Array.isArray(pending.sourceSlots) ? pending.sourceSlots : [];
+  return slots.filter((slot) => slot && !slot.resolved);
+}
+
+function pendingExtractionKindForImageId(imageId) {
+  const id = String(imageId || "").trim();
+  if (!id) return null;
+  const dnaPending = pendingEffectUnresolvedSlots(state.pendingExtractDna).some(
+    (slot) => String(slot.imageId || "").trim() === id
+  );
+  if (dnaPending) return "extract_dna";
+  const soulPending = pendingEffectUnresolvedSlots(state.pendingSoulLeech).some(
+    (slot) => String(slot.imageId || "").trim() === id
+  );
+  if (soulPending) return "soul_leech";
+  return null;
+}
+
+function shouldAnimateEffectVisuals() {
+  if (state.canvasMode !== "multi") return false;
+  if (pendingEffectUnresolvedSlots(state.pendingExtractDna).length) return true;
+  if (pendingEffectUnresolvedSlots(state.pendingSoulLeech).length) return true;
+  for (const token of state.effectTokensById.values()) {
+    if (!token) continue;
+    const life = String(token.lifecycle || "");
+    if (life === EFFECT_TOKEN_LIFECYCLE.CONSUMED) continue;
+    return true;
+  }
+  return false;
+}
+
+function buildEffectsRuntimeScene() {
+  if (state.canvasMode !== "multi") return { extracting: [], tokens: [], drag: null };
+  const transform = getMultiViewTransform();
+  const extracting = [];
+  const tokens = [];
+
+  for (const [imageId, rect] of state.multiRects.entries()) {
+    const screenRect = multiRectToScreenRect(rect, transform);
+    if (!screenRect) continue;
+    const extractionKind = pendingExtractionKindForImageId(imageId);
+    if (extractionKind) {
+      extracting.push({
+        imageId: String(imageId || ""),
+        effectType: extractionKind,
+        rect: screenRect,
+      });
+    }
+    const token = effectTokenForImageId(imageId);
+    if (!token) continue;
+    if (String(token.lifecycle || "") === EFFECT_TOKEN_LIFECYCLE.CONSUMED) continue;
+    tokens.push({
+      tokenId: String(token.id || ""),
+      imageId: String(imageId || ""),
+      effectType: effectTypeFromTokenType(token.type),
+      lifecycle: String(token.lifecycle || EFFECT_TOKEN_LIFECYCLE.READY),
+      rect: screenRect,
+      palette: Array.isArray(token.palette) ? token.palette.slice(0, 8) : [],
+      colors: Array.isArray(token.colors) ? token.colors.slice(0, 8) : [],
+      materials: Array.isArray(token.materials) ? token.materials.slice(0, 8) : [],
+      emotion: token.emotion ? String(token.emotion) : "",
+      summary: token.summary ? String(token.summary) : "",
+      sourceImageId: String(token.sourceImageId || ""),
+    });
+  }
+
+  let drag = null;
+  const dragState = state.effectTokenDrag || null;
+  if (dragState) {
+    const token = state.effectTokensById.get(String(dragState.tokenId || "").trim()) || null;
+    const effectType = effectTypeFromTokenType(token?.type || "extract_dna");
+    const targetId = String(dragState.targetImageId || "").trim();
+    const targetRect = targetId ? state.multiRects.get(targetId) || null : null;
+    const targetScreenRect = targetRect ? multiRectToScreenRect(targetRect, transform) : null;
+    drag = {
+      tokenId: String(dragState.tokenId || ""),
+      effectType,
+      x: Number(dragState.x) || 0,
+      y: Number(dragState.y) || 0,
+      size: targetScreenRect
+        ? effectTokenDisplaySizeForRect(targetScreenRect, effectType)
+        : effectTokenDefaultDragSize(effectType),
+      targetRect: targetScreenRect,
+      data: token,
+    };
+  }
+
+  return { extracting, tokens, drag };
+}
+
+function syncEffectsRuntimeScene() {
+  if (!effectsRuntime) return;
+  const suspended = document.hidden || state.canvasMode !== "multi";
+  effectsRuntime.setSuspended(suspended);
+  if (suspended) {
+    effectsRuntime.syncScene({ extracting: [], tokens: [], drag: null });
+    return;
+  }
+  effectsRuntime.syncScene(buildEffectsRuntimeScene());
 }
 
 async function selectCanvasImage(imageId, { toggle = false } = {}) {
@@ -8519,6 +8937,9 @@ function setCanvasMode(mode) {
   renderSelectionMeta();
   scheduleVisualPromptWrite();
   motherIdleSyncFromInteraction({ userInteraction: false });
+  if (effectsRuntime) {
+    effectsRuntime.setSuspended(document.hidden || state.canvasMode !== "multi");
+  }
   requestRender();
 }
 
@@ -8787,6 +9208,7 @@ function hitTestAnyFreeformCornerHandle(ptCanvas, { padPx = 0 } = {}) {
   const entries = Array.from(state.multiRects.entries());
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const [id, rect] = entries[i];
+    if (isImageEffectTokenized(id)) continue;
     if (!rect) continue;
     const corner = hitTestFreeformCornerHandleWithPad({ x, y }, rect, padPx);
     if (!corner) continue;
@@ -8961,7 +9383,7 @@ async function renderCanvasSnapshotForDiagnose({ maxDimPx = 1200 } = {}) {
   return canvas;
 }
 
-function hitTestMulti(pt) {
+function hitTestMulti(pt, { includeTokenized = false } = {}) {
   if (!pt) return null;
   const ms = state.multiView?.scale || 1;
   const mx = state.multiView?.offsetX || 0;
@@ -8971,6 +9393,7 @@ function hitTestMulti(pt) {
   const entries = Array.from(state.multiRects.entries());
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const [id, rect] = entries[i];
+    if (!includeTokenized && isImageEffectTokenized(id)) continue;
     if (!rect) continue;
     if (x < rect.x || x > rect.x + rect.w) continue;
     if (y < rect.y || y > rect.y + rect.h) continue;
@@ -8979,9 +9402,9 @@ function hitTestMulti(pt) {
   return null;
 }
 
-function hitTestMultiWithPad(pt, padPx = 0) {
+function hitTestMultiWithPad(pt, padPx = 0, { includeTokenized = false } = {}) {
   const padRaw = Math.max(0, Number(padPx) || 0);
-  if (!padRaw) return hitTestMulti(pt);
+  if (!padRaw) return hitTestMulti(pt, { includeTokenized });
   if (!pt) return null;
   const ms = state.multiView?.scale || 1;
   const mx = state.multiView?.offsetX || 0;
@@ -8993,6 +9416,7 @@ function hitTestMultiWithPad(pt, padPx = 0) {
   const entries = Array.from(state.multiRects.entries());
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const [id, rect] = entries[i];
+    if (!includeTokenized && isImageEffectTokenized(id)) continue;
     if (!rect) continue;
     if (x < rect.x - pad || x > rect.x + rect.w + pad) continue;
     if (y < rect.y - pad || y > rect.y + rect.h + pad) continue;
@@ -13240,7 +13664,7 @@ async function openExistingRun() {
   await spawnEngine();
   await startEventsPolling();
   scheduleVisualPromptWrite({ immediate: true });
-  if (intentAmbientActive() && state.images.length) {
+  if (intentAmbientActive() && getVisibleCanvasImages().length) {
     scheduleAmbientIntentInference({ immediate: true, reason: "composition_change" });
   }
   if (state.ptySpawned) setStatus("Engine: ready");
@@ -13741,6 +14165,8 @@ async function handleEvent(event) {
       const instruction = pending.instruction || null;
       const actionLabel = pending.label || timelineAction || "Edit";
       const parentNodeId = state.imagesById.get(targetId)?.timelineNodeId || null;
+      const effectTokenId = mode === "effect_token_apply" ? String(pending.effect_token_id || "").trim() : "";
+      const effectTokenDispatchId = Number(pending.effect_token_dispatch_id) || 0;
       clearPendingReplace();
       if (mode === "annotate_box") {
         const cropPath = pending.cropPath || null;
@@ -13780,6 +14206,27 @@ async function handleEvent(event) {
           });
           const item = state.imagesById.get(targetId) || null;
           if (item && nodeId) item.timelineNodeId = nodeId;
+          if (effectTokenId) {
+            const token = state.effectTokensById.get(effectTokenId) || null;
+            const sourceImageId = String(token?.sourceImageId || pending.source_image_id || "").trim();
+            if (token) {
+              consumeEffectToken(token);
+              clearEffectTokenForImageId(sourceImageId);
+            } else if (sourceImageId) {
+              clearEffectTokenForImageId(sourceImageId);
+            }
+            if (sourceImageId && sourceImageId !== targetId) {
+              await removeImageFromCanvas(sourceImageId).catch(() => {});
+            }
+            state.effectTokenApplyLocks.delete(effectTokenId);
+            showToast("Effect consumed.", "tip", 1800);
+            requestRender();
+          }
+        } else if (effectTokenId) {
+          const token = state.effectTokensById.get(effectTokenId) || null;
+          state.effectTokenApplyLocks.delete(effectTokenId);
+          if (token) recoverEffectTokenApply(token);
+          requestRender();
         }
       }
     } else {
@@ -14004,6 +14451,11 @@ async function handleEvent(event) {
     state.tripletOddOneOutId = null;
     resetActionQueue();
     clearPendingReplace();
+    for (const [tokenId] of state.effectTokenApplyLocks.entries()) {
+      const token = state.effectTokensById.get(tokenId) || null;
+      if (token) recoverEffectTokenApply(token);
+    }
+    state.effectTokenApplyLocks.clear();
     restoreEngineImageModelIfNeeded();
     updatePortraitIdle();
     setImageFxActive(false);
@@ -14504,9 +14956,15 @@ async function handleEvent(event) {
     processActionQueue().catch(() => {});
   } else if (event.type === "image_dna_extracted") {
     const path = typeof event.image_path === "string" ? event.image_path : "";
-    const item = path ? state.images.find((it) => it?.path === path) || null : null;
+    const matchedImageId = consumePendingEffectExtraction("dna", path);
+    const resolvedImageId = matchedImageId || resolveExtractionEventImageIdByPath(path);
+    if (!resolvedImageId) {
+      requestRender();
+      return;
+    }
+    const item = state.imagesById.get(resolvedImageId) || null;
     if (item?.id) {
-      createOrUpdateEffectToken({
+      const token = createOrUpdateEffectToken({
         type: "extract_dna",
         imageId: item.id,
         imagePath: path,
@@ -14517,15 +14975,16 @@ async function handleEvent(event) {
         source: event.source || null,
         model: event.model || null,
       });
-      showToast(`DNA extracted: ${item.label || basename(item.path)}`, "tip", 1800);
+      if (token) {
+        showToast(`DNA extracted: ${item.label || basename(item.path)}`, "tip", 1800);
+      }
       requestRender();
     }
-    resolvePendingEffectExtraction("dna", path);
   } else if (event.type === "image_dna_extracted_failed") {
     const path = typeof event.image_path === "string" ? event.image_path : "";
     const msg = event.error ? `Extract DNA failed: ${event.error}` : "Extract DNA failed.";
     showToast(msg, "error", 2600);
-    if (path) resolvePendingEffectExtraction("dna", path);
+    if (path) consumePendingEffectExtraction("dna", path);
     else {
       state.pendingExtractDna = null;
       updatePortraitIdle();
@@ -14534,9 +14993,15 @@ async function handleEvent(event) {
     }
   } else if (event.type === "image_soul_extracted") {
     const path = typeof event.image_path === "string" ? event.image_path : "";
-    const item = path ? state.images.find((it) => it?.path === path) || null : null;
+    const matchedImageId = consumePendingEffectExtraction("soul", path);
+    const resolvedImageId = matchedImageId || resolveExtractionEventImageIdByPath(path);
+    if (!resolvedImageId) {
+      requestRender();
+      return;
+    }
+    const item = state.imagesById.get(resolvedImageId) || null;
     if (item?.id) {
-      createOrUpdateEffectToken({
+      const token = createOrUpdateEffectToken({
         type: "soul_leech",
         imageId: item.id,
         imagePath: path,
@@ -14545,15 +15010,16 @@ async function handleEvent(event) {
         source: event.source || null,
         model: event.model || null,
       });
-      showToast(`Soul extracted: ${item.label || basename(item.path)}`, "tip", 1800);
+      if (token) {
+        showToast(`Soul extracted: ${item.label || basename(item.path)}`, "tip", 1800);
+      }
       requestRender();
     }
-    resolvePendingEffectExtraction("soul", path);
   } else if (event.type === "image_soul_extracted_failed") {
     const path = typeof event.image_path === "string" ? event.image_path : "";
     const msg = event.error ? `Soul Leech failed: ${event.error}` : "Soul Leech failed.";
     showToast(msg, "error", 2600);
-    if (path) resolvePendingEffectExtraction("soul", path);
+    if (path) consumePendingEffectExtraction("soul", path);
     else {
       state.pendingSoulLeech = null;
       updatePortraitIdle();
@@ -14725,77 +15191,148 @@ async function handleEvent(event) {
   }
 }
 
-function drawEffectTokenTile(wctx, { token, x, y, w, h, dpr = 1 } = {}) {
+function drawEffectTokenTile(wctx, { token, x, y, w, h, dpr = 1, nowMs = Date.now() } = {}) {
   if (!token) return;
+  const now = Number(nowMs) || Date.now();
+  const t = now * 0.001;
+  const type = String(token.type || "").trim();
   const inset = Math.max(3, Math.round(5 * dpr));
   const ix = x + inset;
   const iy = y + inset;
   const iw = Math.max(1, w - inset * 2);
   const ih = Math.max(1, h - inset * 2);
   const radius = Math.max(6, Math.round(12 * dpr));
-  const type = String(token.type || "").trim();
 
   wctx.save();
-  const bg = wctx.createLinearGradient(ix, iy, ix, iy + ih);
-  bg.addColorStop(0, "rgba(10, 13, 20, 0.94)");
-  bg.addColorStop(1, "rgba(5, 7, 12, 0.98)");
-  wctx.fillStyle = bg;
-  wctx.beginPath();
-  wctx.roundRect(Math.round(ix), Math.round(iy), Math.round(iw), Math.round(ih), radius);
-  wctx.fill();
-
-  wctx.strokeStyle = type === "soul_leech" ? "rgba(255, 116, 172, 0.72)" : "rgba(94, 236, 255, 0.72)";
-  wctx.lineWidth = Math.max(1, Math.round(1.6 * dpr));
-  wctx.stroke();
-
   if (type === "extract_dna") {
     const palette = Array.isArray(token.palette) && token.palette.length
       ? token.palette
       : ["#6EF8FF", "#8FB9FF", "#B8FFB0", "#FFD36E"];
-    const cx = ix + iw * 0.5;
-    const top = iy + ih * 0.16;
-    const bot = iy + ih * 0.84;
-    const amp = Math.max(5, iw * 0.17);
-    const steps = 18;
-    wctx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+    const spin = t * 1.72;
+    const cx = x + w * 0.5;
+    const cy = y + h * 0.5;
+    const glyphH = Math.max(52 * dpr, Math.min(108 * dpr, Math.min(w, h) * 0.72));
+    const glyphW = glyphH * 0.44;
+    const top = -glyphH * 0.48;
+    const bot = glyphH * 0.48;
+    const amp = glyphW * 0.66;
+    const steps = 30;
+    const rodW = Math.max(1.2, 1.9 * dpr);
+    const tilt = -0.22 + Math.sin(t * 0.73) * 0.035;
+
+    wctx.translate(cx, cy);
+    wctx.rotate(tilt);
+
+    const aura = wctx.createRadialGradient(
+      Math.sin(spin * 0.9) * glyphW * 0.18,
+      -glyphH * 0.06,
+      Math.max(2, glyphW * 0.08),
+      0,
+      0,
+      glyphH * 0.96
+    );
+    aura.addColorStop(0, "rgba(126, 219, 255, 0.36)");
+    aura.addColorStop(0.42, "rgba(126, 219, 255, 0.16)");
+    aura.addColorStop(1, "rgba(126, 219, 255, 0)");
+    wctx.fillStyle = aura;
+    wctx.fillRect(-glyphH, -glyphH, glyphH * 2, glyphH * 2);
+
+    const rodG = wctx.createLinearGradient(0, top, 0, bot);
+    rodG.addColorStop(0, "rgba(195, 230, 255, 0.15)");
+    rodG.addColorStop(0.5, "rgba(195, 230, 255, 0.55)");
+    rodG.addColorStop(1, "rgba(195, 230, 255, 0.15)");
+    wctx.strokeStyle = rodG;
+    wctx.lineWidth = rodW;
+    wctx.beginPath();
+    wctx.moveTo(0, top);
+    wctx.lineTo(0, bot);
+    wctx.stroke();
+
+    const nodes = [];
     for (let i = 0; i <= steps; i += 1) {
-      const t = i / Math.max(1, steps);
-      const yy = top + (bot - top) * t;
-      const phase = t * Math.PI * 4.0;
-      const dx = Math.sin(phase) * amp;
-      const cA = palette[i % palette.length];
-      const cB = palette[(i + 1) % palette.length];
-      wctx.fillStyle = cA;
-      wctx.beginPath();
-      wctx.arc(cx - dx, yy, Math.max(1.6, 2.4 * dpr), 0, Math.PI * 2);
-      wctx.fill();
-      wctx.fillStyle = cB;
-      wctx.beginPath();
-      wctx.arc(cx + dx, yy, Math.max(1.6, 2.4 * dpr), 0, Math.PI * 2);
-      wctx.fill();
+      const tStep = i / Math.max(1, steps);
+      const yy = top + (bot - top) * tStep;
+      const phase = spin + tStep * Math.PI * 5.4;
+      const sinP = Math.sin(phase);
+      const cosP = Math.cos(phase);
+      const depth = (cosP + 1) * 0.5;
+      const dxA = sinP * amp;
+      const dxB = -sinP * amp;
+      const r = (1.4 + depth * 2.7) * dpr;
+      nodes.push({ x: dxA, y: yy, depth, r, color: palette[i % palette.length], arm: "a" });
+      nodes.push({ x: dxB, y: yy, depth: 1 - depth, r, color: palette[(i + 1) % palette.length], arm: "b" });
       if (i < steps) {
-        const t2 = (i + 1) / Math.max(1, steps);
-        const yy2 = top + (bot - top) * t2;
-        const dx2 = Math.sin(t2 * Math.PI * 4.0) * amp;
-        wctx.strokeStyle = "rgba(210, 235, 255, 0.42)";
+        const tNext = (i + 1) / Math.max(1, steps);
+        const y2 = top + (bot - top) * tNext;
+        const phase2 = spin + tNext * Math.PI * 5.4;
+        const x2A = Math.sin(phase2) * amp;
+        const x2B = -Math.sin(phase2) * amp;
+        wctx.lineWidth = Math.max(1, Math.round((0.8 + depth * 1.2) * dpr));
+        wctx.strokeStyle = `rgba(214, 237, 255, ${0.12 + depth * 0.34})`;
         wctx.beginPath();
-        wctx.moveTo(cx - dx, yy);
-        wctx.lineTo(cx + dx2, yy2);
+        wctx.moveTo(dxA, yy);
+        wctx.lineTo(x2B, y2);
+        wctx.stroke();
+        wctx.strokeStyle = `rgba(214, 237, 255, ${0.08 + (1 - depth) * 0.28})`;
+        wctx.beginPath();
+        wctx.moveTo(dxB, yy);
+        wctx.lineTo(x2A, y2);
         wctx.stroke();
       }
     }
-    wctx.fillStyle = "rgba(224, 239, 255, 0.9)";
-    wctx.font = `${Math.max(10, Math.round(11 * dpr))}px IBM Plex Mono`;
-    wctx.textAlign = "center";
-    wctx.textBaseline = "bottom";
-    wctx.fillText("DNA", Math.round(ix + iw * 0.5), Math.round(iy + ih - Math.max(8, 10 * dpr)));
+
+    nodes.sort((a, b) => a.depth - b.depth);
+    for (const node of nodes) {
+      wctx.save();
+      wctx.shadowColor = `rgba(127, 224, 255, ${0.1 + node.depth * 0.22})`;
+      wctx.shadowBlur = Math.round((1.4 + node.depth * 4.2) * dpr);
+      wctx.fillStyle = node.color;
+      wctx.globalAlpha = 0.3 + node.depth * 0.7;
+      wctx.beginPath();
+      wctx.arc(node.x, node.y, node.r, 0, Math.PI * 2);
+      wctx.fill();
+      wctx.restore();
+    }
+
+    wctx.save();
+    wctx.rotate(spin * 0.72);
+    wctx.strokeStyle = "rgba(185, 235, 255, 0.34)";
+    wctx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+    wctx.beginPath();
+    wctx.ellipse(0, 0, glyphW * 0.98, glyphH * 0.105, 0, 0, Math.PI * 2);
+    wctx.stroke();
+    wctx.restore();
+
+    wctx.save();
+    wctx.rotate(-spin * 0.48 + 0.4);
+    wctx.strokeStyle = "rgba(169, 214, 255, 0.22)";
+    wctx.lineWidth = Math.max(1, Math.round(1.1 * dpr));
+    wctx.beginPath();
+    wctx.ellipse(0, glyphH * 0.03, glyphW * 0.82, glyphH * 0.088, 0, 0, Math.PI * 2);
+    wctx.stroke();
+    wctx.restore();
+    wctx.restore();
+    return;
   } else {
+    const bg = wctx.createLinearGradient(ix, iy, ix, iy + ih);
+    bg.addColorStop(0, "rgba(10, 13, 20, 0.94)");
+    bg.addColorStop(1, "rgba(5, 7, 12, 0.98)");
+    wctx.fillStyle = bg;
+    wctx.beginPath();
+    wctx.roundRect(Math.round(ix), Math.round(iy), Math.round(iw), Math.round(ih), radius);
+    wctx.fill();
+
+    wctx.strokeStyle = "rgba(255, 116, 172, 0.72)";
+    wctx.lineWidth = Math.max(1, Math.round(1.6 * dpr));
+    wctx.stroke();
+
     const cx = ix + iw * 0.5;
     const cy = iy + ih * 0.48;
     const mw = iw * 0.44;
     const mh = ih * 0.52;
     wctx.save();
     wctx.translate(cx, cy);
+    wctx.rotate(Math.sin(t * 0.85) * 0.04);
     wctx.beginPath();
     wctx.moveTo(-mw * 0.62, -mh * 0.4);
     wctx.quadraticCurveTo(0, -mh * 0.86, mw * 0.62, -mh * 0.4);
@@ -14835,13 +15372,161 @@ function drawEffectTokenTile(wctx, { token, x, y, w, h, dpr = 1 } = {}) {
   wctx.restore();
 }
 
+function renderExtractionSwarmOverlay(
+  wctx,
+  { imageId, kind = "extract_dna", x, y, w, h, dpr = 1, nowMs = Date.now() } = {}
+) {
+  if (!imageId || !wctx || w <= 2 || h <= 2) return;
+  const now = Number(nowMs) || Date.now();
+  const t = now * 0.001;
+  const seedBase = hash32(`${kind}:${imageId}`);
+  const TAU = Math.PI * 2;
+  const radius = Math.max(6, Math.round(12 * dpr));
+
+  wctx.save();
+  wctx.beginPath();
+  wctx.roundRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h), radius);
+  wctx.clip();
+
+  const soul = kind === "soul_leech";
+  const hazeInner = soul ? "rgba(56, 18, 42, 0.56)" : "rgba(17, 33, 52, 0.56)";
+  const hazeMid = soul ? "rgba(27, 11, 23, 0.76)" : "rgba(9, 15, 26, 0.80)";
+  const hazeOuter = soul ? "rgba(5, 2, 7, 0.90)" : "rgba(2, 4, 8, 0.92)";
+  const edgeFlashRgb = soul ? "255, 151, 208" : "126, 219, 255";
+  const edgeFlashBase = soul ? 0.17 : 0.2;
+  const edgeFlashRange = soul ? 0.17 : 0.2;
+  const bodyColor = soul ? "31, 10, 23" : "10, 14, 20";
+  const rimColor = soul ? "255, 201, 233" : "188, 231, 255";
+
+  const hazeCx = x + w * (0.5 + 0.14 * Math.sin(t * 0.52 + rand01(seedBase + 2.1) * TAU));
+  const hazeCy = y + h * (0.5 + 0.11 * Math.cos(t * 0.47 + rand01(seedBase + 5.8) * TAU));
+  const haze = wctx.createRadialGradient(
+    hazeCx,
+    hazeCy,
+    Math.max(3, Math.min(w, h) * 0.06),
+    x + w * 0.5,
+    y + h * 0.5,
+    Math.max(w, h) * 0.92
+  );
+  haze.addColorStop(0, hazeInner);
+  haze.addColorStop(0.5, hazeMid);
+  haze.addColorStop(1, hazeOuter);
+  wctx.fillStyle = haze;
+  wctx.fillRect(x, y, w, h);
+
+  const pulse = 0.5 + 0.5 * Math.sin(t * 1.35 + rand01(seedBase + 0.9) * TAU);
+  const flash = wctx.createRadialGradient(
+    x + w * 0.5,
+    y + h * 0.5,
+    Math.max(8, Math.min(w, h) * 0.08),
+    x + w * 0.5,
+    y + h * 0.5,
+    Math.max(w, h) * 0.7
+  );
+  flash.addColorStop(0, `rgba(${edgeFlashRgb}, ${(edgeFlashBase + pulse * edgeFlashRange).toFixed(3)})`);
+  flash.addColorStop(1, "rgba(0, 0, 0, 0)");
+  wctx.fillStyle = flash;
+  wctx.fillRect(x, y, w, h);
+
+  const swarmCount = Math.min(360, Math.max(170, Math.round((w * h) / (1750 * Math.max(0.8, dpr)))));
+  const coreX = x + w * (0.5 + 0.06 * Math.sin(t * 0.63 + rand01(seedBase + 7.1) * TAU));
+  const coreY = y + h * (0.5 + 0.08 * Math.cos(t * 0.58 + rand01(seedBase + 9.7) * TAU));
+  for (let i = 0; i < swarmCount; i += 1) {
+    const seed = hash32(`${seedBase}:${i}`);
+    const p1 = rand01(seed + 0.13);
+    const p2 = rand01(seed + 1.73);
+    const p3 = rand01(seed + 2.91);
+    const p4 = rand01(seed + 4.27);
+    const phase = p4 * TAU;
+    const depth = 0.24 + p3 * 0.76;
+    const orbit = t * (0.85 + depth * 1.9 + p2 * 0.8) + phase;
+    const orbitRx = w * (0.16 + depth * 0.34 + p1 * 0.1);
+    const orbitRy = h * (0.14 + depth * 0.29 + p2 * 0.1);
+    const driftX = ((p1 + t * (0.08 + p3 * 0.17)) % 1 - 0.5) * w * 0.42;
+    const driftY = ((p2 + t * (0.05 + p4 * 0.11)) % 1 - 0.5) * h * 0.34;
+    const cx = coreX + Math.cos(orbit) * orbitRx + driftX * 0.22;
+    const cy = coreY + Math.sin(orbit * 1.08 + p4) * orbitRy + driftY * 0.22;
+    const wingBeat = 0.5 + 0.5 * Math.sin(t * (14 + p4 * 10) + phase * 1.7);
+    const body = (0.8 + depth * 2.7 + p3 * 0.5) * dpr;
+    const wing = body * (1.45 + wingBeat * 1.45 + p4 * 0.4);
+    const angle = orbit + Math.sin(t * (2.6 + p2 * 2.4) + phase) * 0.46;
+    const alpha = Math.max(0.18, Math.min(0.9, 0.24 + depth * 0.48 + wingBeat * 0.16));
+
+    wctx.save();
+    wctx.translate(cx, cy);
+    wctx.rotate(angle);
+    wctx.strokeStyle = `rgba(${rimColor}, ${(0.08 + alpha * 0.24).toFixed(3)})`;
+    wctx.lineWidth = Math.max(1, Math.round((0.5 + depth * 0.9) * dpr));
+    wctx.beginPath();
+    wctx.moveTo(-wing * 1.4, 0);
+    wctx.lineTo(-wing * 0.16, 0);
+    wctx.stroke();
+
+    wctx.shadowColor = `rgba(0, 0, 0, ${(0.22 + alpha * 0.28).toFixed(3)})`;
+    wctx.shadowBlur = Math.round((1 + depth * 5) * dpr);
+    wctx.fillStyle = `rgba(${bodyColor}, ${alpha.toFixed(3)})`;
+    wctx.beginPath();
+    wctx.moveTo(-wing * 0.74, 0);
+    wctx.quadraticCurveTo(-body * 0.24, -body * (0.84 + wingBeat * 0.42), body * 0.08, -body * 0.26);
+    wctx.quadraticCurveTo(body * 0.58, -body * 0.92, wing * 0.78, 0);
+    wctx.quadraticCurveTo(body * 0.18, body * 1.24, -body * 0.08, body * 0.88);
+    wctx.quadraticCurveTo(-body * 0.38, body * 1.04, -wing * 0.74, 0);
+    wctx.closePath();
+    wctx.fill();
+    wctx.strokeStyle = `rgba(${rimColor}, ${(0.04 + alpha * 0.18).toFixed(3)})`;
+    wctx.lineWidth = Math.max(1, Math.round((0.44 + depth * 0.7) * dpr));
+    wctx.stroke();
+    wctx.restore();
+  }
+
+  const moteCount = Math.min(300, Math.max(120, Math.round(swarmCount * 0.78)));
+  for (let i = 0; i < moteCount; i += 1) {
+    const seed = hash32(`${seedBase}:mote:${i}`);
+    const p1 = rand01(seed + 0.21);
+    const p2 = rand01(seed + 1.11);
+    const p3 = rand01(seed + 2.03);
+    const travel = (t * (0.04 + p3 * 0.09) + p1) % 1;
+    const cx = x + travel * w;
+    const cy = y + ((p2 + t * (0.03 + p1 * 0.08)) % 1) * h;
+    const r = (0.45 + p3 * 1.65) * dpr;
+    const a = 0.08 + 0.24 * (0.5 + 0.5 * Math.sin(t * (3.6 + p2 * 2.1) + p1 * TAU));
+    wctx.fillStyle = `rgba(${rimColor}, ${a.toFixed(3)})`;
+    wctx.beginPath();
+    wctx.arc(cx, cy, r, 0, TAU);
+    wctx.fill();
+  }
+
+  const vignette = wctx.createRadialGradient(
+    x + w * 0.5,
+    y + h * 0.5,
+    Math.max(4, Math.min(w, h) * 0.22),
+    x + w * 0.5,
+    y + h * 0.5,
+    Math.max(w, h) * 0.76
+  );
+  vignette.addColorStop(0, "rgba(0, 0, 0, 0)");
+  vignette.addColorStop(1, "rgba(0, 0, 0, 0.54)");
+  wctx.fillStyle = vignette;
+  wctx.fillRect(x, y, w, h);
+  wctx.restore();
+}
+
 function hitTestEffectToken(ptCanvas) {
   if (!ptCanvas || state.canvasMode !== "multi") return null;
-  const ms = Number(state.multiView?.scale) || 1;
-  const mx = Number(state.multiView?.offsetX) || 0;
-  const my = Number(state.multiView?.offsetY) || 0;
-  const x = (Number(ptCanvas.x) - mx) / Math.max(ms, 0.0001);
-  const y = (Number(ptCanvas.y) - my) / Math.max(ms, 0.0001);
+  if (effectsRuntime) {
+    const runtimeHit = effectsRuntime.hitTestToken(ptCanvas);
+    if (runtimeHit?.tokenId) {
+      const imageId = String(runtimeHit.imageId || "").trim();
+      const token = state.effectTokensById.get(String(runtimeHit.tokenId || "").trim()) || null;
+      const rect = imageId ? state.multiRects.get(imageId) || null : null;
+      if (token && imageId && rect) {
+        return { tokenId: token.id, imageId, token, rect };
+      }
+    }
+  }
+  const transform = getMultiViewTransform();
+  const x = (Number(ptCanvas.x) - transform.offsetX) / transform.scale;
+  const y = (Number(ptCanvas.y) - transform.offsetY) / transform.scale;
   const order = Array.isArray(state.freeformZOrder) && state.freeformZOrder.length
     ? state.freeformZOrder
     : Array.from(state.multiRects.keys());
@@ -14852,8 +15537,12 @@ function hitTestEffectToken(ptCanvas) {
     if (!token) continue;
     const rect = state.multiRects.get(imageId) || null;
     if (!rect) continue;
-    if (x < rect.x || x > rect.x + rect.w) continue;
-    if (y < rect.y || y > rect.y + rect.h) continue;
+    const cx = rect.x + rect.w * 0.5;
+    const cy = rect.y + rect.h * 0.5;
+    const r = Math.max(14, Math.min(rect.w, rect.h) * 0.19);
+    const dx = x - cx;
+    const dy = y - cy;
+    if (dx * dx + dy * dy > r * r) continue;
     return { tokenId: token.id, imageId, token, rect };
   }
   return null;
@@ -14904,6 +15593,7 @@ function renderEffectTokenDragOverlay(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
 
 function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   const items = state.images || [];
+  const nowMs = performance.now ? performance.now() : Date.now();
   for (const item of items) {
     ensureCanvasImageLoaded(item);
   }
@@ -14932,7 +15622,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     const h = rect.h * ms;
     const effectToken = imageId ? effectTokenForImageId(imageId) : null;
     if (effectToken) {
-      drawEffectTokenTile(wctx, { token: effectToken, x, y, w, h, dpr });
+      // Token visuals are rendered by the Pixi effects runtime on a dedicated transparent layer.
     } else if (item?.img) {
       wctx.drawImage(item.img, x, y, w, h);
     } else {
@@ -14946,22 +15636,26 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
       wctx.fillText("LOADING…", x + Math.round(12 * dpr), y + Math.round(22 * dpr));
     }
 
-    // Tile frame.
-    wctx.save();
-    const motherGenerated = isMotherGeneratedImageItem(item);
-    wctx.lineWidth = Math.max(1, Math.round(1.5 * dpr));
-    wctx.strokeStyle = motherGenerated ? "rgba(82, 255, 148, 0.90)" : "rgba(54, 76, 106, 0.58)";
-    wctx.shadowColor = motherGenerated ? "rgba(82, 255, 148, 0.26)" : "rgba(0, 0, 0, 0.6)";
-    wctx.shadowBlur = Math.round(10 * dpr);
-    wctx.strokeRect(x - 1, y - 1, w + 2, h + 2);
-    wctx.restore();
+    if (!effectToken) {
+      // Tile frame.
+      wctx.save();
+      const motherGenerated = isMotherGeneratedImageItem(item);
+      wctx.lineWidth = Math.max(1, Math.round(1.5 * dpr));
+      wctx.strokeStyle = motherGenerated ? "rgba(82, 255, 148, 0.90)" : "rgba(54, 76, 106, 0.58)";
+      wctx.shadowColor = motherGenerated ? "rgba(82, 255, 148, 0.26)" : "rgba(0, 0, 0, 0.6)";
+      wctx.shadowBlur = Math.round(10 * dpr);
+      wctx.strokeRect(x - 1, y - 1, w + 2, h + 2);
+      wctx.restore();
+    }
   }
   wctx.restore();
 
-  const selectedIds = getSelectedIds().filter((id) => id);
+  const selectedIds = getSelectedIds().filter((id) => id && !isImageEffectTokenized(id));
   const multiSelectMode = selectedIds.length > 1;
-  const activeRect = state.activeId ? state.multiRects.get(state.activeId) : null;
-  const activeItem = state.activeId ? state.imagesById.get(state.activeId) || null : null;
+  const activeRect = state.activeId && !isImageEffectTokenized(state.activeId) ? state.multiRects.get(state.activeId) : null;
+  const activeItem = state.activeId && !isImageEffectTokenized(state.activeId)
+    ? state.imagesById.get(state.activeId) || null
+    : null;
 
   if (multiSelectMode && selectedIds.length) {
     // Multi-select highlight: keep all selected borders identical (no "active" special casing).
@@ -14982,7 +15676,9 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     octx.restore();
   } else {
     // Multi-select highlights (non-active).
-    const multiSelected = getSelectedIds().filter((id) => id && id !== state.activeId);
+    const multiSelected = getSelectedIds().filter(
+      (id) => id && id !== state.activeId && !isImageEffectTokenized(id)
+    );
     if (multiSelected.length) {
       octx.save();
       octx.lineJoin = "round";
@@ -15101,7 +15797,6 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   }
 
   renderMotherRoleGlyphs(octx, { ms, mox, moy });
-  renderEffectTokenDragOverlay(octx, { ms, mox, moy });
 
   // Triplet insights overlays (Extract the Rule / Odd One Out).
   const oddId = state.tripletOddOneOutId;
@@ -16407,6 +17102,7 @@ function render() {
       wctx.restore();
     }
   }
+  syncEffectsRuntimeScene();
   updateImageFxRect();
 
   const pts = state.selection?.points || state.lassoDraft;
@@ -16551,6 +17247,9 @@ function render() {
   renderIntentOverlay(octx, work.width, work.height);
   renderAmbientIntentNudges(octx, work.width, work.height);
   renderMinimap();
+  if (!effectsRuntime && !document.hidden && shouldAnimateEffectVisuals()) {
+    requestRender();
+  }
 }
 
 function startSpawnTimer() {
@@ -16680,6 +17379,11 @@ function installCanvasHandlers() {
           }
           const effectTokenHit = hitTestEffectToken(p);
           if (effectTokenHit && event.button === 0) {
+            const token = state.effectTokensById.get(String(effectTokenHit.tokenId || "").trim()) || null;
+            if (!token || !beginEffectTokenDrag(token, { x: p.x, y: p.y })) {
+              requestRender();
+              return;
+            }
             bumpInteraction({ semantic: false });
             els.overlayCanvas.setPointerCapture(event.pointerId);
             state.pointer.active = true;
@@ -17110,12 +17814,21 @@ function installCanvasHandlers() {
       const dist = Math.hypot(dx, dy);
       if (dist > 4) state.pointer.moved = true;
       if (drag) {
+        const token = state.effectTokensById.get(String(drag.tokenId || "").trim()) || null;
         drag.moved = Boolean(state.pointer.moved);
         drag.x = p.x;
         drag.y = p.y;
         const dropHit = hitTestMulti(p);
         const sourceId = String(drag.sourceImageId || "");
-        drag.targetImageId = dropHit && String(dropHit) !== sourceId ? String(dropHit) : "";
+        const targetId = dropHit ? String(dropHit) : "";
+        drag.targetImageId = isValidEffectDrop(sourceId, targetId) ? targetId : "";
+        if (token) {
+          updateEffectTokenDrag(token, {
+            x: p.x,
+            y: p.y,
+            targetImageId: drag.targetImageId,
+          });
+        }
       }
       requestRender();
       return;
@@ -17346,24 +18059,54 @@ function installCanvasHandlers() {
             const drag = state.effectTokenDrag || null;
             const tokenId = String(drag?.tokenId || "").trim();
             const sourceImageId = String(drag?.sourceImageId || "").trim();
+            const token = state.effectTokensById.get(tokenId) || null;
             const dropHit = hitTestMulti(canvasPointFromEvent(event));
-            const toImageId =
-              dropHit && String(dropHit || "").trim() !== sourceImageId ? String(dropHit || "").trim() : "";
+            const toImageId = isValidEffectDrop(sourceImageId, dropHit ? String(dropHit || "").trim() : "")
+              ? String(dropHit || "").trim()
+              : "";
             state.effectTokenDrag = null;
-            if (!tokenId || !sourceImageId) {
-              requestRender();
-            } else if (!moved) {
-              clearEffectTokenForImageId(sourceImageId);
-              showToast("Effect dismissed. Source image restored.", "tip", 1800);
+            if (!tokenId || !sourceImageId || !token) {
               requestRender();
             } else if (toImageId) {
-              applyEffectTokenToImage(tokenId, toImageId).catch((err) => {
-                console.error(err);
-                showToast(err?.message || "Effect apply failed.", "error", 2600);
+              const dispatchId = beginEffectTokenApply(token, toImageId, Date.now());
+              if (!dispatchId) {
+                requestRender();
+                return;
+              }
+              state.effectTokenApplyLocks.set(tokenId, {
+                dispatchId,
+                targetImageId: toImageId,
+                queued: false,
+                startedAt: Date.now(),
               });
               requestRender();
+              void animateThenApplyEffectToken({
+                tokenId,
+                targetImageId: toImageId,
+                dispatchId,
+                fromX: Number(drag?.x) || 0,
+                fromY: Number(drag?.y) || 0,
+              });
             } else {
-              showToast("Drop the token onto another image to apply.", "tip", 1800);
+              cancelEffectTokenDrag(token);
+              const sourceRect = state.multiRects.get(sourceImageId) || null;
+              if (effectsRuntime && sourceRect) {
+                const transform = getMultiViewTransform();
+                const sourceScreenRect = multiRectToScreenRect(sourceRect, transform);
+                const effectType = effectTypeFromTokenType(token.type);
+                void effectsRuntime.playCancelToSource({
+                  tokenId,
+                  effectType,
+                  fromX: Number(drag?.x) || 0,
+                  fromY: Number(drag?.y) || 0,
+                  targetRect: sourceScreenRect,
+                  size: effectTokenDisplaySizeForRect(sourceScreenRect, effectType),
+                  data: token,
+                });
+              }
+              if (moved) {
+                showToast("Drop the token onto another image to apply.", "tip", 1800);
+              }
               requestRender();
             }
           }
@@ -18485,7 +19228,7 @@ function installUi() {
 }
 
 async function boot() {
-  if (!els.workCanvas || !els.overlayCanvas) {
+  if (!els.workCanvas || !els.overlayCanvas || !els.effectsCanvas) {
     setStatus("Engine: UI error (missing canvas)", true);
     return;
   }
@@ -18517,6 +19260,13 @@ async function boot() {
   chooseSpawnNodes();
   renderFilmstrip();
   ensureCanvasSize();
+  effectsRuntime = createEffectsRuntime({ canvas: els.effectsCanvas });
+  effectsRuntime.resize({
+    width: els.workCanvas.width,
+    height: els.workCanvas.height,
+    dpr: getDpr(),
+  });
+  effectsRuntime.setSuspended(document.hidden || state.canvasMode !== "multi");
   // Keep decorative canvas bumpers matched to the HUD height.
   const hudShell = els.hud ? els.hud.querySelector(".hud-shell") : null;
   if (typeof ResizeObserver === "function" && (hudShell || els.hud)) {
@@ -18540,6 +19290,9 @@ async function boot() {
     } else {
       ensureLarvaAnimator();
       startMotherGlitchLoop();
+    }
+    if (effectsRuntime) {
+      effectsRuntime.setSuspended(document.hidden || state.canvasMode !== "multi");
     }
   });
 
@@ -18568,6 +19321,11 @@ async function boot() {
     state.pendingRecast = null;
     state.pendingDiagnose = null;
     state.pendingArgue = null;
+    for (const [tokenId] of state.effectTokenApplyLocks.entries()) {
+      const token = state.effectTokensById.get(tokenId) || null;
+      if (token) recoverEffectTokenApply(token);
+    }
+    state.effectTokenApplyLocks.clear();
     clearPendingReplace();
     state.runningActionKey = null;
     state.engineImageModelRestore = null;
