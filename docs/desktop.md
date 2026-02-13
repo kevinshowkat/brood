@@ -29,6 +29,10 @@ Single-image actions (work in `Single view`):
 - `Crop: Square`: local crop (no model call).
 - `Variations`: zero-prompt variations of the active image.
 
+Extraction actions (work from selected source images, typically in `Multi view`):
+- `Extract DNA`: collapse each selected source into a draggable DNA glyph.
+- `Soul Leech`: collapse each selected source into a draggable Soul glyph.
+
 Two-image actions (require `Multi view` and **exactly 2** photos loaded):
 - `Combine`: blend the two images into one (`/blend`).
 - `Swap DNA`: structure from one + surface qualities from the other (`/swap_dna`). Shift-click to invert.
@@ -38,6 +42,27 @@ Two-image actions (require `Multi view` and **exactly 2** photos loaded):
 Notes:
 - Some actions auto-switch the **Image Model** (e.g. 2-photo actions prefer `gemini-3-pro-image-preview`). The agent portraits update to match.
 - After a 2-photo action completes, Brood switches back to `Single view` showing the output-only image. Use `Multi view` to return to the tiled layout.
+
+## Effect Tokens (DNA / Soul)
+- Extraction visuals run on a dedicated Pixi overlay (`#effects-canvas`) and are clipped exactly to the source tile bounds.
+- When extraction completes, the source tile is tokenized: the source image box is removed from normal canvas interaction and replaced by a floating draggable glyph.
+- The token lifecycle is explicit: `extracting -> ready -> dragging -> drop_preview -> applying -> consumed`.
+- Drag/drop rules:
+  - Valid drop target must be a different image than the source.
+  - Valid targets get a strong hover highlight.
+  - Drop plays a sink/absorb animation, then dispatches apply exactly once.
+  - Invalid drop cancels without dispatching apply.
+- On successful apply:
+  - Target is edited in place (DNA/Soul transfer).
+  - The token is consumed.
+  - The extracted source image is removed from the canvas.
+- On failed apply:
+  - Token recovers to a draggable `ready` state (no stuck `applying` lock).
+
+### Canvas Context + Mother Reference Counts
+- Tokenized source images are excluded from visible-canvas counts and selection logic.
+- Effect glyphs are rendered only on the Pixi overlay (not the base work canvas), so realtime/intent snapshots do not include DNA/Soul glyphs.
+- Practical result: after one extraction from `n` images, Mother context and reference counts use `n - 1` visible images until the effect is applied.
 
 ## HUD + Tools
 - The HUD prints `UNIT / DESC / SEL / GEN` for the active image.

@@ -13,6 +13,7 @@ Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, an
 
 - 1 image in: `Diagnose` (creative-direction critique), `Recast` (reimagine in a new medium/context)
 - 2 images in: `Combine`, `Swap DNA`, `Bridge`, `Argue`
+- Effect-token actions in multi view: `Extract DNA`, `Soul Leech` (collapse selected source images into draggable transfer glyphs)
 - Provider/model switching is a first-class concept (OpenAI, Gemini, Imagen, Flux, SDXL)
 
 ## Download (macOS)
@@ -58,6 +59,8 @@ This runs the Tauri app in dev mode (`desktop/`) and will spawn the Python engin
 - Mental model for the onboarding flow: starting a StarCraft 2 game as Zerg (choose what to build and where to place it, but using visual media as the "units").
 - Use **Abilities** in the right panel.
 - Use `Multi view` to run 2-photo actions (when exactly 2 photos are loaded). After a 2-photo action completes, Brood switches back to single-image view (output-only).
+- Use `Extract DNA` / `Soul Leech` in `Multi view` to collapse selected source images into draggable effect glyphs. Tokenized sources are hidden from active canvas references until consumed.
+- Drop a DNA/Soul glyph onto a different image to apply one in-place transfer; successful apply consumes the glyph and removes the extracted source from the canvas.
 - `Diagnose` / `Argue` output appears in the bottom HUD as `DIAG` / `ARG`.
 - Hotkeys: `L` lasso, `D` designate, `F` fit-to-view, `Esc` clears selection, `1`-`9` activate tools in the HUD keybar
 

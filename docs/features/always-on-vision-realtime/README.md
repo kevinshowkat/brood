@@ -26,7 +26,9 @@ called via `/responses`.
 Primary file: `desktop/src/canvas_app.js`
 
 - Snapshot generation is unchanged:
-  - up to 6 images collaged into a 768x768 JPEG at `runDir/alwayson-<ts>.jpg`.
+  - up to 6 images collaged into a 900px-max PNG at `runDir/alwayson-<ts>.png`.
+  - tokenized extraction sources (`Extract DNA` / `Soul Leech`) are excluded from visible-image snapshots until consumed.
+  - DNA/Soul glyphs are Pixi-overlay visuals and are not baked into the work-canvas snapshot.
 - Dispatch:
   - start session: `/canvas_context_rt_start`
   - send snapshot: `/canvas_context_rt <snapshotPath>`
