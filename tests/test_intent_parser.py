@@ -211,3 +211,48 @@ def test_parse_intent_intent_rt_quoted_path():
     intent = parse_intent('/intent_rt "/tmp/a b.png"')
     assert intent.action == "intent_rt"
     assert intent.command_args["path"] == "/tmp/a b.png"
+
+
+def test_parse_intent_profile_and_model_commands() -> None:
+    profile = parse_intent("/profile creative")
+    assert profile.action == "set_profile"
+    assert profile.command_args["profile"] == "creative"
+
+    text_model = parse_intent("/text_model gpt-4o-mini")
+    assert text_model.action == "set_text_model"
+    assert text_model.command_args["model"] == "gpt-4o-mini"
+
+    image_model = parse_intent("/image_model gpt-image-1")
+    assert image_model.action == "set_image_model"
+    assert image_model.command_args["model"] == "gpt-image-1"
+
+
+def test_parse_intent_quality_shortcuts():
+    fast = parse_intent("/fast")
+    assert fast.action == "set_quality"
+    assert fast.settings_update["quality_preset"] == "fast"
+
+    quality = parse_intent("/quality")
+    assert quality.action == "set_quality"
+    assert quality.settings_update["quality_preset"] == "quality"
+
+
+def test_parse_intent_optimize_mode_and_goal_aliases() -> None:
+    optimize = parse_intent("/optimize mode=auto quality, minimize_cost")
+    assert optimize.action == "optimize"
+    assert optimize.command_args["mode"] == "auto"
+    assert optimize.command_args["goals"] == ["maximize quality of render", "minimize cost of render"]
+
+
+def test_parse_intent_optimize_review_mode() -> None:
+    optimize = parse_intent("/optimize review maximize quality of render")
+    assert optimize.action == "optimize"
+    assert optimize.command_args["mode"] == "review"
+    assert optimize.command_args["goals"] == ["maximize quality of render"]
+
+
+def test_parse_intent_unknown_command() -> None:
+    intent = parse_intent("/magic foo bar")
+    assert intent.action == "unknown"
+    assert intent.command_args["command"] == "magic"
+    assert intent.command_args["arg"] == "foo bar"
