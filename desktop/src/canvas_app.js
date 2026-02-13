@@ -5912,7 +5912,10 @@ function motherV2ProposalIconsHtml(intentPayload = null, { phase = null } = {}) 
   const activeNormalized = motherV2NormalizeTransformationMode(intent.transformation_mode || modes[0]);
   const activeMode = modes.includes(activeNormalized) ? activeNormalized : modes[0];
   const label = motherV2ProposalModeLabel(activeMode);
-  const description = motherV2ProposalSentence({ transformation_mode: activeMode });
+  const description = motherV2ProposalSentence({
+    ...intent,
+    transformation_mode: activeMode,
+  });
   const tooltip = `${label}: ${description}`;
   const accent = motherV2ProposalIconAccent(activeMode);
   const icon = motherV2ProposalIconSvg(activeMode);
@@ -7546,10 +7549,12 @@ function motherV2IntentPayload() {
   };
 }
 
-function motherV2ApplyIntent(intentPayload = {}, { source = "local" } = {}) {
+function motherV2ApplyIntent(intentPayload = {}, { source = "local", preserveMode = false } = {}) {
   const idle = state.motherIdle;
   if (!idle) return;
   if (idle.phase !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) return;
+  const sourceTag = String(source || "local").trim();
+  const priorPendingIntentPath = String(idle.pendingIntentPath || "").trim();
   let normalizedIntent =
     intentPayload && typeof intentPayload === "object"
       ? {
@@ -7561,10 +7566,23 @@ function motherV2ApplyIntent(intentPayload = {}, { source = "local" } = {}) {
   normalizedIntent = motherV2DiversifyIntentForRejectFollowup(normalizedIntent);
   normalizedIntent = motherV2SanitizeIntentImageIds(normalizedIntent);
   normalizedIntent = motherV2EnsureProposalCandidates(normalizedIntent);
+  if (preserveMode && normalizedIntent && idle.intent && typeof idle.intent === "object") {
+    const priorMode = motherV2MaybeTransformationMode(idle.intent.transformation_mode);
+    const nextModes = motherV2ProposalModes(normalizedIntent);
+    if (priorMode && nextModes.includes(priorMode)) {
+      normalizedIntent.transformation_mode = priorMode;
+      normalizedIntent.summary = motherV2ProposalSentence({
+        ...normalizedIntent,
+        transformation_mode: priorMode,
+      });
+    }
+  }
   idle.intent = normalizedIntent;
   motherV2NormalizeRoles(normalizedIntent?.roles || null);
   idle.pendingIntent = false;
-  idle.pendingIntentPath = null;
+  // Keep the last request payload path only for local fallback intents so a matching late
+  // engine response can still upgrade this exact request (and only this request).
+  idle.pendingIntentPath = sourceTag.startsWith("local_fallback") && priorPendingIntentPath ? priorPendingIntentPath : null;
   clearTimeout(idle.pendingIntentTimeout);
   idle.pendingIntentTimeout = null;
   idle.pendingVisionImageIds = [];
@@ -14088,15 +14106,8 @@ async function handleEvent(event) {
   if (event.type === "mother_intent_inferred") {
     const idle = state.motherIdle;
     if (!idle) return;
-    if (!idle.pendingIntent) {
-      appendMotherTraceLog({
-        kind: "intent_inferred_ignored",
-        traceId: idle.telemetry?.traceId || null,
-        actionVersion: Number(idle.actionVersion) || 0,
-        reason: "not_pending",
-      }).catch(() => {});
-      return;
-    }
+    const eventPayloadPath = String(event.payload_path || "").trim();
+    const expectedPayloadPath = String(idle.pendingIntentPath || "").trim();
     const actionVersion = Number(event.action_version) || 0;
     if (actionVersion !== (Number(idle.actionVersion) || 0)) {
       motherV2MarkStale({
@@ -14105,13 +14116,68 @@ async function handleEvent(event) {
       });
       return;
     }
-    motherV2ApplyIntent(event.intent || null, { source: event.source || "engine" });
+    const lateIntent = !idle.pendingIntent;
+    if (expectedPayloadPath) {
+      if (!eventPayloadPath) {
+        appendMotherTraceLog({
+          kind: "intent_inferred_ignored",
+          traceId: idle.telemetry?.traceId || null,
+          actionVersion: Number(idle.actionVersion) || 0,
+          reason: "missing_payload_path",
+        }).catch(() => {});
+        return;
+      }
+      if (eventPayloadPath !== expectedPayloadPath) {
+        appendMotherTraceLog({
+          kind: "intent_inferred_ignored",
+          traceId: idle.telemetry?.traceId || null,
+          actionVersion: Number(idle.actionVersion) || 0,
+          reason: "payload_path_mismatch",
+        }).catch(() => {});
+        return;
+      }
+    } else if (lateIntent) {
+      appendMotherTraceLog({
+        kind: "intent_inferred_ignored",
+        traceId: idle.telemetry?.traceId || null,
+        actionVersion: Number(idle.actionVersion) || 0,
+        reason: "not_pending_untracked_request",
+      }).catch(() => {});
+      return;
+    }
+    if (lateIntent && idle.phase !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
+      appendMotherTraceLog({
+        kind: "intent_inferred_ignored",
+        traceId: idle.telemetry?.traceId || null,
+        actionVersion: Number(idle.actionVersion) || 0,
+        reason: "not_pending_not_hypothesizing",
+        phase: String(idle.phase || ""),
+      }).catch(() => {});
+      return;
+    }
+    motherV2ApplyIntent(event.intent || null, {
+      source: event.source || "engine",
+      preserveMode: lateIntent,
+    });
     return;
   }
   if (event.type === "mother_intent_infer_failed") {
     const idle = state.motherIdle;
     if (!idle) return;
     if (!idle.pendingIntent) return;
+    const eventPayloadPath = String(event.payload_path || "").trim();
+    const expectedPayloadPath = String(idle.pendingIntentPath || "").trim();
+    if (expectedPayloadPath) {
+      if (!eventPayloadPath || eventPayloadPath !== expectedPayloadPath) {
+        appendMotherTraceLog({
+          kind: "intent_infer_failed_ignored",
+          traceId: idle.telemetry?.traceId || null,
+          actionVersion: Number(idle.actionVersion) || 0,
+          reason: !eventPayloadPath ? "missing_payload_path" : "payload_path_mismatch",
+        }).catch(() => {});
+        return;
+      }
+    }
     idle.pendingIntent = false;
     idle.pendingIntentPath = null;
     clearTimeout(idle.pendingIntentTimeout);
