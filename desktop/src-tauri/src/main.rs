@@ -275,20 +275,87 @@ fn get_repo_root() -> Result<String, String> {
     }
 }
 
+fn run_export_attempt(
+    program: &str,
+    args: &[String],
+    cwd: Option<&Path>,
+    env: &HashMap<String, String>,
+) -> Result<(), String> {
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args);
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+
+    let output = cmd.output().map_err(|e| format!("{program}: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else if let Some(code) = output.status.code() {
+        format!("exit code {code}")
+    } else {
+        "terminated by signal".to_string()
+    };
+    Err(format!("{program}: {detail}"))
+}
+
 #[tauri::command]
 fn export_run(run_dir: String, out_path: String) -> Result<(), String> {
-    let status = std::process::Command::new("brood")
-        .arg("export")
-        .arg("--run")
-        .arg(run_dir)
-        .arg("--out")
-        .arg(out_path)
-        .status()
-        .map_err(|e| e.to_string())?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("export failed".to_string())
+    let run_dir_path = PathBuf::from(&run_dir);
+    if !run_dir_path.exists() {
+        return Err(format!("run dir not found: {run_dir}"));
+    }
+
+    let out_path_buf = PathBuf::from(&out_path);
+    if let Some(parent) = out_path_buf.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let env = collect_brood_env_snapshot();
+    let py_args = vec![
+        "-m".to_string(),
+        "brood_engine.cli".to_string(),
+        "export".to_string(),
+        "--run".to_string(),
+        run_dir.clone(),
+        "--out".to_string(),
+        out_path.clone(),
+    ];
+    let brood_args = vec![
+        "export".to_string(),
+        "--run".to_string(),
+        run_dir.clone(),
+        "--out".to_string(),
+        out_path.clone(),
+    ];
+
+    let mut errors: Vec<String> = Vec::new();
+
+    if let Some(repo_root) = find_repo_root_best_effort() {
+        for py in ["python", "python3"] {
+            match run_export_attempt(py, &py_args, Some(&repo_root), &env) {
+                Ok(()) => return Ok(()),
+                Err(err) => errors.push(err),
+            }
+        }
+    }
+
+    match run_export_attempt("brood", &brood_args, Some(&run_dir_path), &env) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            errors.push(err);
+            Err(format!("export failed: {}", errors.join(" | ")))
+        }
     }
 }
 
