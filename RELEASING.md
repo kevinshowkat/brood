@@ -3,10 +3,15 @@
 This repo ships via GitHub Releases.
 
 When you push a tag like `v0.1.0`, GitHub Actions will:
+- run a remote macOS **clean-machine smoke install** (build DMG, install, launch)
 - build a universal macOS app bundle
 - code sign it (Developer ID Application)
 - notarize it
 - attach the signed/notarized `.dmg` to a draft GitHub Release for that tag
+
+Smoke details:
+- Workflow: `.github/workflows/desktop-clean-machine-smoke.yml`
+- Script: `scripts/macos_clean_machine_smoke.sh`
 
 ## One-Time Setup (GitHub Repo Secrets)
 
@@ -35,3 +40,17 @@ Notes:
    - `git push origin vX.Y.Z`
 5. Wait for the `publish` workflow to finish.
 6. Publish the draft release on GitHub (or change `releaseDraft` to `false` in the workflow once you're confident).
+
+## Optional: Disposable Remote Mac Snapshot Run
+
+If you use a cloud Mac provider, keep one machine snapshot in a clean state and run:
+
+```bash
+git clone <repo-url>
+cd brood
+npm --prefix desktop ci
+npm --prefix desktop run tauri build -- --bundles dmg --ci -v
+scripts/macos_clean_machine_smoke.sh
+```
+
+Then discard/revert the snapshot. This gives repeatable install confidence without using multiple physical Macs.
