@@ -19,8 +19,10 @@ export function computeActionGridSlots({
   if (!hasImage || n <= 0) return slots;
 
   if (n === 1) {
+    // Promote DNA extraction to key 1 and move annotate to key 5 for single-image flow.
+    slots[0] = { key: "extract_dna", label: "DNA", kind: "ability", hotkey: "1" };
     const abilities = [
-      { key: "extract_dna", label: "DNA", kind: "ability", hotkey: "5" },
+      { key: "annotate", label: "Annotate", kind: "tool", hotkey: "5" },
       { key: "soul_leech", label: "Soul", kind: "ability", hotkey: "6" },
       { key: "bg", label: "BG", kind: "ability", hotkey: "7" },
       { key: "variations", label: "Vars", kind: "ability", hotkey: "8" },
