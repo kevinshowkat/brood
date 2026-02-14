@@ -13963,10 +13963,21 @@ async function runRecast({ fromQueue = false } = {}) {
 
 async function exportRun() {
   bumpInteraction();
-  if (!state.runDir) return;
+  if (!state.runDir) {
+    showToast("Create or open a run before exporting.", "tip", 2600);
+    return;
+  }
   const outPath = `${state.runDir}/export.html`;
-  await invoke("export_run", { runDir: state.runDir, outPath });
-  setStatus(`Engine: exported ${basename(outPath)}`);
+  setStatus("Engine: exporting run…");
+  try {
+    await invoke("export_run", { runDir: state.runDir, outPath });
+    setStatus(`Engine: exported ${basename(outPath)}`);
+    showToast(`Exported ${basename(outPath)}.`, "tip", 2600);
+  } catch (err) {
+    const msg = err?.message || String(err || "export failed");
+    setStatus(`Engine: export failed (${msg})`, true);
+    showToast(`Export failed: ${msg}`, "error", 4200);
+  }
 }
 
 async function ensureRun() {
@@ -17786,6 +17797,38 @@ function render() {
       wctx.imageSmoothingQuality = "high";
       wctx.drawImage(img, 0, 0);
       wctx.restore();
+
+      // Keep single-view active selection clearly visible, matching multi-view behavior.
+      const dpr = getDpr();
+      const motherGenerated = isMotherGeneratedImageItem(item);
+      const outerStroke = motherGenerated ? "rgba(82, 255, 148, 0.20)" : "rgba(255, 212, 0, 0.14)";
+      const mainStroke = motherGenerated ? "rgba(82, 255, 148, 0.94)" : "rgba(255, 212, 0, 0.96)";
+      const mainShadow = motherGenerated ? "rgba(82, 255, 148, 0.28)" : "rgba(255, 212, 0, 0.26)";
+      const innerStroke = motherGenerated ? "rgba(208, 255, 226, 0.60)" : "rgba(255, 247, 210, 0.58)";
+      const ix = state.view.offsetX;
+      const iy = state.view.offsetY;
+      const iw = (img.naturalWidth || item.width || 1) * state.view.scale;
+      const ih = (img.naturalHeight || item.height || 1) * state.view.scale;
+
+      octx.save();
+      octx.lineJoin = "round";
+      octx.strokeStyle = outerStroke;
+      octx.lineWidth = Math.max(1, Math.round(10 * dpr));
+      octx.shadowColor = mainShadow;
+      octx.shadowBlur = Math.round(44 * dpr);
+      octx.strokeRect(ix - 5, iy - 5, iw + 10, ih + 10);
+
+      octx.strokeStyle = mainStroke;
+      octx.lineWidth = Math.max(1, Math.round(3.4 * dpr));
+      octx.shadowColor = mainShadow;
+      octx.shadowBlur = Math.round(28 * dpr);
+      octx.strokeRect(ix - 3, iy - 3, iw + 6, ih + 6);
+
+      octx.shadowBlur = 0;
+      octx.strokeStyle = innerStroke;
+      octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+      octx.strokeRect(ix - 1, iy - 1, iw + 2, ih + 2);
+      octx.restore();
     }
   }
   syncEffectsRuntimeScene();
@@ -18929,7 +18972,7 @@ function installCanvasHandlers() {
 	
 	      const dpr = getDpr();
 	      // UX: two-finger swipe up/down zooms (not pan). Horizontal swipe pans.
-	      // Holding Space forces pan (both axes) for when you want to scroll around.
+	      // Holding Option (Alt) forces pan (both axes) for when you want to scroll around.
 	      let dx = Number(event.deltaX) || 0;
 	      let dy = Number(event.deltaY) || 0;
 	      // Mouse wheels often emit horizontal scroll as Shift+deltaY.
@@ -19379,8 +19422,8 @@ function installUi() {
     });
   }
   window.addEventListener("keydown", (event) => {
-    if (String(event?.code || "") !== "Space") return;
-    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (String(event?.key || "") !== "Alt") return;
+    if (event.metaKey || event.ctrlKey) return;
     const target = event?.target;
     const tag = target?.tagName ? String(target.tagName).toLowerCase() : "";
     const isEditable = Boolean(
@@ -19394,7 +19437,7 @@ function installUi() {
     wheelForcePanHeld = true;
   });
   window.addEventListener("keyup", (event) => {
-    if (String(event?.code || "") !== "Space") return;
+    if (String(event?.key || "") !== "Alt") return;
     wheelForcePanHeld = false;
   });
   window.addEventListener("keydown", (event) => {
