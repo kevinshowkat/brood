@@ -54,6 +54,15 @@ Tests:
 - If changing desktop app version, bump versions in `desktop/package.json`, `desktop/src-tauri/tauri.conf.json`, and `desktop/src-tauri/Cargo.toml` together (CI enforces).
 - PRs should include: summary of changes, test status, and screenshots or screen capture for UI changes.
 
+## Release & CI Notes
+- Release publishing is tag-driven via `.github/workflows/publish.yml` and runs on pushed tags matching `v*`.
+- Publish CI verifies the tag matches desktop app version (`vX.Y.Z`) and that versions match across:
+  - `desktop/package.json`
+  - `desktop/src-tauri/tauri.conf.json`
+  - `desktop/src-tauri/Cargo.toml`
+- `main` is branch-protected and requires the `smoke-install` status check before merge.
+- `.github/workflows/desktop-clean-machine-smoke.yml` always emits `smoke-install` on PRs/pushes; expensive DMG smoke steps are skipped automatically when no desktop-related files changed.
+
 ## Configuration & Tips
 - Memory is opt-in: set `BROOD_MEMORY=1` for the engine.
 - Pricing overrides live at `~/.brood/pricing_overrides.json`.
