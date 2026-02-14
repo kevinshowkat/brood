@@ -28,6 +28,9 @@ test("Mother wheel: native-style open/close and dispatch hooks are wired", () =>
   assert.match(app, /raw === \"add_photo\"[\s\S]*importPhotosAtCanvasPoint\(/);
   assert.match(app, /raw === \"add_role\"[\s\S]*seedRoleDesignationFromWheelAnchor\(/);
   assert.match(app, /state\.pointer\.kind = \"freeform_wheel\"/);
+  assert.match(app, /const opened = openMotherWheelMenuAt\(importPt\);/);
+  assert.match(app, /if \(opened\) \{[\s\S]*recordUserEvent\(\"mother_wheel_open\"/);
+  assert.match(app, /const opened = openMotherWheelMenuAt\(ptCss\);/);
 });
 
 test("Mother v2 idle/cooldown timing constants are explicit", () => {
@@ -184,6 +187,9 @@ test("Mother follow-up inference includes mother-generated images in base contex
   assert.match(app, /function getVisibleCanvasImages\(/);
   assert.match(app, /return !isImageEffectTokenized\(id\);/);
   assert.match(app, /function motherIdleBaseImageItems\(\)\s*\{\s*\/\/ Mother v2 follow-ups should be able to reason over newly generated outputs too\.\s*return getVisibleCanvasImages\(\);\s*\}/);
+  assert.match(app, /function motherIdleHasArmedCanvas\(\)\s*\{[\s\S]*if \(state\.canvasMode === \"single\"\)/);
+  assert.match(app, /const iw = Number\(active\?\.img\?\.naturalWidth \|\| active\?\.width\) \|\| 0;/);
+  assert.match(app, /return iw > 0 && ih > 0;/);
   assert.match(app, /const selectedIds = getVisibleSelectedIds\(\)\.map/);
   assert.match(app, /const activeId = getVisibleActiveId\(\);/);
 });

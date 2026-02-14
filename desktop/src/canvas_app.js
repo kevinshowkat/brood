@@ -55,6 +55,9 @@ const MOTHER_VIDEO_TAKEOVER_SRC = new URL(
 const MOTHER_VIDEO_REALTIME_SRC = new URL("./assets/mother/mother_realtime.mp4", import.meta.url).href;
 const MOTHER_REALTIME_MIN_MS = 4000;
 const MOTHER_USER_HOT_IDLE_MS = 10_000;
+// Avoid brief watch-phase spikes from flashing realtime chrome/video.
+const MOTHER_RT_VISUAL_ON_DELAY_MS = 820;
+const MOTHER_RT_VISUAL_MIN_ON_MS = 2200;
 const MOTHER_TAKEOVER_PREVIEW_MS = 10_000;
 const MOTHER_IDLE_FIRST_IDLE_MS = 5000;
 const MOTHER_IDLE_TAKEOVER_IDLE_MS = 10_000;
@@ -75,6 +78,7 @@ const MOTHER_SELECTION_SEMANTIC_DRAG_PX = 10;
 const MOTHER_V2_COOLDOWN_AFTER_COMMIT_MS = 2000;
 const MOTHER_V2_COOLDOWN_AFTER_REJECT_MS = 1200;
 const MOTHER_V2_VISION_RETRY_MS = 220;
+const MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL = 2;
 const MOTHER_V2_ROLE_KEYS = Object.freeze(["subject", "model", "mediator", "object"]);
 const MOTHER_V2_ROLE_LABEL = Object.freeze({
   subject: "SUBJECT",
@@ -88,6 +92,9 @@ const MOTHER_V2_ROLE_GLYPH = Object.freeze({
   mediator: "△",
   object: "■",
 });
+const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator?.platform || "");
+// Use a more intuitive hold key for Mother option/hints reveal on macOS.
+const MOTHER_OPTION_REVEAL_HOLD_KEY = IS_MAC ? "h" : "i";
 const MOTHER_CREATIVE_DIRECTIVE = "stunningly awe-inspiring and tearfully joyous";
 const MOTHER_CREATIVE_DIRECTIVE_SENTENCE = `Create outputs that are ${MOTHER_CREATIVE_DIRECTIVE}.`;
 const MOTHER_V2_TRANSFORMATION_MODES = Object.freeze([
@@ -136,6 +143,10 @@ const MOTHER_INTENT_USECASE_DEFAULT_ORDER = Object.freeze([
 ]);
 // Minimap world overscan: keep viewport box from filling the minimap immediately when zooming out.
 const MINIMAP_WORLD_OVERSCAN_RATIO = 0.75;
+const REEL_PRESET = Object.freeze({
+  width: 540,
+  height: 960,
+});
 
 const els = {
   runInfo: document.getElementById("run-info"),
@@ -148,6 +159,7 @@ const els = {
   import: document.getElementById("import"),
   canvasImport: document.getElementById("canvas-import"),
   export: document.getElementById("export"),
+  reelAdminToggle: document.getElementById("reel-admin-toggle"),
   settingsToggle: document.getElementById("settings-toggle"),
   settingsDrawer: document.getElementById("settings-drawer"),
   settingsClose: document.getElementById("settings-close"),
@@ -341,6 +353,13 @@ const state = {
     importPointCss: null, // { x, y }
     moved: false,
   },
+  reelTouch: {
+    x: 0,
+    y: 0,
+    visibleUntil: 0,
+    downUntil: 0,
+    down: false,
+  },
   effectTokenDrag: null, // { tokenId, sourceImageId, targetImageId, moved, x, y }
   effectTokenApplyLocks: new Map(), // tokenId -> { dispatchId, targetImageId, queued, startedAt }
   wheelMenu: {
@@ -375,6 +394,9 @@ const state = {
     timer: null,
     rtHoldUntil: 0,
     rtHoldTimer: null,
+    rtVisualActive: false,
+    rtVisualRawSince: 0,
+    rtVisualMinUntil: 0,
     hotSyncAt: 0,
   },
   motherIdle: {
@@ -596,6 +618,9 @@ const INTENT_AMBIENT_FADE_IN_MS = 280;
 
 // Temporarily disabled custom canvas cursor (kept as a single knob for quick restore).
 const INTENT_IMPORT_CURSOR = "default";
+const REEL_TOUCH_MOVE_VISIBLE_MS = 120;
+const REEL_TOUCH_TAP_VISIBLE_MS = 280;
+const REEL_TOUCH_RELEASE_VISIBLE_MS = 150;
 
 // Intent onboarding overlay icon assets (generated via scripts/gemini_generate_intent_icons.py).
 // Keep a procedural fallback so the app still renders if assets fail to load.
@@ -2440,6 +2465,50 @@ function _ambientIntentViewportWorldBounds() {
     minY: (0 - offsetCssY) / scale,
     maxX: (canvasCssW - offsetCssX) / scale,
     maxY: (canvasCssH - offsetCssY) / scale,
+  };
+}
+
+function viewportWorldRect() {
+  const vp = _ambientIntentViewportWorldBounds();
+  if (!vp) return null;
+  const minX = Number(vp.minX) || 0;
+  const minY = Number(vp.minY) || 0;
+  const maxX = Number(vp.maxX) || 0;
+  const maxY = Number(vp.maxY) || 0;
+  const w = Math.max(1, maxX - minX);
+  const h = Math.max(1, maxY - minY);
+  return { x: minX, y: minY, w, h };
+}
+
+function rectVisibleRatioInViewport(rect) {
+  const r = rect && typeof rect === "object" ? rect : null;
+  const vp = viewportWorldRect();
+  if (!r || !vp) return 1;
+  const rx = Number(r.x) || 0;
+  const ry = Number(r.y) || 0;
+  const rw = Math.max(1, Number(r.w) || 1);
+  const rh = Math.max(1, Number(r.h) || 1);
+  const ix = Math.max(rx, vp.x);
+  const iy = Math.max(ry, vp.y);
+  const ax = Math.min(rx + rw, vp.x + vp.w);
+  const ay = Math.min(ry + rh, vp.y + vp.h);
+  const iw = Math.max(0, ax - ix);
+  const ih = Math.max(0, ay - iy);
+  return (iw * ih) / Math.max(1, rw * rh);
+}
+
+function recenterRectToViewport(rect) {
+  const r = rect && typeof rect === "object" ? rect : null;
+  const vp = viewportWorldRect();
+  if (!r || !vp) return r;
+  const rw = Math.max(1, Number(r.w) || 1);
+  const rh = Math.max(1, Number(r.h) || 1);
+  return {
+    x: vp.x + (vp.w - rw) * 0.5,
+    y: vp.y + (vp.h - rh) * 0.5,
+    w: rw,
+    h: rh,
+    autoAspect: true,
   };
 }
 
@@ -4715,6 +4784,7 @@ function bumpSessionApiCalls({ n = 1 } = {}) {
 
 let toastTimer = null;
 function showToast(message, kind = "info", timeoutMs = 2400) {
+  if (shouldSuppressToastInReelMode(message, kind)) return;
   if (!els.toast) return;
   els.toast.textContent = String(message || "");
   els.toast.dataset.kind = kind;
@@ -4734,6 +4804,91 @@ let motherTypeoutTarget = "";
 let motherTypeoutIndex = 0;
 let motherGlitchTimer = null;
 let motherReadoutFadeTimer = null;
+let wheelForcePanHeld = false;
+const REEL_PRESET_MARGIN_PX = 24;
+let reelPresetWindowResizeAttached = false;
+
+function getReelScaleForViewport() {
+  const appWidth = Math.max(1, window.innerWidth - REEL_PRESET_MARGIN_PX);
+  const appHeight = Math.max(1, window.innerHeight - REEL_PRESET_MARGIN_PX);
+  const widthScale = appWidth / REEL_PRESET.width;
+  const heightScale = appHeight / REEL_PRESET.height;
+  const rawScale = Math.min(widthScale, heightScale, 1);
+  return clamp(rawScale, 0.08, 1);
+}
+
+function isReelSizeLocked() {
+  return document.documentElement.dataset.reelSizePreset === "active";
+}
+
+function shouldSuppressToastInReelMode(message, kind = "info") {
+  if (!isReelSizeLocked()) return false;
+  if (String(kind || "").toLowerCase() === "error") return false;
+  const text = String(message || "").trim();
+  if (!text) return false;
+  // In reel mode, suppress informational toasts that reveal generated/input filenames.
+  return /\b[^\\/\s]+\.(png|jpe?g|webp|heic|gif|bmp|tiff?|mp4|mov|webm)\b/i.test(text);
+}
+
+function suppressReelDnaToasts() {
+  return isReelSizeLocked();
+}
+
+function updateReelSizeButton() {
+  const locked = isReelSizeLocked();
+  if (els.reelAdminToggle) {
+    els.reelAdminToggle.textContent = locked ? "Exit Reel 9:16" : "Enable Reel 9:16";
+    els.reelAdminToggle.classList.toggle("is-active", locked);
+    els.reelAdminToggle.setAttribute("aria-pressed", locked ? "true" : "false");
+    els.reelAdminToggle.title = locked
+      ? "Restore normal layout"
+      : `Resize app to ${REEL_PRESET.width} × ${REEL_PRESET.height} area`;
+  }
+}
+
+function setReelSizeLock(enabled) {
+  const appEl = document.getElementById("app");
+  if (!appEl) return;
+  if (!enabled) {
+    document.documentElement.removeAttribute("data-reel-size-preset");
+    document.documentElement.style.removeProperty("--reel-view-scale");
+    appEl.style.removeProperty("width");
+    appEl.style.removeProperty("height");
+    updateReelSizeButton();
+    return;
+  }
+
+  const scale = getReelScaleForViewport();
+  const width = Math.round(REEL_PRESET.width * scale);
+  const height = Math.round(REEL_PRESET.height * scale);
+
+  appEl.style.width = `${width}px`;
+  appEl.style.height = `${height}px`;
+  document.documentElement.setAttribute("data-reel-size-preset", "active");
+  document.documentElement.style.setProperty("--reel-view-scale", "1");
+  updateReelSizeButton();
+}
+
+function toggleReelSizeLock() {
+  const wasLocked = isReelSizeLocked();
+  setReelSizeLock(!wasLocked);
+  const nowLocked = isReelSizeLocked();
+  if (els.overlayCanvas) {
+    els.overlayCanvas.style.cursor = nowLocked ? "none" : INTENT_IMPORT_CURSOR;
+  }
+  if (!nowLocked && state.reelTouch) {
+    state.reelTouch.visibleUntil = 0;
+    state.reelTouch.downUntil = 0;
+    state.reelTouch.down = false;
+  }
+  // Reel mode changes visible control affordances (2x3 grid, mother readout/actions),
+  // so force an immediate UI refresh instead of waiting for later state updates.
+  renderQuickActions();
+  renderMotherReadout();
+  if (nowLocked) {
+    setStatus(`App resize preset: ${REEL_PRESET.width} × ${REEL_PRESET.height}`);
+  }
+}
 
 function stopMotherGlitchLoop() {
   clearTimeout(motherGlitchTimer);
@@ -4854,6 +5009,7 @@ function renderMotherControls() {
   syncMotherTakeoverClass();
 
   const idle = state.motherIdle || null;
+  const reelLocked = isReelSizeLocked();
   const phase = idle?.phase || motherIdleInitialState();
   const proposalModes = motherV2ProposalModes(idle?.intent || null);
   const undoAvailable = motherV2CommitUndoAvailable();
@@ -4882,11 +5038,13 @@ function renderMotherControls() {
     els.motherConfirm.classList.toggle("hidden", false);
   }
   if (els.motherStop) {
+    const stopAction = els.motherStop.closest(".mother-action");
+    if (stopAction) stopAction.classList.toggle("hidden", reelLocked);
     els.motherStop.disabled = !canReject;
     els.motherStop.title = rejectTitle;
     els.motherStop.textContent = undoAvailable ? "↶" : "✕";
     els.motherStop.setAttribute("aria-label", rejectTitle);
-    els.motherStop.classList.toggle("hidden", false);
+    els.motherStop.classList.toggle("hidden", reelLocked);
   }
   if (els.motherAbilityIcon) {
     els.motherAbilityIcon.disabled = !canNextProposal;
@@ -4982,6 +5140,7 @@ function buildMotherText() {
   const drafts = Array.isArray(idle?.drafts) ? idle.drafts : [];
   const cooldownMs = Math.max(0, (Number(idle?.cooldownUntil) || 0) - Date.now());
   const undoAvailable = motherV2CommitUndoAvailable();
+  const canPropose = motherIdleHasArmedCanvas();
 
   if (phase === MOTHER_IDLE_STATES.WATCHING) {
     return "";
@@ -4996,6 +5155,9 @@ function buildMotherText() {
   }
   if (phase === MOTHER_IDLE_STATES.OFFERING) {
     const draftCount = drafts.length;
+    if (isReelSizeLocked()) {
+      return `Draft ready (${draftCount}). ✓ deploy, R reroll.`;
+    }
     return `Draft ready (${draftCount}). ✓ deploy, ✕ reject, R reroll.`;
   }
   if (phase === MOTHER_IDLE_STATES.COMMITTING) {
@@ -5010,6 +5172,9 @@ function buildMotherText() {
   if (!state.images.length) {
     return "";
   }
+  if (!canPropose) {
+    return "";
+  }
   if (motherV2InCooldown()) {
     const sec = (cooldownMs / 1000).toFixed(1);
     return `Cooling down ${sec}s`;
@@ -5021,9 +5186,13 @@ function buildMotherText() {
 
   if (aov?.enabled) {
     if (aov.rtState === "connecting" && !aov.pending && !hasOutput) {
+      if (isReelSizeLocked()) return "";
       return "Mother connecting…";
     }
-    if (aov.pending) return "Mother scanning…";
+    if (aov.pending) {
+      if (isReelSizeLocked()) return "";
+      return "Mother scanning…";
+    }
     if (phase === MOTHER_IDLE_STATES.OBSERVING && motherIdleHasArmedCanvas()) {
       return "";
     }
@@ -5038,7 +5207,12 @@ function motherV2StatusText() {
   const idle = state.motherIdle || null;
   const phase = idle?.phase || motherIdleInitialState();
   const drafts = Array.isArray(idle?.drafts) ? idle.drafts : [];
-  if (phase === MOTHER_IDLE_STATES.OBSERVING || phase === MOTHER_IDLE_STATES.WATCHING) return "";
+  const canPropose = motherIdleHasArmedCanvas();
+  if (!canPropose && (phase === MOTHER_IDLE_STATES.WATCHING || phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING)) {
+    return "Observing";
+  }
+  if (phase === MOTHER_IDLE_STATES.OBSERVING) return "Observing";
+  if (phase === MOTHER_IDLE_STATES.WATCHING) return "Watching";
   if (phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
     if (Array.isArray(idle?.pendingVisionImageIds) && idle.pendingVisionImageIds.length) return "Proposing";
     if (idle?.pendingIntent) return "Proposing";
@@ -5075,11 +5249,31 @@ function renderMotherReadout() {
   );
 
   if (els.motherState) {
+    const normalizedPhase = String(phase || "").trim();
+    const phaseLabel = normalizedPhase
+      ? normalizedPhase.replace(/_/g, " ").replace(/\b([a-z])/g, (m) => m.toUpperCase())
+      : "";
+    const normalizedStatus = String(statusText || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
     els.motherState.textContent = statusText;
     els.motherState.setAttribute("data-phase", String(phase || ""));
+    if (normalizedStatus) {
+      els.motherState.setAttribute("data-status", normalizedStatus);
+    } else {
+      els.motherState.removeAttribute("data-status");
+    }
+    const accessibilityLabel = statusText || phaseLabel;
+    if (accessibilityLabel) {
+      els.motherState.setAttribute("aria-label", accessibilityLabel);
+    } else {
+      els.motherState.removeAttribute("aria-label");
+    }
     const stateRow = els.motherState.closest(".mother-state-row");
     if (stateRow) {
-      stateRow.classList.toggle("hidden", !statusText);
+      stateRow.classList.toggle("hidden", !accessibilityLabel);
     }
   }
   els.tipsText.classList.remove("mother-cursor");
@@ -5110,6 +5304,7 @@ function syncMotherPortrait() {
   const videoEl = els.motherVideo;
 
   const motherRunning = Boolean(state.mother?.running);
+  const reelLocked = isReelSizeLocked();
   const aov = state.alwaysOnVision;
   const now = Date.now();
   const mother = state.mother;
@@ -5138,8 +5333,33 @@ function syncMotherPortrait() {
   const userHotUntil = Math.max(0, Number(state.lastMotherHotAt) || 0) + MOTHER_USER_HOT_IDLE_MS;
   const idlePhase = state.motherIdle?.phase || motherIdleInitialState();
 
-  // Realtime border/video is driven by Mother's idle suggestion flow window.
-  const showRealtime = !motherRunning && hasImages && motherIdleUsesRealtimeVisual(idlePhase);
+  // Realtime border/video is driven by Mother's idle suggestion flow window, with
+  // hysteresis to prevent brief watch-phase spikes from blinking the portrait/border.
+  const rawRealtime = !reelLocked && !motherRunning && hasImages && motherIdleUsesRealtimeVisual(idlePhase);
+  if (rawRealtime) {
+    mother.rtVisualRawSince = Math.max(0, Number(mother.rtVisualRawSince) || 0) || now;
+  } else {
+    mother.rtVisualRawSince = 0;
+  }
+
+  let showRealtime = Boolean(mother.rtVisualActive);
+  const rawSince = Math.max(0, Number(mother.rtVisualRawSince) || 0);
+  const minUntil = Math.max(0, Number(mother.rtVisualMinUntil) || 0);
+  if (rawRealtime) {
+    if (!showRealtime && rawSince && now - rawSince >= MOTHER_RT_VISUAL_ON_DELAY_MS) {
+      showRealtime = true;
+      mother.rtVisualActive = true;
+      mother.rtVisualMinUntil = now + MOTHER_RT_VISUAL_MIN_ON_MS;
+    }
+  } else if (showRealtime && now >= minUntil) {
+    showRealtime = false;
+    mother.rtVisualActive = false;
+    mother.rtVisualMinUntil = 0;
+  }
+  if (!showRealtime && !rawRealtime) {
+    mother.rtVisualMinUntil = 0;
+  }
+
   if (els.canvasWrap) {
     els.canvasWrap.classList.toggle("mother-rt-active", showRealtime);
   }
@@ -5148,6 +5368,12 @@ function syncMotherPortrait() {
   if (!pending) {
     if (held) refreshAts.push(holdUntil);
     if (userHot) refreshAts.push(userHotUntil);
+  }
+  if (rawRealtime && !showRealtime && rawSince) {
+    refreshAts.push(rawSince + MOTHER_RT_VISUAL_ON_DELAY_MS);
+  }
+  if (!rawRealtime && showRealtime && minUntil) {
+    refreshAts.push(minUntil);
   }
   const refreshAt = refreshAts.length ? Math.min(...refreshAts) : 0;
   if (refreshAt && refreshAt > now) {
@@ -5161,7 +5387,9 @@ function syncMotherPortrait() {
     mother.rtHoldTimer = null;
   }
 
-  const mode = motherRunning ? "takeover" : showRealtime ? "realtime" : "idle";
+  // In Reel mode, keep Mother on a single stable loop to avoid frequent clip source
+  // swaps while idle-state phases change.
+  const mode = reelLocked ? (motherRunning ? "takeover" : "idle") : motherRunning ? "takeover" : showRealtime ? "realtime" : "idle";
   const src =
     mode === "takeover"
       ? MOTHER_VIDEO_TAKEOVER_SRC
@@ -5182,10 +5410,11 @@ function syncMotherPortrait() {
   videoEl.style.transform = mode === "takeover" ? "scaleX(-1) scale(1.02)" : "scale(1.02)";
 
   const nextKey = `${mode}:${src}`;
-  const currentSrc = String(videoEl.currentSrc || videoEl.src || "");
-  if (state.portraitMedia.activeKeyMother !== nextKey || (src && currentSrc !== String(src))) {
+  const lastAssignedSrc = String(videoEl.dataset.motherSrc || "");
+  if (state.portraitMedia.activeKeyMother !== nextKey || (src && lastAssignedSrc !== String(src))) {
     state.portraitMedia.activeKeyMother = nextKey;
     videoEl.classList.remove("hidden");
+    videoEl.dataset.motherSrc = String(src || "");
     videoEl.src = src;
     try {
       videoEl.currentTime = 0;
@@ -5207,6 +5436,7 @@ async function motherV2CommitSelectedDraft() {
   if (!idle) return false;
   const draft = motherV2CurrentDraft();
   if (!draft?.path) return false;
+  const reelLocked = isReelSizeLocked();
   const intent = motherV2SanitizeIntentImageIds(idle.intent && typeof idle.intent === "object" ? idle.intent : {}) || {};
   const targetIds = Array.isArray(intent.target_ids) ? intent.target_ids.map((v) => String(v || "").trim()).filter(Boolean) : [];
   const targetId = targetIds[0] || getVisibleActiveId();
@@ -5245,7 +5475,18 @@ async function motherV2CommitSelectedDraft() {
         expiresAt: Date.now() + 4500,
       };
     } else {
-      const rect = motherIdleComputePlacementCss({ policy, targetId, draftIndex: 0 });
+      let rect = motherIdleComputePlacementCss({ policy, targetId, draftIndex: 0 });
+      if (rect) {
+        const wrap = els.canvasWrap;
+        const canvasCssW = Math.max(1, Number(wrap?.clientWidth) || 1);
+        const canvasCssH = Math.max(1, Number(wrap?.clientHeight) || 1);
+        const visibleRatio = rectVisibleRatioInViewport(rect);
+        // Keep accepted Mother artifacts visible to the user.
+        if (reelLocked || visibleRatio < 0.35) {
+          rect = recenterRectToViewport(rect);
+        }
+        rect = clampFreeformRectCss(rect, canvasCssW, canvasCssH);
+      }
       if (rect) state.freeformRects.set(draft.id, { ...rect });
       addImage(
         {
@@ -5283,7 +5524,9 @@ async function motherV2CommitSelectedDraft() {
   motherIdleTransitionTo(MOTHER_IDLE_EVENTS.COMMIT_DONE);
   motherV2ArmCooldown({ rejected: false });
   setStatus("Mother: committed.");
-  showToast("Mother commit applied. Undo available briefly.", "tip", 2200);
+  if (!reelLocked) {
+    showToast("Mother commit applied. Undo available briefly.", "tip", 2200);
+  }
   renderMotherReadout();
   requestRender();
   return true;
@@ -5509,6 +5752,8 @@ function renderMinimap() {
   const surf = els.minimapSurface;
   const wrap = els.canvasWrap;
   if (!surf || !wrap) return;
+  const minimapRoot = els.minimap;
+  if (minimapRoot && minimapRoot.offsetParent === null) return;
 
   const canvasCssW = wrap.clientWidth || 0;
   const canvasCssH = wrap.clientHeight || 0;
@@ -6466,9 +6711,17 @@ function motherV2ForcePhase(nextState, eventName = "force") {
 }
 
 function motherIdleHasArmedCanvas() {
-  if (state.canvasMode !== "multi") return false;
   const base = motherIdleBaseImageItems();
-  if (base.length < 1) return false;
+  if (base.length < MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL) return false;
+  if (state.canvasMode === "single") {
+    const activeId = String(getVisibleActiveId() || "").trim();
+    if (!activeId) return false;
+    const active = state.imagesById.get(activeId) || getActiveImage() || null;
+    const iw = Number(active?.img?.naturalWidth || active?.width) || 0;
+    const ih = Number(active?.img?.naturalHeight || active?.height) || 0;
+    return iw > 0 && ih > 0;
+  }
+  if (state.canvasMode !== "multi") return false;
   const required = base.slice(0, Math.min(2, base.length));
   for (const item of required) {
     const rect = state.freeformRects.get(item.id) || null;
@@ -7825,7 +8078,10 @@ async function motherV2DispatchCompiledPrompt(compiled = {}) {
   );
   const sentViaPayload = await motherV2DispatchViaImagePayload(compiled, promptLine).catch(() => false);
   if (!sentViaPayload) {
-    await invoke("write_pty", { data: `${promptLine}\n` });
+    // Mother drafts must dispatch via structured payload so source_images always includes
+    // the full canvas context (uploaded + Mother-generated images).
+    motherIdleHandleGenerationFailed("Mother could not start drafting payload.");
+    return false;
   }
   return true;
 }
@@ -7910,7 +8166,9 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
     intent_id: idle.intent?.intent_id || null,
     placement_policy: idle.intent?.placement_policy || null,
   }).catch(() => {});
-  showToast("Mother draft ready. ✓ deploy, ✕ dismiss, R reroll.", "tip", 2200);
+  if (!isReelSizeLocked()) {
+    showToast("Mother draft ready. ✓ deploy, ✕ dismiss, R reroll.", "tip", 2200);
+  }
   requestRender();
   return true;
 }
@@ -8861,7 +9119,9 @@ async function runExtractDnaFromSelection({ fromQueue = false } = {}) {
   state.lastAction = "Extract DNA";
   setStatus("Director: extracting DNA…");
   portraitWorking("Extract DNA", { providerOverride: "openai", clearDirector: false });
-  showToast("Extracting DNA from selected image(s)…", "info", 2200);
+  if (!suppressReelDnaToasts()) {
+    showToast("Extracting DNA from selected image(s)…", "info", 2200);
+  }
   renderQuickActions();
   requestRender();
 
@@ -11398,6 +11658,20 @@ function actionGridIconFor(key) {
   return "";
 }
 
+function actionGridReelIconOverrideFor(key) {
+  const k = String(key || "").trim();
+  if (!k) return "";
+  if (k === "pan") {
+    // iOS-style gesture icon for reel mode: finger + touch ring.
+    return `<svg class="tool-icon tool-icon-ios-pan" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="17.5" cy="6.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8" />
+      <path d="M12 19v-8.4a1.6 1.6 0 0 1 3.2 0V14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M12 14l-1.6-1.5a1.5 1.5 0 0 0-2.2 2l2.5 2.8A4.7 4.7 0 0 0 14.3 19H16a4 4 0 0 0 4-4v-2.2a1.5 1.5 0 0 0-3 0V14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>`;
+  }
+  return "";
+}
+
 function renderActionGrid() {
   const root = els.actionGrid;
   if (!root) return;
@@ -11410,6 +11684,17 @@ function renderActionGrid() {
     hasImage,
     alwaysOnVisionEnabled: Boolean(state.alwaysOnVision?.enabled),
   });
+  const reelMode = isReelSizeLocked();
+  const reelNoImageSlots = [
+    { key: "annotate", label: "Annotate", kind: "tool", hotkey: "1" },
+    { key: "pan", label: "Pan", kind: "tool", hotkey: "2" },
+    { key: "lasso", label: "Lasso", kind: "tool", hotkey: "3" },
+    { key: "designate", label: "Designate", kind: "tool", hotkey: "4" },
+    { key: "bg", label: "BG", kind: "ability", hotkey: "5" },
+    { key: "variations", label: "Vars", kind: "ability", hotkey: "6" },
+  ];
+  const visibleSlots = reelMode ? (!hasImage ? reelNoImageSlots : slots.slice(0, 6)) : slots;
+  root.classList.toggle("reel-grid-2x3", reelMode);
   const runningKey = currentRunningActionKey();
 
   const iw = active?.img?.naturalWidth || active?.width || null;
@@ -11419,7 +11704,25 @@ function renderActionGrid() {
   root.innerHTML = "";
   const frag = document.createDocumentFragment();
 
-  for (const slot of slots) {
+  const imageRequiredKeys = new Set([
+    "bg",
+    "extract_dna",
+    "soul_leech",
+    "remove_people",
+    "variations",
+    "diagnose",
+    "recast",
+    "crop_square",
+    "combine",
+    "bridge",
+    "swap_dna",
+    "argue",
+    "extract_rule",
+    "odd_one_out",
+    "triforce",
+  ]);
+
+  for (const slot of visibleSlots) {
     if (!slot) {
       const blank = document.createElement("button");
       blank.type = "button";
@@ -11454,9 +11757,14 @@ function renderActionGrid() {
       btn.disabled = true;
       btn.title = "Already square (or image size unknown)";
     }
+    if (!hasImage && imageRequiredKeys.has(key)) {
+      btn.disabled = true;
+      btn.title = "Import a photo first";
+    }
 
-    const icon = actionGridIconFor(key);
-    btn.innerHTML = `${icon}<span class="tool-hint" aria-hidden="true">${hotkey}</span>`;
+    const icon = reelMode ? actionGridReelIconOverrideFor(key) || actionGridIconFor(key) : actionGridIconFor(key);
+    const hintHtml = reelMode ? "" : `<span class="tool-hint" aria-hidden="true">${hotkey}</span>`;
+    btn.innerHTML = `${icon}${hintHtml}`;
 
     btn.addEventListener("click", (ev) => {
       bumpInteraction();
@@ -12521,6 +12829,12 @@ async function importPhotosAtCanvasPoint(pointCss) {
   if (ok > 0) {
     const suffix = failed ? ` (${failed} failed)` : "";
     setStatus(`Engine: imported ${ok} photo${ok === 1 ? "" : "s"}${suffix}`, failed > 0);
+    if (state.images.length > 1 && state.canvasMode !== "multi") {
+      setCanvasMode("multi");
+      if (!intentActive) {
+        setTip("Multiple photos loaded. Click a photo to focus it. Press M to toggle multi view.");
+      }
+    }
     if (intentActive && !state.intent.startedAt) {
       state.intent.startedAt = Date.now();
       state.intent.deadlineAt = state.intent.startedAt + INTENT_DEADLINE_MS;
@@ -13667,10 +13981,21 @@ async function runRecast({ fromQueue = false } = {}) {
 
 async function exportRun() {
   bumpInteraction();
-  if (!state.runDir) return;
+  if (!state.runDir) {
+    showToast("Create or open a run before exporting.", "tip", 2600);
+    return;
+  }
   const outPath = `${state.runDir}/export.html`;
-  await invoke("export_run", { runDir: state.runDir, outPath });
-  setStatus(`Engine: exported ${basename(outPath)}`);
+  setStatus("Engine: exporting run…");
+  try {
+    await invoke("export_run", { runDir: state.runDir, outPath });
+    setStatus(`Engine: exported ${basename(outPath)}`);
+    showToast(`Exported ${basename(outPath)}.`, "tip", 2600);
+  } catch (err) {
+    const msg = err?.message || String(err || "export failed");
+    setStatus(`Engine: export failed (${msg})`, true);
+    showToast(`Export failed: ${msg}`, "error", 4200);
+  }
 }
 
 async function ensureRun() {
@@ -15285,7 +15610,9 @@ async function handleEvent(event) {
         model: event.model || null,
       });
       if (token) {
-        showToast(`DNA extracted: ${item.label || basename(item.path)}`, "tip", 1800);
+        if (!suppressReelDnaToasts()) {
+          showToast(`DNA extracted: ${item.label || basename(item.path)}`, "tip", 1800);
+        }
       }
       requestRender();
     }
@@ -16196,6 +16523,82 @@ function hitTestMotherRoleGlyph(ptCanvas) {
   return null;
 }
 
+function renderMotherDraftKeyboardHints(octx, rectPx, { dpr = 1 } = {}) {
+  if (!octx || !rectPx || isReelSizeLocked()) return;
+  const hints = [
+    { key: "V", label: "DEPLOY" },
+    { key: "M", label: "DISMISS" },
+    { key: "R", label: "REROLL" },
+  ];
+  if (!hints.length) return;
+  const margin = Math.max(8, Math.round(10 * dpr));
+  const gap = Math.max(4, Math.round(6 * dpr));
+  const chipPadX = Math.max(4, Math.round(6 * dpr));
+  const chipPadY = Math.max(2, Math.round(4 * dpr));
+  const keyW = Math.max(11, Math.round(13 * dpr));
+  const keyH = Math.max(11, Math.round(13 * dpr));
+  const keyGap = Math.max(4, Math.round(5 * dpr));
+  const chipH = Math.max(keyH + chipPadY * 2, Math.round(20 * dpr));
+  const fontPx = Math.max(8, Math.round(9 * dpr));
+  const corner = Math.max(4, Math.round(6 * dpr));
+  const canvasW = Number(octx.canvas?.width) || 0;
+  const canvasH = Number(octx.canvas?.height) || 0;
+  if (canvasW <= 0 || canvasH <= 0) return;
+
+  octx.save();
+  octx.font = `${fontPx}px IBM Plex Mono`;
+  octx.textBaseline = "middle";
+  octx.textAlign = "left";
+
+  const chips = hints.map((hint) => {
+    const label = String(hint.label || "").trim().toUpperCase();
+    const key = String(hint.key || "").trim().toUpperCase();
+    const labelW = Math.ceil(octx.measureText(label).width);
+    const width = chipPadX + keyW + keyGap + labelW + chipPadX;
+    return { key, label, width };
+  });
+  const totalW = chips.reduce((sum, chip) => sum + chip.width, 0) + Math.max(0, chips.length - 1) * gap;
+
+  let x = Math.round((Number(rectPx.x) || 0) + ((Number(rectPx.w) || 0) - totalW) / 2);
+  x = clamp(x, margin, Math.max(margin, canvasW - totalW - margin));
+  let y = Math.round((Number(rectPx.y) || 0) - chipH - margin);
+  if (y < margin) {
+    y = Math.round((Number(rectPx.y) || 0) + (Number(rectPx.h) || 0) + margin);
+  }
+  y = clamp(y, margin, Math.max(margin, canvasH - chipH - margin));
+
+  octx.shadowColor = "rgba(0, 0, 0, 0.52)";
+  octx.shadowBlur = Math.round(10 * dpr);
+  let cx = x;
+  for (const chip of chips) {
+    _drawRoundedRect(octx, cx, y, chip.width, chipH, corner);
+    octx.fillStyle = "rgba(8, 10, 14, 0.84)";
+    octx.fill();
+    octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+    octx.strokeStyle = "rgba(82, 255, 148, 0.46)";
+    octx.stroke();
+
+    const keyX = cx + chipPadX;
+    const keyY = y + Math.round((chipH - keyH) / 2);
+    _drawRoundedRect(octx, keyX, keyY, keyW, keyH, Math.max(3, Math.round(3 * dpr)));
+    octx.fillStyle = "rgba(18, 26, 37, 0.96)";
+    octx.fill();
+    octx.strokeStyle = "rgba(160, 188, 220, 0.62)";
+    octx.stroke();
+
+    octx.fillStyle = "rgba(230, 237, 243, 0.96)";
+    octx.textAlign = "center";
+    octx.fillText(chip.key, keyX + keyW * 0.5, y + chipH * 0.54);
+
+    octx.textAlign = "left";
+    octx.fillStyle = "rgba(210, 255, 228, 0.94)";
+    octx.fillText(chip.label, keyX + keyW + keyGap, y + chipH * 0.54);
+
+    cx += chip.width + gap;
+  }
+  octx.restore();
+}
+
 function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
   const idle = state.motherIdle;
   if (!idle) return;
@@ -16208,12 +16611,16 @@ function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
     idle.roleGlyphHits = [];
     return;
   }
+  const showOfferPreview = phase === MOTHER_IDLE_STATES.OFFERING;
   const advancedVisible = motherV2IsAdvancedVisible();
   const hintsVisible = motherV2HintsVisible();
   if (!advancedVisible && !hintsVisible) {
-    idle.roleGlyphHits = [];
-    return;
+    if (!showOfferPreview) {
+      idle.roleGlyphHits = [];
+      return;
+    }
   }
+  const showRoleGlyphs = advancedVisible || hintsVisible;
   const dpr = getDpr();
   const hintLevel = Number(idle.hintLevel) || 1;
   const glyphSize = advancedVisible
@@ -16229,7 +16636,7 @@ function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
     if (!imageId) continue;
     const rect = state.multiRects.get(imageId) || null;
     if (!rect) continue;
-    const roles = MOTHER_V2_ROLE_KEYS.filter((key) => motherV2RoleImageIds(key).includes(imageId));
+    const roles = showRoleGlyphs ? MOTHER_V2_ROLE_KEYS.filter((key) => motherV2RoleImageIds(key).includes(imageId)) : [];
     if (!roles.length) continue;
     const rx = rect.x * ms + mox;
     const ry = rect.y * ms + moy;
@@ -16281,7 +16688,7 @@ function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
     }
   }
 
-  if (!advancedVisible) {
+  if (showRoleGlyphs && !advancedVisible) {
     const subjectAnchor = roleAnchors.get("subject");
     const modelAnchor = roleAnchors.get("model");
     if (subjectAnchor && modelAnchor) {
@@ -16323,15 +16730,22 @@ function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
         octx.fillStyle = "rgba(82, 255, 148, 0.18)";
         octx.fillRect(Math.round(px.x), Math.round(px.y), Math.round(px.w), Math.round(px.h));
       }
-      octx.globalAlpha = 0.8;
+      octx.globalAlpha = 0.92;
       octx.strokeStyle = "rgba(82, 255, 148, 0.88)";
       octx.lineWidth = Math.max(1, Math.round(2 * dpr));
       octx.strokeRect(Math.round(px.x), Math.round(px.y), Math.round(px.w), Math.round(px.h));
+      octx.globalAlpha = 0.42;
+      octx.setLineDash([Math.max(2, Math.round(6 * dpr)), Math.max(2, Math.round(4 * dpr))]);
+      octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+      octx.strokeStyle = "rgba(182, 255, 216, 0.84)";
+      octx.strokeRect(Math.round(px.x - 3), Math.round(px.y - 3), Math.round(px.w + 6), Math.round(px.h + 6));
+      octx.setLineDash([]);
       octx.restore();
+      renderMotherDraftKeyboardHints(octx, px, { dpr });
     }
   }
 
-  idle.roleGlyphHits = advancedVisible ? hits : [];
+  idle.roleGlyphHits = showRoleGlyphs && advancedVisible ? hits : [];
 }
 
 function hitTestIntentUi(ptCanvas) {
@@ -17383,6 +17797,85 @@ function renderAmbientIntentNudges(octx, canvasW, canvasH) {
   if (needsFadeTick) requestRender();
 }
 
+function reelTouchPulseFromCanvasPoint(pt, { down = false, lingerMs = REEL_TOUCH_MOVE_VISIBLE_MS } = {}) {
+  if (!isReelSizeLocked()) return;
+  const touch = state.reelTouch;
+  if (!touch || !pt) return;
+  const now = Date.now();
+  touch.x = Number(pt.x) || 0;
+  touch.y = Number(pt.y) || 0;
+  touch.visibleUntil = Math.max(Number(touch.visibleUntil) || 0, now + Math.max(20, Number(lingerMs) || 0));
+  if (down) {
+    touch.down = true;
+    touch.downUntil = Math.max(Number(touch.downUntil) || 0, now + REEL_TOUCH_TAP_VISIBLE_MS);
+  } else if (now >= (Number(touch.downUntil) || 0)) {
+    touch.down = false;
+  }
+}
+
+function clearReelTouchPulse() {
+  const touch = state.reelTouch;
+  if (!touch) return;
+  touch.visibleUntil = 0;
+  touch.downUntil = 0;
+  touch.down = false;
+}
+
+function renderReelTouchIndicator(octx, canvasW, canvasH) {
+  if (!isReelSizeLocked()) return;
+  const touch = state.reelTouch;
+  if (!touch || !octx) return;
+  const now = Date.now();
+  const visibleUntil = Number(touch.visibleUntil) || 0;
+  const downUntil = Number(touch.downUntil) || 0;
+  const active = Boolean(state.pointer?.active) || now < visibleUntil || now < downUntil;
+  if (!active) return;
+
+  const x = clamp(Number(touch.x) || 0, 6, Math.max(6, Number(canvasW) - 6));
+  const y = clamp(Number(touch.y) || 0, 6, Math.max(6, Number(canvasH) - 6));
+  const downProgress = downUntil > now ? 1 - clamp((downUntil - now) / REEL_TOUCH_TAP_VISIBLE_MS, 0, 1) : 0;
+  const tail = clamp((visibleUntil - now) / REEL_TOUCH_MOVE_VISIBLE_MS, 0, 1);
+  const alpha = clamp(0.36 + 0.56 * Math.max(tail, downProgress), 0.2, 0.96);
+  const coreR = 8 - downProgress * 1.2;
+  const ringR = 15 - downProgress * 1.6;
+
+  octx.save();
+  octx.globalCompositeOperation = "source-over";
+  octx.shadowColor = "rgba(0, 0, 0, 0.44)";
+  octx.shadowBlur = 18;
+
+  octx.beginPath();
+  octx.arc(x, y, ringR, 0, Math.PI * 2);
+  octx.fillStyle = `rgba(220, 236, 255, ${Math.max(0.10, alpha * 0.18).toFixed(3)})`;
+  octx.fill();
+
+  octx.shadowBlur = 10;
+  octx.beginPath();
+  octx.arc(x, y, coreR, 0, Math.PI * 2);
+  octx.fillStyle = `rgba(245, 250, 255, ${Math.max(0.2, alpha).toFixed(3)})`;
+  octx.fill();
+
+  octx.shadowBlur = 0;
+  octx.lineWidth = 1.5;
+  octx.strokeStyle = `rgba(90, 120, 150, ${Math.max(0.24, alpha * 0.42).toFixed(3)})`;
+  octx.beginPath();
+  octx.arc(x, y, coreR + 0.5, 0, Math.PI * 2);
+  octx.stroke();
+
+  if (downUntil > now) {
+    const pulse = 10 + downProgress * 18;
+    const pulseAlpha = Math.max(0, 0.42 * (1 - downProgress));
+    octx.lineWidth = 2;
+    octx.strokeStyle = `rgba(240, 248, 255, ${pulseAlpha.toFixed(3)})`;
+    octx.beginPath();
+    octx.arc(x, y, pulse, 0, Math.PI * 2);
+    octx.stroke();
+  }
+  octx.restore();
+
+  if (now < visibleUntil || now < downUntil) requestRender();
+}
+
 function render() {
   const work = els.workCanvas;
   const overlay = els.overlayCanvas;
@@ -17409,6 +17902,38 @@ function render() {
       wctx.imageSmoothingQuality = "high";
       wctx.drawImage(img, 0, 0);
       wctx.restore();
+
+      // Keep single-view active selection clearly visible, matching multi-view behavior.
+      const dpr = getDpr();
+      const motherGenerated = isMotherGeneratedImageItem(item);
+      const outerStroke = motherGenerated ? "rgba(82, 255, 148, 0.20)" : "rgba(255, 212, 0, 0.14)";
+      const mainStroke = motherGenerated ? "rgba(82, 255, 148, 0.94)" : "rgba(255, 212, 0, 0.96)";
+      const mainShadow = motherGenerated ? "rgba(82, 255, 148, 0.28)" : "rgba(255, 212, 0, 0.26)";
+      const innerStroke = motherGenerated ? "rgba(208, 255, 226, 0.60)" : "rgba(255, 247, 210, 0.58)";
+      const ix = state.view.offsetX;
+      const iy = state.view.offsetY;
+      const iw = (img.naturalWidth || item.width || 1) * state.view.scale;
+      const ih = (img.naturalHeight || item.height || 1) * state.view.scale;
+
+      octx.save();
+      octx.lineJoin = "round";
+      octx.strokeStyle = outerStroke;
+      octx.lineWidth = Math.max(1, Math.round(10 * dpr));
+      octx.shadowColor = mainShadow;
+      octx.shadowBlur = Math.round(44 * dpr);
+      octx.strokeRect(ix - 5, iy - 5, iw + 10, ih + 10);
+
+      octx.strokeStyle = mainStroke;
+      octx.lineWidth = Math.max(1, Math.round(3.4 * dpr));
+      octx.shadowColor = mainShadow;
+      octx.shadowBlur = Math.round(28 * dpr);
+      octx.strokeRect(ix - 3, iy - 3, iw + 6, ih + 6);
+
+      octx.shadowBlur = 0;
+      octx.strokeStyle = innerStroke;
+      octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+      octx.strokeRect(ix - 1, iy - 1, iw + 2, ih + 2);
+      octx.restore();
     }
   }
   syncEffectsRuntimeScene();
@@ -17555,6 +18080,7 @@ function render() {
 
   renderIntentOverlay(octx, work.width, work.height);
   renderAmbientIntentNudges(octx, work.width, work.height);
+  renderReelTouchIndicator(octx, work.width, work.height);
   renderMinimap();
   if (!effectsRuntime && !document.hidden && shouldAnimateEffectVisuals()) {
     requestRender();
@@ -17577,7 +18103,7 @@ function installCanvasHandlers() {
 
   let lastOverlayCursor = null;
   const setOverlayCursor = (value) => {
-    const next = value || INTENT_IMPORT_CURSOR;
+    const next = isReelSizeLocked() ? "none" : value || INTENT_IMPORT_CURSOR;
     if (next === lastOverlayCursor) return;
     lastOverlayCursor = next;
     els.overlayCanvas.style.cursor = next;
@@ -17591,8 +18117,18 @@ function installCanvasHandlers() {
     }
   };
   resetCanvasCursor();
-  els.overlayCanvas.addEventListener("pointerenter", resetCanvasCursor);
-  els.overlayCanvas.addEventListener("pointerleave", resetCanvasCursor);
+  els.overlayCanvas.addEventListener("pointerenter", (event) => {
+    resetCanvasCursor();
+    if (!isReelSizeLocked()) return;
+    reelTouchPulseFromCanvasPoint(canvasPointFromEvent(event), { down: false, lingerMs: REEL_TOUCH_MOVE_VISIBLE_MS });
+    requestRender();
+  });
+  els.overlayCanvas.addEventListener("pointerleave", () => {
+    resetCanvasCursor();
+    if (!isReelSizeLocked()) return;
+    clearReelTouchPulse();
+    requestRender();
+  });
 
   els.overlayCanvas.addEventListener("keydown", (event) => {
     const key = String(event?.key || "");
@@ -17657,6 +18193,10 @@ function installCanvasHandlers() {
 		      }
 
 			      const p = canvasPointFromEvent(event);
+          if (isReelSizeLocked()) {
+            reelTouchPulseFromCanvasPoint(p, { down: event.button === 0, lingerMs: REEL_TOUCH_TAP_VISIBLE_MS });
+            requestRender();
+          }
 			      const pCss = canvasCssPointFromEvent(event);
           const intentActive = intentModeActive();
           const motherRoleHit = motherV2InInteractivePhase() && motherV2IsAdvancedVisible() ? hitTestMotherRoleGlyph(p) : null;
@@ -17942,6 +18482,11 @@ function installCanvasHandlers() {
 		    const img = getActiveImage();
 		    if (!img) return;
         const p = canvasPointFromEvent(event);
+        const pCss = canvasCssPointFromEvent(event);
+        if (isReelSizeLocked()) {
+          reelTouchPulseFromCanvasPoint(p, { down: event.button === 0, lingerMs: REEL_TOUCH_TAP_VISIBLE_MS });
+          requestRender();
+        }
 		    if (state.tool === "designate") {
 		      const imgPt = canvasToImage(p);
 		      state.pendingDesignation = { imageId: img.id, x: imgPt.x, y: imgPt.y, at: Date.now() };
@@ -17965,10 +18510,14 @@ function installCanvasHandlers() {
 
 		    els.overlayCanvas.setPointerCapture(event.pointerId);
 		    state.pointer.active = true;
-	    state.pointer.startX = p.x;
-	    state.pointer.startY = p.y;
-	    state.pointer.lastX = p.x;
-	    state.pointer.lastY = p.y;
+		    state.pointer.kind = state.tool === "pan" ? "single_pan" : null;
+		    state.pointer.importPointCss = { x: pCss.x, y: pCss.y };
+		    state.pointer.startX = p.x;
+		    state.pointer.startY = p.y;
+		    state.pointer.startCssX = pCss.x;
+		    state.pointer.startCssY = pCss.y;
+		    state.pointer.lastX = p.x;
+		    state.pointer.lastY = p.y;
     state.pointer.startOffsetX = state.view.offsetX;
 		    state.pointer.startOffsetY = state.view.offsetY;
 
@@ -18017,6 +18566,14 @@ function installCanvasHandlers() {
   els.overlayCanvas.addEventListener("pointermove", (event) => {
     const p = canvasPointFromEvent(event);
     const pCss = canvasCssPointFromEvent(event);
+    if (isReelSizeLocked()) {
+      const down = Boolean(state.pointer?.active && (Number(event?.buttons) & 1));
+      reelTouchPulseFromCanvasPoint(p, {
+        down,
+        lingerMs: down ? REEL_TOUCH_TAP_VISIBLE_MS : REEL_TOUCH_MOVE_VISIBLE_MS,
+      });
+      requestRender();
+    }
     if (!state.pointer.active && state.motherIdle?.phase === MOTHER_IDLE_STATES.WAITING_FOR_USER) {
       const now = Date.now();
       if (now - (Number(state.lastInteractionAt) || 0) > 120) {
@@ -18241,6 +18798,11 @@ function installCanvasHandlers() {
 			      return;
 			    }
 	    if (state.tool === "pan") {
+	      if (state.pointer.kind === "single_pan") {
+	        const dist = Math.hypot((Number(pCss.x) || 0) - state.pointer.startCssX, (Number(pCss.y) || 0) - state.pointer.startCssY);
+	        if (!state.pointer.moved && dist <= 6) return;
+	        state.pointer.moved = true;
+	      }
 	      if (state.canvasMode === "multi") {
 	        state.multiView.offsetX = state.pointer.startOffsetX + dx;
 	        state.multiView.offsetY = state.pointer.startOffsetY + dy;
@@ -18297,6 +18859,15 @@ function installCanvasHandlers() {
 		    state.pointer.importPointCss = null;
 		    state.pointer.moved = false;
         setOverlayCursor(INTENT_IMPORT_CURSOR);
+        if (isReelSizeLocked()) {
+          const p = canvasPointFromEvent(event);
+          reelTouchPulseFromCanvasPoint(p, { down: false, lingerMs: REEL_TOUCH_RELEASE_VISIBLE_MS });
+          if (state.reelTouch) {
+            state.reelTouch.down = false;
+            state.reelTouch.downUntil = Date.now() + REEL_TOUCH_RELEASE_VISIBLE_MS;
+          }
+          requestRender();
+        }
         // Arm Mother idle timers against the settled interaction state (pointer no longer active).
         const motherRoleDrag = kind === "mother_role_drag";
         const effectTokenDrag = kind === "effect_token_drag";
@@ -18342,13 +18913,26 @@ function installCanvasHandlers() {
 			    }
 			    if (kind === "freeform_wheel") {
 			      if (!moved && importPt) {
-			        recordUserEvent("mother_wheel_open", {
-			          x: Math.round(Number(importPt.x) || 0),
-			          y: Math.round(Number(importPt.y) || 0),
-			        });
-			        openMotherWheelMenuAt(importPt);
+              const opened = openMotherWheelMenuAt(importPt);
+              if (opened) {
+                recordUserEvent("mother_wheel_open", {
+                  x: Math.round(Number(importPt.x) || 0),
+                  y: Math.round(Number(importPt.y) || 0),
+                });
+              }
 			      }
 			    }
+          if (kind === "single_pan") {
+            if (!moved && importPt) {
+              const opened = openMotherWheelMenuAt(importPt);
+              if (opened) {
+                recordUserEvent("mother_wheel_open", {
+                  x: Math.round(Number(importPt.x) || 0),
+                  y: Math.round(Number(importPt.y) || 0),
+                });
+              }
+            }
+          }
           if (kind === "mother_role_drag") {
             bumpInteraction({ semantic: false });
             const idle = state.motherIdle;
@@ -18514,7 +19098,7 @@ function installCanvasHandlers() {
 	
 	      const dpr = getDpr();
 	      // UX: two-finger swipe up/down zooms (not pan). Horizontal swipe pans.
-	      // Holding Option (alt) forces pan (both axes) for when you want to scroll around.
+	      // Holding Option (Alt) forces pan (both axes) for when you want to scroll around.
 	      let dx = Number(event.deltaX) || 0;
 	      let dy = Number(event.deltaY) || 0;
 	      // Mouse wheels often emit horizontal scroll as Shift+deltaY.
@@ -18537,7 +19121,7 @@ function installCanvasHandlers() {
 	      const panX = dx * dpr;
 	      const panY = dy * dpr;
 	
-	      if (event.altKey) {
+	      if (wheelForcePanHeld) {
 	        if (state.canvasMode === "multi") {
 	          state.multiView.offsetX = (Number(state.multiView?.offsetX) || 0) - panX;
 	          state.multiView.offsetY = (Number(state.multiView?.offsetY) || 0) - panY;
@@ -18797,6 +19381,24 @@ function installUi() {
     });
   }
 
+  if (els.reelAdminToggle) {
+    updateReelSizeButton();
+    els.reelAdminToggle.addEventListener("click", () => {
+      bumpInteraction();
+      toggleReelSizeLock();
+      ensureCanvasSize();
+    });
+  }
+
+  if (!reelPresetWindowResizeAttached) {
+    reelPresetWindowResizeAttached = true;
+    window.addEventListener("resize", () => {
+      if (!isReelSizeLocked()) return;
+      setReelSizeLock(true);
+      ensureCanvasSize();
+    });
+  }
+
   if (els.newRun)
     els.newRun.addEventListener("click", () => {
       bumpInteraction();
@@ -18947,6 +19549,37 @@ function installUi() {
   }
   window.addEventListener("keydown", (event) => {
     if (String(event?.key || "") !== "Alt") return;
+    if (event.metaKey || event.ctrlKey) return;
+    const target = event?.target;
+    const tag = target?.tagName ? String(target.tagName).toLowerCase() : "";
+    const isEditable = Boolean(
+      target &&
+        (target.isContentEditable ||
+          tag === "input" ||
+          tag === "textarea" ||
+          tag === "select")
+    );
+    if (isEditable) return;
+    wheelForcePanHeld = true;
+  });
+  window.addEventListener("keyup", (event) => {
+    if (String(event?.key || "") !== "Alt") return;
+    wheelForcePanHeld = false;
+  });
+  window.addEventListener("keydown", (event) => {
+    const key = String(event?.key || "").toLowerCase();
+    if (key !== MOTHER_OPTION_REVEAL_HOLD_KEY) return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const target = event?.target;
+    const tag = target?.tagName ? String(target.tagName).toLowerCase() : "";
+    const isEditable = Boolean(
+      target &&
+        (target.isContentEditable ||
+          tag === "input" ||
+          tag === "textarea" ||
+          tag === "select")
+    );
+    if (isEditable) return;
     const idle = state.motherIdle;
     if (!idle) return;
     if (idle.optionReveal) return;
@@ -18956,7 +19589,8 @@ function installUi() {
     requestRender();
   });
   window.addEventListener("keyup", (event) => {
-    if (String(event?.key || "") !== "Alt") return;
+    const key = String(event?.key || "").toLowerCase();
+    if (key !== MOTHER_OPTION_REVEAL_HOLD_KEY) return;
     const idle = state.motherIdle;
     if (!idle) return;
     idle.optionReveal = false;
@@ -18967,6 +19601,7 @@ function installUi() {
     requestRender();
   });
   window.addEventListener("blur", () => {
+    wheelForcePanHeld = false;
     const idle = state.motherIdle;
     if (!idle) return;
     idle.optionReveal = false;
@@ -18992,15 +19627,21 @@ function installUi() {
       if (els.dropHint.classList.contains("hidden")) return;
       event?.preventDefault?.();
       event?.stopPropagation?.();
-	      if (event && typeof event.clientX === "number" && typeof event.clientY === "number" && els.canvasWrap) {
-	        const rect = els.canvasWrap.getBoundingClientRect();
-	        const x = event.clientX - rect.left;
-	        const y = event.clientY - rect.top;
-	        importPhotosAtCanvasPoint(canvasScreenCssToWorldCss({ x, y })).catch((e) => console.error(e));
-	        return;
-	      }
-	      importPhotosAtCanvasPoint(canvasScreenCssToWorldCss(_defaultImportPointCss())).catch((e) => console.error(e));
-	    };
+      const ptCss =
+        event && typeof event.clientX === "number" && typeof event.clientY === "number" && els.canvasWrap
+          ? (() => {
+              const rect = els.canvasWrap.getBoundingClientRect();
+              return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+            })()
+          : _defaultImportPointCss();
+      const opened = openMotherWheelMenuAt(ptCss);
+      if (opened) {
+        recordUserEvent("mother_wheel_open", {
+          x: Math.round(Number(ptCss.x) || 0),
+          y: Math.round(Number(ptCss.y) || 0),
+        });
+      }
+    };
     els.dropHint.addEventListener("click", openPicker);
     els.dropHint.addEventListener("keydown", (event) => {
       const key = String(event?.key || "");
