@@ -16514,6 +16514,82 @@ function hitTestMotherRoleGlyph(ptCanvas) {
   return null;
 }
 
+function renderMotherDraftKeyboardHints(octx, rectPx, { dpr = 1 } = {}) {
+  if (!octx || !rectPx || isReelSizeLocked()) return;
+  const hints = [
+    { key: "V", label: "DEPLOY" },
+    { key: "M", label: "DISMISS" },
+    { key: "R", label: "REROLL" },
+  ];
+  if (!hints.length) return;
+  const margin = Math.max(8, Math.round(10 * dpr));
+  const gap = Math.max(4, Math.round(6 * dpr));
+  const chipPadX = Math.max(4, Math.round(6 * dpr));
+  const chipPadY = Math.max(2, Math.round(4 * dpr));
+  const keyW = Math.max(11, Math.round(13 * dpr));
+  const keyH = Math.max(11, Math.round(13 * dpr));
+  const keyGap = Math.max(4, Math.round(5 * dpr));
+  const chipH = Math.max(keyH + chipPadY * 2, Math.round(20 * dpr));
+  const fontPx = Math.max(8, Math.round(9 * dpr));
+  const corner = Math.max(4, Math.round(6 * dpr));
+  const canvasW = Number(octx.canvas?.width) || 0;
+  const canvasH = Number(octx.canvas?.height) || 0;
+  if (canvasW <= 0 || canvasH <= 0) return;
+
+  octx.save();
+  octx.font = `${fontPx}px IBM Plex Mono`;
+  octx.textBaseline = "middle";
+  octx.textAlign = "left";
+
+  const chips = hints.map((hint) => {
+    const label = String(hint.label || "").trim().toUpperCase();
+    const key = String(hint.key || "").trim().toUpperCase();
+    const labelW = Math.ceil(octx.measureText(label).width);
+    const width = chipPadX + keyW + keyGap + labelW + chipPadX;
+    return { key, label, width };
+  });
+  const totalW = chips.reduce((sum, chip) => sum + chip.width, 0) + Math.max(0, chips.length - 1) * gap;
+
+  let x = Math.round((Number(rectPx.x) || 0) + ((Number(rectPx.w) || 0) - totalW) / 2);
+  x = clamp(x, margin, Math.max(margin, canvasW - totalW - margin));
+  let y = Math.round((Number(rectPx.y) || 0) - chipH - margin);
+  if (y < margin) {
+    y = Math.round((Number(rectPx.y) || 0) + (Number(rectPx.h) || 0) + margin);
+  }
+  y = clamp(y, margin, Math.max(margin, canvasH - chipH - margin));
+
+  octx.shadowColor = "rgba(0, 0, 0, 0.52)";
+  octx.shadowBlur = Math.round(10 * dpr);
+  let cx = x;
+  for (const chip of chips) {
+    _drawRoundedRect(octx, cx, y, chip.width, chipH, corner);
+    octx.fillStyle = "rgba(8, 10, 14, 0.84)";
+    octx.fill();
+    octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+    octx.strokeStyle = "rgba(82, 255, 148, 0.46)";
+    octx.stroke();
+
+    const keyX = cx + chipPadX;
+    const keyY = y + Math.round((chipH - keyH) / 2);
+    _drawRoundedRect(octx, keyX, keyY, keyW, keyH, Math.max(3, Math.round(3 * dpr)));
+    octx.fillStyle = "rgba(18, 26, 37, 0.96)";
+    octx.fill();
+    octx.strokeStyle = "rgba(160, 188, 220, 0.62)";
+    octx.stroke();
+
+    octx.fillStyle = "rgba(230, 237, 243, 0.96)";
+    octx.textAlign = "center";
+    octx.fillText(chip.key, keyX + keyW * 0.5, y + chipH * 0.54);
+
+    octx.textAlign = "left";
+    octx.fillStyle = "rgba(210, 255, 228, 0.94)";
+    octx.fillText(chip.label, keyX + keyW + keyGap, y + chipH * 0.54);
+
+    cx += chip.width + gap;
+  }
+  octx.restore();
+}
+
 function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
   const idle = state.motherIdle;
   if (!idle) return;
@@ -16526,9 +16602,11 @@ function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
     idle.roleGlyphHits = [];
     return;
   }
+  const showOfferPreview = phase === MOTHER_IDLE_STATES.OFFERING;
   const advancedVisible = motherV2IsAdvancedVisible();
   const hintsVisible = motherV2HintsVisible();
-  if (!advancedVisible && !hintsVisible) {
+  const showRoleGlyphs = advancedVisible || hintsVisible;
+  if (!showRoleGlyphs && !showOfferPreview) {
     idle.roleGlyphHits = [];
     return;
   }
@@ -16547,7 +16625,7 @@ function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
     if (!imageId) continue;
     const rect = state.multiRects.get(imageId) || null;
     if (!rect) continue;
-    const roles = MOTHER_V2_ROLE_KEYS.filter((key) => motherV2RoleImageIds(key).includes(imageId));
+    const roles = showRoleGlyphs ? MOTHER_V2_ROLE_KEYS.filter((key) => motherV2RoleImageIds(key).includes(imageId)) : [];
     if (!roles.length) continue;
     const rx = rect.x * ms + mox;
     const ry = rect.y * ms + moy;
@@ -16599,7 +16677,7 @@ function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
     }
   }
 
-  if (!advancedVisible) {
+  if (showRoleGlyphs && !advancedVisible) {
     const subjectAnchor = roleAnchors.get("subject");
     const modelAnchor = roleAnchors.get("model");
     if (subjectAnchor && modelAnchor) {
@@ -16641,15 +16719,22 @@ function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
         octx.fillStyle = "rgba(82, 255, 148, 0.18)";
         octx.fillRect(Math.round(px.x), Math.round(px.y), Math.round(px.w), Math.round(px.h));
       }
-      octx.globalAlpha = 0.8;
+      octx.globalAlpha = 0.92;
       octx.strokeStyle = "rgba(82, 255, 148, 0.88)";
       octx.lineWidth = Math.max(1, Math.round(2 * dpr));
       octx.strokeRect(Math.round(px.x), Math.round(px.y), Math.round(px.w), Math.round(px.h));
+      octx.globalAlpha = 0.42;
+      octx.setLineDash([Math.max(2, Math.round(6 * dpr)), Math.max(2, Math.round(4 * dpr))]);
+      octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+      octx.strokeStyle = "rgba(182, 255, 216, 0.84)";
+      octx.strokeRect(Math.round(px.x - 3), Math.round(px.y - 3), Math.round(px.w + 6), Math.round(px.h + 6));
+      octx.setLineDash([]);
       octx.restore();
+      renderMotherDraftKeyboardHints(octx, px, { dpr });
     }
   }
 
-  idle.roleGlyphHits = advancedVisible ? hits : [];
+  idle.roleGlyphHits = showRoleGlyphs && advancedVisible ? hits : [];
 }
 
 function hitTestIntentUi(ptCanvas) {
