@@ -29,6 +29,13 @@ test("Menu: menu items close the popover via data-menu-close", () => {
   }
 });
 
+test("Reel mode is buried in Settings admin tools (not top-level UI)", () => {
+  assert.doesNotMatch(html, /id=\"reel-mode-toggle\"/);
+  assert.doesNotMatch(html, /id=\"reel-size-button\"/);
+  assert.match(html, /id=\"settings-drawer\"[\s\S]*key-status-title\">Admin/);
+  assert.match(html, /id=\"reel-admin-toggle\"/);
+});
+
 test("Layout: legacy inspector/right panel is removed (canvas expands)", () => {
   assert.doesNotMatch(html, /class=\"inspector\"/);
   assert.doesNotMatch(html, /<aside\b/);
