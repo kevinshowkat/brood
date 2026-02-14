@@ -1122,7 +1122,8 @@ button.ghost:hover {
     inset 0 0 0 3px rgba(236, 138, 82, 0.42),
     inset 0 0 0 9px rgba(236, 138, 82, 0.12),
     inset 0 0 0 18px rgba(255, 202, 136, 0.06);
-  animation: intent-rt-pulse 3.4s ease-in-out infinite;
+  animation: none;
+  opacity: 0.82;
   mix-blend-mode: normal;
 }
 
@@ -1165,9 +1166,8 @@ button.ghost:hover {
     inset 0 0 0 3px rgba(255, 72, 72, 0.44),
     inset 0 0 0 9px rgba(255, 72, 72, 0.14),
     inset 0 0 0 18px rgba(255, 128, 128, 0.08);
-  animation:
-    mother-takeover-pulse 2.8s ease-in-out infinite,
-    mother-takeover-shimmer 2400ms linear infinite;
+  animation: mother-takeover-shimmer 5600ms linear infinite;
+  opacity: 0.88;
   mix-blend-mode: normal;
 }
 
@@ -1202,9 +1202,8 @@ button.ghost:hover {
     inset 0 0 0 3px rgba(255, 72, 72, 0.44),
     inset 0 0 0 9px rgba(255, 72, 72, 0.14),
     inset 0 0 0 18px rgba(255, 128, 128, 0.08);
-  animation:
-    mother-takeover-pulse 2.8s ease-in-out infinite,
-    mother-takeover-shimmer 2400ms linear infinite;
+  animation: mother-takeover-shimmer 5600ms linear infinite;
+  opacity: 0.88;
   mix-blend-mode: normal;
 }
 
@@ -3239,7 +3238,7 @@ button.ghost:hover {
 }
 
 .agent-slot.busy .portrait-frame {
-  animation: portraitGlow 1.1s ease-in-out infinite;
+  animation: portraitGlow 2.8s ease-in-out infinite;
 }
 
 @keyframes portraitGlow {

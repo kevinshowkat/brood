@@ -56,8 +56,8 @@ const MOTHER_VIDEO_REALTIME_SRC = new URL("./assets/mother/mother_realtime.mp4",
 const MOTHER_REALTIME_MIN_MS = 4000;
 const MOTHER_USER_HOT_IDLE_MS = 10_000;
 // Avoid brief watch-phase spikes from flashing realtime chrome/video.
-const MOTHER_RT_VISUAL_ON_DELAY_MS = 460;
-const MOTHER_RT_VISUAL_MIN_ON_MS = 1200;
+const MOTHER_RT_VISUAL_ON_DELAY_MS = 820;
+const MOTHER_RT_VISUAL_MIN_ON_MS = 2200;
 const MOTHER_TAKEOVER_PREVIEW_MS = 10_000;
 const MOTHER_IDLE_FIRST_IDLE_MS = 5000;
 const MOTHER_IDLE_TAKEOVER_IDLE_MS = 10_000;
@@ -78,6 +78,7 @@ const MOTHER_SELECTION_SEMANTIC_DRAG_PX = 10;
 const MOTHER_V2_COOLDOWN_AFTER_COMMIT_MS = 2000;
 const MOTHER_V2_COOLDOWN_AFTER_REJECT_MS = 1200;
 const MOTHER_V2_VISION_RETRY_MS = 220;
+const MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL = 2;
 const MOTHER_V2_ROLE_KEYS = Object.freeze(["subject", "model", "mediator", "object"]);
 const MOTHER_V2_ROLE_LABEL = Object.freeze({
   subject: "SUBJECT",
@@ -5139,6 +5140,7 @@ function buildMotherText() {
   const drafts = Array.isArray(idle?.drafts) ? idle.drafts : [];
   const cooldownMs = Math.max(0, (Number(idle?.cooldownUntil) || 0) - Date.now());
   const undoAvailable = motherV2CommitUndoAvailable();
+  const canPropose = motherIdleHasArmedCanvas();
 
   if (phase === MOTHER_IDLE_STATES.WATCHING) {
     return "";
@@ -5168,6 +5170,9 @@ function buildMotherText() {
   }
 
   if (!state.images.length) {
+    return "";
+  }
+  if (!canPropose) {
     return "";
   }
   if (motherV2InCooldown()) {
@@ -5202,6 +5207,10 @@ function motherV2StatusText() {
   const idle = state.motherIdle || null;
   const phase = idle?.phase || motherIdleInitialState();
   const drafts = Array.isArray(idle?.drafts) ? idle.drafts : [];
+  const canPropose = motherIdleHasArmedCanvas();
+  if (!canPropose && (phase === MOTHER_IDLE_STATES.WATCHING || phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING)) {
+    return "Observing";
+  }
   if (phase === MOTHER_IDLE_STATES.OBSERVING) return "Observing";
   if (phase === MOTHER_IDLE_STATES.WATCHING) return "Watching";
   if (phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
@@ -6703,7 +6712,7 @@ function motherV2ForcePhase(nextState, eventName = "force") {
 
 function motherIdleHasArmedCanvas() {
   const base = motherIdleBaseImageItems();
-  if (base.length < 1) return false;
+  if (base.length < MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL) return false;
   if (state.canvasMode === "single") {
     const activeId = String(getVisibleActiveId() || "").trim();
     if (!activeId) return false;
