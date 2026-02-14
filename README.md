@@ -1,30 +1,46 @@
-# Brood: Promptless, Reference-First AI Image Generation and Editing for Developers
+# Brood: Reference-First AI Image Editing Desktop for Developers
 
 <p align="left">
   <img src="media/brood_demo_intent_build_20260211.gif" alt="Brood demo">
 </p>
 
-Brood is a promptless, reference-first AI image generation and editing desktop for developers (multi-provider + reproducible runs).
-It is an image-first canvas for steering image-to-image edits and generations using reference images.
+Brood is a promptless, reference-first AI image generation and editing desktop for developers.
+You steer outputs by arranging and combining images on a canvas, then applying abilities.
 
 ## Status
 
-Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
-
-- 1 image in: `Diagnose` (creative-direction critique), `Recast` (reimagine in a new medium/context)
-- 2 images in: `Combine`, `Swap DNA`, `Bridge`, `Argue`
-- Effect-token actions in multi view: `Extract DNA`, `Soul Leech` (collapse selected source images into draggable transfer glyphs)
-- Provider/model switching is a first-class concept (OpenAI, Gemini, Imagen, Flux, SDXL)
+Brood is currently a **macOS-only desktop app** (Tauri).
+There is no web app, and Windows/Linux builds are not supported yet.
 
 ## Download (macOS)
 
-Download the latest universal DMG from GitHub Releases:
+Get the latest universal DMG from GitHub Releases:
 - <https://github.com/kevinshowkat/brood/releases>
 
 Install:
 1. Download `Brood_<version>_universal.dmg`.
 2. Open the DMG and drag `Brood.app` into `/Applications`.
-3. If macOS blocks the app, try right-clicking `Brood.app` -> **Open**, or open it via **System Settings** -> **Privacy & Security**.
+3. If macOS blocks launch, right-click `Brood.app` and choose **Open**.
+
+## What You Can Do
+
+- 1 image: `Diagnose`, `Recast`
+- 2 images: `Combine`, `Swap DNA`, `Bridge`, `Argue`
+- Multi-view effect tokens: `Extract DNA`, `Soul Leech`
+- Multi-provider model support: OpenAI, Gemini, Imagen, Flux, SDXL
+
+## First 5 Minutes (Desktop)
+
+1. Import one or more images (click canvas or use **Import Photos**).
+2. Use **Abilities** to run an operation.
+3. For transfer workflows, use `Extract DNA` / `Soul Leech`, then drag the token to another image.
+4. Watch bottom HUD output for `DIAG` / `ARG` messages.
+
+Notes:
+- Two-image actions return to output-only single view when complete.
+- Adding more images switches back to multi view when needed.
+
+More usage details: `docs/desktop.md`.
 
 ## Features
 
@@ -41,34 +57,38 @@ Constrain edits to a selected region so changes stay focused and controllable.
 </p>
 
 ### Intent Build
-Work in progress: Mother runs ambient intent discovery as you build, with the goal of producing all assets needed for the Intent Build flow.
+Work in progress: Mother runs ambient intent discovery as you build to support Intent Build outputs.
 <p align="left">
   <img src="media/features/intent_build.gif" alt="Intent build feature demo">
 </p>
 
-## Quickstart (desktop)
+## Hotkeys
+
+- `L` lasso
+- `D` designate
+- `F` fit-to-view
+- `Esc` clear selection
+- `1`-`9` activate HUD tools
+
+## Run From Source (Desktop)
 
 ```bash
 ./scripts/dev_desktop.sh
 ```
 
-This runs the Tauri app in dev mode (`desktop/`) and will spawn the Python engine in the background.
+This runs the Tauri app in dev mode (`desktop/`) and spawns the Python engine in the background.
 
-## Desktop usage
-- Click anywhere on the canvas to import photos at that point (or use **Import Photos**).
-- Mental model for the onboarding flow: starting a StarCraft 2 game as Zerg (choose what to build and where to place it, but using visual media as the "units").
-- Use **Abilities** in the right panel.
-- Use `Multi view` to run 2-photo actions (when exactly 2 photos are loaded). After a 2-photo action completes, Brood switches back to single-image view (output-only).
-- Use `Extract DNA` / `Soul Leech` in `Multi view` to collapse selected source images into draggable effect glyphs. Tokenized sources are hidden from active canvas references until consumed.
-- Drop a DNA/Soul glyph onto a different image to apply one in-place transfer; successful apply consumes the glyph and removes the extracted source from the canvas.
-- `Diagnose` / `Argue` output appears in the bottom HUD as `DIAG` / `ARG`.
-- Hotkeys: `L` lasso, `D` designate, `F` fit-to-view, `Esc` clears selection, `1`-`9` activate tools in the HUD keybar
+Build desktop app:
 
-More details: `docs/desktop.md`.
+```bash
+cd desktop
+npm install
+npm run tauri build
+```
 
-## Quickstart (engine / CLI)
+## Engine / CLI Quickstart
 
-The engine/CLI is primarily a developer interface that powers the desktop app.
+The engine CLI powers the desktop app and can also run standalone.
 
 ```bash
 python -m venv .venv
@@ -85,15 +105,16 @@ brood run --prompt "hero image for Series A" --out /tmp/brood-run
 brood recreate --reference path/to/image.png --out /tmp/brood-recreate
 ```
 
-## Desktop build
+## API Keys
 
-```bash
-cd desktop
-npm install
-npm run tauri build
-```
+- Copy `.env.example` to `.env` and fill provider keys.
+- Supported key families: OpenAI, Anthropic, Gemini/Google, Imagen/Vertex, Flux/BFL.
+- For OpenAI image models:
+  - set `OPENAI_API_KEY` (or `OPENAI_API_KEY_BACKUP`)
+  - use `/image_model gpt-image-1` in chat or `--image-model gpt-image-1` on CLI
+  - optional: `OPENAI_IMAGE_USE_RESPONSES=1`, `OPENAI_IMAGE_STREAM=1`
 
-## Memory
+## Optional Configuration
 
 Enable local memory:
 
@@ -101,41 +122,35 @@ Enable local memory:
 export BROOD_MEMORY=1
 ```
 
-## Pricing overrides
+Pricing/latency override file:
 
-Edit `~/.brood/pricing_overrides.json` to override pricing or latency values.
-
-## API keys
-- Copy `.env.example` to `.env` and fill in provider keys.
-- Supported keys mirror Param Forge: OpenAI, Anthropic, Gemini/Google, Imagen/Vertex, Flux/BFL.
-- For OpenAI images, set `OPENAI_API_KEY` (or `OPENAI_API_KEY_BACKUP`).
-  Use `/image_model gpt-image-1` in chat or `--image-model gpt-image-1` on the CLI to target OpenAI image models.
-  Optional toggles: `OPENAI_IMAGE_USE_RESPONSES=1` (Responses API) and `OPENAI_IMAGE_STREAM=1` (streaming; falls back to non-streaming with a warning).
+- `~/.brood/pricing_overrides.json`
 
 ## Troubleshooting (Desktop)
+
 - **App failed to initialize: Importing binding name ... not found**  
-  Ensure Tauri v1 APIs are used. This repo expects `@tauri-apps/api` v1 and the v1 CLI.
+  Repo expects Tauri v1 APIs (`@tauri-apps/api` v1 and v1 CLI).
 - **Images not rendering**  
   Tauri must allow file access under `$HOME/**` (see `desktop/src-tauri/tauri.conf.json`).
 - **Import Photos fails or does nothing**  
-  The selected files must be within the allowed FS scope (default: `$HOME/**`). Adjust the scope in `desktop/src-tauri/tauri.conf.json` if needed.
+  Selected files must be inside allowed FS scope (`$HOME/**` by default).
 
-## Project layout
+## Project Layout
 
 - `brood_engine/` core engine and CLI
 - `desktop/` Tauri desktop app
 - `tests/` pytest suite
 - `docs/param_forge_reference.md` Param Forge reference notes
-- `docs/desktop.md` Desktop UI notes (abilities + workflows)
+- `docs/desktop.md` desktop UI notes (abilities + workflows)
 
-## Agent/LLM entrypoints
+## Agent / LLM Entrypoints
 
-- `llms.txt` high-signal entrypoints and task routing for LLM agents.
-- `llms-full.txt` expanded, inlined agent context generated from canonical docs (`python3 scripts/build_llms_full.py`).
-- `agent-intake.json` optional Agent Intake Protocol (AIP) contract (curated entrypoints + optional context packs).
-- `scripts/aip_build_packs.py` builds JSON context packs to host and return via AIP (writes to `outputs/aip_packs/`, gitignored).
-- `scripts/aip_server.py` stdlib-only local stub AIP server for testing the contract + pack downloads.
+- `llms.txt` high-signal entrypoints and task routing
+- `llms-full.txt` expanded inlined context (`python3 scripts/build_llms_full.py`)
+- `agent-intake.json` optional Agent Intake Protocol (AIP) contract
+- `scripts/aip_build_packs.py` build JSON context packs to `outputs/aip_packs/`
+- `scripts/aip_server.py` stdlib-only local AIP stub server
 
 ## License
 
-This project is licensed under the Apache License 2.0. See `LICENSE`.
+Apache License 2.0. See `LICENSE`.
