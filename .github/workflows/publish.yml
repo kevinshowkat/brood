@@ -6,7 +6,41 @@ on:
       - "v*"
 
 jobs:
+  clean-machine-smoke:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            desktop/src-tauri -> target
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build macOS DMG (unsigned smoke build)
+        working-directory: desktop
+        run: npm run tauri build -- --bundles dmg --ci -v
+
+      - name: Run clean-machine install smoke
+        run: scripts/macos_clean_machine_smoke.sh
+
   publish-macos:
+    needs: clean-machine-smoke
     permissions:
       contents: write
     runs-on: macos-latest

@@ -21,11 +21,11 @@ test("computeActionGridSlots: no image -> tools only", () => {
 test("computeActionGridSlots: 1 selected -> single-image abilities (DIAG when AOV off)", () => {
   const slots = computeActionGridSlots({ selectionCount: 1, hasImage: true, alwaysOnVisionEnabled: false });
   assert.deepEqual(slotKeys(slots), [
-    "annotate",
+    "extract_dna",
     "pan",
     "lasso",
     "designate",
-    "extract_dna",
+    "annotate",
     "soul_leech",
     "bg",
     "variations",
