@@ -36,9 +36,14 @@ trap cleanup EXIT
 find_latest_dmg() {
   local found
   found="$(
-    find desktop/src-tauri/target -type f -name '*.dmg' -print 2>/dev/null \
-      | sort \
-      | tail -n 1
+    find desktop/src-tauri/target -type f -name '*.dmg' -print0 2>/dev/null \
+      | while IFS= read -r -d '' path; do
+          # stat -f is BSD/macOS; emit epoch mtime then path for stable sorting.
+          printf '%s\t%s\n' "$(stat -f '%m' "$path" 2>/dev/null || printf '0')" "$path"
+        done \
+      | sort -n -k1,1 -k2,2 \
+      | tail -n 1 \
+      | cut -f2-
   )"
   printf '%s' "$found"
 }

@@ -16614,11 +16614,13 @@ function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
   const showOfferPreview = phase === MOTHER_IDLE_STATES.OFFERING;
   const advancedVisible = motherV2IsAdvancedVisible();
   const hintsVisible = motherV2HintsVisible();
-  const showRoleGlyphs = advancedVisible || hintsVisible;
-  if (!showRoleGlyphs && !showOfferPreview) {
-    idle.roleGlyphHits = [];
-    return;
+  if (!advancedVisible && !hintsVisible) {
+    if (!showOfferPreview) {
+      idle.roleGlyphHits = [];
+      return;
+    }
   }
+  const showRoleGlyphs = advancedVisible || hintsVisible;
   const dpr = getDpr();
   const hintLevel = Number(idle.hintLevel) || 1;
   const glyphSize = advancedVisible
@@ -18508,12 +18510,14 @@ function installCanvasHandlers() {
 
 		    els.overlayCanvas.setPointerCapture(event.pointerId);
 		    state.pointer.active = true;
-	    state.pointer.kind = state.tool === "pan" ? "single_pan" : null;
-	    state.pointer.importPointCss = { x: pCss.x, y: pCss.y };
-	    state.pointer.startX = p.x;
-	    state.pointer.startY = p.y;
-	    state.pointer.lastX = p.x;
-	    state.pointer.lastY = p.y;
+		    state.pointer.kind = state.tool === "pan" ? "single_pan" : null;
+		    state.pointer.importPointCss = { x: pCss.x, y: pCss.y };
+		    state.pointer.startX = p.x;
+		    state.pointer.startY = p.y;
+		    state.pointer.startCssX = pCss.x;
+		    state.pointer.startCssY = pCss.y;
+		    state.pointer.lastX = p.x;
+		    state.pointer.lastY = p.y;
     state.pointer.startOffsetX = state.view.offsetX;
 		    state.pointer.startOffsetY = state.view.offsetY;
 
