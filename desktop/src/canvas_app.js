@@ -8078,7 +8078,10 @@ async function motherV2DispatchCompiledPrompt(compiled = {}) {
   );
   const sentViaPayload = await motherV2DispatchViaImagePayload(compiled, promptLine).catch(() => false);
   if (!sentViaPayload) {
-    await invoke("write_pty", { data: `${promptLine}\n` });
+    // Mother drafts must dispatch via structured payload so source_images always includes
+    // the full canvas context (uploaded + Mother-generated images).
+    motherIdleHandleGenerationFailed("Mother could not start drafting payload.");
+    return false;
   }
   return true;
 }
