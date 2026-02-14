@@ -3759,8 +3759,8 @@ button.ghost:hover {
   height: 46px;
   border-radius: 999px;
   transform: translate(-50%, -50%) scale(0.72);
-  border: 1px solid rgba(54, 76, 106, 0.78);
-  border-bottom-color: rgba(0, 0, 0, 0.82);
+  border: 1px solid rgba(66, 90, 122, 0.8);
+  border-bottom-color: rgba(46, 66, 92, 0.9);
   background:
     radial-gradient(160px 90px at 25% 0%, rgba(100, 210, 255, 0.12), transparent 68%),
     radial-gradient(180px 110px at 82% 0%, rgba(255, 212, 0, 0.10), transparent 72%),
@@ -3792,8 +3792,8 @@ button.ghost:hover {
   display: grid;
   place-items: center;
   border-radius: 999px;
-  border: 1px solid rgba(54, 76, 106, 0.68);
-  border-bottom-color: rgba(0, 0, 0, 0.82);
+  border: 1px solid rgba(66, 90, 122, 0.74);
+  border-bottom-color: rgba(46, 66, 92, 0.9);
   background:
     radial-gradient(120px 70px at 20% 0%, rgba(100, 210, 255, 0.10), transparent 72%),
     radial-gradient(140px 90px at 88% 0%, rgba(255, 212, 0, 0.08), transparent 74%),
