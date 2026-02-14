@@ -3,17 +3,9 @@ name: desktop-clean-machine-smoke
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - ".github/workflows/desktop-clean-machine-smoke.yml"
-      - "desktop/**"
-      - "scripts/macos_clean_machine_smoke.sh"
   push:
     branches:
       - main
-    paths:
-      - ".github/workflows/desktop-clean-machine-smoke.yml"
-      - "desktop/**"
-      - "scripts/macos_clean_machine_smoke.sh"
 
 jobs:
   smoke-install:
@@ -21,8 +13,46 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect desktop-related changes
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          pattern='^(desktop/|scripts/macos_clean_machine_smoke\.sh$|\.github/workflows/desktop-clean-machine-smoke\.yml$)'
+          changed_file_list="$(mktemp)"
+          event="${GITHUB_EVENT_NAME}"
+
+          if [[ "$event" == "pull_request" ]]; then
+            base_sha="$(jq -r '.pull_request.base.sha // empty' "$GITHUB_EVENT_PATH")"
+            if [[ -n "$base_sha" ]]; then
+              git diff --name-only "$base_sha" "$GITHUB_SHA" > "$changed_file_list" || true
+            fi
+          elif [[ "$event" == "push" ]]; then
+            before_sha="$(jq -r '.before // empty' "$GITHUB_EVENT_PATH")"
+            if [[ -n "$before_sha" && "$before_sha" != "0000000000000000000000000000000000000000" ]]; then
+              git diff --name-only "$before_sha" "$GITHUB_SHA" > "$changed_file_list" || true
+            else
+              git ls-files > "$changed_file_list"
+            fi
+          else
+            git ls-files > "$changed_file_list"
+          fi
+
+          should_run="false"
+          if [[ -s "$changed_file_list" ]] && grep -Eq "$pattern" "$changed_file_list"; then
+            should_run="true"
+          fi
+
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+          echo "[smoke] event=$event should_run=$should_run"
+          echo "[smoke] changed files:"
+          sed -n '1,200p' "$changed_file_list"
 
       - name: Setup node
+        if: steps.changes.outputs.should_run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
@@ -30,21 +60,31 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
 
       - name: Install Rust stable
+        if: steps.changes.outputs.should_run == 'true'
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust
+        if: steps.changes.outputs.should_run == 'true'
         uses: swatinem/rust-cache@v2
         with:
           workspaces: |
             desktop/src-tauri -> target
 
       - name: Install frontend dependencies
+        if: steps.changes.outputs.should_run == 'true'
         working-directory: desktop
         run: npm ci
 
       - name: Build macOS DMG (unsigned smoke build)
+        if: steps.changes.outputs.should_run == 'true'
         working-directory: desktop
         run: npm run tauri build -- --bundles dmg --ci -v
 
       - name: Run clean-machine install smoke
+        if: steps.changes.outputs.should_run == 'true'
         run: scripts/macos_clean_machine_smoke.sh
+
+      - name: Skip smoke (no desktop-impacting changes)
+        if: steps.changes.outputs.should_run != 'true'
+        run: |
+          echo "Skipping desktop smoke: no matching file changes."
