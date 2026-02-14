@@ -12829,6 +12829,12 @@ async function importPhotosAtCanvasPoint(pointCss) {
   if (ok > 0) {
     const suffix = failed ? ` (${failed} failed)` : "";
     setStatus(`Engine: imported ${ok} photo${ok === 1 ? "" : "s"}${suffix}`, failed > 0);
+    if (state.images.length > 1 && state.canvasMode !== "multi") {
+      setCanvasMode("multi");
+      if (!intentActive) {
+        setTip("Multiple photos loaded. Click a photo to focus it. Press M to toggle multi view.");
+      }
+    }
     if (intentActive && !state.intent.startedAt) {
       state.intent.startedAt = Date.now();
       state.intent.deadlineAt = state.intent.startedAt + INTENT_DEADLINE_MS;
@@ -18474,6 +18480,7 @@ function installCanvasHandlers() {
 		    const img = getActiveImage();
 		    if (!img) return;
         const p = canvasPointFromEvent(event);
+        const pCss = canvasCssPointFromEvent(event);
         if (isReelSizeLocked()) {
           reelTouchPulseFromCanvasPoint(p, { down: event.button === 0, lingerMs: REEL_TOUCH_TAP_VISIBLE_MS });
           requestRender();
@@ -18501,6 +18508,8 @@ function installCanvasHandlers() {
 
 		    els.overlayCanvas.setPointerCapture(event.pointerId);
 		    state.pointer.active = true;
+	    state.pointer.kind = state.tool === "pan" ? "single_pan" : null;
+	    state.pointer.importPointCss = { x: pCss.x, y: pCss.y };
 	    state.pointer.startX = p.x;
 	    state.pointer.startY = p.y;
 	    state.pointer.lastX = p.x;
@@ -18785,6 +18794,11 @@ function installCanvasHandlers() {
 			      return;
 			    }
 	    if (state.tool === "pan") {
+	      if (state.pointer.kind === "single_pan") {
+	        const dist = Math.hypot((Number(pCss.x) || 0) - state.pointer.startCssX, (Number(pCss.y) || 0) - state.pointer.startCssY);
+	        if (!state.pointer.moved && dist <= 6) return;
+	        state.pointer.moved = true;
+	      }
 	      if (state.canvasMode === "multi") {
 	        state.multiView.offsetX = state.pointer.startOffsetX + dx;
 	        state.multiView.offsetY = state.pointer.startOffsetY + dy;
@@ -18904,6 +18918,17 @@ function installCanvasHandlers() {
               }
 			      }
 			    }
+          if (kind === "single_pan") {
+            if (!moved && importPt) {
+              const opened = openMotherWheelMenuAt(importPt);
+              if (opened) {
+                recordUserEvent("mother_wheel_open", {
+                  x: Math.round(Number(importPt.x) || 0),
+                  y: Math.round(Number(importPt.y) || 0),
+                });
+              }
+            }
+          }
           if (kind === "mother_role_drag") {
             bumpInteraction({ semantic: false });
             const idle = state.motherIdle;
