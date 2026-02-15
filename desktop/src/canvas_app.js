@@ -43,6 +43,21 @@ import {
   motherIdleTransition,
   motherIdleUsesRealtimeVisual,
 } from "./mother_idle_flow.js";
+import { DESKTOP_EVENT_TYPES, PTY_COMMANDS, quoteForPtyArg as quoteForPtyArgUtil } from "./canvas_protocol.js";
+import { appendTextWithFallback } from "./jsonl_io.js";
+import {
+  classifyIntentIconsRouting as classifyIntentIconsRoutingUtil,
+  intentIconsPayloadChecksum as intentIconsPayloadChecksumUtil,
+  intentIconsPayloadSafeSnippet as intentIconsPayloadSafeSnippetUtil,
+  parseIntentIconsJson as parseIntentIconsJsonUtil,
+  parseIntentIconsJsonDetailed as parseIntentIconsJsonDetailedUtil,
+} from "./intent_icons_parser.js";
+import { createDesktopEventHandlerMap } from "./event_handlers/index.js";
+import { installCanvasGestureHandlers } from "./canvas_handlers/gesture_handlers.js";
+import { installCanvasKeyboardHandlers } from "./canvas_handlers/keyboard_handlers.js";
+import { installCanvasPointerHandlers } from "./canvas_handlers/pointer_handlers.js";
+import { installCanvasWheelHandlers } from "./canvas_handlers/wheel_handlers.js";
+import { POINTER_KINDS, isEffectTokenPath, isMotherRolePath } from "./canvas_handlers/pointer_paths.js";
 
 const THUMB_PLACEHOLDER_SRC = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
@@ -77,6 +92,9 @@ const MOTHER_SUGGESTION_LOG_FILENAME = "mother_suggestions.jsonl";
 const MOTHER_TRACE_FILENAME = "mother_trace.jsonl";
 const MOTHER_V2_WATCH_IDLE_MS = 800;
 const MOTHER_V2_INTENT_IDLE_MS = 1500;
+const MOTHER_V2_MULTI_UPLOAD_WATCH_IDLE_MS = 400;
+const MOTHER_V2_MULTI_UPLOAD_INTENT_IDLE_MS = 900;
+const MOTHER_V2_MULTI_UPLOAD_IDLE_BOOST_WINDOW_MS = 20_000;
 const MOTHER_SELECTION_SEMANTIC_DRAG_PX = 10;
 const MOTHER_V2_COOLDOWN_AFTER_COMMIT_MS = 2000;
 const MOTHER_V2_COOLDOWN_AFTER_REJECT_MS = 1200;
@@ -371,7 +389,7 @@ const state = {
   tool: "pan",
   pointer: {
     active: false,
-    kind: null, // "freeform_move" | "freeform_resize" | "freeform_import" | "freeform_wheel" | "mother_role_drag" | "effect_token_drag"
+    kind: null, // POINTER_KINDS.FREEFORM_MOVE | POINTER_KINDS.FREEFORM_RESIZE | POINTER_KINDS.FREEFORM_IMPORT | POINTER_KINDS.FREEFORM_WHEEL | POINTER_KINDS.MOTHER_ROLE_DRAG | POINTER_KINDS.EFFECT_TOKEN_DRAG
     imageId: null,
     role: null,
     corner: null, // "nw"|"ne"|"sw"|"se"
@@ -459,6 +477,7 @@ const state = {
     actionVersion: 0,
     pendingActionVersion: 0,
     cooldownUntil: 0,
+    multiUploadIdleBoostUntil: 0,
     pendingIntent: false,
     pendingIntentRequestId: null,
     pendingIntentStartedAt: 0,
@@ -769,22 +788,11 @@ async function appendIntentTrace(entry) {
   };
   const line = `${JSON.stringify(payload)}\n`;
 
-  // Best-effort: prefer append if supported by the Tauri FS API; fall back to read+write.
   try {
-    await writeTextFile(outPath, line, { append: true });
+    await appendTextWithFallback(outPath, line, { maxBytes: 1_200_000 });
     return true;
   } catch {
-    try {
-      const prior = (await exists(outPath)) ? await readTextFile(outPath) : "";
-      let next = `${prior}${line}`;
-      // Keep logs bounded if we ever need to rewrite the file.
-      const maxBytes = 1_200_000;
-      if (next.length > maxBytes) next = next.slice(next.length - maxBytes);
-      await writeTextFile(outPath, next);
-      return true;
-    } catch {
-      return false;
-    }
+    return false;
   }
 }
 function scheduleVisualPromptWrite({ immediate = false } = {}) {
@@ -929,11 +937,64 @@ function renderHudReadout() {
 // Give vision requests enough time to complete under normal network conditions.
 // (Engine-side OpenAI timeout is ~22s; keep a little buffer.)
 const DESCRIBE_TIMEOUT_MS = 30000;
+const DESCRIBE_MAX_IN_FLIGHT = 3;
+const UPLOAD_DESCRIBE_PRIORITY_BURST = 3;
 let describeQueue = [];
 let describeQueued = new Set(); // path strings
-let describeInFlightPath = null;
-let describeInFlightTimer = null;
+let describeInFlightOrder = [];
+let describeInFlightTimers = new Map(); // path -> timeout id
 let ptyLineBuffer = "";
+
+function syncDescribePendingPath() {
+  let next = null;
+  for (const path of describeInFlightOrder) {
+    if (describeInFlightTimers.has(path)) {
+      next = path;
+      break;
+    }
+  }
+  if (!next && describeQueue.length) {
+    next = describeQueue[0] || null;
+  }
+  state.describePendingPath = next || null;
+}
+
+function describeHasInFlight(path) {
+  return describeInFlightTimers.has(path);
+}
+
+function clearDescribeInFlightPath(path) {
+  const target = String(path || "").trim();
+  if (!target) return false;
+  const timer = describeInFlightTimers.get(target);
+  if (timer) clearTimeout(timer);
+  const hadInFlight = describeInFlightTimers.delete(target);
+  if (hadInFlight) {
+    describeInFlightOrder = describeInFlightOrder.filter((queuedPath) => queuedPath !== target);
+  }
+  syncDescribePendingPath();
+  return hadInFlight;
+}
+
+function dropDescribeQueuedPath(path) {
+  const target = String(path || "").trim();
+  if (!target) return false;
+  const beforeLen = describeQueue.length;
+  describeQueue = describeQueue.filter((queuedPath) => queuedPath !== target);
+  const removedFromSet = describeQueued.delete(target);
+  syncDescribePendingPath();
+  return removedFromSet || beforeLen !== describeQueue.length;
+}
+
+function oldestDescribeInFlightPath() {
+  while (describeInFlightOrder.length) {
+    const candidate = describeInFlightOrder[0];
+    if (describeInFlightTimers.has(candidate)) return candidate;
+    describeInFlightOrder.shift();
+  }
+  syncDescribePendingPath();
+  return null;
+}
 
 let ptyStatusPromise = null;
 async function ensureEngineSpawned({ reason = "engine" } = {}) {
@@ -981,9 +1042,11 @@ function allowVisionDescribeInCurrentMode() {
 function resetDescribeQueue({ clearPending = false } = {}) {
   describeQueue = [];
   describeQueued.clear();
-  describeInFlightPath = null;
-  clearTimeout(describeInFlightTimer);
-  describeInFlightTimer = null;
+  for (const timer of describeInFlightTimers.values()) {
+    if (timer) clearTimeout(timer);
+  }
+  describeInFlightTimers.clear();
+  describeInFlightOrder = [];
   state.describePendingPath = null;
 
   if (!clearPending) return;
@@ -998,22 +1061,18 @@ function resetDescribeQueue({ clearPending = false } = {}) {
 function dropVisionDescribePath(path, { cancelInFlight = true } = {}) {
   const target = String(path || "").trim();
   if (!target) return;
-  const wasInFlight = describeInFlightPath === target;
-  describeQueue = describeQueue.filter((queuedPath) => queuedPath !== target);
-  describeQueued.delete(target);
-  if (state.describePendingPath === target) state.describePendingPath = null;
+  const wasInFlight = describeHasInFlight(target);
+  dropDescribeQueuedPath(target);
   if (cancelInFlight && wasInFlight) {
     const item = state.images.find((img) => img?.path === target) || null;
     if (item && item.visionPending && !item.visionDesc) item.visionPending = false;
-    describeInFlightPath = null;
-    clearTimeout(describeInFlightTimer);
-    describeInFlightTimer = null;
+    clearDescribeInFlightPath(target);
     processDescribeQueue();
   }
 }
 
 function processDescribeQueue() {
-  if (describeInFlightPath) return;
+  if (describeInFlightOrder.length >= DESCRIBE_MAX_IN_FLIGHT) return;
   // Treat describe as background work; don't compete with queued actions.
   if (state.actionQueueActive || state.actionQueue.length || isEngineBusy()) return;
   if (!state.ptySpawned) {
@@ -1031,7 +1090,7 @@ function processDescribeQueue() {
     return;
   }
 
-  while (describeQueue.length) {
+  while (describeQueue.length && describeInFlightOrder.length < DESCRIBE_MAX_IN_FLIGHT) {
     const path = describeQueue.shift();
     if (typeof path !== "string" || !path) continue;
     describeQueued.delete(path);
@@ -1048,37 +1107,33 @@ function processDescribeQueue() {
       item.visionPendingAt = Date.now();
     }
 
-    describeInFlightPath = path;
-    state.describePendingPath = path;
+    describeInFlightOrder.push(path);
     if (getActiveImage()?.path === path) renderHudReadout();
+    syncDescribePendingPath();
 
     // NOTE: do not quote paths here. `/describe` uses a raw arg string (not shlex-split),
     // so adding quotes would become part of the path and fail to resolve.
     bumpSessionApiCalls();
-    invoke("write_pty", { data: `/describe ${path}\n` }).catch(() => {
+    invoke("write_pty", { data: `${PTY_COMMANDS.DESCRIBE} ${path}\n` }).catch(() => {
       // Backend PTY might have exited; re-spawn and continue.
       state.ptySpawned = false;
       _completeDescribeInFlight({
+        path,
         description: null,
         errorMessage: "Engine disconnected. Restarting…",
       });
       ensureEngineSpawned({ reason: "vision" }).catch(() => {});
     });
 
-    clearTimeout(describeInFlightTimer);
-    describeInFlightTimer = setTimeout(() => {
-      describeInFlightTimer = null;
-      const inflight = describeInFlightPath;
-      if (!inflight) return;
-      const img = state.images.find((it) => it?.path === inflight) || null;
+    const timer = setTimeout(() => {
+      if (!describeHasInFlight(path)) return;
+      const img = state.images.find((it) => it?.path === path) || null;
       if (img && img.visionPending && !img.visionDesc) img.visionPending = false;
-      if (state.describePendingPath === inflight) state.describePendingPath = null;
-      describeInFlightPath = null;
-      if (getActiveImage()?.path === inflight) renderHudReadout();
+      clearDescribeInFlightPath(path);
+      if (getActiveImage()?.path === path) renderHudReadout();
       processDescribeQueue();
     }, DESCRIBE_TIMEOUT_MS);
-
-    return;
+    describeInFlightTimers.set(path, timer);
   }
 }
 
@@ -1093,11 +1148,12 @@ function scheduleVisionDescribe(path, { priority = false } = {}) {
     if (item.visionDesc) return;
   }
 
-  if (describeInFlightPath === path) return;
+  if (describeHasInFlight(path)) return;
   if (describeQueued.has(path)) {
     // If a user focuses an image, bump it to the front of the queue.
     if (priority) {
       describeQueue = [path, ...describeQueue.filter((p) => p !== path)];
+      syncDescribePendingPath();
       processDescribeQueue();
     }
     return;
@@ -1105,16 +1161,38 @@ function scheduleVisionDescribe(path, { priority = false } = {}) {
   if (priority) describeQueue.unshift(path);
   else describeQueue.push(path);
   describeQueued.add(path);
+  syncDescribePendingPath();
   if (getActiveImage()?.path === path) renderHudReadout();
   processDescribeQueue();
 }
 
+function scheduleVisionDescribeBurst(paths, { priority = true, maxConcurrent = UPLOAD_DESCRIBE_PRIORITY_BURST } = {}) {
+  const list = Array.isArray(paths) ? paths : [];
+  if (!list.length) return;
+  const burstLimit = Math.max(1, Number(maxConcurrent) || 1);
+  const unique = [];
+  const seen = new Set();
+  for (const rawPath of list) {
+    const path = String(rawPath || "").trim();
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    unique.push(path);
+  }
+  if (!unique.length) return;
+  for (let i = 0; i < unique.length; i += 1) {
+    scheduleVisionDescribe(unique[i], { priority: Boolean(priority) && i < burstLimit });
+  }
+}
+
 function _completeDescribeInFlight({
+  path = null,
   description = null,
   meta = null, // { source, model }
   errorMessage = null,
 } = {}) {
-  const inflight = describeInFlightPath || state.describePendingPath || null;
+  let inflight = typeof path === "string" ? path.trim() : "";
+  if (!inflight) inflight = oldestDescribeInFlightPath() || "";
+  if (!inflight) inflight = typeof state.describePendingPath === "string" ? state.describePendingPath.trim() : "";
   if (!inflight) return;
   const item = state.images.find((img) => img?.path === inflight) || null;
   const cleanedDesc = typeof description === "string" ? description.trim() : "";
@@ -1129,12 +1207,8 @@ function _completeDescribeInFlight({
     }
     item.visionPending = false;
   }
-  if (state.describePendingPath === inflight) state.describePendingPath = null;
-
-  describeQueued.delete(inflight);
-  describeInFlightPath = null;
-  clearTimeout(describeInFlightTimer);
-  describeInFlightTimer = null;
+  dropDescribeQueuedPath(inflight);
+  clearDescribeInFlightPath(inflight);
 
   if (errorMessage) {
     showToast(errorMessage, "error", 3200);
@@ -2460,12 +2534,12 @@ async function runAlwaysOnVisionOnce({ force = false } = {}) {
   if (aov.rtState === "off") aov.rtState = "connecting";
 
   // Ensure the canvas-context realtime backend is running before dispatching snapshot work.
-  await invoke("write_pty", { data: "/canvas_context_rt_start\n" }).catch((err) => {
+  await invoke("write_pty", { data: `${PTY_COMMANDS.CANVAS_CONTEXT_RT_START}\n` }).catch((err) => {
     console.warn("Always-on vision canvas context start failed:", err);
   });
 
   try {
-    await invoke("write_pty", { data: `/canvas_context_rt ${quoteForPtyArg(snapshotPath)}\n` });
+    await invoke("write_pty", { data: `${PTY_COMMANDS.CANVAS_CONTEXT_RT} ${quoteForPtyArg(snapshotPath)}\n` });
   } catch (err) {
     console.warn("Always-on vision dispatch failed:", err);
     aov.pending = false;
@@ -2817,7 +2891,7 @@ async function runAmbientIntentInferenceOnce({ reason = null } = {}) {
   }
 
   if (ambient.rtState === "off" || ambient.rtState === "failed") ambient.rtState = "connecting";
-  await invoke("write_pty", { data: "/intent_rt_start\n" }).catch(() => {});
+  await invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT_START}\n` }).catch(() => {});
 
   ambient.frameSeq = (Number(ambient.frameSeq) || 0) + 1;
   const stamp = Date.now();
@@ -2871,7 +2945,7 @@ async function runAmbientIntentInferenceOnce({ reason = null } = {}) {
   }, INTENT_INFERENCE_TIMEOUT_MS);
 
   try {
-    await invoke("write_pty", { data: `/intent_rt ${quoteForPtyArg(snapshotPath)}\n` });
+    await invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT} ${quoteForPtyArg(snapshotPath)}\n` });
     bumpSessionApiCalls();
   } catch (err) {
     const msg = err?.message ? `Intent realtime failed: ${err.message}` : "Intent realtime failed.";
@@ -3054,7 +3128,7 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
 
   // Start (or keep alive) the realtime session.
   if (intent.rtState === "off" || intent.rtState === "failed") intent.rtState = "connecting";
-  await invoke("write_pty", { data: "/intent_rt_start\n" }).catch(() => {});
+  await invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT_START}\n` }).catch(() => {});
 
   // Build a new frame id so we can ignore stale streaming updates.
   intent.frameSeq = (Number(intent.frameSeq) || 0) + 1;
@@ -3127,7 +3201,7 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
   }, INTENT_INFERENCE_TIMEOUT_MS);
 
   try {
-    await invoke("write_pty", { data: `/intent_rt ${quoteForPtyArg(snapshotPath)}\n` });
+    await invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT} ${quoteForPtyArg(snapshotPath)}\n` });
     bumpSessionApiCalls();
   } catch (err) {
     intent.pending = false;
@@ -3378,441 +3452,28 @@ function ensureIntentFallbackIconState(reason = "fallback") {
   return intent.iconState;
 }
 
-function _stripJsonFences(raw) {
-  let text = String(raw || "").trim();
-  if (!text) return "";
-  if (text.startsWith("```")) {
-    text = text.replace(/^```(?:json)?/i, "").trim();
-    text = text.replace(/```$/i, "").trim();
-  }
-  return text.trim();
-}
-
-function _extractFencedJsonBlocks(raw) {
-  const text = String(raw || "");
-  if (!text.includes("```")) return [];
-  const out = [];
-  const re = /```(?:json)?\s*([\s\S]*?)```/gi;
-  let match = null;
-  while ((match = re.exec(text)) !== null) {
-    const body = String(match?.[1] || "").trim();
-    if (body) out.push(body);
-  }
-  return out;
-}
-
-function _extractBalancedJsonBlocks(raw) {
-  const text = String(raw || "");
-  if (!text) return [];
-  const out = [];
-  const stack = [];
-  let start = -1;
-  let quote = "";
-  let escaped = false;
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i];
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === quote) {
-        quote = "";
-      }
-      continue;
-    }
-    if (ch === "\"") {
-      quote = ch;
-      continue;
-    }
-    if (ch === "{" || ch === "[") {
-      if (stack.length === 0) start = i;
-      stack.push(ch);
-      continue;
-    }
-    if (ch !== "}" && ch !== "]") continue;
-    if (!stack.length) continue;
-    const open = stack[stack.length - 1];
-    const pairOk = (open === "{" && ch === "}") || (open === "[" && ch === "]");
-    if (!pairOk) {
-      stack.length = 0;
-      start = -1;
-      continue;
-    }
-    stack.pop();
-    if (!stack.length && start >= 0) {
-      const snippet = text.slice(start, i + 1).trim();
-      if (snippet) out.push(snippet);
-      start = -1;
-    }
-  }
-  return out;
-}
-
-function _tryParseJsonLooseDetailed(raw) {
-  const text = String(raw || "").trim();
-  if (!text) return { value: null, mode: "empty", error: "empty_text" };
-  const attempts = [{ mode: "strict", text }];
-  const noTrailingCommas = text.replace(/,\s*([}\]])/g, "$1");
-  if (noTrailingCommas !== text) attempts.push({ mode: "trailing_commas_removed", text: noTrailingCommas });
-  let lastError = "";
-  for (const attempt of attempts) {
-    try {
-      return { value: JSON.parse(attempt.text), mode: attempt.mode, error: null };
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err || "json_parse_error");
-      continue;
-    }
-  }
-  return { value: null, mode: "none", error: lastError || "json_parse_error" };
-}
-
-function _tryParseJsonLoose(raw) {
-  return _tryParseJsonLooseDetailed(raw).value;
-}
-
-function _looksLikeIntentIconsPayload(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const schemaRaw = value.schema ? String(value.schema).trim().toLowerCase() : "";
-  if (schemaRaw === "brood.intent_icons") return true;
-  if (schemaRaw && schemaRaw.includes("intent") && schemaRaw.includes("icon")) return true;
-  if (Array.isArray(value.intent_icons)) return true;
-  if (Array.isArray(value.branches)) return true;
-  if (Array.isArray(value.image_descriptions)) return true;
-  if (typeof value.transformation_mode === "string" && value.transformation_mode.trim()) return true;
-  if (Array.isArray(value.transformation_mode_candidates)) return true;
-  return false;
-}
-
-function _unwrapIntentIconsPayload(value, depth = 0, seen = null, path = "root") {
-  if (depth > 6 || value == null) return null;
-  const visited = seen || new Set();
-  if (typeof value === "string") {
-    const parsed = _tryParseJsonLooseDetailed(value);
-    if (!parsed.value) return null;
-    return _unwrapIntentIconsPayload(parsed.value, depth + 1, visited, `${path}#string(${parsed.mode})`);
-  }
-  if (Array.isArray(value)) {
-    for (let idx = 0; idx < value.length; idx += 1) {
-      const found = _unwrapIntentIconsPayload(value[idx], depth + 1, visited, `${path}[${idx}]`);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (typeof value !== "object") return null;
-  if (visited.has(value)) return null;
-  visited.add(value);
-  if (_looksLikeIntentIconsPayload(value)) return { payload: value, path };
-  const preferredKeys = [
-    "intent_icons_payload",
-    "payload",
-    "data",
-    "result",
-    "output",
-    "response",
-    "intent",
-    "analysis",
-    "message",
-  ];
-  for (const key of preferredKeys) {
-    if (!(key in value)) continue;
-    const found = _unwrapIntentIconsPayload(value[key], depth + 1, visited, `${path}.${key}`);
-    if (found) return found;
-  }
-  for (const [key, nested] of Object.entries(value)) {
-    if (!nested || (typeof nested !== "object" && typeof nested !== "string")) continue;
-    const found = _unwrapIntentIconsPayload(nested, depth + 1, visited, `${path}.${String(key || "")}`);
-    if (found) return found;
-  }
-  return null;
-}
-
-function _looksLikeTruncatedJsonText(raw) {
-  const text = String(raw || "").trim();
-  if (!text) return false;
-  const startsJson = text.startsWith("{") || text.startsWith("[");
-  const endsJson = text.endsWith("}") || text.endsWith("]");
-  return startsJson && !endsJson;
-}
-
 function intentIconsPayloadChecksum(raw) {
-  const text = String(raw || "");
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i += 1) {
-    hash ^= text.charCodeAt(i);
-    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
-    hash >>>= 0;
-  }
-  return `fnv1a32:${hash.toString(16).padStart(8, "0")}`;
+  return intentIconsPayloadChecksumUtil(raw);
 }
 
-function intentIconsPayloadSafeSnippet(raw, { head = 220, tail = 180 } = {}) {
-  const normalized = String(raw || "")
-    .replace(/[\x00-\x1f]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!normalized) return { head: "", tail: "" };
-  if (normalized.length <= head + tail + 8) return { head: normalized, tail: "" };
-  return {
-    head: normalized.slice(0, Math.max(0, head)),
-    tail: normalized.slice(Math.max(0, normalized.length - Math.max(0, tail))),
-  };
+function intentIconsPayloadSafeSnippet(raw, options = {}) {
+  return intentIconsPayloadSafeSnippetUtil(raw, options);
 }
 
 function parseIntentIconsJsonDetailed(raw) {
-  const rawText = String(raw || "").trim();
-  if (!rawText) {
-    return {
-      ok: false,
-      value: null,
-      strategy: "none",
-      reason: "empty_text",
-      error: "empty_text",
-      candidate_count: 0,
-      parseable_candidates: 0,
-    };
-  }
-  const candidates = [];
-  const seen = new Set();
-  const addCandidate = (value, source) => {
-    const text = String(value || "").trim();
-    if (!text || seen.has(text)) return;
-    seen.add(text);
-    candidates.push({ text, source });
-  };
-  addCandidate(rawText, "raw");
-  addCandidate(_stripJsonFences(rawText), "raw_unfenced");
-  for (const block of _extractFencedJsonBlocks(rawText)) {
-    addCandidate(block, "fenced_block");
-    addCandidate(_stripJsonFences(block), "fenced_block_unfenced");
-  }
-  for (const block of _extractBalancedJsonBlocks(rawText)) addCandidate(block, "balanced_block");
-
-  let obj = null;
-  let parseStrategy = "none";
-  let parseError = "";
-  let parseableCandidates = 0;
-  for (const candidate of candidates) {
-    const parsed = _tryParseJsonLooseDetailed(candidate.text);
-    if (!parsed.value) {
-      if (parsed.error) parseError = parsed.error;
-      continue;
-    }
-    parseableCandidates += 1;
-    const unwrapped = _unwrapIntentIconsPayload(parsed.value);
-    const payload = unwrapped?.payload;
-    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-      obj = payload;
-      parseStrategy = `${candidate.source}:${parsed.mode}:${String(unwrapped?.path || "root")}`;
-      break;
-    }
-  }
-
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
-    const truncated = _looksLikeTruncatedJsonText(rawText);
-    return {
-      ok: false,
-      value: null,
-      strategy: parseStrategy,
-      reason: truncated ? "truncated_json" : parseableCandidates > 0 ? "no_intent_payload_found" : "invalid_json",
-      error: parseError || null,
-      candidate_count: candidates.length,
-      parseable_candidates: parseableCandidates,
-    };
-  }
-  const schemaRaw = obj.schema ? String(obj.schema).trim() : "";
-  if (schemaRaw) {
-    const schemaNorm = schemaRaw.toLowerCase().replace(/[.\s-]+/g, "_");
-    if (!schemaNorm.includes("intent") || !schemaNorm.includes("icon")) {
-      return {
-        ok: false,
-        value: null,
-        strategy: parseStrategy,
-        reason: "schema_mismatch",
-        error: `unexpected_schema:${schemaRaw}`,
-        candidate_count: candidates.length,
-        parseable_candidates: parseableCandidates,
-      };
-    }
-    obj.schema = "brood.intent_icons";
-  }
-  const hasIntentShape = Boolean(
-    Array.isArray(obj.intent_icons) ||
-      Array.isArray(obj.branches) ||
-      Array.isArray(obj.image_descriptions) ||
-      Array.isArray(obj.transformation_mode_candidates) ||
-      (typeof obj.transformation_mode === "string" && obj.transformation_mode.trim())
-  );
-  if (!hasIntentShape && !schemaRaw) {
-    return {
-      ok: false,
-      value: null,
-      strategy: parseStrategy,
-      reason: "no_intent_shape",
-      error: "missing intent_icons/branches/image_descriptions/transformation_mode",
-      candidate_count: candidates.length,
-      parseable_candidates: parseableCandidates,
-    };
-  }
-
-  // Normalize common fields so rendering code can be defensive and simple.
-  if (!Array.isArray(obj.intent_icons)) obj.intent_icons = [];
-  if (!Array.isArray(obj.branches)) obj.branches = [];
-  if (!Array.isArray(obj.relations)) obj.relations = [];
-  if (obj.checkpoint && typeof obj.checkpoint !== "object") obj.checkpoint = null;
-
-  // Coerce icon_id fields to strings.
-  obj.intent_icons = obj.intent_icons
-    .filter((it) => it && typeof it === "object")
-    .map((it) => ({
-      icon_id: it.icon_id ? String(it.icon_id) : "",
-      confidence: typeof it.confidence === "number" ? it.confidence : 0,
-      position_hint: it.position_hint ? String(it.position_hint) : "secondary",
-    }))
-    .filter((it) => Boolean(it.icon_id));
-
-  obj.branches = obj.branches
-    .filter((b) => b && typeof b === "object")
-    .map((b, idx) => {
-      const c = typeof b.confidence === "number" ? clamp(Number(b.confidence) || 0, 0, 1) : null;
-      const evidence = Array.isArray(b.evidence_image_ids)
-        ? b.evidence_image_ids.map((v) => String(v || "").trim()).filter(Boolean)
-        : [];
-      return {
-        _idx: idx,
-        confidence: c,
-        evidence_image_ids: evidence.length ? evidence.slice(0, 3) : [],
-        branch_id: b.branch_id ? String(b.branch_id) : "",
-        icons: Array.isArray(b.icons) ? b.icons.map((v) => String(v || "").trim()).filter(Boolean) : [],
-        lane_position: b.lane_position ? String(b.lane_position) : "left",
-      };
-    })
-    .filter((b) => Boolean(b.branch_id) && b.icons.length > 0);
-
-  // If the model provides branch confidences, treat them as an ordering contract.
-  // Keep the original order as a tie-breaker to reduce UI churn.
-  const anyBranchConf = obj.branches.some((b) => typeof b?.confidence === "number" && Number.isFinite(b.confidence));
-  if (anyBranchConf) {
-    obj.branches.sort((a, b) => {
-      const ac = typeof a?.confidence === "number" && Number.isFinite(a.confidence) ? a.confidence : -1;
-      const bc = typeof b?.confidence === "number" && Number.isFinite(b.confidence) ? b.confidence : -1;
-      if (bc !== ac) return bc - ac;
-      return (Number(a?._idx) || 0) - (Number(b?._idx) || 0);
-    });
-  }
-
-  obj.branches = obj.branches
-    .map((b) => ({
-      branch_id: b.branch_id ? String(b.branch_id) : "",
-      confidence: typeof b.confidence === "number" && Number.isFinite(b.confidence) ? clamp(Number(b.confidence) || 0, 0, 1) : null,
-      evidence_image_ids: Array.isArray(b.evidence_image_ids)
-        ? b.evidence_image_ids.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 3)
-        : [],
-      icons: Array.isArray(b.icons) ? b.icons.map((v) => String(v || "").trim()).filter(Boolean) : [],
-      lane_position: b.lane_position ? String(b.lane_position) : "left",
-    }))
-    .filter((b) => Boolean(b.branch_id) && b.icons.length > 0);
-
-  obj.relations = obj.relations
-    .filter((r) => r && typeof r === "object")
-    .map((r) => ({
-      from_icon: r.from_icon ? String(r.from_icon) : "",
-      to_icon: r.to_icon ? String(r.to_icon) : "",
-      relation_type: r.relation_type ? String(r.relation_type) : "FLOW",
-    }))
-    .filter((r) => r.from_icon && r.to_icon);
-
-  if (obj.checkpoint) {
-    const icons = Array.isArray(obj.checkpoint.icons) ? obj.checkpoint.icons : [];
-    obj.checkpoint = {
-      icons: icons.map((v) => String(v || "").trim()).filter(Boolean),
-      applies_to: obj.checkpoint.applies_to ? String(obj.checkpoint.applies_to) : null,
-    };
-  }
-
-  const parsedMode = motherV2MaybeTransformationMode(obj.transformation_mode);
-  obj.transformation_mode = parsedMode || null;
-  const rawModeCandidates = Array.isArray(obj.transformation_mode_candidates)
-    ? obj.transformation_mode_candidates
-    : [];
-  const modeCandidates = rawModeCandidates
-    .map((entry, idx) => {
-      if (!entry || typeof entry !== "object") return null;
-      const mode = motherV2MaybeTransformationMode(entry.mode || entry.transformation_mode);
-      if (!mode) return null;
-      const confidence = typeof entry.confidence === "number" && Number.isFinite(entry.confidence)
-        ? clamp(Number(entry.confidence) || 0, 0, 1)
-        : null;
-      return { _idx: idx, mode, confidence };
-    })
-    .filter(Boolean);
-  if (modeCandidates.length) {
-    modeCandidates.sort((a, b) => {
-      const ac = typeof a.confidence === "number" ? a.confidence : -1;
-      const bc = typeof b.confidence === "number" ? b.confidence : -1;
-      if (bc !== ac) return bc - ac;
-      return Number(a._idx) - Number(b._idx);
-    });
-  }
-  obj.transformation_mode_candidates = modeCandidates.map((entry) => ({
-    mode: entry.mode,
-    confidence: typeof entry.confidence === "number" ? entry.confidence : null,
-  }));
-  if (!obj.transformation_mode && obj.transformation_mode_candidates.length) {
-    obj.transformation_mode = String(obj.transformation_mode_candidates[0].mode || "").trim() || null;
-  }
-
-  if (!obj.frame_id) obj.frame_id = "";
-  if (!obj.schema) obj.schema = "brood.intent_icons";
-  if (!obj.schema_version) obj.schema_version = 1;
-  return {
-    ok: true,
-    value: obj,
-    strategy: parseStrategy || "unknown",
-    reason: null,
-    error: null,
-    candidate_count: candidates.length,
-    parseable_candidates: parseableCandidates,
-  };
+  return parseIntentIconsJsonDetailedUtil(raw, {
+    normalizeTransformationMode: motherV2MaybeTransformationMode,
+  });
 }
 
 function parseIntentIconsJson(raw) {
-  const parsed = parseIntentIconsJsonDetailed(raw);
-  return parsed?.ok ? parsed.value : null;
+  return parseIntentIconsJsonUtil(raw, {
+    normalizeTransformationMode: motherV2MaybeTransformationMode,
+  });
 }
 
-function classifyIntentIconsRouting({
-  path = "",
-  intentPendingPath = "",
-  ambientPendingPath = "",
-  motherCanAcceptRealtime = false,
-  motherRealtimePath = "",
-  motherActionVersion = 0,
-  eventActionVersion = null,
-} = {}) {
-  const normalizedPath = String(path || "");
-  const normalizedIntentPath = String(intentPendingPath || "");
-  const normalizedAmbientPath = String(ambientPendingPath || "");
-  const normalizedMotherPath = String(motherRealtimePath || "");
-  const actionVersion = Number(motherActionVersion) || 0;
-  const eventVersion = Number(eventActionVersion);
-
-  const matchIntent = Boolean(normalizedIntentPath && normalizedIntentPath === normalizedPath);
-  const matchAmbient = Boolean(normalizedAmbientPath && normalizedAmbientPath === normalizedPath);
-  const matchMother = Boolean(motherCanAcceptRealtime && normalizedMotherPath && normalizedMotherPath === normalizedPath);
-
-  let ignoreReason = null;
-  if (!matchIntent && !matchAmbient && !matchMother) {
-    ignoreReason = motherCanAcceptRealtime && normalizedMotherPath ? "snapshot_path_mismatch" : "path_mismatch";
-  } else if (
-    matchMother &&
-    Number.isFinite(eventVersion) &&
-    eventVersion > 0 &&
-    eventVersion !== actionVersion
-  ) {
-    ignoreReason = "event_action_version_mismatch";
-  }
-  return { matchIntent, matchAmbient, matchMother, ignoreReason };
+function classifyIntentIconsRouting(options = {}) {
+  return classifyIntentIconsRoutingUtil(options);
 }
 
 function _normalizeVisionLabel(raw, { maxChars = 32 } = {}) {
@@ -4232,7 +3893,7 @@ async function lockIntentToBranch(branchId) {
   intent.rtState = "off";
   intent.disabledReason = null;
   if (state.ptySpawned) {
-    invoke("write_pty", { data: "/intent_rt_stop\n" }).catch(() => {});
+    invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT_STOP}\n` }).catch(() => {});
   }
 
   // Persist locked intent as a run artifact for downstream prompting/recommendations.
@@ -4385,7 +4046,7 @@ async function ensureGeminiForBlend() {
   if (els.imageModel) els.imageModel.value = settings.imageModel;
   updatePortraitIdle({ fromSettings: true });
   if (state.ptySpawned) {
-    await invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
+    await invoke("write_pty", { data: `${PTY_COMMANDS.IMAGE_MODEL} ${settings.imageModel}\n` }).catch(() => {});
   }
   showToast(`Combine requires Gemini. Switched image model to ${settings.imageModel}.`, "tip", 3200);
   return providerFromModel(settings.imageModel) === "gemini";
@@ -4408,7 +4069,7 @@ async function ensureGeminiProImagePreviewForAction(actionLabel = "This action")
   if (els.imageModel) els.imageModel.value = settings.imageModel;
   updatePortraitIdle({ fromSettings: true });
   if (state.ptySpawned) {
-    await invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
+    await invoke("write_pty", { data: `${PTY_COMMANDS.IMAGE_MODEL} ${settings.imageModel}\n` }).catch(() => {});
   }
 
   if (changed) {
@@ -8417,20 +8078,10 @@ async function appendMotherSuggestionLog(entry = {}) {
   if (!logPath) return false;
   const line = `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`;
   try {
-    await writeTextFile(logPath, line, { append: true });
+    await appendTextWithFallback(logPath, line);
     return true;
-  } catch (_) {
-    // Fallback for environments where append options are unavailable.
-    let prior = "";
-    try {
-      if (await exists(logPath)) {
-        prior = await readTextFile(logPath);
-      }
-    } catch {
-      prior = "";
-    }
-    await writeTextFile(logPath, `${prior}${line}`);
-    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -8444,17 +8095,10 @@ async function appendMotherTraceLog(entry = {}) {
   if (!logPath) return false;
   const line = `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`;
   try {
-    await writeTextFile(logPath, line, { append: true });
+    await appendTextWithFallback(logPath, line);
     return true;
-  } catch (_) {
-    let prior = "";
-    try {
-      if (await exists(logPath)) prior = await readTextFile(logPath);
-    } catch {
-      prior = "";
-    }
-    await writeTextFile(logPath, `${prior}${line}`);
-    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -8515,17 +8159,10 @@ async function _appendAutomationEvents(events, { requestId = null } = {}) {
   if (!payloads.length) return false;
   const text = payloads.join("");
   try {
-    await writeTextFile(outPath, text, { append: true });
+    await appendTextWithFallback(outPath, text);
     return true;
   } catch {
-    let prior = "";
-    try {
-      if (await exists(outPath)) prior = await readTextFile(outPath);
-    } catch {
-      prior = "";
-    }
-    await writeTextFile(outPath, `${prior}${text}`);
-    return true;
+    return false;
   }
 }
 
@@ -9705,6 +9342,7 @@ function resetMotherIdleAndWheelState() {
     state.motherIdle.actionVersion = 0;
     state.motherIdle.pendingActionVersion = 0;
     state.motherIdle.cooldownUntil = 0;
+    state.motherIdle.multiUploadIdleBoostUntil = 0;
     state.motherIdle.pendingIntent = false;
     state.motherIdle.pendingIntentRequestId = null;
     state.motherIdle.pendingIntentStartedAt = 0;
@@ -10906,8 +10544,8 @@ async function motherV2RequestIntentInference() {
 
   let realtimeDispatched = false;
   if (snapshotPath) {
-    await invoke("write_pty", { data: "/intent_rt_mother_start\n" }).catch(() => {});
-    realtimeDispatched = await invoke("write_pty", { data: `/intent_rt_mother ${quoteForPtyArg(snapshotPath)}\n` })
+    await invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT_MOTHER_START}\n` }).catch(() => {});
+    realtimeDispatched = await invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT_MOTHER} ${quoteForPtyArg(snapshotPath)}\n` })
       .then(() => true)
       .catch(() => false);
   }
@@ -10964,7 +10602,7 @@ async function motherV2RequestPromptCompile() {
   }, 2200);
 
   if (payloadPath) {
-    await invoke("write_pty", { data: `/prompt_compile ${quoteForPtyArg(payloadPath)}\n` }).catch(() => {});
+    await invoke("write_pty", { data: `${PTY_COMMANDS.PROMPT_COMPILE} ${quoteForPtyArg(payloadPath)}\n` }).catch(() => {});
   } else {
     const compiled = motherV2CompilePromptLocal(payload);
     await motherV2DispatchCompiledPrompt(compiled);
@@ -11103,7 +10741,7 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "") {
       ? String(imagePayload.sourceImageIds[0] || "")
       : null,
   }).catch(() => {});
-  await invoke("write_pty", { data: `/mother_generate ${quoteForPtyArg(payloadPath)}\n` });
+  await invoke("write_pty", { data: `${PTY_COMMANDS.MOTHER_GENERATE} ${quoteForPtyArg(payloadPath)}\n` });
   return true;
 }
 
@@ -11289,6 +10927,33 @@ async function motherIdleDispatchGeneration() {
   return true;
 }
 
+function motherV2HasMultiUploadIdleBoost(nowMs = Date.now()) {
+  const idle = state.motherIdle;
+  if (!idle) return false;
+  return (Number(idle.multiUploadIdleBoostUntil) || 0) > nowMs;
+}
+
+function motherV2WatchIdleDelayMs(nowMs = Date.now()) {
+  return motherV2HasMultiUploadIdleBoost(nowMs) ? MOTHER_V2_MULTI_UPLOAD_WATCH_IDLE_MS : MOTHER_V2_WATCH_IDLE_MS;
+}
+
+function motherV2IntentIdleDelayMs(nowMs = Date.now()) {
+  return motherV2HasMultiUploadIdleBoost(nowMs) ? MOTHER_V2_MULTI_UPLOAD_INTENT_IDLE_MS : MOTHER_V2_INTENT_IDLE_MS;
+}
+
+function motherV2ArmMultiUploadIdleBoost(importCount = 0) {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  const count = Math.max(0, Number(importCount) || 0);
+  if (count < 2) return;
+  idle.multiUploadIdleBoostUntil = Date.now() + MOTHER_V2_MULTI_UPLOAD_IDLE_BOOST_WINDOW_MS;
+  if (idle.phase === MOTHER_IDLE_STATES.OBSERVING && !state.pointer.active) {
+    motherIdleArmFirstTimer();
+  } else if (idle.phase === MOTHER_IDLE_STATES.WATCHING && !state.pointer.active) {
+    motherIdleArmIntentTimer();
+  }
+}
+
 function motherIdleArmFirstTimer() {
   const idle = state.motherIdle;
   if (!idle) return;
@@ -11301,7 +10966,9 @@ function motherIdleArmFirstTimer() {
   if (state.pointer.active) return;
   if (motherV2InCooldown()) return;
   if (idle.phase !== MOTHER_IDLE_STATES.OBSERVING) return;
-  const dueAt = (Number(state.lastInteractionAt) || Date.now()) + MOTHER_V2_WATCH_IDLE_MS;
+  const nowMs = Date.now();
+  const watchIdleMs = motherV2WatchIdleDelayMs(nowMs);
+  const dueAt = (Number(state.lastInteractionAt) || nowMs) + watchIdleMs;
   const delay = Math.max(25, dueAt - Date.now());
   idle.firstIdleTimer = setTimeout(() => {
     idle.firstIdleTimer = null;
@@ -11310,7 +10977,9 @@ function motherIdleArmFirstTimer() {
     if (state.pointer.active) return;
     if (motherV2InCooldown()) return;
     const quietFor = Date.now() - (Number(state.lastInteractionAt) || 0);
-    if (quietFor < MOTHER_V2_WATCH_IDLE_MS) {
+    const now = Date.now();
+    const watchDelayMs = motherV2WatchIdleDelayMs(now);
+    if (quietFor < watchDelayMs) {
       motherIdleArmFirstTimer();
       return;
     }
@@ -11331,7 +11000,9 @@ function motherIdleArmIntentTimer() {
   if (state.pointer.active) return;
   if (motherV2InCooldown()) return;
   if (idle.phase !== MOTHER_IDLE_STATES.WATCHING) return;
-  const dueAt = (Number(state.lastInteractionAt) || Date.now()) + MOTHER_V2_INTENT_IDLE_MS;
+  const nowMs = Date.now();
+  const intentIdleMs = motherV2IntentIdleDelayMs(nowMs);
+  const dueAt = (Number(state.lastInteractionAt) || nowMs) + intentIdleMs;
   const delay = Math.max(25, dueAt - Date.now());
   idle.intentIdleTimer = setTimeout(async () => {
     idle.intentIdleTimer = null;
@@ -11340,11 +11011,16 @@ function motherIdleArmIntentTimer() {
     if (state.pointer.active) return;
     if (motherV2InCooldown()) return;
     const quietFor = Date.now() - (Number(state.lastInteractionAt) || 0);
-    if (quietFor < MOTHER_V2_INTENT_IDLE_MS) {
+    const now = Date.now();
+    const intentDelayMs = motherV2IntentIdleDelayMs(now);
+    if (quietFor < intentDelayMs) {
       motherIdleArmIntentTimer();
       return;
     }
     if (state.motherIdle?.phase !== MOTHER_IDLE_STATES.WATCHING) return;
+    if (motherV2HasMultiUploadIdleBoost(now)) {
+      idle.multiUploadIdleBoostUntil = 0;
+    }
     motherIdleTransitionTo(MOTHER_IDLE_EVENTS.IDLE_WINDOW_ELAPSED);
     await motherV2RequestIntentInference();
     renderMotherReadout();
@@ -11404,6 +11080,7 @@ function motherIdleSyncFromInteraction({ userInteraction = false, semantic = tru
         actionVersion: Number(idle.actionVersion) || 0,
       }).catch(() => {});
     }
+    idle.multiUploadIdleBoostUntil = 0;
     idle.actionVersion = (Number(idle.actionVersion) || 0) + 1;
     closeMotherWheelMenu({ immediate: false });
     clearMotherIdleTimers({ first: true, takeover: true });
@@ -12216,7 +11893,7 @@ async function runExtractDnaFromSelection({ fromQueue = false } = {}) {
 
   const args = sources.map((item) => quoteForPtyArg(item.path)).join(" ");
   try {
-    await invoke("write_pty", { data: `/extract_dna ${args}\n` });
+    await invoke("write_pty", { data: `${PTY_COMMANDS.EXTRACT_DNA} ${args}\n` });
     bumpSessionApiCalls();
   } catch (err) {
     console.error(err);
@@ -12268,7 +11945,7 @@ async function runSoulLeechFromSelection({ fromQueue = false } = {}) {
 
   const args = sources.map((item) => quoteForPtyArg(item.path)).join(" ");
   try {
-    await invoke("write_pty", { data: `/soul_leech ${args}\n` });
+    await invoke("write_pty", { data: `${PTY_COMMANDS.SOUL_LEECH} ${args}\n` });
     bumpSessionApiCalls();
   } catch (err) {
     console.error(err);
@@ -12930,7 +12607,7 @@ async function runAutoCanvasDiagnose(signature) {
   state.autoCanvasDiagnosePath = outPath;
   setStatus("Director: canvas diagnose…");
   try {
-    await invoke("write_pty", { data: `/diagnose ${quoteForPtyArg(outPath)}\n` });
+    await invoke("write_pty", { data: `${PTY_COMMANDS.DIAGNOSE} ${quoteForPtyArg(outPath)}\n` });
     bumpSessionApiCalls();
   } catch (_) {
     // Best-effort; if the engine drops, we'll retry on the next debounce.
@@ -15431,14 +15108,14 @@ async function removeImageFromCanvas(imageId) {
       intentInferenceTimeout = null;
       stopIntentTicker();
       if (state.ptySpawned) {
-        invoke("write_pty", { data: "/intent_rt_stop\n" }).catch(() => {});
+        invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT_STOP}\n` }).catch(() => {});
       }
       syncIntentModeClass();
       scheduleIntentStateWrite({ immediate: true });
     }
     resetAmbientIntentState();
     if (state.ptySpawned) {
-      invoke("write_pty", { data: "/intent_rt_stop\n" }).catch(() => {});
+      invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT_STOP}\n` }).catch(() => {});
     }
     updateEmptyCanvasHint();
     setTip(DEFAULT_TIP);
@@ -15558,7 +15235,7 @@ async function setEngineActiveImage(path) {
     // Active image tracking is best-effort; don't block UI if engine isn't ready yet.
     return;
   }
-  await invoke("write_pty", { data: `/use ${path}\n` }).catch(() => {
+  await invoke("write_pty", { data: `${PTY_COMMANDS.USE} ${path}\n` }).catch(() => {
     state.ptySpawned = false;
   });
 }
@@ -15568,7 +15245,7 @@ function restoreEngineImageModelIfNeeded() {
   if (!restore) return;
   state.engineImageModelRestore = null;
   if (!state.ptySpawned) return;
-  invoke("write_pty", { data: `/image_model ${restore}\n` }).catch(() => {});
+  invoke("write_pty", { data: `${PTY_COMMANDS.IMAGE_MODEL} ${restore}\n` }).catch(() => {});
 }
 
 async function maybeOverrideEngineImageModel(desiredModel) {
@@ -15577,7 +15254,7 @@ async function maybeOverrideEngineImageModel(desiredModel) {
   if (!state.ptySpawned) return false;
   if (desired === settings.imageModel) return false;
   state.engineImageModelRestore = settings.imageModel;
-  await invoke("write_pty", { data: `/image_model ${desired}\n` }).catch(() => {});
+  await invoke("write_pty", { data: `${PTY_COMMANDS.IMAGE_MODEL} ${desired}\n` }).catch(() => {});
   return true;
 }
 
@@ -15876,6 +15553,7 @@ async function importPhotosAtCanvasPoint(pointCss) {
   let ok = 0;
   let failed = 0;
   let lastErr = null;
+  const importedVisionPaths = [];
   for (let idx = 0; idx < pickedLimited.length; idx += 1) {
     const src = pickedLimited[idx];
     if (typeof src !== "string" || !src) continue;
@@ -15907,6 +15585,7 @@ async function importPhotosAtCanvasPoint(pointCss) {
         },
         { select: ok === 0 && !state.activeId }
       );
+      importedVisionPaths.push(dest);
       ok += 1;
     } catch (err) {
       failed += 1;
@@ -15916,6 +15595,11 @@ async function importPhotosAtCanvasPoint(pointCss) {
   }
 
   if (ok > 0) {
+    motherV2ArmMultiUploadIdleBoost(ok);
+    scheduleVisionDescribeBurst(importedVisionPaths, {
+      priority: true,
+      maxConcurrent: UPLOAD_DESCRIBE_PRIORITY_BURST,
+    });
     const suffix = failed ? ` (${failed} failed)` : "";
     setStatus(`Engine: imported ${ok} photo${ok === 1 ? "" : "s"}${suffix}`, failed > 0);
     if (state.images.length > 1 && state.canvasMode !== "multi") {
@@ -16278,7 +15962,7 @@ async function aiAnnotateEdit({
     });
 
     // Point the engine at the cropped image so "edit the image" edits the crop.
-    await invoke("write_pty", { data: `/use ${quoteForPtyArg(cropPath)}\n` }).catch(() => {});
+    await invoke("write_pty", { data: `${PTY_COMMANDS.USE} ${quoteForPtyArg(cropPath)}\n` }).catch(() => {});
 
     state.expectingArtifacts = true;
     state.lastAction = label;
@@ -16287,7 +15971,7 @@ async function aiAnnotateEdit({
 
     if (state.ptySpawned && effectiveModel && effectiveModel !== settings.imageModel) {
       state.engineImageModelRestore = settings.imageModel;
-      await invoke("write_pty", { data: `/image_model ${effectiveModel}\n` }).catch(() => {});
+      await invoke("write_pty", { data: `${PTY_COMMANDS.IMAGE_MODEL} ${effectiveModel}\n` }).catch(() => {});
     }
 
     // Must start with "edit" or "replace" for Brood's edit detection.
@@ -16558,7 +16242,7 @@ async function runVariations({ fromQueue = false } = {}) {
     state.expectingArtifacts = true;
     state.pendingRecreate = { startedAt: Date.now() };
     setStatus("Engine: variations…");
-    await invoke("write_pty", { data: `/recreate ${imgItem.path}\n` });
+    await invoke("write_pty", { data: `${PTY_COMMANDS.RECREATE} ${imgItem.path}\n` });
   } catch (err) {
     state.expectingArtifacts = false;
     state.pendingRecreate = null;
@@ -16569,9 +16253,7 @@ async function runVariations({ fromQueue = false } = {}) {
 }
 
 function quoteForPtyArg(value) {
-  const raw = String(value || "");
-  const escaped = raw.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  return `"${escaped}"`;
+  return quoteForPtyArgUtil(value);
 }
 
 async function runBlendPair({ fromQueue = false } = {}) {
@@ -16615,7 +16297,7 @@ async function runBlendPair({ fromQueue = false } = {}) {
 
   try {
     await invoke("write_pty", {
-      data: `/blend ${quoteForPtyArg(a.path)} ${quoteForPtyArg(b.path)}\n`,
+      data: `${PTY_COMMANDS.BLEND} ${quoteForPtyArg(a.path)} ${quoteForPtyArg(b.path)}\n`,
     });
   } catch (err) {
     console.error(err);
@@ -16676,7 +16358,7 @@ async function runSwapDnaPair({ invert = false, fromQueue = false } = {}) {
 
   try {
     await invoke("write_pty", {
-      data: `/swap_dna ${quoteForPtyArg(structure.path)} ${quoteForPtyArg(surface.path)}\n`,
+      data: `${PTY_COMMANDS.SWAP_DNA} ${quoteForPtyArg(structure.path)} ${quoteForPtyArg(surface.path)}\n`,
     });
   } catch (err) {
     console.error(err);
@@ -16734,7 +16416,7 @@ async function runBridgePair({ fromQueue = false } = {}) {
 
   try {
     await invoke("write_pty", {
-      data: `/bridge ${quoteForPtyArg(first.path)} ${quoteForPtyArg(second.path)}\n`,
+      data: `${PTY_COMMANDS.BRIDGE} ${quoteForPtyArg(first.path)} ${quoteForPtyArg(second.path)}\n`,
     });
   } catch (err) {
     console.error(err);
@@ -16790,7 +16472,7 @@ async function runArguePair({ fromQueue = false } = {}) {
 
   try {
     await invoke("write_pty", {
-      data: `/argue ${quoteForPtyArg(first.path)} ${quoteForPtyArg(second.path)}\n`,
+      data: `${PTY_COMMANDS.ARGUE} ${quoteForPtyArg(first.path)} ${quoteForPtyArg(second.path)}\n`,
     });
     bumpSessionApiCalls();
   } catch (err) {
@@ -16845,7 +16527,7 @@ async function runExtractRuleTriplet({ fromQueue = false } = {}) {
 
   try {
     await invoke("write_pty", {
-      data: `/extract_rule ${quoteForPtyArg(a.path)} ${quoteForPtyArg(b.path)} ${quoteForPtyArg(c.path)}\n`,
+      data: `${PTY_COMMANDS.EXTRACT_RULE} ${quoteForPtyArg(a.path)} ${quoteForPtyArg(b.path)} ${quoteForPtyArg(c.path)}\n`,
     });
     bumpSessionApiCalls();
   } catch (err) {
@@ -16900,7 +16582,7 @@ async function runOddOneOutTriplet({ fromQueue = false } = {}) {
 
   try {
     await invoke("write_pty", {
-      data: `/odd_one_out ${quoteForPtyArg(a.path)} ${quoteForPtyArg(b.path)} ${quoteForPtyArg(c.path)}\n`,
+      data: `${PTY_COMMANDS.ODD_ONE_OUT} ${quoteForPtyArg(a.path)} ${quoteForPtyArg(b.path)} ${quoteForPtyArg(c.path)}\n`,
     });
     bumpSessionApiCalls();
   } catch (err) {
@@ -16961,7 +16643,7 @@ async function runTriforceTriplet({ fromQueue = false } = {}) {
 
   try {
     await invoke("write_pty", {
-      data: `/triforce ${quoteForPtyArg(first.path)} ${quoteForPtyArg(second.path)} ${quoteForPtyArg(third.path)}\n`,
+      data: `${PTY_COMMANDS.TRIFORCE} ${quoteForPtyArg(first.path)} ${quoteForPtyArg(second.path)} ${quoteForPtyArg(third.path)}\n`,
     });
   } catch (err) {
     console.error(err);
@@ -17004,7 +16686,7 @@ async function runDiagnose({ fromQueue = false } = {}) {
   renderQuickActions();
 
   try {
-    await invoke("write_pty", { data: `/diagnose ${quoteForPtyArg(imgItem.path)}\n` });
+    await invoke("write_pty", { data: `${PTY_COMMANDS.DIAGNOSE} ${quoteForPtyArg(imgItem.path)}\n` });
     bumpSessionApiCalls();
   } catch (err) {
     console.error(err);
@@ -17052,9 +16734,9 @@ async function runRecast({ fromQueue = false } = {}) {
     const desired = "gemini-3-pro-image-preview";
     if (state.ptySpawned && desired && desired !== settings.imageModel) {
       state.engineImageModelRestore = settings.imageModel;
-      await invoke("write_pty", { data: `/image_model ${desired}\n` }).catch(() => {});
+      await invoke("write_pty", { data: `${PTY_COMMANDS.IMAGE_MODEL} ${desired}\n` }).catch(() => {});
     }
-    await invoke("write_pty", { data: `/recast ${quoteForPtyArg(imgItem.path)}\n` });
+    await invoke("write_pty", { data: `${PTY_COMMANDS.RECAST} ${quoteForPtyArg(imgItem.path)}\n` });
   } catch (err) {
     console.error(err);
     state.expectingArtifacts = false;
@@ -17410,11 +17092,11 @@ async function spawnEngine() {
     if (!spawned) throw lastErr;
 
     state.ptySpawned = true;
-    await invoke("write_pty", { data: `/text_model ${settings.textModel}\n` }).catch(() => {});
-    await invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
+    await invoke("write_pty", { data: `${PTY_COMMANDS.TEXT_MODEL} ${settings.textModel}\n` }).catch(() => {});
+    await invoke("write_pty", { data: `${PTY_COMMANDS.IMAGE_MODEL} ${settings.imageModel}\n` }).catch(() => {});
     const active = getActiveImage();
     if (active?.path) {
-      await invoke("write_pty", { data: `/use ${active.path}\n` }).catch(() => {});
+      await invoke("write_pty", { data: `${PTY_COMMANDS.USE} ${active.path}\n` }).catch(() => {});
       if (!active.visionDesc) scheduleVisionDescribe(active.path, { priority: true });
     }
     processDescribeQueue();
@@ -17506,18 +17188,59 @@ async function pollEventsFallback() {
   fallbackLineOffset = lines.length;
 }
 
+function handleMotherDesktopEvent(event) {
+  return handleEventLegacy(event);
+}
+
+function handleArtifactDesktopEvent(event) {
+  return handleEventLegacy(event);
+}
+
+function handleIntentDesktopEvent(event) {
+  return handleEventLegacy(event);
+}
+
+function handleDiagnosticsDesktopEvent(event) {
+  return handleEventLegacy(event);
+}
+
+function handleRecreateDesktopEvent(event) {
+  return handleEventLegacy(event);
+}
+
+let desktopEventHandlerMap = null;
+function getDesktopEventHandlerMap() {
+  if (desktopEventHandlerMap) return desktopEventHandlerMap;
+  desktopEventHandlerMap = createDesktopEventHandlerMap(DESKTOP_EVENT_TYPES, {
+    onMother: handleMotherDesktopEvent,
+    onArtifact: handleArtifactDesktopEvent,
+    onIntent: handleIntentDesktopEvent,
+    onDiagnostics: handleDiagnosticsDesktopEvent,
+    onRecreate: handleRecreateDesktopEvent,
+  });
+  return desktopEventHandlerMap;
+}
+
 async function handleEvent(event) {
   if (!event || typeof event !== "object") return;
-  if (event.type === "plan_preview") {
+  const type = String(event.type || "");
+  const handler = getDesktopEventHandlerMap().get(type);
+  if (!handler) return;
+  await handler(event);
+}
+
+async function handleEventLegacy(event) {
+  if (!event || typeof event !== "object") return;
+  if (event.type === DESKTOP_EVENT_TYPES.PLAN_PREVIEW) {
     const cached = Boolean(event?.plan && event.plan.cached);
     if (!cached) bumpSessionApiCalls();
     return;
   }
-  if (event.type === "version_created") {
+  if (event.type === DESKTOP_EVENT_TYPES.VERSION_CREATED) {
     motherIdleTrackVersionCreated(event);
     return;
   }
-  if (event.type === "mother_intent_inferred") {
+  if (event.type === DESKTOP_EVENT_TYPES.MOTHER_INTENT_INFERRED) {
     appendMotherTraceLog({
       kind: "intent_inferred_ignored",
       traceId: state.motherIdle?.telemetry?.traceId || null,
@@ -17527,7 +17250,7 @@ async function handleEvent(event) {
     }).catch(() => {});
     return;
   }
-  if (event.type === "mother_intent_infer_failed") {
+  if (event.type === DESKTOP_EVENT_TYPES.MOTHER_INTENT_INFER_FAILED) {
     appendMotherTraceLog({
       kind: "intent_infer_failed_ignored",
       traceId: state.motherIdle?.telemetry?.traceId || null,
@@ -17537,7 +17260,7 @@ async function handleEvent(event) {
     }).catch(() => {});
     return;
   }
-  if (event.type === "mother_prompt_compiled") {
+  if (event.type === DESKTOP_EVENT_TYPES.MOTHER_PROMPT_COMPILED) {
     const idle = state.motherIdle;
     if (!idle) return;
     const actionVersion = Number(event.action_version) || 0;
@@ -17565,7 +17288,7 @@ async function handleEvent(event) {
     });
     return;
   }
-  if (event.type === "mother_prompt_compile_failed") {
+  if (event.type === DESKTOP_EVENT_TYPES.MOTHER_PROMPT_COMPILE_FAILED) {
     const idle = state.motherIdle;
     if (!idle) return;
     if (!idle.pendingPromptCompile) return;
@@ -17589,7 +17312,7 @@ async function handleEvent(event) {
     });
     return;
   }
-  if (event.type === "artifact_created") {
+  if (event.type === DESKTOP_EVENT_TYPES.ARTIFACT_CREATED) {
     const id = event.artifact_id;
     const path = event.image_path;
     if (!id || !path) return;
@@ -17948,7 +17671,7 @@ async function handleEvent(event) {
     renderQuickActions();
     renderHudReadout();
     processActionQueue().catch(() => {});
-  } else if (event.type === "generation_failed") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.GENERATION_FAILED) {
     const idleDrafting = state.motherIdle?.phase === MOTHER_IDLE_STATES.DRAFTING;
     const idleDispatching = Boolean(state.motherIdle?.pendingDispatchToken);
     if (idleDrafting && idleDispatching) {
@@ -18120,7 +17843,7 @@ async function handleEvent(event) {
     chooseSpawnNodes();
     requestRender();
     processActionQueue().catch(() => {});
-  } else if (event.type === "cost_latency_update") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.COST_LATENCY_UPDATE) {
     state.lastCostLatency = {
       provider: event.provider,
       model: event.model,
@@ -18130,7 +17853,7 @@ async function handleEvent(event) {
       at: Date.now(),
     };
     renderHudReadout();
-  } else if (event.type === "canvas_context") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.CANVAS_CONTEXT) {
     const text = event.text;
     const isPartial = Boolean(event.partial);
     const aov = state.alwaysOnVision;
@@ -18180,7 +17903,7 @@ async function handleEvent(event) {
         : null;
       renderQuickActions();
     }
-  } else if (event.type === "canvas_context_failed") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.CANVAS_CONTEXT_FAILED) {
     const aov = state.alwaysOnVision;
     if (aov) {
       aov.pending = false;
@@ -18210,7 +17933,7 @@ async function handleEvent(event) {
 
         // Best-effort shutdown; the engine will ignore if not running.
         if (state.ptySpawned) {
-          invoke("write_pty", { data: "/canvas_context_rt_stop\n" }).catch(() => {});
+          invoke("write_pty", { data: `${PTY_COMMANDS.CANVAS_CONTEXT_RT_STOP}\n` }).catch(() => {});
         }
         setStatus("Engine: always-on vision disabled (canvas context failure)", true);
       }
@@ -18221,7 +17944,7 @@ async function handleEvent(event) {
     updateAlwaysOnVisionReadout();
     renderQuickActions();
     processActionQueue().catch(() => {});
-  } else if (event.type === "intent_icons") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.INTENT_ICONS) {
     const intent = state.intent;
     const ambient = state.intentAmbient;
     const motherIdle = state.motherIdle;
@@ -18574,7 +18297,7 @@ async function handleEvent(event) {
 
     requestRender();
     renderQuickActions();
-  } else if (event.type === "intent_icons_failed") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.INTENT_ICONS_FAILED) {
     const intent = state.intent;
     const ambient = state.intentAmbient;
     const motherIdle = state.motherIdle;
@@ -18684,7 +18407,7 @@ async function handleEvent(event) {
     if (!hardDisable && matchIntent && intentModeActive() && intent && !intent.forceChoice) {
       scheduleIntentInference({ immediate: false, reason: "retry" });
     }
-	  } else if (event.type === "image_description") {
+	  } else if (event.type === DESKTOP_EVENT_TYPES.IMAGE_DESCRIPTION) {
 	    const path = event.image_path;
 	    const desc = event.description;
 	    if (typeof path === "string" && typeof desc === "string" && desc.trim()) {
@@ -18701,14 +18424,9 @@ async function handleEvent(event) {
 	          break;
 	        }
 	      }
-	      if (state.describePendingPath === path) state.describePendingPath = null;
-	      describeQueued.delete(path);
-	      if (describeInFlightPath === path) {
-	        describeInFlightPath = null;
-	        clearTimeout(describeInFlightTimer);
-	        describeInFlightTimer = null;
-	        processDescribeQueue();
-	      }
+	      dropDescribeQueuedPath(path);
+	      const releasedSlot = clearDescribeInFlightPath(path);
+	      if (releasedSlot) processDescribeQueue();
 	      // Persist the new per-image description into run artifacts.
 	      scheduleVisualPromptWrite();
 	
@@ -18730,7 +18448,7 @@ async function handleEvent(event) {
 	      }
 	      if (getActiveImage()?.path === path) renderHudReadout();
 	    }
-	  } else if (event.type === "image_diagnosis") {
+	  } else if (event.type === DESKTOP_EVENT_TYPES.IMAGE_DIAGNOSIS) {
     const text = event.text;
     if (typeof text === "string" && text.trim()) {
       const diagPath = typeof event.image_path === "string" ? event.image_path : "";
@@ -18761,7 +18479,7 @@ async function handleEvent(event) {
       renderQuickActions();
       processActionQueue().catch(() => {});
     }
-  } else if (event.type === "image_diagnosis_failed") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.IMAGE_DIAGNOSIS_FAILED) {
     const diagPath = typeof event.image_path === "string" ? event.image_path : "";
     const pendingCanvas = state.pendingCanvasDiagnose;
     const isCanvasDiagnose = Boolean(pendingCanvas && pendingCanvas.imagePath === diagPath);
@@ -18779,7 +18497,7 @@ async function handleEvent(event) {
     updatePortraitIdle();
     renderQuickActions();
     processActionQueue().catch(() => {});
-  } else if (event.type === "image_argument") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.IMAGE_ARGUMENT) {
     const text = event.text;
     if (typeof text === "string" && text.trim()) {
       state.pendingArgue = null;
@@ -18796,7 +18514,7 @@ async function handleEvent(event) {
       renderQuickActions();
       processActionQueue().catch(() => {});
     }
-  } else if (event.type === "image_argument_failed") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.IMAGE_ARGUMENT_FAILED) {
     state.pendingArgue = null;
     const msg = event.error ? `Argue failed: ${event.error}` : "Argue failed.";
     setStatus(`Director: ${msg}`, true);
@@ -18804,7 +18522,7 @@ async function handleEvent(event) {
     updatePortraitIdle();
     renderQuickActions();
     processActionQueue().catch(() => {});
-  } else if (event.type === "image_dna_extracted") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.IMAGE_DNA_EXTRACTED) {
     const path = typeof event.image_path === "string" ? event.image_path : "";
     const matchedImageId = consumePendingEffectExtraction("dna", path);
     const resolvedImageId = matchedImageId || resolveExtractionEventImageIdByPath(path);
@@ -18832,7 +18550,7 @@ async function handleEvent(event) {
       }
       requestRender();
     }
-  } else if (event.type === "image_dna_extracted_failed") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.IMAGE_DNA_EXTRACTED_FAILED) {
     const path = typeof event.image_path === "string" ? event.image_path : "";
     const msg = event.error ? `Extract DNA failed: ${event.error}` : "Extract DNA failed.";
     showToast(msg, "error", 2600);
@@ -18843,7 +18561,7 @@ async function handleEvent(event) {
       renderQuickActions();
       processActionQueue().catch(() => {});
     }
-  } else if (event.type === "image_soul_extracted") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.IMAGE_SOUL_EXTRACTED) {
     const path = typeof event.image_path === "string" ? event.image_path : "";
     const matchedImageId = consumePendingEffectExtraction("soul", path);
     const resolvedImageId = matchedImageId || resolveExtractionEventImageIdByPath(path);
@@ -18867,7 +18585,7 @@ async function handleEvent(event) {
       }
       requestRender();
     }
-  } else if (event.type === "image_soul_extracted_failed") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.IMAGE_SOUL_EXTRACTED_FAILED) {
     const path = typeof event.image_path === "string" ? event.image_path : "";
     const msg = event.error ? `Soul Leech failed: ${event.error}` : "Soul Leech failed.";
     showToast(msg, "error", 2600);
@@ -18878,7 +18596,7 @@ async function handleEvent(event) {
       renderQuickActions();
       processActionQueue().catch(() => {});
     }
-  } else if (event.type === "triplet_rule") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.TRIPLET_RULE) {
     state.pendingExtractRule = null;
     const paths = Array.isArray(event.image_paths) ? event.image_paths : [];
     const principle = typeof event.principle === "string" ? event.principle.trim() : "";
@@ -18940,7 +18658,7 @@ async function handleEvent(event) {
     renderQuickActions();
     requestRender();
     processActionQueue().catch(() => {});
-  } else if (event.type === "triplet_rule_failed") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.TRIPLET_RULE_FAILED) {
     state.pendingExtractRule = null;
     const msg = event.error ? `Extract the Rule failed: ${event.error}` : "Extract the Rule failed.";
     setStatus(`Director: ${msg}`, true);
@@ -18948,7 +18666,7 @@ async function handleEvent(event) {
     updatePortraitIdle();
     renderQuickActions();
     processActionQueue().catch(() => {});
-  } else if (event.type === "triplet_odd_one_out") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.TRIPLET_ODD_ONE_OUT) {
     state.pendingOddOneOut = null;
     const paths = Array.isArray(event.image_paths) ? event.image_paths : [];
     const oddIndex = typeof event.odd_index === "number" ? event.odd_index : null;
@@ -19000,7 +18718,7 @@ async function handleEvent(event) {
     renderQuickActions();
     requestRender();
     processActionQueue().catch(() => {});
-  } else if (event.type === "triplet_odd_one_out_failed") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.TRIPLET_ODD_ONE_OUT_FAILED) {
     state.pendingOddOneOut = null;
     const msg = event.error ? `Odd One Out failed: ${event.error}` : "Odd One Out failed.";
     setStatus(`Director: ${msg}`, true);
@@ -19008,7 +18726,7 @@ async function handleEvent(event) {
     updatePortraitIdle();
     renderQuickActions();
     processActionQueue().catch(() => {});
-  } else if (event.type === "recreate_prompt_inferred") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.RECREATE_PROMPT_INFERRED) {
     const prompt = event.prompt;
     if (typeof prompt === "string") {
       state.lastRecreatePrompt = prompt;
@@ -19024,7 +18742,7 @@ async function handleEvent(event) {
       setStatus("Engine: recreate (zero-prompt) running…");
     }
     renderHudReadout();
-  } else if (event.type === "recreate_iteration_update") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.RECREATE_ITERATION_UPDATE) {
     const iter = event.iteration;
     const sim = event.similarity;
     if (typeof iter === "number") {
@@ -19032,7 +18750,7 @@ async function handleEvent(event) {
       setStatus(`Engine: recreate iter ${iter} (best ${pct})`);
     }
     renderHudReadout();
-  } else if (event.type === "recreate_done") {
+  } else if (event.type === DESKTOP_EVENT_TYPES.RECREATE_DONE) {
     state.pendingRecreate = null;
     setStatus("Engine: variations ready");
     setTip("Variations complete.");
@@ -21342,25 +21060,25 @@ function installCanvasHandlers() {
     }
   };
   resetCanvasCursor();
-  els.overlayCanvas.addEventListener("pointerenter", (event) => {
+  const handlePointerEnter = (event) => {
     resetCanvasCursor();
     if (!isReelSizeLocked()) return;
     reelTouchPulseFromCanvasPoint(canvasPointFromEvent(event), { down: false, lingerMs: REEL_TOUCH_MOVE_VISIBLE_MS });
     requestRender();
-  });
-  els.overlayCanvas.addEventListener("pointerleave", () => {
+  };
+  const handlePointerLeave = () => {
     resetCanvasCursor();
     if (!isReelSizeLocked()) return;
     clearReelTouchPulse();
     requestRender();
-  });
+  };
 
-  els.overlayCanvas.addEventListener("keydown", (event) => {
+  const handleOverlayKeyDown = (event) => {
     const key = String(event?.key || "");
     if (key !== "Enter" && key !== " ") return;
     const viewportOnlyMotion =
-      state.pointer.kind === "freeform_import" ||
-      state.pointer.kind === "freeform_wheel" ||
+      state.pointer.kind === POINTER_KINDS.FREEFORM_IMPORT ||
+      state.pointer.kind === POINTER_KINDS.FREEFORM_WHEEL ||
       (state.tool === "pan" && !state.pointer.kind);
     bumpInteraction({ semantic: !viewportOnlyMotion });
     event.preventDefault();
@@ -21385,10 +21103,10 @@ function installCanvasHandlers() {
 	        return;
 	      }
 	    }
-	    importPhotosAtCanvasPoint(canvasScreenCssToWorldCss(_defaultImportPointCss())).catch((err) => console.error(err));
-	  });
+		    importPhotosAtCanvasPoint(canvasScreenCssToWorldCss(_defaultImportPointCss())).catch((err) => console.error(err));
+		  };
 
-  els.overlayCanvas.addEventListener("contextmenu", (event) => {
+  const handleContextMenu = (event) => {
     bumpInteraction();
     closeMotherWheelMenu({ immediate: false });
     if (!getActiveImage()) return;
@@ -21406,9 +21124,9 @@ function installCanvasHandlers() {
     showImageMenuAt(canvasCssPointFromEvent(event), hit);
     // Prevent global "click outside" handlers from immediately closing the menu.
     event.stopPropagation();
-  });
+  };
 
-  els.overlayCanvas.addEventListener("pointerdown", (event) => {
+  const handlePointerDown = (event) => {
 			    closeMotherWheelMenu({ immediate: false });
 		    hideDesignateMenu();
 		    if (state.canvasMode === "multi") {
@@ -21430,7 +21148,7 @@ function installCanvasHandlers() {
             bumpInteraction({ semantic: false });
             els.overlayCanvas.setPointerCapture(event.pointerId);
             state.pointer.active = true;
-            state.pointer.kind = "mother_role_drag";
+            state.pointer.kind = POINTER_KINDS.MOTHER_ROLE_DRAG;
             state.pointer.imageId = String(motherRoleHit.imageId || "");
             state.pointer.role = String(motherRoleHit.role || "");
             state.pointer.startX = p.x;
@@ -21461,7 +21179,7 @@ function installCanvasHandlers() {
             bumpInteraction({ semantic: false });
             els.overlayCanvas.setPointerCapture(event.pointerId);
             state.pointer.active = true;
-            state.pointer.kind = "effect_token_drag";
+            state.pointer.kind = POINTER_KINDS.EFFECT_TOKEN_DRAG;
             state.pointer.imageId = String(effectTokenHit.imageId || "");
             state.pointer.startX = p.x;
             state.pointer.startY = p.y;
@@ -21570,13 +21288,13 @@ function installCanvasHandlers() {
 	            state.pointer.moved = false;
 	            if (intentActive) {
 	              // Keep legacy import behavior in forced intent mode.
-	              state.pointer.kind = "freeform_import";
+	              state.pointer.kind = POINTER_KINDS.FREEFORM_IMPORT;
 	              if (!state.intent.startedAt) {
 	                state.intent.rtState = "connecting";
 	              }
 	            } else {
 	              // Empty-space click in normal mode opens the Mother wheel on pointerup.
-	              state.pointer.kind = "freeform_wheel";
+	              state.pointer.kind = POINTER_KINDS.FREEFORM_WHEEL;
 	            }
 	            requestRender();
 	            return;
@@ -21597,7 +21315,7 @@ function installCanvasHandlers() {
 		        const rectCss = state.freeformRects.get(hit) || null;
 		        els.overlayCanvas.setPointerCapture(event.pointerId);
 		        state.pointer.active = true;
-		        state.pointer.kind = cornerHit ? "freeform_resize" : "freeform_move";
+		        state.pointer.kind = cornerHit ? POINTER_KINDS.FREEFORM_RESIZE : POINTER_KINDS.FREEFORM_MOVE;
 		        state.pointer.imageId = hit;
 		        state.pointer.corner = cornerHit;
 		        state.pointer.startX = p.x;
@@ -21735,7 +21453,7 @@ function installCanvasHandlers() {
 
 		    els.overlayCanvas.setPointerCapture(event.pointerId);
 		    state.pointer.active = true;
-		    state.pointer.kind = state.tool === "pan" ? "single_pan" : null;
+		    state.pointer.kind = state.tool === "pan" ? POINTER_KINDS.SINGLE_PAN : null;
 		    state.pointer.importPointCss = { x: pCss.x, y: pCss.y };
 		    state.pointer.startX = p.x;
 		    state.pointer.startY = p.y;
@@ -21786,9 +21504,9 @@ function installCanvasHandlers() {
 	      state.lassoDraft = [canvasToImage(p)];
 	      requestRender();
     }
-  });
+	  };
 
-  els.overlayCanvas.addEventListener("pointermove", (event) => {
+  const handlePointerMove = (event) => {
     const p = canvasPointFromEvent(event);
     const pCss = canvasCssPointFromEvent(event);
     if (isReelSizeLocked()) {
@@ -21870,16 +21588,16 @@ function installCanvasHandlers() {
     }
 
     // Keep move/resize affordances during active drags.
-    if (state.pointer.kind === "freeform_resize") {
+    if (state.pointer.kind === POINTER_KINDS.FREEFORM_RESIZE) {
       const corner = state.pointer.corner;
       if (corner) {
         setOverlayCursor(corner === "nw" || corner === "se" ? "nwse-resize" : "nesw-resize");
       }
-    } else if (state.pointer.kind === "freeform_move") {
+    } else if (state.pointer.kind === POINTER_KINDS.FREEFORM_MOVE) {
       setOverlayCursor("grabbing");
-    } else if (state.pointer.kind === "effect_token_drag") {
+    } else if (state.pointer.kind === POINTER_KINDS.EFFECT_TOKEN_DRAG) {
       setOverlayCursor("grabbing");
-    } else if (state.pointer.kind === "freeform_import" || state.pointer.kind === "freeform_wheel") {
+    } else if (state.pointer.kind === POINTER_KINDS.FREEFORM_IMPORT || state.pointer.kind === POINTER_KINDS.FREEFORM_WHEEL) {
       setOverlayCursor(INTENT_IMPORT_CURSOR);
     }
 
@@ -21888,7 +21606,7 @@ function installCanvasHandlers() {
 		    state.pointer.lastX = p.x;
 		    state.pointer.lastY = p.y;
 
-    if (state.pointer.kind === "mother_role_drag") {
+    if (state.pointer.kind === POINTER_KINDS.MOTHER_ROLE_DRAG) {
       bumpInteraction({ semantic: false });
 	      const drag = state.motherIdle?.roleGlyphDrag || null;
 	      const dist = Math.hypot(dx, dy);
@@ -21901,7 +21619,7 @@ function installCanvasHandlers() {
 	      requestRender();
 	      return;
 	    }
-    if (state.pointer.kind === "effect_token_drag") {
+    if (state.pointer.kind === POINTER_KINDS.EFFECT_TOKEN_DRAG) {
       bumpInteraction({ semantic: false });
       const drag = state.effectTokenDrag;
       const dist = Math.hypot(dx, dy);
@@ -21927,7 +21645,7 @@ function installCanvasHandlers() {
       return;
     }
 
-    if (state.pointer.kind === "freeform_move" || state.pointer.kind === "freeform_resize") {
+    if (state.pointer.kind === POINTER_KINDS.FREEFORM_MOVE || state.pointer.kind === POINTER_KINDS.FREEFORM_RESIZE) {
       const dragDistCss = Math.hypot(
         (Number(pCss.x) || 0) - state.pointer.startCssX,
         (Number(pCss.y) || 0) - state.pointer.startCssY
@@ -21938,12 +21656,12 @@ function installCanvasHandlers() {
     }
 
 	    // Freeform interactions (multi canvas + pan tool).
-    if (state.pointer.kind === "freeform_import" || state.pointer.kind === "freeform_wheel") {
+    if (state.pointer.kind === POINTER_KINDS.FREEFORM_IMPORT || state.pointer.kind === POINTER_KINDS.FREEFORM_WHEEL) {
       const dist = Math.hypot((Number(pCss.x) || 0) - state.pointer.startCssX, (Number(pCss.y) || 0) - state.pointer.startCssY);
       if (dist > 6) state.pointer.moved = true;
       return;
     }
-    if (state.pointer.kind === "freeform_move" && state.pointer.imageId) {
+    if (state.pointer.kind === POINTER_KINDS.FREEFORM_MOVE && state.pointer.imageId) {
       const id = state.pointer.imageId;
       const startRect = state.pointer.startRectCss || state.freeformRects.get(id) || null;
       if (!startRect) return;
@@ -21975,7 +21693,7 @@ function installCanvasHandlers() {
       requestRender();
       return;
     }
-    if (state.pointer.kind === "freeform_resize" && state.pointer.imageId) {
+    if (state.pointer.kind === POINTER_KINDS.FREEFORM_RESIZE && state.pointer.imageId) {
       const id = state.pointer.imageId;
       const startRect = state.pointer.startRectCss || state.freeformRects.get(id) || null;
       if (!startRect) return;
@@ -22023,7 +21741,7 @@ function installCanvasHandlers() {
 			      return;
 			    }
 	    if (state.tool === "pan") {
-	      if (state.pointer.kind === "single_pan") {
+	      if (state.pointer.kind === POINTER_KINDS.SINGLE_PAN) {
 	        const dist = Math.hypot((Number(pCss.x) || 0) - state.pointer.startCssX, (Number(pCss.y) || 0) - state.pointer.startCssY);
 	        if (!state.pointer.moved && dist <= 6) return;
 	        state.pointer.moved = true;
@@ -22039,8 +21757,8 @@ function installCanvasHandlers() {
 	      requestRender();
 	      return;
 	    }
-		    if (state.tool === "lasso") {
-		      const imgPt = canvasToImage(p);
+    if (state.tool === "lasso") {
+      const imgPt = canvasToImage(p);
 		      const last = state.lassoDraft[state.lassoDraft.length - 1];
 		      const dist2 = (imgPt.x - last.x) ** 2 + (imgPt.y - last.y) ** 2;
 		      let scale = state.view.scale;
@@ -22064,7 +21782,7 @@ function installCanvasHandlers() {
         requestRender();
       }
     }
-  });
+  };
 
 		  function finalizePointer(event) {
 		    if (!state.pointer.active) return;
@@ -22094,18 +21812,18 @@ function installCanvasHandlers() {
           requestRender();
         }
         // Arm Mother idle timers against the settled interaction state (pointer no longer active).
-        const motherRoleDrag = kind === "mother_role_drag";
-        const effectTokenDrag = kind === "effect_token_drag";
+        const motherRoleDrag = isMotherRolePath(kind);
+        const effectTokenDrag = isEffectTokenPath(kind);
         if (!motherRoleDrag && !effectTokenDrag) {
-          const selectionOnly = (kind === "freeform_move" || kind === "freeform_resize") && !moved;
+          const selectionOnly = (kind === POINTER_KINDS.FREEFORM_MOVE || kind === POINTER_KINDS.FREEFORM_RESIZE) && !moved;
           bumpInteraction({ semantic: !selectionOnly });
         }
 
-		    if (moved && (kind === "freeform_move" || kind === "freeform_resize") && imageId) {
+		    if (moved && (kind === POINTER_KINDS.FREEFORM_MOVE || kind === POINTER_KINDS.FREEFORM_RESIZE) && imageId) {
 		      const start = startRectCss && typeof startRectCss === "object" ? startRectCss : null;
 		      const end = state.freeformRects.get(imageId) || null;
 		      if (start && end) {
-		        recordUserEvent(kind === "freeform_move" ? "image_move" : "image_resize", {
+		        recordUserEvent(kind === POINTER_KINDS.FREEFORM_MOVE ? "image_move" : "image_resize", {
 		          image_id: String(imageId),
 		          corner: corner ? String(corner) : null,
 		          start: {
@@ -22122,11 +21840,11 @@ function installCanvasHandlers() {
 			          },
 			        });
 		      }
-          markAlwaysOnVisionDirty(kind === "freeform_move" ? "image_move" : "image_resize");
+          markAlwaysOnVisionDirty(kind === POINTER_KINDS.FREEFORM_MOVE ? "image_move" : "image_resize");
           scheduleAlwaysOnVision();
 		    }
 
-			    if (kind === "freeform_import") {
+			    if (kind === POINTER_KINDS.FREEFORM_IMPORT) {
 			      if (!moved && importPt) {
               const worldPt = canvasScreenCssToWorldCss(importPt);
 			        recordUserEvent("canvas_import_click", {
@@ -22136,7 +21854,7 @@ function installCanvasHandlers() {
 			        importPhotosAtCanvasPoint(worldPt).catch((err) => console.error(err));
 			      }
 			    }
-			    if (kind === "freeform_wheel") {
+			    if (kind === POINTER_KINDS.FREEFORM_WHEEL) {
 			      if (!moved && importPt) {
               const opened = openMotherWheelMenuAt(importPt);
               if (opened) {
@@ -22147,7 +21865,7 @@ function installCanvasHandlers() {
               }
 			      }
 			    }
-          if (kind === "single_pan") {
+          if (kind === POINTER_KINDS.SINGLE_PAN) {
             if (!moved && importPt) {
               const opened = openMotherWheelMenuAt(importPt);
               if (opened) {
@@ -22158,7 +21876,7 @@ function installCanvasHandlers() {
               }
             }
           }
-          if (kind === "mother_role_drag") {
+          if (isMotherRolePath(kind)) {
             bumpInteraction({ semantic: false });
             const idle = state.motherIdle;
             const role = String(roleKey || idle?.roleGlyphDrag?.role || "").trim();
@@ -22191,7 +21909,7 @@ function installCanvasHandlers() {
             renderMotherReadout();
             requestRender();
           }
-          if (kind === "effect_token_drag") {
+          if (isEffectTokenPath(kind)) {
             bumpInteraction({ semantic: false });
             const drag = state.effectTokenDrag || null;
             const tokenId = String(drag?.tokenId || "").trim();
@@ -22311,15 +22029,23 @@ function installCanvasHandlers() {
     }
   }
 
-  els.overlayCanvas.addEventListener("pointerup", finalizePointer);
-  els.overlayCanvas.addEventListener("pointercancel", finalizePointer);
+  installCanvasPointerHandlers(els.overlayCanvas, {
+    onPointerEnter: handlePointerEnter,
+    onPointerLeave: handlePointerLeave,
+    onContextMenu: handleContextMenu,
+    onPointerDown: handlePointerDown,
+    onPointerMove: handlePointerMove,
+    onPointerUp: finalizePointer,
+    onPointerCancel: finalizePointer,
+  });
+  installCanvasKeyboardHandlers(els.overlayCanvas, {
+    onKeyDown: handleOverlayKeyDown,
+  });
 
-  els.overlayCanvas.addEventListener(
-    "wheel",
-    (event) => {
+  const handleOverlayWheel = (event) => {
       bumpInteraction({ motherHot: false, semantic: false });
       if (!state.images || state.images.length === 0) return;
-	      event.preventDefault();
+		      event.preventDefault();
 	
 	      const dpr = getDpr();
 	      // UX: two-finger swipe up/down zooms (not pan). Horizontal swipe pans.
@@ -22394,12 +22120,13 @@ function installCanvasHandlers() {
 	        state.view.offsetX = p.x - before.x * state.view.scale;
 	        state.view.offsetY = p.y - before.y * state.view.scale;
 	      }
-	      renderHudReadout();
-	      scheduleVisualPromptWrite();
-	      requestRender();
-	    },
-	    { passive: false }
-	  );
+		      renderHudReadout();
+		      scheduleVisualPromptWrite();
+		      requestRender();
+		    };
+  installCanvasWheelHandlers(els.overlayCanvas, {
+    onWheel: handleOverlayWheel,
+  });
 
     // WKWebView/Safari trackpad pinch-to-zoom is exposed via non-standard gesture events.
     // If we only listen for wheel+ctrlKey, users can lose pinch zoom.
@@ -22464,13 +22191,15 @@ function installCanvasHandlers() {
       state.gestureZoom.active = false;
       state.gestureZoom.lastScale = 1;
     };
-    try {
-      els.overlayCanvas.addEventListener("gesturestart", onGestureStart, { passive: false });
-      els.overlayCanvas.addEventListener("gesturechange", onGestureChange, { passive: false });
-      els.overlayCanvas.addEventListener("gestureend", onGestureEnd, { passive: false });
-    } catch {
-      // ignore
-    }
+	    try {
+      installCanvasGestureHandlers(els.overlayCanvas, {
+        onGestureStart,
+        onGestureChange,
+        onGestureEnd,
+      });
+	    } catch {
+	      // ignore
+	    }
 		}
 
 function installDnD() {
@@ -22516,6 +22245,7 @@ function installDnD() {
     const inputsDir = `${state.runDir}/inputs`;
     await createDir(inputsDir, { recursive: true }).catch(() => {});
     const stamp = Date.now();
+    const importedVisionPaths = [];
     for (let idx = 0; idx < paths.length; idx += 1) {
       const src = paths[idx];
       const ext = extname(src);
@@ -22539,7 +22269,13 @@ function installDnD() {
         },
         { select: idx === 0 && !state.activeId }
       );
+      importedVisionPaths.push(dest);
     }
+    motherV2ArmMultiUploadIdleBoost(importedVisionPaths.length);
+    scheduleVisionDescribeBurst(importedVisionPaths, {
+      priority: true,
+      maxConcurrent: UPLOAD_DESCRIBE_PRIORITY_BURST,
+    });
     setStatus(`Engine: imported ${paths.length} dropped file${paths.length === 1 ? "" : "s"}`);
     if (state.images.length > 1) {
       setCanvasMode("multi");
@@ -22985,7 +22721,7 @@ function installUi() {
         ensureEngineSpawned({ reason: "always-on vision" })
           .then((ok) => {
             if (!ok) return;
-            return invoke("write_pty", { data: "/canvas_context_rt_start\n" }).catch(() => {});
+            return invoke("write_pty", { data: `${PTY_COMMANDS.CANVAS_CONTEXT_RT_START}\n` }).catch(() => {});
           })
           .catch(() => {});
         scheduleAlwaysOnVision({ immediate: true });
@@ -22993,7 +22729,7 @@ function installUi() {
         setStatus("Engine: always-on vision disabled");
         updatePortraitIdle({ fromSettings: true });
         if (state.ptySpawned) {
-          invoke("write_pty", { data: "/canvas_context_rt_stop\n" }).catch(() => {});
+          invoke("write_pty", { data: `${PTY_COMMANDS.CANVAS_CONTEXT_RT_STOP}\n` }).catch(() => {});
         }
       }
     });
@@ -23022,7 +22758,7 @@ function installUi() {
       localStorage.setItem("brood.textModel", settings.textModel);
       updatePortraitIdle({ fromSettings: true });
       if (state.ptySpawned) {
-        invoke("write_pty", { data: `/text_model ${settings.textModel}\n` }).catch(() => {});
+        invoke("write_pty", { data: `${PTY_COMMANDS.TEXT_MODEL} ${settings.textModel}\n` }).catch(() => {});
       }
     });
   }
@@ -23034,7 +22770,7 @@ function installUi() {
       localStorage.setItem("brood.imageModel", settings.imageModel);
       updatePortraitIdle({ fromSettings: true });
       if (state.ptySpawned) {
-        invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
+        invoke("write_pty", { data: `${PTY_COMMANDS.IMAGE_MODEL} ${settings.imageModel}\n` }).catch(() => {});
       }
     });
   }

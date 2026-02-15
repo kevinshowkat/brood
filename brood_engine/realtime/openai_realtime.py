@@ -63,18 +63,22 @@ def _is_mother_intent_snapshot_path(image_path: str) -> bool:
     return name.startswith("mother-intent-")
 
 
-class CanvasContextRealtimeSession:
-    """Background OpenAI Realtime session that streams Canvas Context text."""
+class _BaseRealtimeSnapshotSession:
+    """Shared OpenAI Realtime session runner for snapshot-driven background tasks."""
 
-    def __init__(self, events: EventWriter) -> None:
+    def __init__(
+        self,
+        events: EventWriter,
+        *,
+        model: str,
+        disabled: bool,
+        thread_name: str,
+    ) -> None:
         self._events = events
-        self._model = _resolve_realtime_model(
-            ("BROOD_CANVAS_CONTEXT_REALTIME_MODEL", "OPENAI_CANVAS_CONTEXT_REALTIME_MODEL"),
-            default="gpt-realtime-mini",
-        )
-
+        self._model = model
+        self._disabled = bool(disabled)
+        self._thread_name = str(thread_name or "brood-realtime")
         self._api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY_BACKUP")
-        self._disabled = os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_DISABLED") == "1"
 
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -84,7 +88,7 @@ class CanvasContextRealtimeSession:
 
     def start(self) -> tuple[bool, str | None]:
         if self._disabled:
-            return False, "Realtime canvas context is disabled (BROOD_CANVAS_CONTEXT_REALTIME_DISABLED=1)."
+            return False, self._disabled_message()
         if not self._api_key:
             return False, "Missing OPENAI_API_KEY (or OPENAI_API_KEY_BACKUP)."
         try:
@@ -97,7 +101,7 @@ class CanvasContextRealtimeSession:
                 return True, None
             self._fatal_error = None
             self._stop.clear()
-            self._thread = threading.Thread(target=self._thread_main, name="brood-aov-realtime", daemon=True)
+            self._thread = threading.Thread(target=self._thread_main, name=self._thread_name, daemon=True)
             self._thread.start()
         return True, None
 
@@ -114,11 +118,9 @@ class CanvasContextRealtimeSession:
 
     def submit_snapshot(self, snapshot_path: Path) -> tuple[bool, str | None]:
         if self._disabled:
-            return False, "Realtime canvas context is disabled (BROOD_CANVAS_CONTEXT_REALTIME_DISABLED=1)."
+            return False, self._disabled_message()
         if not snapshot_path.exists():
             return False, f"Snapshot not found: {snapshot_path}"
-        # Desktop callers can treat `/canvas_context_rt_start` as optional; if a session isn't
-        # running yet, auto-start it on demand for robustness.
         with self._lock:
             fatal = self._fatal_error
             alive = bool(self._thread and self._thread.is_alive())
@@ -128,13 +130,48 @@ class CanvasContextRealtimeSession:
             ok, err = self.start()
             if not ok:
                 return False, err
-            # Re-check for a fatal error set during (or immediately after) thread startup.
             with self._lock:
                 if self._fatal_error:
                     return False, self._fatal_error
         job = CanvasContextJob(image_path=str(snapshot_path), submitted_at_ms=int(time.time() * 1000))
         self._jobs.put(job)
         return True, None
+
+    def _disabled_message(self) -> str:
+        raise NotImplementedError
+
+    def _instruction(self) -> str:
+        raise NotImplementedError
+
+    def _max_output_tokens(self) -> int:
+        raise NotImplementedError
+
+    def _timeout_message(self) -> str:
+        raise NotImplementedError
+
+    def _empty_response_message(self, response: Any) -> str:
+        raise NotImplementedError
+
+    def _emit_stream_payload(
+        self,
+        image_path: str,
+        text: str,
+        *,
+        partial: bool,
+        response_meta: dict[str, Any] | None = None,
+    ) -> None:
+        raise NotImplementedError
+
+    def _emit_failed(self, image_path: str | None, error: str, *, fatal: bool) -> None:
+        raise NotImplementedError
+
+    def _select_job(self, jobs: list[CanvasContextJob]) -> CanvasContextJob:
+        # Default queue policy: latest-wins.
+        return jobs[-1]
+
+    def _set_fatal_error(self, message: str) -> None:
+        with self._lock:
+            self._fatal_error = str(message or "").strip() or "Unknown realtime error."
 
     def _thread_main(self) -> None:
         try:
@@ -154,8 +191,6 @@ class CanvasContextRealtimeSession:
         ]
 
         try:
-            # websockets renamed `extra_headers` -> `additional_headers` (>=14). Avoid passing
-            # an unknown kwarg because websockets forwards it to `loop.create_connection()`.
             connect_kwargs: dict[str, Any] = {"ping_interval": 20, "ping_timeout": 20}
             try:
                 sig = inspect.signature(websockets.connect)
@@ -172,13 +207,11 @@ class CanvasContextRealtimeSession:
                         {
                             "type": "session.update",
                             "session": {
-                                "instructions": _canvas_context_instruction(),
-                                # Realtime sessions use `modalities` (not `output_modalities`).
-                                # Setting ["text"] disables audio outputs.
+                                "instructions": self._instruction(),
                                 "modalities": ["text"],
-                                # Temperature is clamped by the API; keep at the minimum for consistent context.
+                                # JSON/text-only: keep temperature at API minimum for stability.
                                 "temperature": 0.6,
-                                "max_response_output_tokens": _CANVAS_CONTEXT_MAX_OUTPUT_TOKENS,
+                                "max_response_output_tokens": self._max_output_tokens(),
                             },
                         }
                     )
@@ -191,13 +224,13 @@ class CanvasContextRealtimeSession:
 
     async def _job_loop(self, ws: Any) -> None:
         while not self._stop.is_set():
-            job = await asyncio.to_thread(self._jobs.get)
-            if job is _STOP:
+            item = await asyncio.to_thread(self._jobs.get)
+            if item is _STOP:
                 break
-            if not isinstance(job, CanvasContextJob):
+            if not isinstance(item, CanvasContextJob):
                 continue
 
-            # Latest-wins: if several snapshots queued up, keep only the last one.
+            jobs: list[CanvasContextJob] = [item]
             while True:
                 try:
                     nxt = self._jobs.get_nowait()
@@ -207,11 +240,11 @@ class CanvasContextRealtimeSession:
                     self._stop.set()
                     break
                 if isinstance(nxt, CanvasContextJob):
-                    job = nxt
+                    jobs.append(nxt)
 
             if self._stop.is_set():
                 break
-            await self._run_job(ws, job)
+            await self._run_job(ws, self._select_job(jobs))
 
     async def _run_job(self, ws: Any, job: CanvasContextJob) -> None:
         data_url = _read_image_as_data_url(Path(job.image_path))
@@ -225,7 +258,7 @@ class CanvasContextRealtimeSession:
                 {
                     "type": "response.create",
                     "response": {
-                        # Out-of-band: avoid growing conversation state inside the persistent session.
+                        # Out-of-band to avoid growing conversation state in a persistent session.
                         "conversation": "none",
                         "modalities": ["text"],
                         "input": [
@@ -235,7 +268,7 @@ class CanvasContextRealtimeSession:
                                 "content": content,
                             }
                         ],
-                        "max_output_tokens": _CANVAS_CONTEXT_MAX_OUTPUT_TOKENS,
+                        "max_output_tokens": self._max_output_tokens(),
                     },
                 }
             )
@@ -248,7 +281,7 @@ class CanvasContextRealtimeSession:
 
         while not self._stop.is_set():
             if time.monotonic() - started_s > 42.0:
-                msg = "Realtime canvas context timed out."
+                msg = self._timeout_message()
                 self._set_fatal_error(msg)
                 self._emit_failed(job.image_path, msg, fatal=True)
                 self._stop.set()
@@ -281,11 +314,11 @@ class CanvasContextRealtimeSession:
             if event_type == "response.output_text.delta":
                 delta = event.get("delta") or event.get("text")
                 if isinstance(delta, str) and delta:
-                    buffer = _merge_stream_text(buffer, delta)
+                    buffer = _append_stream_delta(buffer, delta)
                 now_s = time.monotonic()
                 if buffer.strip() and now_s - last_emit_s >= 0.25:
                     last_emit_s = now_s
-                    self._emit_canvas_context(job.image_path, buffer, partial=True)
+                    self._emit_stream_payload(job.image_path, buffer, partial=True)
                 continue
             if event_type == "response.output_text.done":
                 text = event.get("text") or event.get("output_text")
@@ -294,23 +327,53 @@ class CanvasContextRealtimeSession:
                 continue
 
             if event_type == "response.done":
-                # Guard in case a previous response's done arrives late.
                 resp = event.get("response")
                 if response_id and isinstance(resp, dict) and isinstance(resp.get("id"), str):
                     if resp["id"] != response_id:
                         continue
                 cleaned, response_meta = _resolve_streamed_response_text(buffer, resp)
                 if not cleaned:
-                    meta = _summarize_realtime_response(resp)
-                    msg = f"Empty realtime canvas context response.{meta}"
+                    msg = self._empty_response_message(resp)
                     self._emit_failed(job.image_path, msg, fatal=True)
                     self._set_fatal_error(msg)
                     self._stop.set()
                     return
-                self._emit_canvas_context(job.image_path, cleaned, partial=False, response_meta=response_meta)
+                self._emit_stream_payload(job.image_path, cleaned, partial=False, response_meta=response_meta)
                 return
 
-    def _emit_canvas_context(
+
+class CanvasContextRealtimeSession(_BaseRealtimeSnapshotSession):
+    """Background OpenAI Realtime session that streams Canvas Context text."""
+
+    def __init__(self, events: EventWriter) -> None:
+        model = _resolve_realtime_model(
+            ("BROOD_CANVAS_CONTEXT_REALTIME_MODEL", "OPENAI_CANVAS_CONTEXT_REALTIME_MODEL"),
+            default="gpt-realtime-mini",
+        )
+        super().__init__(
+            events,
+            model=model,
+            disabled=os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_DISABLED") == "1",
+            thread_name="brood-aov-realtime",
+        )
+
+    def _disabled_message(self) -> str:
+        return "Realtime canvas context is disabled (BROOD_CANVAS_CONTEXT_REALTIME_DISABLED=1)."
+
+    def _instruction(self) -> str:
+        return _canvas_context_instruction()
+
+    def _max_output_tokens(self) -> int:
+        return _CANVAS_CONTEXT_MAX_OUTPUT_TOKENS
+
+    def _timeout_message(self) -> str:
+        return "Realtime canvas context timed out."
+
+    def _empty_response_message(self, response: Any) -> str:
+        meta = _summarize_realtime_response(response)
+        return f"Empty realtime canvas context response.{meta}"
+
+    def _emit_stream_payload(
         self,
         image_path: str,
         text: str,
@@ -341,12 +404,8 @@ class CanvasContextRealtimeSession:
             payload["fatal"] = True
         self._events.emit("canvas_context_failed", **payload)
 
-    def _set_fatal_error(self, message: str) -> None:
-        with self._lock:
-            self._fatal_error = str(message or "").strip() or "Unknown realtime error."
 
-
-class IntentIconsRealtimeSession:
+class IntentIconsRealtimeSession(_BaseRealtimeSnapshotSession):
     """Background OpenAI Realtime session that streams intent-icon JSON for the spatial canvas."""
 
     def __init__(
@@ -357,251 +416,44 @@ class IntentIconsRealtimeSession:
         model_env_keys: tuple[str, ...] = ("BROOD_INTENT_REALTIME_MODEL", "OPENAI_INTENT_REALTIME_MODEL"),
         default_model: str = "gpt-realtime-mini",
     ) -> None:
-        self._events = events
-        self._model = (
+        resolved_model = (
             _normalize_realtime_model_name(model, default=default_model)
             if model is not None
             else _resolve_realtime_model(model_env_keys, default=default_model)
         )
-
-        self._api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY_BACKUP")
-        self._disabled = os.getenv("BROOD_INTENT_REALTIME_DISABLED") == "1"
-
-        self._lock = threading.Lock()
-        self._thread: threading.Thread | None = None
-        self._stop = threading.Event()
-        self._jobs: queue.Queue[object] = queue.Queue()
-        self._fatal_error: str | None = None
-
-    def start(self) -> tuple[bool, str | None]:
-        if self._disabled:
-            return False, "Realtime intent inference is disabled (BROOD_INTENT_REALTIME_DISABLED=1)."
-        if not self._api_key:
-            return False, "Missing OPENAI_API_KEY (or OPENAI_API_KEY_BACKUP)."
-        try:
-            import websockets  # noqa: F401
-        except Exception:
-            return False, "Missing dependency: websockets (pip install websockets)."
-
-        with self._lock:
-            if self._thread and self._thread.is_alive():
-                return True, None
-            self._fatal_error = None
-            self._stop.clear()
-            self._thread = threading.Thread(target=self._thread_main, name="brood-intent-realtime", daemon=True)
-            self._thread.start()
-        return True, None
-
-    def stop(self, *, join_timeout_s: float = 2.0) -> None:
-        with self._lock:
-            thread = self._thread
-            self._stop.set()
-            self._jobs.put(_STOP)
-        if thread:
-            thread.join(timeout=max(0.0, float(join_timeout_s)))
-        with self._lock:
-            if self._thread and not self._thread.is_alive():
-                self._thread = None
-
-    def submit_snapshot(self, snapshot_path: Path) -> tuple[bool, str | None]:
-        if self._disabled:
-            return False, "Realtime intent inference is disabled (BROOD_INTENT_REALTIME_DISABLED=1)."
-        if not snapshot_path.exists():
-            return False, f"Snapshot not found: {snapshot_path}"
-        # Desktop callers can treat `/intent_rt_start` as optional; if a session isn't
-        # running yet, auto-start it on demand for robustness.
-        with self._lock:
-            fatal = self._fatal_error
-            alive = bool(self._thread and self._thread.is_alive())
-        if fatal:
-            return False, fatal
-        if not alive:
-            ok, err = self.start()
-            if not ok:
-                return False, err
-            with self._lock:
-                if self._fatal_error:
-                    return False, self._fatal_error
-        job = CanvasContextJob(image_path=str(snapshot_path), submitted_at_ms=int(time.time() * 1000))
-        self._jobs.put(job)
-        return True, None
-
-    def _thread_main(self) -> None:
-        try:
-            asyncio.run(self._async_main())
-        except Exception as exc:
-            msg = f"Realtime session crashed: {exc}"
-            self._set_fatal_error(msg)
-            self._emit_failed(None, msg, fatal=True)
-
-    async def _async_main(self) -> None:
-        import websockets
-
-        ws_url = _openai_realtime_ws_url(self._model)
-        headers = [
-            ("Authorization", f"Bearer {self._api_key}"),
-            _REALTIME_BETA_HEADER,
-        ]
-
-        try:
-            connect_kwargs: dict[str, Any] = {"ping_interval": 20, "ping_timeout": 20}
-            try:
-                sig = inspect.signature(websockets.connect)
-                if "additional_headers" in sig.parameters:
-                    connect_kwargs["additional_headers"] = headers
-                else:
-                    connect_kwargs["extra_headers"] = headers
-            except Exception:
-                connect_kwargs["additional_headers"] = headers
-
-            async with websockets.connect(ws_url, **connect_kwargs) as ws:
-                await ws.send(
-                    json.dumps(
-                        {
-                            "type": "session.update",
-                            "session": {
-                                "instructions": _intent_icons_instruction(),
-                                "modalities": ["text"],
-                                # JSON-only: keep temperature at the API minimum for stable schemas.
-                                "temperature": 0.6,
-                                "max_response_output_tokens": _INTENT_ICONS_MAX_OUTPUT_TOKENS,
-                            },
-                        }
-                    )
-                )
-                await self._job_loop(ws)
-        except Exception as exc:
-            msg = f"Realtime connection failed: {exc}"
-            self._set_fatal_error(msg)
-            self._emit_failed(None, msg, fatal=True)
-
-    async def _job_loop(self, ws: Any) -> None:
-        while not self._stop.is_set():
-            job = await asyncio.to_thread(self._jobs.get)
-            if job is _STOP:
-                break
-            if not isinstance(job, CanvasContextJob):
-                continue
-
-            # Latest-wins, but prefer mother proposal snapshots when mixed with ambient traffic.
-            # This prevents Mother proposal intents from being superseded and falling back.
-            latest_job = job
-            latest_mother_job = job if _is_mother_intent_snapshot_path(job.image_path) else None
-            while True:
-                try:
-                    nxt = self._jobs.get_nowait()
-                except queue.Empty:
-                    break
-                if nxt is _STOP:
-                    self._stop.set()
-                    break
-                if isinstance(nxt, CanvasContextJob):
-                    latest_job = nxt
-                    if _is_mother_intent_snapshot_path(nxt.image_path):
-                        latest_mother_job = nxt
-
-            job = latest_mother_job or latest_job
-
-            if self._stop.is_set():
-                break
-            await self._run_job(ws, job)
-
-    async def _run_job(self, ws: Any, job: CanvasContextJob) -> None:
-        data_url = _read_image_as_data_url(Path(job.image_path))
-        context_text = _read_canvas_context_envelope(Path(job.image_path))
-        content: list[dict[str, Any]] = []
-        if context_text:
-            content.append({"type": "input_text", "text": context_text})
-        content.append({"type": "input_image", "image_url": data_url})
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "response.create",
-                    "response": {
-                        "conversation": "none",
-                        "modalities": ["text"],
-                        "input": [
-                            {
-                                "type": "message",
-                                "role": "user",
-                                "content": content,
-                            }
-                        ],
-                        "max_output_tokens": _INTENT_ICONS_MAX_OUTPUT_TOKENS,
-                    },
-                }
-            )
+        super().__init__(
+            events,
+            model=resolved_model,
+            disabled=os.getenv("BROOD_INTENT_REALTIME_DISABLED") == "1",
+            thread_name="brood-intent-realtime",
         )
 
-        buffer = ""
-        response_id: str | None = None
-        last_emit_s = 0.0
-        started_s = time.monotonic()
+    def _disabled_message(self) -> str:
+        return "Realtime intent inference is disabled (BROOD_INTENT_REALTIME_DISABLED=1)."
 
-        while not self._stop.is_set():
-            if time.monotonic() - started_s > 42.0:
-                msg = "Realtime intent inference timed out."
-                self._set_fatal_error(msg)
-                self._emit_failed(job.image_path, msg, fatal=True)
-                self._stop.set()
-                return
+    def _instruction(self) -> str:
+        return _intent_icons_instruction()
 
-            try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=0.5)
-            except asyncio.TimeoutError:
-                continue
+    def _max_output_tokens(self) -> int:
+        return _INTENT_ICONS_MAX_OUTPUT_TOKENS
 
-            try:
-                event = json.loads(raw)
-            except Exception:
-                continue
+    def _timeout_message(self) -> str:
+        return "Realtime intent inference timed out."
 
-            event_type = event.get("type")
-            if event_type == "error":
-                msg = _format_realtime_error(event)
-                self._set_fatal_error(msg)
-                self._emit_failed(job.image_path, msg, fatal=True)
-                self._stop.set()
-                return
+    def _empty_response_message(self, response: Any) -> str:
+        meta = _summarize_realtime_response(response)
+        return f"Empty realtime intent inference response.{meta}"
 
-            if event_type == "response.created":
-                resp = event.get("response")
-                if isinstance(resp, dict) and isinstance(resp.get("id"), str):
-                    response_id = resp["id"]
-                continue
+    def _select_job(self, jobs: list[CanvasContextJob]) -> CanvasContextJob:
+        # Latest-wins, but prefer mother proposal snapshots when mixed with ambient traffic.
+        latest_job = jobs[-1]
+        latest_mother_job: CanvasContextJob | None = None
+        for job in jobs:
+            if _is_mother_intent_snapshot_path(job.image_path):
+                latest_mother_job = job
+        return latest_mother_job or latest_job
 
-            if event_type == "response.output_text.delta":
-                delta = event.get("delta") or event.get("text")
-                if isinstance(delta, str) and delta:
-                    buffer = _merge_stream_text(buffer, delta)
-                now_s = time.monotonic()
-                if buffer.strip() and now_s - last_emit_s >= 0.25:
-                    last_emit_s = now_s
-                    self._emit_intent_icons(job.image_path, buffer, partial=True)
-                continue
-            if event_type == "response.output_text.done":
-                text = event.get("text") or event.get("output_text")
-                if isinstance(text, str) and text:
-                    buffer = _merge_stream_text(buffer, text)
-                continue
-
-            if event_type == "response.done":
-                resp = event.get("response")
-                if response_id and isinstance(resp, dict) and isinstance(resp.get("id"), str):
-                    if resp["id"] != response_id:
-                        continue
-                cleaned, response_meta = _resolve_streamed_response_text(buffer, resp)
-                if not cleaned:
-                    meta = _summarize_realtime_response(resp)
-                    msg = f"Empty realtime intent inference response.{meta}"
-                    self._emit_failed(job.image_path, msg, fatal=True)
-                    self._set_fatal_error(msg)
-                    self._stop.set()
-                    return
-                self._emit_intent_icons(job.image_path, cleaned, partial=False, response_meta=response_meta)
-                return
-
-    def _emit_intent_icons(
+    def _emit_stream_payload(
         self,
         image_path: str,
         text: str,
@@ -634,10 +486,6 @@ class IntentIconsRealtimeSession:
         if fatal:
             payload["fatal"] = True
         self._events.emit("intent_icons_failed", **payload)
-
-    def _set_fatal_error(self, message: str) -> None:
-        with self._lock:
-            self._fatal_error = str(message or "").strip() or "Unknown realtime error."
 
 
 def _openai_api_base_url() -> str:
@@ -692,21 +540,33 @@ def _format_realtime_error(event: dict[str, Any]) -> str:
 
 
 def _merge_stream_text(buffer: str, incoming: str) -> str:
-    """Merge streamed text chunks while avoiding duplicate concatenation."""
+    """Merge potentially overlapping streamed text snapshots."""
     left = str(buffer or "")
     right = str(incoming or "")
     if not right:
         return left
     if not left:
         return right
-    if right in left:
-        return left
-    if left in right:
+    # `response.output_text.done` / `response.done` may include a full snapshot.
+    if right.startswith(left):
         return right
     max_overlap = min(len(left), len(right))
     for size in range(max_overlap, 0, -1):
         if left.endswith(right[:size]):
+            # Treat full overlap as new content when appending deltas; true
+            # duplicate suppression for full snapshots is handled above.
+            if size == len(right):
+                break
             return left + right[size:]
+    return left + right
+
+
+def _append_stream_delta(buffer: str, incoming: str) -> str:
+    """Append delta chunks verbatim; repeated tokens are valid output."""
+    left = str(buffer or "")
+    right = str(incoming or "")
+    if not right:
+        return left
     return left + right
 
 

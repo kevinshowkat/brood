@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .chat.intent_parser import parse_intent
+from .chat.command_registry import CHAT_HELP_COMMANDS
 from .chat.refine import extract_model_directive, detect_edit_model, is_edit_request, is_refinement, is_repeat_request
 from .cli_progress import progress_once, ProgressTicker, elapsed_line
 from .engine import BroodEngine
@@ -673,6 +674,51 @@ def _handle_chat(args: argparse.Namespace) -> int:
     mother_intent_rt: IntentIconsRealtimeSession | None = None
 
     print("Brood chat started. Type /help for commands.")
+
+    def _handle_help_command() -> bool:
+        print(f"Commands: {' '.join(CHAT_HELP_COMMANDS)}")
+        return True
+
+    def _handle_set_profile_command(intent) -> bool:
+        engine.profile = intent.command_args.get("profile") or "default"
+        print(f"Profile set to {engine.profile}")
+        return True
+
+    def _handle_set_text_model_command(intent) -> bool:
+        engine.text_model = intent.command_args.get("model") or engine.text_model
+        print(f"Text model set to {engine.text_model}")
+        return True
+
+    def _handle_set_image_model_command(intent) -> bool:
+        engine.image_model = intent.command_args.get("model") or engine.image_model
+        print(f"Image model set to {engine.image_model}")
+        _maybe_warn_missing_flux_key(engine.image_model)
+        return True
+
+    def _handle_set_active_image_command(intent) -> bool:
+        nonlocal last_artifact_path
+        path = intent.command_args.get("path")
+        if not path:
+            print("/use requires a path")
+            return True
+        last_artifact_path = str(path)
+        print(f"Active image set to {last_artifact_path}")
+        return True
+
+    def _handle_set_quality_command(intent) -> bool:
+        state["quality_preset"] = intent.settings_update.get("quality_preset")
+        print(f"Quality preset: {state['quality_preset']}")
+        return True
+
+    command_handlers = {
+        "help": _handle_help_command,
+        "set_profile": _handle_set_profile_command,
+        "set_text_model": _handle_set_text_model_command,
+        "set_image_model": _handle_set_image_model_command,
+        "set_active_image": _handle_set_active_image_command,
+        "set_quality": _handle_set_quality_command,
+    }
+
     while True:
         try:
             line = input("> ")
@@ -681,37 +727,9 @@ def _handle_chat(args: argparse.Namespace) -> int:
         intent = parse_intent(line)
         if intent.action == "noop":
             continue
-        if intent.action == "help":
-            print(
-                "Commands: /profile /text_model /image_model /fast /quality /cheaper "
-                "/better /optimize /recreate /describe /canvas_context /intent_infer /prompt_compile /mother_generate "
-                "/diagnose /recast /use "
-                "/canvas_context_rt_start /canvas_context_rt_stop /canvas_context_rt "
-                "/intent_rt_start /intent_rt_stop /intent_rt "
-                "/intent_rt_mother_start /intent_rt_mother_stop /intent_rt_mother "
-                "/blend /swap_dna /argue /bridge /extract_dna /soul_leech /extract_rule /odd_one_out /triforce /export"
-            )
-            continue
-        if intent.action == "set_profile":
-            engine.profile = intent.command_args.get("profile") or "default"
-            print(f"Profile set to {engine.profile}")
-            continue
-        if intent.action == "set_text_model":
-            engine.text_model = intent.command_args.get("model") or engine.text_model
-            print(f"Text model set to {engine.text_model}")
-            continue
-        if intent.action == "set_image_model":
-            engine.image_model = intent.command_args.get("model") or engine.image_model
-            print(f"Image model set to {engine.image_model}")
-            _maybe_warn_missing_flux_key(engine.image_model)
-            continue
-        if intent.action == "set_active_image":
-            path = intent.command_args.get("path")
-            if not path:
-                print("/use requires a path")
-                continue
-            last_artifact_path = str(path)
-            print(f"Active image set to {last_artifact_path}")
+        handler = command_handlers.get(intent.action)
+        if handler:
+            handler(intent)
             continue
         if intent.action == "describe":
             raw_path = intent.command_args.get("path") or last_artifact_path
@@ -1727,10 +1745,6 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 print(f"Swap DNA failed: {error}")
             else:
                 print("Swap DNA complete.")
-            continue
-        if intent.action == "set_quality":
-            state["quality_preset"] = intent.settings_update.get("quality_preset")
-            print(f"Quality preset: {state['quality_preset']}")
             continue
         if intent.action == "optimize":
             goals = intent.command_args.get("goals") or []

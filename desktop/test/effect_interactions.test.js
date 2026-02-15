@@ -144,6 +144,6 @@ test("pending extraction state: duplicate source paths resolve per image slot", 
 test("extraction success events can resolve image id by path without pending ui slots", () => {
   assert.match(app, /function resolveExtractionEventImageIdByPath\(imagePath\)/);
   assert.match(app, /const resolvedImageId = matchedImageId \|\| resolveExtractionEventImageIdByPath\(path\);/);
-  assert.match(app, /event\.type === \"image_dna_extracted\"[\s\S]*resolvedImageId/);
-  assert.match(app, /event\.type === \"image_soul_extracted\"[\s\S]*resolvedImageId/);
+  assert.match(app, /DESKTOP_EVENT_TYPES\.IMAGE_DNA_EXTRACTED/);
+  assert.match(app, /DESKTOP_EVENT_TYPES\.IMAGE_SOUL_EXTRACTED/);
 });
