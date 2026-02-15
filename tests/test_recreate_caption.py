@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
-from brood_engine.recreate.caption import infer_prompt, infer_diagnosis, infer_argument
+from brood_engine.recreate.caption import infer_prompt, infer_diagnosis, infer_argument, infer_description
 
 
 def test_prepare_vision_image_converts_heic_on_macos(tmp_path: Path) -> None:
@@ -86,3 +86,39 @@ def test_infer_argument_returns_none_without_keys(tmp_path: Path, monkeypatch: p
     Image.new("RGB", (16, 16), (30, 30, 200)).save(b)
 
     assert infer_argument(a, b) is None
+
+
+def test_infer_description_openai_retry_accumulates_tokens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_caption_env(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    reference = tmp_path / "ref.png"
+    Image.new("RGB", (16, 16), (20, 140, 220)).save(reference)
+
+    import brood_engine.recreate.caption as caption_mod
+
+    calls: list[dict[str, object]] = []
+    responses = [
+        {
+            "usage": {"input_tokens": 110, "output_tokens": 24},
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output_text": "",
+        },
+        {
+            "usage": {"input_tokens": 45, "output_tokens": 9},
+            "output_text": "Neon city skyline",
+        },
+    ]
+
+    def fake_post_openai_json(url: str, payload: dict[str, object], api_key: str, *, timeout_s: float) -> tuple[int, dict]:
+        del url, api_key, timeout_s
+        calls.append(payload)
+        return 200, responses.pop(0)
+
+    monkeypatch.setattr(caption_mod, "_post_openai_json", fake_post_openai_json)
+
+    inference = infer_description(reference, max_chars=48)
+    assert inference is not None
+    assert inference.source == "openai_vision"
+    assert inference.input_tokens == 155
+    assert inference.output_tokens == 33
+    assert len(calls) == 2
