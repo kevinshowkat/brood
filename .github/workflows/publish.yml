@@ -43,6 +43,9 @@ jobs:
     needs: clean-machine-smoke
     permissions:
       contents: write
+    env:
+      # Prefer a dedicated PAT for release API calls; fall back to the workflow token.
+      RELEASE_GITHUB_TOKEN: ${{ secrets.BROOD_RELEASE_TOKEN != '' && secrets.BROOD_RELEASE_TOKEN || github.token }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -123,10 +126,29 @@ jobs:
           echo "APPLE_SIGNING_IDENTITY=$CERT_SHA" >> "$GITHUB_ENV"
           echo "Using signing identity SHA: $CERT_SHA"
 
+      - name: Ensure draft release exists
+        env:
+          GH_TOKEN: ${{ env.RELEASE_GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release for $TAG already exists."
+            exit 0
+          fi
+
+          echo "Creating draft release for $TAG..."
+          if ! gh release create "$TAG" \
+            --draft \
+            --title "Brood $TAG" \
+            --generate-notes; then
+            echo "Failed to create release for $TAG. Configure BROOD_RELEASE_TOKEN with repo contents write access." >&2
+            exit 1
+          fi
+
       - name: Build and publish (signed + notarized DMG)
         uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ env.RELEASE_GITHUB_TOKEN }}
           # Notarization
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
