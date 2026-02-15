@@ -549,6 +549,17 @@ def extract_token_usage_pair(payload: Any) -> tuple[int | None, int | None]:
     return None, None
 
 
+def _sum_token_counts(*values: int | None) -> int | None:
+    total = 0
+    saw_any = False
+    for value in values:
+        if value is None:
+            continue
+        total += int(value)
+        saw_any = True
+    return total if saw_any else None
+
+
 def _openai_api_key() -> str | None:
     return os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY_BACKUP")
 
@@ -671,6 +682,8 @@ def _describe_with_openai(reference_path: Path, *, max_chars: int) -> Descriptio
                     retry["max_output_tokens"] = max(int(candidate.get("max_output_tokens", 0)) * 2, 240)
                     _, retry_resp = _post_openai_json(endpoint, retry, api_key, timeout_s=22.0)
                     retry_input_tokens, retry_output_tokens = extract_token_usage_pair(retry_resp)
+                    total_input_tokens = _sum_token_counts(input_tokens, retry_input_tokens)
+                    total_output_tokens = _sum_token_counts(output_tokens, retry_output_tokens)
                     text = _extract_openai_output_text(retry_resp)
                     cleaned = _clean_description(text, max_chars=max_chars)
                     if cleaned:
@@ -678,8 +691,8 @@ def _describe_with_openai(reference_path: Path, *, max_chars: int) -> Descriptio
                             description=cleaned,
                             source="openai_vision",
                             model=model,
-                            input_tokens=retry_input_tokens,
-                            output_tokens=retry_output_tokens,
+                            input_tokens=total_input_tokens,
+                            output_tokens=total_output_tokens,
                         )
                 except Exception:
                     pass

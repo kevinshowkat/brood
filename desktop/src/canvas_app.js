@@ -177,8 +177,8 @@ const MOTHER_INTENT_USECASE_DEFAULT_ORDER = Object.freeze([
   "game_dev_assets",
   "content_engine",
 ]);
-// Minimap world overscan: keep viewport box from filling the minimap immediately when zooming out.
-const MINIMAP_WORLD_OVERSCAN_RATIO = 0.75;
+// World-projection overscan: keep viewport boxes from filling panel projections immediately when zooming out.
+const WORLD_PROJECTION_OVERSCAN_RATIO = 0.75;
 const ENABLE_FILE_BROWSER_DOCK = true;
 const FILE_BROWSER_ROOT_DIR_LS_KEY = "brood.fileBrowser.rootDir";
 const FILE_BROWSER_DRAG_MIME = "application/x-brood-local-image-path";
@@ -246,8 +246,6 @@ const els = {
   imageFx2: document.getElementById("image-fx-2"),
   overlayCanvas: document.getElementById("overlay-canvas"),
   controlStrip: document.getElementById("control-strip"),
-  minimap: document.getElementById("minimap"),
-  minimapSurface: document.getElementById("minimap-surface"),
   fileBrowserDock: document.getElementById("file-browser-dock"),
   fileBrowserHeader: document.getElementById("file-browser-header"),
   fileBrowserChoose: document.getElementById("file-browser-choose"),
@@ -556,9 +554,6 @@ const state = {
       deployed: 0,
       stale: 0,
     },
-  },
-  minimap: {
-    lastSignature: null,
   },
   fileBrowser: {
     enabled: ENABLE_FILE_BROWSER_DOCK,
@@ -7411,7 +7406,7 @@ function motherV2RolePreviewHtml(
     if (!entry) continue;
     const projectedRaw = projectWorldRectToSurface(entry.rect, projection);
     if (!projectedRaw) continue;
-    // Mirror minimap projection behavior: preserve world-relative size/position.
+    // Preserve world-relative size/position in the role preview projection.
     const projected = {
       x: Math.round(clamp(Number(projectedRaw.x) || 0, 0, Math.max(0, maxSurfaceW - 1))),
       y: Math.round(clamp(Number(projectedRaw.y) || 0, 0, Math.max(0, maxSurfaceH - 1))),
@@ -7429,7 +7424,7 @@ function motherV2RolePreviewHtml(
     return `<div class="mother-role-preview-surface"></div>`;
   }
 
-  // Use the exact minimap geometry first, then apply one uniform panel-level zoom so
+  // Use exact projection geometry first, then apply one uniform panel-level zoom so
   // the preview stays readable without changing relative spacing between rectangles.
   {
     let minX = Number.POSITIVE_INFINITY;
@@ -8860,90 +8855,12 @@ function stopMotherTakeover() {
   motherV2RejectOrDismiss({ queueFollowup: true });
 }
 
-function minimapBusyImageIds() {
-  const ids = new Set();
-  const add = (raw) => {
-    const id = String(raw || "").trim();
-    if (id) ids.add(id);
-  };
-  const addMany = (list) => {
-    for (const v of Array.isArray(list) ? list : []) add(v);
-  };
-  const addByPath = (rawPath) => {
-    const path = String(rawPath || "").trim();
-    if (!path) return;
-    const match = (state.images || []).find((it) => it?.id && it?.path && String(it.path) === path) || null;
-    if (match?.id) add(match.id);
-  };
-
-  addByPath(state.describePendingPath);
-  addByPath(state.pendingCanvasDiagnose?.imagePath);
-
-  addMany(state.pendingBlend?.sourceIds);
-  add(state.pendingSwapDna?.structureId);
-  add(state.pendingSwapDna?.surfaceId);
-  addMany(state.pendingBridge?.sourceIds);
-  addMany(state.pendingExtractDna?.sourceIds);
-  addMany(state.pendingSoulLeech?.sourceIds);
-  addMany(state.pendingArgue?.sourceIds);
-  addMany(state.pendingExtractRule?.sourceIds);
-  addMany(state.pendingOddOneOut?.sourceIds);
-  addMany(state.pendingTriforce?.sourceIds);
-  add(state.pendingRecast?.sourceId);
-  add(state.pendingDiagnose?.sourceId);
-  add(state.pendingReplace?.targetId);
-
-  if (state.mother?.running) {
-    addMany(getVisibleSelectedIds());
-  }
-  return ids;
-}
-
-function computeMinimapSignature(busyIds) {
-  const parts = [];
-  const wrap = els.canvasWrap;
-  if (wrap) parts.push(`wrap=${Math.round(wrap.clientWidth || 0)}x${Math.round(wrap.clientHeight || 0)}`);
-  const surf = els.minimapSurface;
-  if (surf) parts.push(`surf=${Math.round(surf.clientWidth || 0)}x${Math.round(surf.clientHeight || 0)}`);
-  parts.push(`mother_takeover=${state.mother?.running ? 1 : 0}`);
-  parts.push(`mode=${state.canvasMode || ""}`);
-  if (state.canvasMode === "multi") {
-    const ms = Number(state.multiView?.scale) || 1;
-    const mx = Math.round(Number(state.multiView?.offsetX) || 0);
-    const my = Math.round(Number(state.multiView?.offsetY) || 0);
-    parts.push(`mv=${Math.round(ms * 1000)},${mx},${my}`);
-  } else {
-    const vs = Number(state.view?.scale) || 1;
-    const vx = Math.round(Number(state.view?.offsetX) || 0);
-    const vy = Math.round(Number(state.view?.offsetY) || 0);
-    parts.push(`v=${Math.round(vs * 1000)},${vx},${vy}`);
-  }
-  parts.push(`n=${getVisibleCanvasImages().length}`);
-  parts.push(`active=${getVisibleActiveId() || ""}`);
-  parts.push(`sel=${getVisibleSelectedIds().join(",")}`);
-  const busy = busyIds ? Array.from(busyIds).sort().join(",") : "";
-  parts.push(`busy=${busy}`);
-  const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
-  for (const imageIdRaw of z) {
-    const imageId = String(imageIdRaw || "").trim();
-    if (!imageId || !isVisibleCanvasImageId(imageId)) continue;
-    const rect = state.freeformRects.get(imageId) || null;
-    if (!rect) continue;
-    parts.push(
-      `${imageId}:${Math.round(Number(rect.x) || 0)},${Math.round(Number(rect.y) || 0)},${Math.round(
-        Number(rect.w) || 0
-      )},${Math.round(Number(rect.h) || 0)}`
-    );
-  }
-  return parts.join("|");
-}
-
 function computeWorldProjection({
   canvasCssW,
   canvasCssH,
   surfaceW,
   surfaceH,
-  overscanRatio = MINIMAP_WORLD_OVERSCAN_RATIO,
+  overscanRatio = WORLD_PROJECTION_OVERSCAN_RATIO,
   padPx = 6,
 } = {}) {
   const worldCanvasW = Math.max(1, Number(canvasCssW) || 1);
@@ -8980,105 +8897,6 @@ function projectWorldRectToSurface(rect, projection) {
     w: Math.max(1, Math.round(w * projection.scale)),
     h: Math.max(1, Math.round(h * projection.scale)),
   };
-}
-
-function renderMinimap() {
-  const surf = els.minimapSurface;
-  const wrap = els.canvasWrap;
-  if (!surf || !wrap) return;
-  const minimapRoot = els.minimap;
-  if (minimapRoot && minimapRoot.offsetParent === null) return;
-
-  const canvasCssW = wrap.clientWidth || 0;
-  const canvasCssH = wrap.clientHeight || 0;
-  ensureFreeformLayoutRectsCss(state.images || [], canvasCssW, canvasCssH);
-
-  const busyIds = minimapBusyImageIds();
-  const sig = computeMinimapSignature(busyIds);
-  if (sig && state.minimap?.lastSignature === sig) return;
-  if (state.minimap) state.minimap.lastSignature = sig;
-
-  const surfaceW = surf.clientWidth || 0;
-  const surfaceH = surf.clientHeight || 0;
-  if (!surfaceW || !surfaceH) return;
-  surf.innerHTML = "";
-  if (state.mother?.running) return;
-
-  const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
-  const rects = [];
-  for (let idx = 0; idx < z.length; idx += 1) {
-    const imageId = String(z[idx] || "").trim();
-    if (!imageId) continue;
-    if (!isVisibleCanvasImageId(imageId)) continue;
-    const rect = state.freeformRects.get(imageId) || null;
-    if (!rect) continue;
-    rects.push({ imageId: String(imageId), rect, z: idx });
-  }
-
-  if (!rects.length) return;
-
-  const projection = computeWorldProjection({
-    canvasCssW,
-    canvasCssH,
-    surfaceW,
-    surfaceH,
-    padPx: 6,
-  });
-  if (!projection) return;
-
-  const selected = new Set(getVisibleSelectedIds());
-  const activeId = String(getVisibleActiveId() || "");
-  const frag = document.createDocumentFragment();
-  for (const rec of rects) {
-    const projected = projectWorldRectToSurface(rec.rect, projection);
-    if (!projected) continue;
-
-    const el = document.createElement("div");
-    el.className = "minimap-rect";
-    if (selected.has(rec.imageId)) el.classList.add("is-selected");
-    if (activeId && rec.imageId === activeId) el.classList.add("is-active");
-    el.style.left = `${projected.x}px`;
-    el.style.top = `${projected.y}px`;
-    el.style.width = `${projected.w}px`;
-    el.style.height = `${projected.h}px`;
-    el.style.zIndex = String(10 + rec.z);
-    el.style.setProperty(
-      "--minimap-rect-fill",
-      googleBrandRectColorForIndex(motherV2PaletteIndexByImageId(rec.imageId), 0.4)
-    );
-
-    if (busyIds.has(rec.imageId)) {
-      const orb = document.createElement("div");
-      orb.className = "minimap-orb";
-      el.appendChild(orb);
-    }
-
-    frag.appendChild(el);
-  }
-
-  // Viewport indicator (what the user is currently looking at).
-  if (state.canvasMode === "multi") {
-    const ms = Math.max(0.0001, Number(state.multiView?.scale) || 1);
-    const dpr = getDpr();
-    const mxCss = (Number(state.multiView?.offsetX) || 0) / Math.max(dpr, 0.0001);
-    const myCss = (Number(state.multiView?.offsetY) || 0) / Math.max(dpr, 0.0001);
-    const vw = Math.min(projection.worldW, (canvasCssW || projection.worldW) / ms);
-    const vh = Math.min(projection.worldH, (canvasCssH || projection.worldH) / ms);
-    const maxVx = projection.worldLeft + Math.max(0, projection.worldW - vw);
-    const maxVy = projection.worldTop + Math.max(0, projection.worldH - vh);
-    const vx = clamp((-mxCss) / ms, projection.worldLeft, maxVx);
-    const vy = clamp((-myCss) / ms, projection.worldTop, maxVy);
-
-    const vp = document.createElement("div");
-    vp.className = "minimap-viewport";
-    vp.style.left = `${Math.round(projection.ox + (vx - projection.worldLeft) * projection.scale)}px`;
-    vp.style.top = `${Math.round(projection.oy + (vy - projection.worldTop) * projection.scale)}px`;
-    vp.style.width = `${Math.max(1, Math.round(vw * projection.scale))}px`;
-    vp.style.height = `${Math.max(1, Math.round(vh * projection.scale))}px`;
-    vp.style.zIndex = "999";
-    frag.appendChild(vp);
-  }
-  surf.appendChild(frag);
 }
 
 function setTip(message) {
@@ -22728,7 +22546,6 @@ function render() {
   renderIntentOverlay(octx, work.width, work.height);
   renderAmbientIntentNudges(octx, work.width, work.height);
   renderReelTouchIndicator(octx, work.width, work.height);
-  renderMinimap();
   renderMotherRolePreview();
   if (!effectsRuntime && !document.hidden && shouldAnimateEffectVisuals()) {
     requestRender();
@@ -22994,9 +22811,9 @@ function installCanvasHandlers() {
             }
 
 	      if (hit) {
-	              const toggle = Boolean(event.shiftKey && state.tool !== "annotate");
+	              const toggle = Boolean((event.shiftKey || event.metaKey || event.ctrlKey) && state.tool !== "annotate");
 	              selectCanvasImage(hit, { toggle }).catch(() => {});
-	              // Shift-click is reserved for multi-select toggling; don't start a drag/tool action.
+	              // Modifier-click (Shift/Cmd/Ctrl) is reserved for multi-select toggling; don't start a drag/tool action.
 	              if (toggle) return;
 	            }
 
