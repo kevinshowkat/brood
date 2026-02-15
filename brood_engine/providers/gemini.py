@@ -36,7 +36,7 @@ class GeminiProvider:
             raise RuntimeError("google-genai package not installed. Run: pip install google-genai")
 
         client = genai.Client(api_key=api_key)
-        model = request.model or "gemini-2.5-flash-image"
+        model = request.model or "gemini-3-pro-image-preview"
         warnings: list[str] = []
 
         ratio = nearest_gemini_ratio(request.size, warnings)

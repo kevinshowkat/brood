@@ -2,248 +2,845 @@
   "schema": "brood.target_user_harness",
   "schema_version": 1,
   "defaults": {
-    "adapter": "chat_cli",
+    "adapter": "desktop_ui",
     "max_turns": 12,
     "max_runtime_s": 900,
     "max_cost_usd": 6.0,
     "text_model": "gpt-5.2",
     "image_model": "gemini-2.5-flash-image",
+    "panel_model": "gpt-5.2",
+    "panel_reasoning_effort": "high",
+    "panel_prompt_path": "docs/target_user_panel_prompt.md",
+    "panel_temperature": 0.7,
+    "screenshot_capture_mode": "auto",
+    "screenshot_app_names": [
+      "Brood"
+    ],
     "seed": 42,
     "require_reflection_each_turn": true
   },
   "personas": [
     {
-      "id": "streetwear_founder",
-      "role": "Indie streetwear founder shipping a drop quickly",
-      "experience": "intermediate",
-      "traits": [
-        "visual-first",
-        "time-constrained",
-        "quality-sensitive"
-      ],
-      "decision_style": "tries quick diagnostics first, then commits to one direction"
-    },
-    {
-      "id": "tattoo_artist",
-      "role": "Tattoo artist exploring a motif system for flash sheets",
+      "id": "product_engineer_image_features",
+      "role": "Product engineer shipping image feature flows in a production app",
       "experience": "expert",
       "traits": [
-        "style-consistency",
-        "rule-seeking",
-        "iterative"
+        "reliability-first",
+        "regression-minded",
+        "auditability-sensitive"
       ],
-      "decision_style": "compares references and extracts principles before generating"
+      "decision_style": "starts from reproducible failure evidence, then narrows to a minimal fix path"
     },
     {
-      "id": "solo_creator",
-      "role": "Solo creator preparing a video thumbnail tonight",
+      "id": "creative_technologist_design_infra",
+      "role": "Creative technologist balancing quality and throughput for design operations",
       "experience": "intermediate",
       "traits": [
-        "speed-sensitive",
-        "attention-seeking",
-        "pragmatic"
+        "visual-iterative",
+        "throughput-sensitive",
+        "tool-pragmatic"
       ],
-      "decision_style": "explores 2-3 variants fast and picks one winner"
+      "decision_style": "explores multiple directions quickly, then converges on one production-safe path"
+    },
+    {
+      "id": "agency_studio_ops_lead",
+      "role": "Agency or studio lead optimizing multi-provider asset production",
+      "experience": "expert",
+      "traits": [
+        "cost-sensitive",
+        "latency-aware",
+        "consistency-driven"
+      ],
+      "decision_style": "tests provider and setting variance, then standardizes the cheapest reliable recipe"
+    },
+    {
+      "id": "agent_discoverability_owner",
+      "role": "Founder or devrel owner improving agent discoverability and intake quality",
+      "experience": "intermediate",
+      "traits": [
+        "documentation-focused",
+        "distribution-minded",
+        "integration-pragmatic"
+      ],
+      "decision_style": "checks whether agents can infer capabilities from artifacts and docs without handholding"
     }
   ],
   "scenarios": [
     {
-      "id": "drop_lookbook_rescue",
-      "persona_id": "streetwear_founder",
-      "project_context": "Launch is tomorrow. Existing photos are noisy and flat. Need premium-looking hero outputs that still feel authentic.",
-      "goal": "Create two launch-ready hero images from rough phone captures.",
+      "id": "image_feature_regression_triage",
+      "persona_id": "product_engineer_image_features",
+      "project_context": "A shipped background-replacement flow regressed after model and prompt updates. Team needs a reproducible failure trace and a credible mitigation before the next deploy.",
+      "goal": "Reproduce the regression, isolate likely failure causes, and produce one improved output direction with explicit evidence.",
       "inputs": [
         {
-          "id": "hoodie_flatlay",
-          "path": "media/target_users/lookbook/hoodie_flatlay.jpg",
-          "label": "Hoodie flatlay"
+          "id": "input_subject",
+          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/P0.jpg",
+          "label": "Original subject image"
         },
         {
-          "id": "on_body_hallway",
-          "path": "media/target_users/lookbook/on_body_hallway.jpg",
-          "label": "On-body hallway shot"
+          "id": "failed_release_output",
+          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/item-0001.jpg",
+          "label": "Output from failing release"
         },
         {
-          "id": "detail_closeup",
-          "path": "media/target_users/lookbook/detail_closeup.jpg",
-          "label": "Stitch detail closeup"
+          "id": "target_reference",
+          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/P3-processed.jpg",
+          "label": "Target quality reference"
         }
       ],
       "success_criteria": [
-        "Two candidate outputs exist and are materially different in composition.",
-        "At least one output preserves product details and text/logo legibility.",
-        "The run includes one explicit critique step and one argument-style comparison."
+        "At least one diagnose or context event captures a plausible root cause.",
+        "At least one generation artifact is produced after diagnosis.",
+        "A comparison argument is logged between failing and improved outcomes."
       ],
       "required_abilities": [
         "diagnose",
-        "bridge",
+        "canvas_context",
         "argue"
       ],
       "policy": {
         "max_turns": 10,
-        "max_runtime_s": 720,
-        "max_cost_usd": 4.5,
+        "max_runtime_s": 840,
+        "max_cost_usd": 5.0,
         "consecutive_fail_limit": 2
       },
       "bootstrap_actions": [
         {
-          "kind": "command",
-          "command": {
-            "name": "use",
-            "paths": [
-              "media/target_users/lookbook/on_body_hallway.jpg"
-            ]
+          "kind": "ui",
+          "ui": {
+            "op": "focus_app"
           },
-          "reason": "Set a primary image context before generating."
+          "reason": "Ensure Brood is frontmost for visible UI interactions."
         },
         {
-          "kind": "command",
-          "command": {
-            "name": "quality"
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 1200
           },
-          "reason": "Persona prefers quality over speed for final launch assets."
+          "reason": "Allow Mother to surface a proposal state before interaction."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 900
+          },
+          "reason": "Avoid command-only mode toggles here; stay in visible UI flow before Mother interaction."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 1600
+          },
+          "reason": "Wait for Mother intent hypothesis before confirming suggestion."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "mother_confirm_suggestion",
+            "expect_mother_phases": [
+              "offering"
+            ],
+            "wait_timeout_ms": 60000
+          },
+          "reason": "Confirm the active Mother suggestion and wait until offering so accept/reject controls are visible."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 1200
+          },
+          "reason": "Leave a brief window so offering state and controls are visible in screenshots."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "mother_confirm_suggestion",
+            "expect_mother_phases": [
+              "cooldown",
+              "intent_hypothesizing",
+              "watching",
+              "observing"
+            ],
+            "wait_timeout_ms": 60000
+          },
+          "reason": "Press Mother confirm again to accept the offered draft so the generated result is actually deployed."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "set_canvas_mode",
+            "mode": "multi"
+          },
+          "reason": "Validate multi-view canvas mode so multiple loaded images are visible on the main canvas."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "canvas_fit_all",
+            "mode": "multi"
+          },
+          "reason": "Pan out so all loaded images are visible on the main canvas before screenshot capture."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "canvas_zoom",
+            "factor": 1.04
+          },
+          "reason": "Capture a subtle zoom transition so state changes are easy to review in screenshots."
         },
         {
           "kind": "command",
           "command": {
             "name": "diagnose",
             "paths": [
-              "media/target_users/lookbook/on_body_hallway.jpg"
+              "/Users/mainframe/Desktop/projects/gridlock/image_test/item-0001.jpg"
             ]
           },
-          "reason": "Start with a critical reading of current weaknesses."
+          "reason": "Collect explicit critique and failure hypotheses early."
+        },
+        {
+          "kind": "command",
+          "command": {
+            "name": "canvas_context",
+            "paths": [
+              "/Users/mainframe/Desktop/projects/gridlock/image_test/P0.jpg"
+            ]
+          },
+          "reason": "Capture context for a reproducible setup before remediation."
         }
       ]
     },
     {
-      "id": "tattoo_flash_direction_find",
-      "persona_id": "tattoo_artist",
-      "project_context": "Client wants a new creature motif that feels consistent with an existing flash language, but not derivative.",
-      "goal": "Generate one centroid concept and extract an explicit design rule.",
+      "id": "creative_direction_iteration_lane",
+      "persona_id": "creative_technologist_design_infra",
+      "project_context": "Design ops needs new campaign directions quickly, but prior runs drifted from brand constraints and required too much manual rescue.",
+      "goal": "Generate two distinct directions, then select one with explicit rationale and quality confidence.",
       "inputs": [
         {
-          "id": "flash_reference_a",
-          "path": "media/target_users/tattoo/flash_reference_a.jpg",
-          "label": "Reference A"
+          "id": "brand_subject",
+          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/sofa_test.png",
+          "label": "Primary subject"
         },
         {
-          "id": "flash_reference_b",
-          "path": "media/target_users/tattoo/flash_reference_b.jpg",
-          "label": "Reference B"
+          "id": "style_ref_a",
+          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/boat.webp",
+          "label": "Style reference A"
         },
         {
-          "id": "rough_sketch",
-          "path": "media/target_users/tattoo/rough_sketch.png",
-          "label": "Sketch"
+          "id": "style_ref_b",
+          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/shopping.webp",
+          "label": "Style reference B"
         }
       ],
       "success_criteria": [
-        "One centroid-style output exists.",
-        "A rule extraction event is present and non-empty.",
-        "Odd-one-out reasoning is logged at least once."
+        "At least two materially distinct candidate outputs are produced.",
+        "One explicit comparison or argument step is logged.",
+        "The final selected direction preserves key subject identity cues."
       ],
       "required_abilities": [
-        "triforce",
-        "extract_rule",
-        "odd_one_out"
+        "swap_dna",
+        "bridge",
+        "argue"
       ],
       "policy": {
         "max_turns": 12,
-        "max_runtime_s": 900,
+        "max_runtime_s": 780,
         "max_cost_usd": 5.0,
+        "consecutive_fail_limit": 3
+      },
+      "bootstrap_actions": [
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "focus_app"
+          },
+          "reason": "Ensure Brood is frontmost for visible UI interactions."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 1200
+          },
+          "reason": "Allow Mother to surface a proposal state before interaction."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 900
+          },
+          "reason": "Avoid command-only mode toggles here; wait for visible Mother state progression instead."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 1600
+          },
+          "reason": "Wait for Mother intent hypothesis before confirming suggestion."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "mother_confirm_suggestion",
+            "expect_mother_phases": [
+              "offering"
+            ],
+            "wait_timeout_ms": 60000
+          },
+          "reason": "Confirm a Mother suggestion and wait until offering so visible acceptance controls appear."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 1200
+          },
+          "reason": "Leave a short interval so offering state is captured in screenshots."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "mother_confirm_suggestion",
+            "expect_mother_phases": [
+              "cooldown",
+              "intent_hypothesizing",
+              "watching",
+              "observing"
+            ],
+            "wait_timeout_ms": 60000
+          },
+          "reason": "Press Mother confirm again to accept the offered draft and keep flow progress visible in-canvas."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "set_canvas_mode",
+            "mode": "multi"
+          },
+          "reason": "Switch to multi-view so the main canvas visibly shows multiple loaded images before navigation."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "canvas_fit_all",
+            "mode": "multi"
+          },
+          "reason": "Pan out to include all images in view before additional canvas navigation."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "canvas_pan",
+            "dx": -180,
+            "dy": 88
+          },
+          "reason": "Capture a visible canvas navigation gesture after mode switch."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "canvas_zoom",
+            "factor": 1.08
+          },
+          "reason": "Capture zoom animation before the regression triage command."
+        },
+        {
+          "kind": "command",
+          "command": {
+            "name": "swap_dna",
+            "paths": [
+              "/Users/mainframe/Desktop/projects/gridlock/image_test/sofa_test.png",
+              "/Users/mainframe/Desktop/projects/gridlock/image_test/boat.webp"
+            ]
+          },
+          "reason": "Generate a first directional variant rapidly."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "select_canvas_image",
+            "image_index": 0
+          },
+          "reason": "Select first comparison image explicitly before running argument analysis."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "select_canvas_image",
+            "image_index": 1,
+            "toggle": true
+          },
+          "reason": "Add second comparison image so the analysis command runs against deterministic selections."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 450
+          },
+          "reason": "Allow selection state to settle before issuing argument analysis."
+        },
+        {
+          "kind": "command",
+          "command": {
+            "name": "argue",
+            "paths": [
+              "/Users/mainframe/Desktop/projects/gridlock/image_test/sofa_test.png",
+              "/Users/mainframe/Desktop/projects/gridlock/image_test/boat.webp"
+            ]
+          },
+          "reason": "Run explicit comparison on a deterministic two-image selection before freeform direction prompts."
+        },
+        {
+          "kind": "utterance",
+          "text": "Generate a second direction with stronger composition contrast but keep brand subject identity stable.",
+          "reason": "Simulate practical creative-direction language from design ops."
+        }
+      ]
+    },
+    {
+      "id": "multi_provider_cost_reliability_sweep",
+      "persona_id": "agency_studio_ops_lead",
+      "project_context": "A studio pipeline must deliver client-safe outputs while controlling cost and latency. Team needs a stable recipe that does not collapse under provider variance.",
+      "goal": "Produce one client-ready output and document a low-cost fallback path.",
+      "inputs": [
+        {
+          "id": "client_product",
+          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/item-0002.jpg",
+          "label": "Client product source"
+        },
+        {
+          "id": "campaign_reference",
+          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/P4.jpg",
+          "label": "Campaign reference"
+        },
+        {
+          "id": "fallback_baseline",
+          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/P2.jpg",
+          "label": "Known baseline output"
+        }
+      ],
+      "success_criteria": [
+        "At least one action explicitly shifts toward cheaper execution.",
+        "At least one compare step explains tradeoffs between quality and efficiency.",
+        "One final output is selected as the recommended default path."
+      ],
+      "required_abilities": [
+        "cheaper",
+        "blend",
+        "argue"
+      ],
+      "policy": {
+        "max_turns": 11,
+        "max_runtime_s": 840,
+        "max_cost_usd": 4.0,
+        "consecutive_fail_limit": 3
+      },
+      "bootstrap_actions": [
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "focus_app"
+          },
+          "reason": "Ensure Brood is frontmost for visible UI interactions."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 1200
+          },
+          "reason": "Allow Mother to surface a proposal state before interaction."
+        },
+        {
+          "kind": "command",
+          "command": {
+            "name": "use",
+            "paths": [
+              "/Users/mainframe/Desktop/projects/gridlock/image_test/item-0002.jpg"
+            ]
+          },
+          "reason": "Pin a primary source before recipe exploration."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 1600
+          },
+          "reason": "Wait for Mother intent hypothesis before confirming suggestion."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "mother_confirm_suggestion",
+            "expect_mother_phases": [
+              "offering"
+            ],
+            "wait_timeout_ms": 60000
+          },
+          "reason": "Confirm the current Mother suggestion and wait for offering so controls are visibly present."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 1200
+          },
+          "reason": "Leave a brief animation settle window while offering controls remain visible."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "mother_confirm_suggestion",
+            "expect_mother_phases": [
+              "cooldown",
+              "intent_hypothesizing",
+              "watching",
+              "observing"
+            ],
+            "wait_timeout_ms": 60000
+          },
+          "reason": "Press Mother confirm again to accept the offering and commit the generated output to canvas."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "set_canvas_mode",
+            "mode": "multi"
+          },
+          "reason": "Switch to multi-view so loaded references remain visibly present on the main canvas."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "canvas_fit_all",
+            "mode": "multi"
+          },
+          "reason": "Pan out to include all active images before cost-mode interactions."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "canvas_zoom",
+            "factor": 0.95
+          },
+          "reason": "Capture a subtle view change to confirm deterministic canvas automation."
+        },
+        {
+          "kind": "command",
+          "command": {
+            "name": "cheaper"
+          },
+          "reason": "Bias toward cost control for high-volume throughput."
+        },
+        {
+          "kind": "command",
+          "command": {
+            "name": "blend",
+            "paths": [
+              "/Users/mainframe/Desktop/projects/gridlock/image_test/item-0002.jpg",
+              "/Users/mainframe/Desktop/projects/gridlock/image_test/P4.jpg"
+            ]
+          },
+          "reason": "Build a client-facing candidate while tracking cost-mode effects."
+        },
+        {
+          "kind": "utterance",
+          "text": "Compare the new candidate to the known baseline and call out quality, consistency, and likely rework risk.",
+          "reason": "Capture production tradeoff analysis for team rollout."
+        }
+      ]
+    },
+    {
+      "id": "agent_intake_discoverability_check",
+      "persona_id": "agent_discoverability_owner",
+      "project_context": "The team added agent intake assets and visibility tooling, but is unsure whether capabilities are legible to external coding agents without direct guidance.",
+      "goal": "Assess clarity of capability communication and produce one prioritized documentation improvement hypothesis.",
+      "inputs": [
+        {
+          "id": "llms_entrypoint",
+          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/crash-movie-david-cronenberg-three.jpg",
+          "label": "llms entrypoint screenshot"
+        },
+        {
+          "id": "agent_intake_contract",
+          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/caterpillar.jpeg",
+          "label": "agent-intake contract screenshot"
+        },
+        {
+          "id": "visibility_probe_output",
+          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/caterpillar2.jpg",
+          "label": "visibility probe output screenshot"
+        }
+      ],
+      "success_criteria": [
+        "At least one context or describe step captures what an agent can infer.",
+        "At least one extraction step proposes a concrete capability rule from provided artifacts.",
+        "One explicit hypothesis is recorded for improving discoverability."
+      ],
+      "required_abilities": [
+        "describe",
+        "canvas_context",
+        "extract_rule"
+      ],
+      "policy": {
+        "max_turns": 9,
+        "max_runtime_s": 720,
+        "max_cost_usd": 3.5,
         "consecutive_fail_limit": 2
       },
       "bootstrap_actions": [
         {
+          "kind": "ui",
+          "ui": {
+            "op": "focus_app"
+          },
+          "reason": "Ensure Brood is frontmost for visible UI interactions."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 1200
+          },
+          "reason": "Allow Mother to surface a proposal state before interaction."
+        },
+        {
           "kind": "command",
           "command": {
-            "name": "triforce",
+            "name": "describe",
             "paths": [
-              "media/target_users/tattoo/flash_reference_a.jpg",
-              "media/target_users/tattoo/flash_reference_b.jpg",
-              "media/target_users/tattoo/rough_sketch.png"
+              "/Users/mainframe/Desktop/projects/gridlock/image_test/crash-movie-david-cronenberg-three.jpg"
             ]
           },
-          "reason": "Generate a midpoint concept from the three inputs."
+          "reason": "Capture first-pass interpretation of agent-facing entrypoints."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 1600
+          },
+          "reason": "Wait for Mother intent hypothesis before confirming suggestion."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "mother_confirm_suggestion",
+            "expect_mother_phases": [
+              "offering"
+            ],
+            "wait_timeout_ms": 60000
+          },
+          "reason": "Confirm Mother suggestion and wait for offering so visible controls are captured."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 1200
+          },
+          "reason": "Hold briefly so offering state is visible in captured screenshots."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "mother_confirm_suggestion",
+            "expect_mother_phases": [
+              "cooldown",
+              "intent_hypothesizing",
+              "watching",
+              "observing"
+            ],
+            "wait_timeout_ms": 60000
+          },
+          "reason": "Press Mother confirm again to accept the offered suggestion before continuing discoverability checks."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "set_canvas_mode",
+            "mode": "multi"
+          },
+          "reason": "Switch to multi-view so the main canvas reflects the same multi-image context shown in minimap."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "canvas_fit_all",
+            "mode": "multi"
+          },
+          "reason": "Pan out to ensure all imported context images are visible before review steps."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "canvas_pan",
+            "dx": 140,
+            "dy": -100
+          },
+          "reason": "Capture pan gesture while reviewing discoverability and capability framing."
+        },
+        {
+          "kind": "command",
+          "command": {
+            "name": "canvas_context",
+            "paths": [
+              "/Users/mainframe/Desktop/projects/gridlock/image_test/caterpillar.jpeg"
+            ]
+          },
+          "reason": "Assess whether intended integration context is understandable."
         },
         {
           "kind": "command",
           "command": {
             "name": "extract_rule",
             "paths": [
-              "media/target_users/tattoo/flash_reference_a.jpg",
-              "media/target_users/tattoo/flash_reference_b.jpg",
-              "media/target_users/tattoo/rough_sketch.png"
+              "/Users/mainframe/Desktop/projects/gridlock/image_test/crash-movie-david-cronenberg-three.jpg",
+              "/Users/mainframe/Desktop/projects/gridlock/image_test/caterpillar.jpeg",
+              "/Users/mainframe/Desktop/projects/gridlock/image_test/caterpillar2.jpg"
             ]
           },
-          "reason": "Capture style logic explicitly."
+          "reason": "Synthesize one rule for what makes the project legible to agents."
         }
       ]
     },
     {
-      "id": "creator_thumbnail_pack",
-      "persona_id": "solo_creator",
-      "project_context": "Need click-worthy thumbnails for a new video, using personal face photo plus scene context from the video frame.",
-      "goal": "Produce three viable thumbnail directions and choose one winner.",
+      "id": "mother_three_photo_accept_flow",
+      "persona_id": "creative_technologist_design_infra",
+      "project_context": "Smoke-test a visible Mother proposal cycle with three uploaded references and deterministic acceptance.",
+      "goal": "Load three photos, let Mother propose one action, and visibly accept the proposal on-canvas.",
       "inputs": [
         {
-          "id": "selfie",
-          "path": "media/target_users/creator/selfie.jpg",
-          "label": "Creator selfie"
+          "id": "subject_image",
+          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/sofa_test.png",
+          "label": "Primary subject image"
         },
         {
-          "id": "video_frame",
-          "path": "media/target_users/creator/video_frame.jpg",
-          "label": "Video frame"
+          "id": "style_image_a",
+          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/boat.webp",
+          "label": "Style reference image A"
         },
         {
-          "id": "mood_ref",
-          "path": "media/target_users/creator/mood_ref.jpg",
-          "label": "Mood reference"
+          "id": "style_image_b",
+          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/shopping.webp",
+          "label": "Style reference image B"
         }
       ],
       "success_criteria": [
-        "At least three output artifacts are produced.",
-        "At least one comparison argument is logged.",
-        "A final selected direction is recorded in summary."
+        "Mother first confirm reaches offering so accept controls are visibly active.",
+        "Mother second confirm reaches cooldown to indicate proposal acceptance/commit.",
+        "Canvas fit-all shows all loaded images after acceptance."
       ],
-      "required_abilities": [
-        "swap_dna",
-        "diagnose",
-        "argue"
-      ],
+      "required_abilities": [],
       "policy": {
-        "max_turns": 12,
-        "max_runtime_s": 780,
-        "max_cost_usd": 5.5,
-        "consecutive_fail_limit": 3
+        "max_turns": 1,
+        "max_runtime_s": 420,
+        "max_cost_usd": 2.5,
+        "consecutive_fail_limit": 1
       },
       "bootstrap_actions": [
         {
-          "kind": "command",
-          "command": {
-            "name": "swap_dna",
-            "paths": [
-              "media/target_users/creator/selfie.jpg",
-              "media/target_users/creator/mood_ref.jpg"
-            ]
+          "kind": "ui",
+          "ui": {
+            "op": "focus_app"
           },
-          "reason": "Blend creator identity with a high-performing thumbnail style reference."
+          "reason": "Ensure Brood is frontmost before Mother controls are exercised."
         },
         {
-          "kind": "command",
-          "command": {
-            "name": "diagnose",
-            "paths": [
-              "media/target_users/creator/video_frame.jpg"
-            ]
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 900
           },
-          "reason": "Identify why the current frame underperforms."
+          "reason": "Allow initial Mother idle state to settle after image seeding."
         },
         {
-          "kind": "utterance",
-          "text": "Give me two distinct thumbnail directions from these references. Keep face readability high and avoid clutter.",
-          "reason": "Simulate a natural instruction to Mother."
+          "kind": "ui",
+          "ui": {
+            "op": "set_canvas_mode",
+            "mode": "multi"
+          },
+          "reason": "Switch to multi-view first so all imported images are visible on the main canvas."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "canvas_fit_all",
+            "mode": "multi"
+          },
+          "reason": "Pan out immediately so all three seeded images are visible before proposal interactions."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "mother_next_proposal",
+            "expect_mother_phases": [
+              "intent_hypothesizing",
+              "offering",
+              "watching",
+              "observing"
+            ],
+            "wait_timeout_ms": 60000
+          },
+          "reason": "Nudge Mother proposal state so intent visuals are active before confirm."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 1500
+          },
+          "reason": "Hold while the proposal state is visibly present prior to confirm."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "mother_confirm_suggestion",
+            "expect_mother_phases": [
+              "offering"
+            ],
+            "wait_timeout_ms": 60000
+          },
+          "reason": "Trigger Mother proposal generation and wait for offering controls."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "wait",
+            "ms": 1500
+          },
+          "reason": "Keep offering state visible before acceptance."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "mother_confirm_suggestion",
+            "expect_mother_phases": [
+              "cooldown",
+              "intent_hypothesizing",
+              "watching",
+              "observing"
+            ],
+            "wait_timeout_ms": 60000
+          },
+          "reason": "Accept the offered Mother suggestion so the generated result is committed."
+        },
+        {
+          "kind": "ui",
+          "ui": {
+            "op": "canvas_fit_all",
+            "mode": "multi"
+          },
+          "reason": "Fit the full image set after acceptance for screenshot evidence."
         }
       ]
     }

@@ -17,6 +17,11 @@
 			          <div id="engine-status" class="engine-status">API calls: 0</div>
 			        </div>
               <div class="brand-actions" aria-label="Menu">
+                <span
+                  id="mother-intent-source-indicator"
+                  class="mother-intent-source-indicator hidden"
+                  aria-hidden="true"
+                ></span>
                 <button
                   id="app-menu-toggle"
                   class="menu-toggle"
@@ -179,7 +184,10 @@
                     <div class="mother-state-row">
                       <span id="mother-state" class="mother-state" aria-live="polite">Watching</span>
                     </div>
-                    <div id="tips-text" class="panel-body muted panel-readout"></div>
+                    <div class="mother-panel-body">
+                      <div id="mother-role-preview" class="mother-role-preview hidden" aria-label="Mother role preview"></div>
+                      <div id="tips-text" class="panel-body muted panel-readout"></div>
+                    </div>
                     <div class="mother-panel-controls">
                       <button id="mother-refine-toggle" class="mother-refine-toggle hidden" type="button" aria-expanded="false">
                         Refine structure
@@ -211,12 +219,15 @@
                   <div class="mother-actions mother-actions-floating" aria-label="Mother controls">
                     <div class="mother-action">
                       <button id="mother-ability-icon" class="mother-ability-icon" type="button" aria-label="Next">→</button>
+                      <span class="mother-action-label">NEXT</span>
                     </div>
                     <div class="mother-action">
                       <button id="mother-confirm" class="mother-confirm" type="button" aria-label="Draft">✓</button>
+                      <span class="mother-action-label">ACCEPT</span>
                     </div>
                     <div class="mother-action">
                       <button id="mother-stop" class="mother-stop hidden" type="button" aria-label="Dismiss">✕</button>
+                      <span class="mother-action-label">REJECT</span>
                     </div>
                   </div>
                 </div>
@@ -331,8 +342,8 @@
             <div class="field-label">Image Model</div>
             <select id="image-model">
               <option value="dryrun-image-1">dryrun-image-1</option>
-              <option value="gemini-2.5-flash-image">gemini-2.5-flash-image</option>
               <option value="gemini-3-pro-image-preview">gemini-3-pro-image-preview</option>
+              <option value="gemini-2.5-flash-image">gemini-2.5-flash-image</option>
               <option value="imagen-4.0-ultra">imagen-4.0-ultra</option>
               <option value="imagen-4">imagen-4</option>
               <option value="flux-2-flex">flux-2-flex</option>

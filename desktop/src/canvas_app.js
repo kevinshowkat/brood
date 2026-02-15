@@ -68,7 +68,10 @@ const MOTHER_IDLE_TAKEOVER_GRACE_MS = 20_000;
 const MOTHER_GENERATION_TIMEOUT_MS = 90_000;
 const MOTHER_GENERATION_TIMEOUT_EXTENSION_MS = 90_000;
 const MOTHER_GENERATION_POST_VERSION_TIMEOUT_MS = 240_000;
-const MOTHER_GENERATION_MODEL = "gemini-2.5-flash-image";
+const DEFAULT_IMAGE_MODEL = "gemini-3-pro-image-preview";
+const LEGACY_DEFAULT_IMAGE_MODEL = "gemini-2.5-flash-image";
+const IMAGE_MODEL_DEFAULT_MIGRATION_KEY = "brood.imageModel.default.v2";
+const MOTHER_GENERATION_MODEL = DEFAULT_IMAGE_MODEL;
 const MOTHER_GENERATED_SOURCE = "mother_generated";
 const MOTHER_SUGGESTION_LOG_FILENAME = "mother_suggestions.jsonl";
 const MOTHER_TRACE_FILENAME = "mother_trace.jsonl";
@@ -78,7 +81,7 @@ const MOTHER_SELECTION_SEMANTIC_DRAG_PX = 10;
 const MOTHER_V2_COOLDOWN_AFTER_COMMIT_MS = 2000;
 const MOTHER_V2_COOLDOWN_AFTER_REJECT_MS = 1200;
 const MOTHER_V2_VISION_RETRY_MS = 220;
-const MOTHER_V2_INTENT_RT_TIMEOUT_MS = 9000;
+const MOTHER_V2_INTENT_RT_TIMEOUT_MS = 30_000;
 const MOTHER_V2_INTENT_ENGINE_FALLBACK_TIMEOUT_MS = 2200;
 const MOTHER_V2_INTENT_LATE_REALTIME_UPGRADE_MS = 12000;
 const MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL = 2;
@@ -89,12 +92,12 @@ const MOTHER_V2_ROLE_LABEL = Object.freeze({
   mediator: "MEDIATOR",
   object: "OBJECT",
 });
-const MOTHER_V2_ROLE_PREVIEW_ACCENT = Object.freeze({
-  subject: "rgba(88, 239, 176, 0.96)",
-  model: "rgba(122, 203, 255, 0.96)",
-  mediator: "rgba(255, 212, 113, 0.96)",
-  object: "rgba(255, 144, 160, 0.96)",
-});
+const GOOGLE_BRAND_RECT_PALETTE_RGB = Object.freeze([
+  [66, 133, 244], // blue
+  [234, 67, 53], // red
+  [251, 188, 5], // yellow
+  [52, 168, 83], // green
+]);
 const MOTHER_V2_ROLE_GLYPH = Object.freeze({
   subject: "●",
   model: "◆",
@@ -143,6 +146,12 @@ const MOTHER_V2_PROPOSAL_ICON_ACCENT_BY_MODE = Object.freeze({
   romanticize: "rgba(255, 160, 203, 0.96)",
   alienate: "rgba(152, 255, 174, 0.96)",
 });
+const MOTHER_V2_ROLE_PREVIEW_PANEL_FILL_RATIO = 0.95;
+const MOTHER_V2_ROLE_PREVIEW_PANEL_ZOOM_MAX = 4.2;
+const MOTHER_V2_ROLE_PREVIEW_PANEL_PAD_PX = 0;
+const MOTHER_OFFER_PREVIEW_SCALE = 1.62;
+const MOTHER_OFFER_PREVIEW_MIN_VIEWPORT_COVER = 0.46;
+const MOTHER_OFFER_PREVIEW_MAX_VIEWPORT_COVER = 0.92;
 const MOTHER_INTENT_USECASE_DEFAULT_ORDER = Object.freeze([
   "streaming_content",
   "ecommerce_pod",
@@ -272,7 +281,21 @@ const settings = {
   })(),
   autoAcceptSuggestedAbility: localStorage.getItem("brood.autoAcceptSuggestedAbility") === "1",
   textModel: localStorage.getItem("brood.textModel") || "gpt-5.2",
-  imageModel: localStorage.getItem("brood.imageModel") || "gemini-2.5-flash-image",
+  imageModel: (() => {
+    const storedRaw = String(localStorage.getItem("brood.imageModel") || "").trim();
+    const migrated = localStorage.getItem(IMAGE_MODEL_DEFAULT_MIGRATION_KEY) === "1";
+    if (!storedRaw) {
+      if (!migrated) localStorage.setItem(IMAGE_MODEL_DEFAULT_MIGRATION_KEY, "1");
+      return DEFAULT_IMAGE_MODEL;
+    }
+    if (!migrated && storedRaw === LEGACY_DEFAULT_IMAGE_MODEL) {
+      localStorage.setItem("brood.imageModel", DEFAULT_IMAGE_MODEL);
+      localStorage.setItem(IMAGE_MODEL_DEFAULT_MIGRATION_KEY, "1");
+      return DEFAULT_IMAGE_MODEL;
+    }
+    if (!migrated) localStorage.setItem(IMAGE_MODEL_DEFAULT_MIGRATION_KEY, "1");
+    return storedRaw;
+  })(),
 };
 
 const state = {
@@ -423,6 +446,7 @@ const state = {
     dispatchTimeoutTimer: null,
     dispatchTimeoutExtensions: 0,
     pendingPromptLine: null,
+    promptMotionProfile: null,
     pendingVersionId: null,
     ignoredVersionIds: new Set(),
     waitingSince: 0,
@@ -469,7 +493,7 @@ const state = {
     hintVisibleUntil: 0,
     hintFadeTimer: null,
     intensity: 62, // optional UI steering dial
-    commitUndo: null, // { expiresAt, mode, insertedId, targetId, before }
+    commitUndo: null, // { expiresAt, mode, insertedId, targetId, before, removedSeeds }
     telemetry: {
       traceId: `mother-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`,
       stateTransitions: [],
@@ -3364,29 +3388,272 @@ function _stripJsonFences(raw) {
   return text.trim();
 }
 
-function parseIntentIconsJson(raw) {
-  const cleaned = _stripJsonFences(raw);
-  if (!cleaned) return null;
+function _extractFencedJsonBlocks(raw) {
+  const text = String(raw || "");
+  if (!text.includes("```")) return [];
+  const out = [];
+  const re = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let match = null;
+  while ((match = re.exec(text)) !== null) {
+    const body = String(match?.[1] || "").trim();
+    if (body) out.push(body);
+  }
+  return out;
+}
 
-  const tryParse = (value) => {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return null;
+function _extractBalancedJsonBlocks(raw) {
+  const text = String(raw || "");
+  if (!text) return [];
+  const out = [];
+  const stack = [];
+  let start = -1;
+  let quote = "";
+  let escaped = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === quote) {
+        quote = "";
+      }
+      continue;
     }
-  };
+    if (ch === "\"") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "{" || ch === "[") {
+      if (stack.length === 0) start = i;
+      stack.push(ch);
+      continue;
+    }
+    if (ch !== "}" && ch !== "]") continue;
+    if (!stack.length) continue;
+    const open = stack[stack.length - 1];
+    const pairOk = (open === "{" && ch === "}") || (open === "[" && ch === "]");
+    if (!pairOk) {
+      stack.length = 0;
+      start = -1;
+      continue;
+    }
+    stack.pop();
+    if (!stack.length && start >= 0) {
+      const snippet = text.slice(start, i + 1).trim();
+      if (snippet) out.push(snippet);
+      start = -1;
+    }
+  }
+  return out;
+}
 
-  let obj = tryParse(cleaned);
-  if (!obj) {
-    const start = cleaned.indexOf("{");
-    const end = cleaned.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      obj = tryParse(cleaned.slice(start, end + 1));
+function _tryParseJsonLooseDetailed(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return { value: null, mode: "empty", error: "empty_text" };
+  const attempts = [{ mode: "strict", text }];
+  const noTrailingCommas = text.replace(/,\s*([}\]])/g, "$1");
+  if (noTrailingCommas !== text) attempts.push({ mode: "trailing_commas_removed", text: noTrailingCommas });
+  let lastError = "";
+  for (const attempt of attempts) {
+    try {
+      return { value: JSON.parse(attempt.text), mode: attempt.mode, error: null };
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err || "json_parse_error");
+      continue;
+    }
+  }
+  return { value: null, mode: "none", error: lastError || "json_parse_error" };
+}
+
+function _tryParseJsonLoose(raw) {
+  return _tryParseJsonLooseDetailed(raw).value;
+}
+
+function _looksLikeIntentIconsPayload(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const schemaRaw = value.schema ? String(value.schema).trim().toLowerCase() : "";
+  if (schemaRaw === "brood.intent_icons") return true;
+  if (schemaRaw && schemaRaw.includes("intent") && schemaRaw.includes("icon")) return true;
+  if (Array.isArray(value.intent_icons)) return true;
+  if (Array.isArray(value.branches)) return true;
+  if (Array.isArray(value.image_descriptions)) return true;
+  if (typeof value.transformation_mode === "string" && value.transformation_mode.trim()) return true;
+  if (Array.isArray(value.transformation_mode_candidates)) return true;
+  return false;
+}
+
+function _unwrapIntentIconsPayload(value, depth = 0, seen = null, path = "root") {
+  if (depth > 6 || value == null) return null;
+  const visited = seen || new Set();
+  if (typeof value === "string") {
+    const parsed = _tryParseJsonLooseDetailed(value);
+    if (!parsed.value) return null;
+    return _unwrapIntentIconsPayload(parsed.value, depth + 1, visited, `${path}#string(${parsed.mode})`);
+  }
+  if (Array.isArray(value)) {
+    for (let idx = 0; idx < value.length; idx += 1) {
+      const found = _unwrapIntentIconsPayload(value[idx], depth + 1, visited, `${path}[${idx}]`);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof value !== "object") return null;
+  if (visited.has(value)) return null;
+  visited.add(value);
+  if (_looksLikeIntentIconsPayload(value)) return { payload: value, path };
+  const preferredKeys = [
+    "intent_icons_payload",
+    "payload",
+    "data",
+    "result",
+    "output",
+    "response",
+    "intent",
+    "analysis",
+    "message",
+  ];
+  for (const key of preferredKeys) {
+    if (!(key in value)) continue;
+    const found = _unwrapIntentIconsPayload(value[key], depth + 1, visited, `${path}.${key}`);
+    if (found) return found;
+  }
+  for (const [key, nested] of Object.entries(value)) {
+    if (!nested || (typeof nested !== "object" && typeof nested !== "string")) continue;
+    const found = _unwrapIntentIconsPayload(nested, depth + 1, visited, `${path}.${String(key || "")}`);
+    if (found) return found;
+  }
+  return null;
+}
+
+function _looksLikeTruncatedJsonText(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return false;
+  const startsJson = text.startsWith("{") || text.startsWith("[");
+  const endsJson = text.endsWith("}") || text.endsWith("]");
+  return startsJson && !endsJson;
+}
+
+function intentIconsPayloadChecksum(raw) {
+  const text = String(raw || "");
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+    hash >>>= 0;
+  }
+  return `fnv1a32:${hash.toString(16).padStart(8, "0")}`;
+}
+
+function intentIconsPayloadSafeSnippet(raw, { head = 220, tail = 180 } = {}) {
+  const normalized = String(raw || "")
+    .replace(/[\x00-\x1f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return { head: "", tail: "" };
+  if (normalized.length <= head + tail + 8) return { head: normalized, tail: "" };
+  return {
+    head: normalized.slice(0, Math.max(0, head)),
+    tail: normalized.slice(Math.max(0, normalized.length - Math.max(0, tail))),
+  };
+}
+
+function parseIntentIconsJsonDetailed(raw) {
+  const rawText = String(raw || "").trim();
+  if (!rawText) {
+    return {
+      ok: false,
+      value: null,
+      strategy: "none",
+      reason: "empty_text",
+      error: "empty_text",
+      candidate_count: 0,
+      parseable_candidates: 0,
+    };
+  }
+  const candidates = [];
+  const seen = new Set();
+  const addCandidate = (value, source) => {
+    const text = String(value || "").trim();
+    if (!text || seen.has(text)) return;
+    seen.add(text);
+    candidates.push({ text, source });
+  };
+  addCandidate(rawText, "raw");
+  addCandidate(_stripJsonFences(rawText), "raw_unfenced");
+  for (const block of _extractFencedJsonBlocks(rawText)) {
+    addCandidate(block, "fenced_block");
+    addCandidate(_stripJsonFences(block), "fenced_block_unfenced");
+  }
+  for (const block of _extractBalancedJsonBlocks(rawText)) addCandidate(block, "balanced_block");
+
+  let obj = null;
+  let parseStrategy = "none";
+  let parseError = "";
+  let parseableCandidates = 0;
+  for (const candidate of candidates) {
+    const parsed = _tryParseJsonLooseDetailed(candidate.text);
+    if (!parsed.value) {
+      if (parsed.error) parseError = parsed.error;
+      continue;
+    }
+    parseableCandidates += 1;
+    const unwrapped = _unwrapIntentIconsPayload(parsed.value);
+    const payload = unwrapped?.payload;
+    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+      obj = payload;
+      parseStrategy = `${candidate.source}:${parsed.mode}:${String(unwrapped?.path || "root")}`;
+      break;
     }
   }
 
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
-  if (obj.schema && String(obj.schema) !== "brood.intent_icons") return null;
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
+    const truncated = _looksLikeTruncatedJsonText(rawText);
+    return {
+      ok: false,
+      value: null,
+      strategy: parseStrategy,
+      reason: truncated ? "truncated_json" : parseableCandidates > 0 ? "no_intent_payload_found" : "invalid_json",
+      error: parseError || null,
+      candidate_count: candidates.length,
+      parseable_candidates: parseableCandidates,
+    };
+  }
+  const schemaRaw = obj.schema ? String(obj.schema).trim() : "";
+  if (schemaRaw) {
+    const schemaNorm = schemaRaw.toLowerCase().replace(/[.\s-]+/g, "_");
+    if (!schemaNorm.includes("intent") || !schemaNorm.includes("icon")) {
+      return {
+        ok: false,
+        value: null,
+        strategy: parseStrategy,
+        reason: "schema_mismatch",
+        error: `unexpected_schema:${schemaRaw}`,
+        candidate_count: candidates.length,
+        parseable_candidates: parseableCandidates,
+      };
+    }
+    obj.schema = "brood.intent_icons";
+  }
+  const hasIntentShape = Boolean(
+    Array.isArray(obj.intent_icons) ||
+      Array.isArray(obj.branches) ||
+      Array.isArray(obj.image_descriptions) ||
+      Array.isArray(obj.transformation_mode_candidates) ||
+      (typeof obj.transformation_mode === "string" && obj.transformation_mode.trim())
+  );
+  if (!hasIntentShape && !schemaRaw) {
+    return {
+      ok: false,
+      value: null,
+      strategy: parseStrategy,
+      reason: "no_intent_shape",
+      error: "missing intent_icons/branches/image_descriptions/transformation_mode",
+      candidate_count: candidates.length,
+      parseable_candidates: parseableCandidates,
+    };
+  }
 
   // Normalize common fields so rendering code can be defensive and simple.
   if (!Array.isArray(obj.intent_icons)) obj.intent_icons = [];
@@ -3498,7 +3765,54 @@ function parseIntentIconsJson(raw) {
   if (!obj.frame_id) obj.frame_id = "";
   if (!obj.schema) obj.schema = "brood.intent_icons";
   if (!obj.schema_version) obj.schema_version = 1;
-  return obj;
+  return {
+    ok: true,
+    value: obj,
+    strategy: parseStrategy || "unknown",
+    reason: null,
+    error: null,
+    candidate_count: candidates.length,
+    parseable_candidates: parseableCandidates,
+  };
+}
+
+function parseIntentIconsJson(raw) {
+  const parsed = parseIntentIconsJsonDetailed(raw);
+  return parsed?.ok ? parsed.value : null;
+}
+
+function classifyIntentIconsRouting({
+  path = "",
+  intentPendingPath = "",
+  ambientPendingPath = "",
+  motherCanAcceptRealtime = false,
+  motherRealtimePath = "",
+  motherActionVersion = 0,
+  eventActionVersion = null,
+} = {}) {
+  const normalizedPath = String(path || "");
+  const normalizedIntentPath = String(intentPendingPath || "");
+  const normalizedAmbientPath = String(ambientPendingPath || "");
+  const normalizedMotherPath = String(motherRealtimePath || "");
+  const actionVersion = Number(motherActionVersion) || 0;
+  const eventVersion = Number(eventActionVersion);
+
+  const matchIntent = Boolean(normalizedIntentPath && normalizedIntentPath === normalizedPath);
+  const matchAmbient = Boolean(normalizedAmbientPath && normalizedAmbientPath === normalizedPath);
+  const matchMother = Boolean(motherCanAcceptRealtime && normalizedMotherPath && normalizedMotherPath === normalizedPath);
+
+  let ignoreReason = null;
+  if (!matchIntent && !matchAmbient && !matchMother) {
+    ignoreReason = motherCanAcceptRealtime && normalizedMotherPath ? "snapshot_path_mismatch" : "path_mismatch";
+  } else if (
+    matchMother &&
+    Number.isFinite(eventVersion) &&
+    eventVersion > 0 &&
+    eventVersion !== actionVersion
+  ) {
+    ignoreReason = "event_action_version_mismatch";
+  }
+  return { matchIntent, matchAmbient, matchMother, ignoreReason };
 }
 
 function _normalizeVisionLabel(raw, { maxChars = 32 } = {}) {
@@ -4013,6 +4327,15 @@ function providerFromModel(model) {
   if (name.includes("claude")) return "anthropic";
   if (name.includes("gpt-") || name.includes("o1")) return "openai";
   return "unknown";
+}
+
+function googleBrandRectColorForKey(key = "", alpha = 0.44) {
+  const palette = GOOGLE_BRAND_RECT_PALETTE_RGB;
+  if (!Array.isArray(palette) || !palette.length) return `rgba(66, 133, 244, ${alpha})`;
+  const idx = Math.abs(Number(hash32(String(key || ""))) || 0) % palette.length;
+  const rgb = Array.isArray(palette[idx]) ? palette[idx] : palette[0];
+  const a = Math.max(0, Math.min(1, Number(alpha) || 0));
+  return `rgba(${Number(rgb[0]) || 66}, ${Number(rgb[1]) || 133}, ${Number(rgb[2]) || 244}, ${a})`;
 }
 
 function pickGeminiImageModel() {
@@ -4916,6 +5239,8 @@ function stopMotherGlitchLoop() {
 
 function _triggerMotherGlitchBurst() {
   if (!els.tipsText) return;
+  if (els.tipsText.classList.contains("mother-proposal-active")) return;
+  if (els.tipsText.querySelector(".mother-proposal-icon, .mother-phase-icon")) return;
   // Keep it subtle and infrequent: brief "cosmic storm" interference.
   const durationMs = 140 + Math.floor(Math.random() * 240);
   els.tipsText.classList.add("mother-glitch");
@@ -5029,11 +5354,21 @@ function renderMotherControls() {
   const idle = state.motherIdle || null;
   const reelLocked = isReelSizeLocked();
   const phase = idle?.phase || motherIdleInitialState();
+  const hasProposalImageSet = motherV2HasProposalImageSet();
   const proposalModes = motherV2ProposalModes(idle?.intent || null);
   const undoAvailable = motherV2CommitUndoAvailable();
-  const canNextProposal = phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING && proposalModes.length > 1;
-  const canConfirm = phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING || phase === MOTHER_IDLE_STATES.OFFERING;
-  const canReject = undoAvailable || phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING || phase === MOTHER_IDLE_STATES.OFFERING || phase === MOTHER_IDLE_STATES.DRAFTING;
+  const canNextProposal =
+    hasProposalImageSet &&
+    phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING &&
+    proposalModes.length > 1;
+  const canConfirm =
+    phase === MOTHER_IDLE_STATES.OFFERING ||
+    (hasProposalImageSet && phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING);
+  const canReject =
+    undoAvailable ||
+    phase === MOTHER_IDLE_STATES.OFFERING ||
+    phase === MOTHER_IDLE_STATES.DRAFTING ||
+    (hasProposalImageSet && phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING);
   const nextLabel = "Next proposal";
   const nextTitle = canNextProposal ? "Cycle to next proposal option" : "No alternate proposal available";
   const confirmTitle =
@@ -5206,9 +5541,7 @@ function motherV2RolePreviewEntries() {
       .toLowerCase();
     const roleKey = MOTHER_V2_ROLE_KEYS.includes(roleCandidate) ? roleCandidate : "";
     const roleLabel = roleKey ? String(MOTHER_V2_ROLE_LABEL[roleKey] || roleKey.toUpperCase()) : "";
-    const accent = roleKey
-      ? String(MOTHER_V2_ROLE_PREVIEW_ACCENT[roleKey] || "rgba(230, 237, 243, 0.96)")
-      : "rgba(255, 72, 72, 0.92)";
+    const accent = googleBrandRectColorForKey(imageId, 0.94);
     entries.push({
       imageId,
       roleKey,
@@ -5226,24 +5559,17 @@ function motherV2RolePreviewEntries() {
   return entries;
 }
 
-function motherV2RolePreviewSignature(entries, { canvasCssW, canvasCssH, surfaceW, surfaceH, animationMode = "" } = {}) {
+function motherV2RolePreviewSignature(
+  entries,
+  { canvasCssW, canvasCssH, surfaceW, surfaceH, animationMode = "", promptMotionKey = "" } = {}
+) {
   const parts = [
     `canvas=${Math.round(Number(canvasCssW) || 0)}x${Math.round(Number(canvasCssH) || 0)}`,
     `surface=${Math.round(Number(surfaceW) || 0)}x${Math.round(Number(surfaceH) || 0)}`,
     `mode=${state.canvasMode || ""}`,
     `proposal_mode=${String(animationMode || "")}`,
+    `prompt_motion=${String(promptMotionKey || "")}`,
   ];
-  if (state.canvasMode === "multi") {
-    const ms = Number(state.multiView?.scale) || 1;
-    const mx = Math.round(Number(state.multiView?.offsetX) || 0);
-    const my = Math.round(Number(state.multiView?.offsetY) || 0);
-    parts.push(`mv=${Math.round(ms * 1000)},${mx},${my}`);
-  } else {
-    const vs = Number(state.view?.scale) || 1;
-    const vx = Math.round(Number(state.view?.offsetX) || 0);
-    const vy = Math.round(Number(state.view?.offsetY) || 0);
-    parts.push(`v=${Math.round(vs * 1000)},${vx},${vy}`);
-  }
   parts.push(`active=${getVisibleActiveId() || ""}`);
   parts.push(`sel=${getVisibleSelectedIds().join(",")}`);
   for (const entry of Array.isArray(entries) ? entries : []) {
@@ -5308,29 +5634,173 @@ function motherV2BlendNumber(base, target, t = 0) {
   return from + (to - from) * amount;
 }
 
+const MOTHER_V2_PROMPT_MOTION_KEYWORDS = Object.freeze({
+  cinematic: Object.freeze([
+    "cinematic",
+    "dramatic",
+    "hero",
+    "high-contrast",
+    "moody",
+    "rim light",
+    "production-grade lighting",
+  ]),
+  soft: Object.freeze([
+    "soft",
+    "warm",
+    "gentle",
+    "dreamy",
+    "ethereal",
+    "serene",
+    "intimate",
+    "romantic",
+  ]),
+  chaos: Object.freeze([
+    "chaotic",
+    "chaos",
+    "fracture",
+    "destabilize",
+    "glitch",
+    "shatter",
+    "fragment",
+    "volatile",
+  ]),
+  precise: Object.freeze([
+    "clean",
+    "minimal",
+    "crisp",
+    "coherent",
+    "structured",
+    "grid",
+    "focal hierarchy",
+    "perspective",
+  ]),
+  fusion: Object.freeze([
+    "integrate all references",
+    "single coherent scene",
+    "fusion",
+    "fuse",
+    "blend",
+    "hybrid",
+    "midpoint",
+  ]),
+  lighting: Object.freeze([
+    "lighting",
+    "shadow",
+    "contrast",
+    "exposure",
+    "color",
+    "tonal",
+    "highlight",
+  ]),
+});
+
+function motherV2PromptKeywordScore(text = "", keywords = []) {
+  const hay = String(text || "").toLowerCase();
+  if (!hay || !Array.isArray(keywords) || !keywords.length) return 0;
+  let hits = 0;
+  for (const rawKeyword of keywords) {
+    const keyword = String(rawKeyword || "").trim().toLowerCase();
+    if (!keyword) continue;
+    if (hay.includes(keyword)) hits += 1;
+  }
+  return clamp(hits / Math.max(1, keywords.length), 0, 1);
+}
+
+function motherV2PromptMotionProfileFromCompiled(compiled = {}) {
+  const payload = compiled && typeof compiled === "object" ? compiled : {};
+  const positive = String(payload.positive_prompt || payload.prompt || "").trim();
+  const negative = String(payload.negative_prompt || "").trim();
+  const summary = String(payload.summary || payload.intent_summary || "").trim();
+  const directive = String(payload.creative_directive || "").trim();
+  const transformationMode = motherV2MaybeTransformationMode(payload.transformation_mode) || "";
+  const raw = [positive, negative, summary, directive, transformationMode].filter(Boolean).join("\n").trim().toLowerCase();
+  if (!raw) return null;
+
+  const cinematic = motherV2PromptKeywordScore(raw, MOTHER_V2_PROMPT_MOTION_KEYWORDS.cinematic);
+  const softness = motherV2PromptKeywordScore(raw, MOTHER_V2_PROMPT_MOTION_KEYWORDS.soft);
+  const chaos = motherV2PromptKeywordScore(raw, MOTHER_V2_PROMPT_MOTION_KEYWORDS.chaos);
+  const precision = motherV2PromptKeywordScore(raw, MOTHER_V2_PROMPT_MOTION_KEYWORDS.precise);
+  const fusion = motherV2PromptKeywordScore(raw, MOTHER_V2_PROMPT_MOTION_KEYWORDS.fusion);
+  const lighting = motherV2PromptKeywordScore(raw, MOTHER_V2_PROMPT_MOTION_KEYWORDS.lighting);
+
+  const promptHash = hash32(raw);
+  const seedA = rand01(promptHash + 0.17);
+  const seedB = rand01(promptHash + 1.93);
+  const seedC = rand01(promptHash + 3.71);
+  const seedD = rand01(promptHash + 5.29);
+
+  const tempo = clamp(1 + cinematic * 0.2 + chaos * 0.22 - softness * 0.1 + (seedA - 0.5) * 0.08, 0.72, 1.42);
+  const spread = clamp(1 + chaos * 0.2 - fusion * 0.17 - precision * 0.12 + (seedB - 0.5) * 0.12, 0.72, 1.35);
+  const pulse = clamp(0.22 + cinematic * 0.45 + fusion * 0.24 + seedC * 0.12, 0.08, 0.96);
+  const verticalLift = clamp(cinematic * 0.65 + softness * 0.28 - chaos * 0.18 + (seedD - 0.5) * 0.08, -0.24, 1);
+  const focusPull = clamp(precision * 0.62 + fusion * 0.42 - chaos * 0.26, 0, 1);
+  const chaosGain = clamp(0.62 + chaos * 0.94 - precision * 0.14 + (seedA - 0.5) * 0.12, 0.45, 1.75);
+  const key = [
+    promptHash.toString(16),
+    Math.round(cinematic * 100),
+    Math.round(softness * 100),
+    Math.round(chaos * 100),
+    Math.round(precision * 100),
+    Math.round(fusion * 100),
+    Math.round(lighting * 100),
+  ].join(":");
+
+  return {
+    key,
+    tempo,
+    spread,
+    pulse,
+    verticalLift,
+    focusPull,
+    chaosGain,
+    cinematic,
+    softness,
+    chaos,
+    precision,
+    fusion,
+    lighting,
+  };
+}
+
+function motherV2CurrentPromptMotionProfile() {
+  const idle = state.motherIdle;
+  if (!idle) return null;
+  const phase = String(idle.phase || "").trim();
+  const canUseStored = phase === MOTHER_IDLE_STATES.DRAFTING || phase === MOTHER_IDLE_STATES.OFFERING || phase === MOTHER_IDLE_STATES.COMMITTING || phase === MOTHER_IDLE_STATES.COOLDOWN;
+  if (canUseStored && idle.promptMotionProfile && typeof idle.promptMotionProfile === "object") {
+    return idle.promptMotionProfile;
+  }
+  const fallbackCompiled = {
+    positive_prompt: String(idle.pendingPromptLine || idle.intent?.summary || "").trim(),
+    creative_directive: String(idle.intent?.creative_directive || "").trim(),
+    transformation_mode: String(idle.intent?.transformation_mode || "").trim(),
+  };
+  return motherV2PromptMotionProfileFromCompiled(fallbackCompiled);
+}
+
 function motherV2RolePreviewMergeBlend(mode = "") {
   const modeKey = String(mode || "").trim().toLowerCase();
   switch (modeKey) {
     case "amplify":
-      return 0.84;
+      return 0.24;
     case "transcend":
-      return 0.82;
+      return 0.4;
     case "destabilize":
-      return 0.78;
+      return 0.08;
     case "purify":
-      return 0.9;
+      return 0.66;
     case "hybridize":
       return 0.98;
     case "mythologize":
-      return 0.83;
+      return 0.2;
     case "monumentalize":
-      return 0.86;
+      return 0.56;
     case "fracture":
-      return 0.74;
+      return 0.03;
     case "romanticize":
       return 0.92;
     case "alienate":
-      return 0.8;
+      return 0;
     default:
       return 0;
   }
@@ -5349,6 +5819,7 @@ function motherV2RolePreviewMotionProfile({
   modelCenter = null,
   focusCenter = null,
   mergeRect = null,
+  promptMotion = null,
 } = {}) {
   const panelCenterX = (Number(surfaceW) || 0) / 2;
   const panelCenterY = (Number(surfaceH) || 0) / 2;
@@ -5372,7 +5843,7 @@ function motherV2RolePreviewMotionProfile({
     preRot: 0,
     preSat: 1,
     preBright: 1,
-    preAlpha: 1,
+    preAlpha: 0.92,
     mx: 0,
     my: 0,
     scale: 1,
@@ -5381,7 +5852,7 @@ function motherV2RolePreviewMotionProfile({
     rot: 0,
     sat: 1,
     bright: 1,
-    alpha: 1,
+    alpha: 0.84,
     speedMs: 3000,
     animKind: "flow",
     jitterAx: 2.2,
@@ -5394,130 +5865,154 @@ function motherV2RolePreviewMotionProfile({
 
   switch (modeKey) {
     case "amplify":
-      out.speedMs = 1850;
-      out.mx = ux * 3.0;
-      out.my = uy * 3.0;
-      out.scale = 1.12;
-      out.resizeX = 1.06;
-      out.resizeY = 1.06;
-      out.sat = 1.28;
-      out.bright = 1.14;
-      out.mergeStrength = 0.42;
+      out.animKind = "amplify";
+      out.speedMs = 1100;
+      out.mx = ux * 5.6;
+      out.my = uy * 5.2;
+      out.scale = 1.2;
+      out.resizeX = 1.16;
+      out.resizeY = 1.16;
+      out.rot = signX * 2.4;
+      out.sat = 1.42;
+      out.bright = 1.22;
+      out.mergeStrength = 0.16;
       break;
     case "transcend":
-      out.speedMs = 3400;
-      out.mx = towardCenterX * 1.1;
-      out.my = -3.8 + towardCenterY * 0.8;
-      out.scale = 1.04;
-      out.resizeX = 0.98;
-      out.resizeY = 1.12;
-      out.sat = 1.05;
-      out.bright = 1.12;
-      out.rot = tx * 1.2;
-      out.mergeStrength = 0.5;
+      out.animKind = "transcend";
+      out.speedMs = 5200;
+      out.mx = tx * 1.6 + towardCenterX * 0.8;
+      out.my = -7.2 + towardCenterY * 1.1;
+      out.scale = 1.02;
+      out.resizeX = 0.9;
+      out.resizeY = 1.24;
+      out.sat = 0.98;
+      out.bright = 1.24;
+      out.rot = tx * 3.2;
+      out.jitterAx = 1.1;
+      out.jitterAy = 0.9;
+      out.mergeStrength = 0.44;
       break;
     case "destabilize":
-      out.speedMs = 900;
-      out.mx = ux * 1.5;
-      out.my = uy * 1.5;
-      out.scale = 1.03;
-      out.resizeX = 1.12;
-      out.resizeY = 0.88;
-      out.rot = signX * 1.8;
-      out.sat = 1.12;
-      out.bright = 1.02;
-      out.animKind = "jitter";
-      out.jitterAx = 3.2;
-      out.jitterAy = 2.3;
-      out.mergeStrength = 0.2;
+      out.animKind = "destabilize";
+      out.speedMs = 620;
+      out.mx = ux * 2.8 + tx * 1.8;
+      out.my = uy * 2.6 + ty * 1.2;
+      out.scale = 1;
+      out.resizeX = 1.24;
+      out.resizeY = 0.78;
+      out.rot = signX * 5.2;
+      out.sat = 1.26;
+      out.bright = 0.98;
+      out.jitterAx = 5.8;
+      out.jitterAy = 4.2;
+      out.alpha = 0.78;
+      out.mergeStrength = 0.06;
       break;
     case "purify":
-      out.speedMs = 3800;
-      out.mx = towardCenterX * 2.8;
-      out.my = towardCenterY * 2.0;
-      out.scale = 0.98;
-      out.resizeX = 0.96;
-      out.resizeY = 1.04;
-      out.sat = 0.9;
-      out.bright = 1.18;
-      out.mergeStrength = 0.72;
+      out.animKind = "purify";
+      out.speedMs = 4400;
+      out.mx = towardCenterX * 4.2;
+      out.my = towardCenterY * 3.4 - 1.4;
+      out.scale = 0.96;
+      out.resizeX = 0.84;
+      out.resizeY = 1.2;
+      out.sat = 0.72;
+      out.bright = 1.32;
+      out.alpha = 0.8;
+      out.mergeStrength = 0.8;
       break;
     case "hybridize":
-      out.speedMs = 2600;
-      out.mx = towardCenterX * 3.2;
-      out.my = towardCenterY * 2.4;
-      out.scale = 1.04;
-      out.resizeX = 1.04;
-      out.resizeY = 0.96;
-      out.sat = 1.12;
-      out.bright = 1.1;
-      out.mergeStrength = 0.96;
+      out.animKind = "hybridize";
+      out.speedMs = 1800;
+      out.mx = towardCenterX * 5 + tx * 0.8;
+      out.my = towardCenterY * 4.2 + ty * 0.8;
+      out.scale = 1.08;
+      out.resizeX = 1.12;
+      out.resizeY = 0.88;
+      out.sat = 1.24;
+      out.bright = 1.16;
+      out.rot = signX * 1.6;
+      out.jitterAx = 1.8;
+      out.jitterAy = 1.4;
+      out.alpha = 0.86;
+      out.mergeStrength = 1;
       break;
     case "mythologize":
-      out.speedMs = 4200;
-      out.mx = tx * 3.6;
-      out.my = ty * 3.6;
-      out.scale = 1.06;
-      out.resizeX = 1.1;
-      out.resizeY = 0.92;
-      out.rot = signX * 1.8;
-      out.sat = 1.18;
-      out.bright = 1.1;
-      out.mergeStrength = 0.54;
+      out.animKind = "mythologize";
+      out.speedMs = 5600;
+      out.mx = tx * 6.8;
+      out.my = ty * 6.8;
+      out.scale = 1.14;
+      out.resizeX = 1.22;
+      out.resizeY = 0.8;
+      out.rot = signX * 7.5;
+      out.sat = 1.3;
+      out.bright = 1.16;
+      out.jitterAx = 3.8;
+      out.jitterAy = 2.8;
+      out.mergeStrength = 0.24;
       break;
     case "monumentalize":
-      out.speedMs = 3900;
-      out.mx = towardCenterX * 2.2;
-      out.my = -4.4 + towardCenterY;
-      out.scale = 1.11;
-      out.resizeX = 1.08;
-      out.resizeY = 1.12;
-      out.sat = 1.12;
-      out.bright = 1.1;
-      out.mergeStrength = 0.64;
+      out.animKind = "monumentalize";
+      out.speedMs = 6200;
+      out.mx = towardCenterX * 1.6;
+      out.my = -8.8 + towardCenterY * 0.8;
+      out.scale = 1.2;
+      out.resizeX = 1.1;
+      out.resizeY = 1.3;
+      out.rot = signX * 0.5;
+      out.sat = 1.06;
+      out.bright = 1.16;
+      out.alpha = 0.88;
+      out.mergeStrength = 0.62;
       break;
     case "fracture":
-      out.speedMs = 980;
-      out.mx = signX * 4.6;
-      out.my = signX * 1.2;
-      out.scale = 1.02;
-      out.resizeX = 1.16;
-      out.resizeY = 0.84;
-      out.rot = signX * 2.2;
-      out.sat = 1.08;
-      out.animKind = "jitter";
-      out.jitterAx = 4.3;
-      out.jitterAy = 2.4;
-      out.mergeStrength = 0.12;
+      out.animKind = "fracture";
+      out.speedMs = 540;
+      out.mx = signX * 8.2 + tx * 2.4;
+      out.my = signX * 2.2 - ty * 1.8;
+      out.scale = 0.98;
+      out.resizeX = 1.36;
+      out.resizeY = 0.66;
+      out.rot = signX * 8.5;
+      out.sat = 1.18;
+      out.bright = 0.92;
+      out.jitterAx = 7.8;
+      out.jitterAy = 5.4;
+      out.alpha = 0.72;
+      out.mergeStrength = 0.01;
       break;
     case "romanticize": {
-      out.speedMs = 3200;
-      out.mx = towardCenterX * 1.4;
-      out.my = towardCenterY * 1.1 - 0.8;
-      out.scale = 1.05;
-      out.resizeX = 1.08;
-      out.resizeY = 0.94;
-      out.sat = 1.16;
-      out.bright = 1.12;
+      out.animKind = "romanticize";
+      out.speedMs = 2600;
+      out.mx = towardCenterX * 2.4;
+      out.my = towardCenterY * 2.0 - 1.8;
+      out.scale = 1.08;
+      out.resizeX = 1.2;
+      out.resizeY = 0.86;
+      out.sat = 1.24;
+      out.bright = 1.18;
+      out.rot = signX * 1.2;
+      out.alpha = 0.86;
       out.mergeStrength = 0.9;
 
       const hasPair = subjectCenter && modelCenter;
       if (hasPair) {
-        const subjectToModel = motherV2VectorToTarget(centerX, centerY, modelCenter.x, modelCenter.y, 2.8);
-        const modelToSubject = motherV2VectorToTarget(centerX, centerY, subjectCenter.x, subjectCenter.y, 2.8);
+        const subjectToModel = motherV2VectorToTarget(centerX, centerY, modelCenter.x, modelCenter.y, 4.4);
+        const modelToSubject = motherV2VectorToTarget(centerX, centerY, subjectCenter.x, subjectCenter.y, 4.4);
         const pairMidX = (subjectCenter.x + modelCenter.x) / 2;
         const pairMidY = (subjectCenter.y + modelCenter.y) / 2;
-        const toPairMid = motherV2VectorToTarget(centerX, centerY, pairMidX, pairMidY, 1.6);
+        const toPairMid = motherV2VectorToTarget(centerX, centerY, pairMidX, pairMidY, 2.3);
         if (roleKey === "subject") {
           out.mx += subjectToModel.x;
           out.my += subjectToModel.y;
-          out.resizeX = 1.16;
-          out.resizeY = 0.88;
+          out.resizeX = 1.28;
+          out.resizeY = 0.8;
         } else if (roleKey === "model") {
           out.mx += modelToSubject.x;
           out.my += modelToSubject.y;
-          out.resizeX = 1.16;
-          out.resizeY = 0.88;
+          out.resizeX = 1.28;
+          out.resizeY = 0.8;
         } else {
           out.mx += toPairMid.x;
           out.my += toPairMid.y;
@@ -5526,19 +6021,22 @@ function motherV2RolePreviewMotionProfile({
       break;
     }
     case "alienate":
-      out.speedMs = 3000;
-      out.mx = ux * 4.6;
-      out.my = uy * 4.0;
-      out.scale = 0.95;
-      out.resizeX = 0.92;
-      out.resizeY = 1.08;
-      out.sat = 0.86;
-      out.bright = 0.95;
-      out.rot = signX * 1.1;
-      out.mergeStrength = 0.05;
+      out.animKind = "alienate";
+      out.speedMs = 3600;
+      out.mx = ux * 7.4 + tx * 1.2;
+      out.my = uy * 6.8 + ty * 1.2;
+      out.scale = 0.86;
+      out.resizeX = 0.72;
+      out.resizeY = 1.34;
+      out.sat = 0.62;
+      out.bright = 0.8;
+      out.rot = signX * 3.2;
+      out.alpha = 0.64;
+      out.mergeStrength = 0;
       if (roleKey === "subject" || roleKey === "model") {
-        out.resizeX = 0.84;
-        out.resizeY = 1.14;
+        out.resizeX = 0.64;
+        out.resizeY = 1.42;
+        out.alpha = 0.6;
       }
       break;
     default:
@@ -5579,21 +6077,59 @@ function motherV2RolePreviewMotionProfile({
     if (mergeBlend > 0.001) {
       const targetCx = Number(mergeRect.x) + Number(mergeRect.w) / 2;
       const targetCy = Number(mergeRect.y) + Number(mergeRect.h) / 2;
-      const centerBlend = clamp(0.7 + mergeBlend * 0.28, 0, 0.985);
+      const centerBlend = clamp(0.14 + mergeBlend * 0.74, 0, 0.92);
       out.mx = motherV2BlendNumber(out.mx, targetCx - Number(centerX), centerBlend);
       out.my = motherV2BlendNumber(out.my, targetCy - Number(centerY), centerBlend);
-      const targetScaleX = clamp((Number(mergeRect.w) || 1) / Math.max(1, Number(rectW) || 1), 0.42, 2.9);
-      const targetScaleY = clamp((Number(mergeRect.h) || 1) / Math.max(1, Number(rectH) || 1), 0.42, 2.9);
-      const shapeBlend = clamp(0.64 + mergeBlend * 0.32, 0, 0.99);
+      const targetScaleX = clamp((Number(mergeRect.w) || 1) / Math.max(1, Number(rectW) || 1), 0.68, 1.55);
+      const targetScaleY = clamp((Number(mergeRect.h) || 1) / Math.max(1, Number(rectH) || 1), 0.68, 1.55);
+      const shapeBlend = clamp(0.04 + mergeBlend * 0.38, 0, 0.46);
       out.resizeX = motherV2BlendNumber(out.resizeX, targetScaleX, shapeBlend);
       out.resizeY = motherV2BlendNumber(out.resizeY, targetScaleY, shapeBlend);
-      out.rot = motherV2BlendNumber(out.rot, 0, clamp(mergeBlend * 0.95, 0, 0.95));
-      out.alpha = motherV2BlendNumber(out.alpha, modeKey === "hybridize" ? 0.84 : 0.8, clamp(mergeBlend * 0.96, 0, 0.96));
-      out.sat = motherV2BlendNumber(out.sat, modeKey === "hybridize" ? 1.2 : 1.08, clamp(mergeBlend * 0.88, 0, 0.88));
-      out.bright = motherV2BlendNumber(out.bright, modeKey === "hybridize" ? 1.12 : 1.06, clamp(mergeBlend * 0.82, 0, 0.82));
-      out.scale = motherV2BlendNumber(out.scale, 1.03, clamp(mergeBlend * 0.42, 0, 0.42));
+      out.rot = motherV2BlendNumber(out.rot, 0, clamp(mergeBlend * 0.72, 0, 0.72));
+      out.alpha = motherV2BlendNumber(out.alpha, modeKey === "hybridize" ? 0.86 : 0.78, clamp(mergeBlend * 0.84, 0, 0.84));
+      out.sat = motherV2BlendNumber(out.sat, modeKey === "hybridize" ? 1.2 : 1.03, clamp(mergeBlend * 0.72, 0, 0.72));
+      out.bright = motherV2BlendNumber(out.bright, modeKey === "hybridize" ? 1.12 : 1.04, clamp(mergeBlend * 0.66, 0, 0.66));
+      out.scale = motherV2BlendNumber(out.scale, 1.03, clamp(mergeBlend * 0.1, 0, 0.1));
     }
   }
+
+  const promptProfile = promptMotion && typeof promptMotion === "object" ? promptMotion : null;
+  if (promptProfile) {
+    const tempo = clamp(Number(promptProfile.tempo) || 1, 0.72, 1.42);
+    out.speedMs = Math.max(420, Math.round((Number(out.speedMs) || 3000) / tempo));
+
+    const spread = clamp(Number(promptProfile.spread) || 1, 0.72, 1.35);
+    out.mx *= spread;
+    out.my *= spread;
+
+    const focusPull = clamp(Number(promptProfile.focusPull) || 0, 0, 1);
+    const focusBlendX = clamp(focusPull * 0.45, 0, 0.45);
+    const focusBlendY = clamp(focusPull * 0.34, 0, 0.34);
+    out.mx = motherV2BlendNumber(out.mx, out.mx * 0.82, focusBlendX);
+    out.my = motherV2BlendNumber(out.my, out.my * 0.84, focusBlendY);
+
+    const lift = clamp(Number(promptProfile.verticalLift) || 0, -0.24, 1);
+    out.my -= lift * 2.4;
+
+    const pulse = clamp(Number(promptProfile.pulse) || 0, 0, 1);
+    out.scale = clamp((Number(out.scale) || 1) + pulse * 0.08 - focusPull * 0.02, 0.84, 1.4);
+
+    const chaos = clamp(Number(promptProfile.chaos) || 0, 0, 1);
+    const chaosGain = clamp(Number(promptProfile.chaosGain) || 1, 0.45, 1.75);
+    out.jitterAx = clamp((Number(out.jitterAx) || 2.2) * chaosGain, 0.7, 12);
+    out.jitterAy = clamp((Number(out.jitterAy) || 1.6) * (0.85 + Math.max(0, chaosGain - 1) * 0.8), 0.55, 9);
+
+    const cinematic = clamp(Number(promptProfile.cinematic) || 0, 0, 1);
+    const softness = clamp(Number(promptProfile.softness) || 0, 0, 1);
+    const lighting = clamp(Number(promptProfile.lighting) || 0, 0, 1);
+    out.sat = clamp((Number(out.sat) || 1) + cinematic * 0.12 - softness * 0.08, 0.74, 1.5);
+    out.bright = clamp((Number(out.bright) || 1) + lighting * 0.1 - chaos * 0.04 + softness * 0.03, 0.78, 1.38);
+    out.alpha = clamp((Number(out.alpha) || 1) + pulse * 0.05 - chaos * 0.05, 0.6, 1);
+  }
+
+  // Keep proposal rects visibly filled but semi-transparent across all modes.
+  preMerge.alpha = clamp(Number(preMerge.alpha) || 0.7, 0.34, 0.74);
+  out.alpha = clamp(Number(out.alpha) || 0.7, 0.34, 0.74);
 
   const round = (n) => Math.round(Number(n || 0) * 100) / 100;
   return {
@@ -5622,7 +6158,7 @@ function motherV2RolePreviewMotionProfile({
   };
 }
 
-function motherV2RolePreviewViewportHtml(projection, { canvasCssW = 0, canvasCssH = 0 } = {}) {
+function motherV2RolePreviewViewportBox(projection, { canvasCssW = 0, canvasCssH = 0 } = {}) {
   if (!projection) return "";
   if (state.canvasMode !== "multi") return "";
   const ms = Math.max(0.0001, Number(state.multiView?.scale) || 1);
@@ -5635,20 +6171,54 @@ function motherV2RolePreviewViewportHtml(projection, { canvasCssW = 0, canvasCss
   const maxVy = projection.worldTop + Math.max(0, projection.worldH - vh);
   const vx = clamp((-mxCss) / ms, projection.worldLeft, maxVx);
   const vy = clamp((-myCss) / ms, projection.worldTop, maxVy);
-  return `<div class="mother-role-preview-viewport" style="left:${Math.round(projection.ox + (vx - projection.worldLeft) * projection.scale)}px;top:${Math.round(projection.oy + (vy - projection.worldTop) * projection.scale)}px;width:${Math.max(1, Math.round(vw * projection.scale))}px;height:${Math.max(1, Math.round(vh * projection.scale))}px;"></div>`;
+  return {
+    left: Math.round(projection.ox + (vx - projection.worldLeft) * projection.scale),
+    top: Math.round(projection.oy + (vy - projection.worldTop) * projection.scale),
+    width: Math.max(1, Math.round(vw * projection.scale)),
+    height: Math.max(1, Math.round(vh * projection.scale)),
+  };
+}
+
+function motherV2ApplyRolePreviewViewportBox(node, box) {
+  if (!node || !box) return;
+  node.style.left = `${Math.round(Number(box.left) || 0)}px`;
+  node.style.top = `${Math.round(Number(box.top) || 0)}px`;
+  node.style.width = `${Math.max(1, Math.round(Number(box.width) || 0))}px`;
+  node.style.height = `${Math.max(1, Math.round(Number(box.height) || 0))}px`;
+}
+
+function motherV2SyncRolePreviewViewport(root, projection, { canvasCssW = 0, canvasCssH = 0 } = {}) {
+  if (!root) return;
+  const existing = root.querySelector(".mother-role-preview-viewport");
+  // Keep the panel preview clean: do not render a viewport overlay box here.
+  if (existing) existing.remove();
+}
+
+function motherV2RolePreviewViewportHtml(projection, { canvasCssW = 0, canvasCssH = 0 } = {}) {
+  // Keep the panel preview clean: do not include a viewport overlay box.
+  return "";
 }
 
 function motherV2RolePreviewHtml(
   entries,
   projection,
-  { mode = "", surfaceW = 0, surfaceH = 0, canvasCssW = 0, canvasCssH = 0 } = {}
+  { mode = "", surfaceW = 0, surfaceH = 0, canvasCssW = 0, canvasCssH = 0, promptMotion = null } = {}
 ) {
   if (!projection) return "";
+  const maxSurfaceW = Math.max(1, Number(surfaceW) || 1);
+  const maxSurfaceH = Math.max(1, Number(surfaceH) || 1);
   const projectedEntries = [];
   for (const entry of Array.isArray(entries) ? entries : []) {
     if (!entry) continue;
-    const projected = projectWorldRectToSurface(entry.rect, projection);
-    if (!projected) continue;
+    const projectedRaw = projectWorldRectToSurface(entry.rect, projection);
+    if (!projectedRaw) continue;
+    // Mirror minimap projection behavior: preserve world-relative size/position.
+    const projected = {
+      x: Math.round(clamp(Number(projectedRaw.x) || 0, 0, Math.max(0, maxSurfaceW - 1))),
+      y: Math.round(clamp(Number(projectedRaw.y) || 0, 0, Math.max(0, maxSurfaceH - 1))),
+      w: Math.max(1, Math.round(Number(projectedRaw.w) || 1)),
+      h: Math.max(1, Math.round(Number(projectedRaw.h) || 1)),
+    };
     projectedEntries.push({
       entry,
       projected,
@@ -5658,6 +6228,99 @@ function motherV2RolePreviewHtml(
   }
   if (!projectedEntries.length) {
     return `<div class="mother-role-preview-surface"></div>`;
+  }
+
+  // Use the exact minimap geometry first, then apply one uniform panel-level zoom so
+  // the preview stays readable without changing relative spacing between rectangles.
+  {
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const rec of projectedEntries) {
+      const p = rec?.projected;
+      if (!p) continue;
+      const x = Number(p.x) || 0;
+      const y = Number(p.y) || 0;
+      const w = Math.max(1, Number(p.w) || 1);
+      const h = Math.max(1, Number(p.h) || 1);
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + w);
+      maxY = Math.max(maxY, y + h);
+    }
+    const boxW = Math.max(1, maxX - minX);
+    const boxH = Math.max(1, maxY - minY);
+    const targetW = Math.max(1, maxSurfaceW * clamp(Number(MOTHER_V2_ROLE_PREVIEW_PANEL_FILL_RATIO) || 0.68, 0.4, 0.9));
+    const targetH = Math.max(1, maxSurfaceH * clamp(Number(MOTHER_V2_ROLE_PREVIEW_PANEL_FILL_RATIO) || 0.68, 0.4, 0.9));
+    const zoom = clamp(
+      Math.min(targetW / boxW, targetH / boxH),
+      1,
+      Math.max(1, Number(MOTHER_V2_ROLE_PREVIEW_PANEL_ZOOM_MAX) || 2.2)
+    );
+    if (zoom > 1.001) {
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+      for (const rec of projectedEntries) {
+        const p = rec?.projected;
+        if (!p) continue;
+        const x = Number(p.x) || 0;
+        const y = Number(p.y) || 0;
+        const w = Math.max(1, Number(p.w) || 1);
+        const h = Math.max(1, Number(p.h) || 1);
+        const nextW = w * zoom;
+        const nextH = h * zoom;
+        const nextX = cx + (x - cx) * zoom;
+        const nextY = cy + (y - cy) * zoom;
+        rec.projected = {
+          x: nextX,
+          y: nextY,
+          w: nextW,
+          h: nextH,
+        };
+        rec.cx = nextX + nextW / 2;
+        rec.cy = nextY + nextH / 2;
+      }
+      let scaledMinX = Number.POSITIVE_INFINITY;
+      let scaledMinY = Number.POSITIVE_INFINITY;
+      let scaledMaxX = Number.NEGATIVE_INFINITY;
+      let scaledMaxY = Number.NEGATIVE_INFINITY;
+      for (const rec of projectedEntries) {
+        const p = rec?.projected;
+        if (!p) continue;
+        scaledMinX = Math.min(scaledMinX, Number(p.x) || 0);
+        scaledMinY = Math.min(scaledMinY, Number(p.y) || 0);
+        scaledMaxX = Math.max(scaledMaxX, (Number(p.x) || 0) + Math.max(1, Number(p.w) || 1));
+        scaledMaxY = Math.max(scaledMaxY, (Number(p.y) || 0) + Math.max(1, Number(p.h) || 1));
+      }
+      const pad = Math.max(0, Math.round(Number(MOTHER_V2_ROLE_PREVIEW_PANEL_PAD_PX) || 0));
+      const scaledW = Math.max(1, scaledMaxX - scaledMinX);
+      const scaledH = Math.max(1, scaledMaxY - scaledMinY);
+      const availW = Math.max(1, maxSurfaceW - pad * 2);
+      const availH = Math.max(1, maxSurfaceH - pad * 2);
+      const targetMinX = scaledW <= availW ? clamp(scaledMinX, pad, maxSurfaceW - pad - scaledW) : (maxSurfaceW - scaledW) / 2;
+      const targetMinY = scaledH <= availH ? clamp(scaledMinY, pad, maxSurfaceH - pad - scaledH) : (maxSurfaceH - scaledH) / 2;
+      const dx = targetMinX - scaledMinX;
+      const dy = targetMinY - scaledMinY;
+      for (const rec of projectedEntries) {
+        const p = rec?.projected;
+        if (!p) continue;
+        const x = Number(p.x) + dx;
+        const y = Number(p.y) + dy;
+        const w = Math.max(1, Number(p.w) || 1);
+        const h = Math.max(1, Number(p.h) || 1);
+        const clampedX = clamp(x, -w + 1, maxSurfaceW - 1);
+        const clampedY = clamp(y, -h + 1, maxSurfaceH - 1);
+        rec.projected = {
+          x: clampedX,
+          y: clampedY,
+          w,
+          h,
+        };
+        rec.cx = clampedX + w / 2;
+        rec.cy = clampedY + h / 2;
+      }
+    }
   }
 
   const subjectRec = projectedEntries.find((it) => String(it?.entry?.roleKey || "") === "subject") || null;
@@ -5758,14 +6421,30 @@ function motherV2RolePreviewHtml(
       modelCenter,
       focusCenter,
       mergeRect,
+      promptMotion,
     });
-    const animKind = profile.animKind === "jitter" ? "jitter" : "flow";
-    const accent = modeKey === "hybridize" ? modeAccent : String(entry.accent || "rgba(255, 72, 72, 0.92)");
+    const animKindRaw = String(profile.animKind || "").trim().toLowerCase();
+    const animKind = [
+      "flow",
+      "amplify",
+      "transcend",
+      "destabilize",
+      "purify",
+      "hybridize",
+      "mythologize",
+      "monumentalize",
+      "fracture",
+      "romanticize",
+      "alienate",
+    ].includes(animKindRaw)
+      ? animKindRaw
+      : "flow";
+    const accent = String(entry.accent || googleBrandRectColorForKey(entry.imageId || `${i}`, 0.94));
     rects.push(`
       <div
         class="mother-role-preview-rect${roleClass}"
         data-anim="${escapeHtml(animKind)}"
-        style="left:${projected.x}px;top:${projected.y}px;width:${projected.w}px;height:${projected.h}px;z-index:${20 + i};--mother-role-accent:${escapeHtml(accent)};--mother-role-stagger:${(i % 8) * 90}ms;--mother-role-mode-ms:${escapeHtml(`${Math.max(650, Number(profile.speedMs) || 3000)}ms`)};--mother-role-pre-mx:${escapeHtml(`${profile.preMx}px`)};--mother-role-pre-my:${escapeHtml(`${profile.preMy}px`)};--mother-role-pre-scale:${escapeHtml(String(profile.preScale))};--mother-role-pre-resize-x:${escapeHtml(String(profile.preResizeX))};--mother-role-pre-resize-y:${escapeHtml(String(profile.preResizeY))};--mother-role-pre-rot:${escapeHtml(`${profile.preRot}deg`)};--mother-role-pre-sat:${escapeHtml(String(profile.preSat))};--mother-role-pre-bright:${escapeHtml(String(profile.preBright))};--mother-role-pre-alpha:${escapeHtml(String(profile.preAlpha))};--mother-role-mx:${escapeHtml(`${profile.mx}px`)};--mother-role-my:${escapeHtml(`${profile.my}px`)};--mother-role-scale:${escapeHtml(String(profile.scale))};--mother-role-resize-x:${escapeHtml(String(profile.resizeX))};--mother-role-resize-y:${escapeHtml(String(profile.resizeY))};--mother-role-rot:${escapeHtml(`${profile.rot}deg`)};--mother-role-sat:${escapeHtml(String(profile.sat))};--mother-role-bright:${escapeHtml(String(profile.bright))};--mother-role-alpha:${escapeHtml(String(profile.alpha))};--mother-role-jitter-ax:${escapeHtml(`${profile.jitterAx}px`)};--mother-role-jitter-ay:${escapeHtml(`${profile.jitterAy}px`)}"
+        style="left:${projected.x}px;top:${projected.y}px;width:${projected.w}px;height:${projected.h}px;z-index:${20 + i};--mother-role-accent:${escapeHtml(accent)};--mother-role-stagger:${(i % 8) * 90}ms;--mother-role-mode-ms:${escapeHtml(`${Math.max(420, Number(profile.speedMs) || 3000)}ms`)};--mother-role-pre-mx:${escapeHtml(`${profile.preMx}px`)};--mother-role-pre-my:${escapeHtml(`${profile.preMy}px`)};--mother-role-pre-scale:${escapeHtml(String(profile.preScale))};--mother-role-pre-resize-x:${escapeHtml(String(profile.preResizeX))};--mother-role-pre-resize-y:${escapeHtml(String(profile.preResizeY))};--mother-role-pre-rot:${escapeHtml(`${profile.preRot}deg`)};--mother-role-pre-sat:${escapeHtml(String(profile.preSat))};--mother-role-pre-bright:${escapeHtml(String(profile.preBright))};--mother-role-pre-alpha:${escapeHtml(String(profile.preAlpha))};--mother-role-mx:${escapeHtml(`${profile.mx}px`)};--mother-role-my:${escapeHtml(`${profile.my}px`)};--mother-role-scale:${escapeHtml(String(profile.scale))};--mother-role-resize-x:${escapeHtml(String(profile.resizeX))};--mother-role-resize-y:${escapeHtml(String(profile.resizeY))};--mother-role-rot:${escapeHtml(`${profile.rot}deg`)};--mother-role-sat:${escapeHtml(String(profile.sat))};--mother-role-bright:${escapeHtml(String(profile.bright))};--mother-role-alpha:${escapeHtml(String(profile.alpha))};--mother-role-jitter-ax:${escapeHtml(`${profile.jitterAx}px`)};--mother-role-jitter-ay:${escapeHtml(`${profile.jitterAy}px`)}"
         title="${escapeHtml(title)}"
         aria-label="${escapeHtml(title)}"
       ></div>
@@ -5781,6 +6460,13 @@ function motherV2RolePreviewHtml(
 function renderMotherRolePreview() {
   const root = els.motherRolePreview;
   if (!root) return;
+  const hasProposalImageSet = motherV2HasProposalImageSet();
+  if (!hasProposalImageSet) {
+    root.innerHTML = "";
+    root.dataset.previewSig = "";
+    root.classList.add("hidden");
+    return;
+  }
   const animationMode = motherV2RolePreviewAnimationMode();
   if (animationMode) {
     root.setAttribute("data-mode", animationMode);
@@ -5811,9 +6497,11 @@ function renderMotherRolePreview() {
     canvasCssH,
     surfaceW,
     surfaceH,
-    padPx: 0,
+    padPx: 6,
   });
   if (!projection) return;
+  const promptMotion = motherV2CurrentPromptMotionProfile();
+  const promptMotionKey = String(promptMotion?.key || "").trim();
 
   const sig = motherV2RolePreviewSignature(entries, {
     canvasCssW,
@@ -5821,9 +6509,13 @@ function renderMotherRolePreview() {
     surfaceW,
     surfaceH,
     animationMode,
+    promptMotionKey,
   });
   if (!sig) return;
-  if (root.dataset.previewSig === sig) return;
+  if (root.dataset.previewSig === sig) {
+    motherV2SyncRolePreviewViewport(root, projection, { canvasCssW, canvasCssH });
+    return;
+  }
 
   const html = motherV2RolePreviewHtml(entries, projection, {
     mode: animationMode,
@@ -5831,6 +6523,7 @@ function renderMotherRolePreview() {
     surfaceH,
     canvasCssW,
     canvasCssH,
+    promptMotion,
   });
   if (!html) {
     root.innerHTML = "";
@@ -5839,6 +6532,7 @@ function renderMotherRolePreview() {
   }
   root.innerHTML = html;
   root.dataset.previewSig = sig;
+  motherV2SyncRolePreviewViewport(root, projection, { canvasCssW, canvasCssH });
 }
 
 function buildMotherText() {
@@ -6025,7 +6719,7 @@ function motherV2ProposalStepperHtml(phase) {
 function motherV2HasRealProposalPayload(intentPayload = null) {
   const intent = intentPayload && typeof intentPayload === "object" ? intentPayload : null;
   if (!intent) return false;
-  if (motherIdleBaseImageItems().length <= 0) return false;
+  if (!motherV2HasProposalImageSet()) return false;
   const mode = motherV2MaybeTransformationMode(intent.transformation_mode);
   const candidateModes = Array.isArray(intent.transformation_mode_candidates)
     ? intent.transformation_mode_candidates
@@ -6168,7 +6862,7 @@ function motherV2IntentSourceKind(source = "") {
 function motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml }) {
   const normalizedPhase = String(phase || "").trim();
   const visibleImageCount = motherIdleBaseImageItems().length;
-  if (visibleImageCount <= 0) return "";
+  if (visibleImageCount < MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL) return "";
   const cardVisiblePhases = new Set([
     MOTHER_IDLE_STATES.WATCHING,
     MOTHER_IDLE_STATES.OBSERVING,
@@ -6200,14 +6894,16 @@ function motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml }) {
   const explicitMode = motherV2MaybeTransformationMode(intent?.transformation_mode);
   const rememberedMode = motherV2MaybeTransformationMode(state.motherIdle?.lastProposalMode);
   const modeForDisplay = explicitMode || rememberedMode || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE;
-  const modeLabel = motherV2ProposalModeLabel(modeForDisplay);
-  const modeAccent = motherV2ProposalIconAccent(modeForDisplay);
+  const hasConfirmedIntentSource = Boolean(motherV2IntentSourceKind(intent?._intent_source_kind));
+  const modeLabel = hasConfirmedIntentSource ? motherV2ProposalModeLabel(modeForDisplay) : "";
+  const modeAccent = hasConfirmedIntentSource ? motherV2ProposalIconAccent(modeForDisplay) : "";
+  const modeAria = hasConfirmedIntentSource ? `Proposal mode ${modeLabel}` : "";
   const proposalVisualHtml = motherV2ProposalIconsHtml(intent, { phase: normalizedPhase });
   const visualHtml = proposalVisualHtml || readoutHtml;
   const visualLine = visualHtml ? `<div class="mother-proposal-visual">${visualHtml}</div>` : "";
   const flowLine = `<div class="mother-proposal-flow">${visualLine}</div>`;
   const modeLine = modeLabel
-    ? `<div class="mother-proposal-mode" style="--proposal-mode-accent:${escapeHtml(modeAccent)}" aria-label="Proposal mode ${escapeHtml(modeLabel)}">${escapeHtml(modeLabel)}</div>`
+    ? `<div class="mother-proposal-mode" style="--proposal-mode-accent:${escapeHtml(modeAccent)}" aria-label="${escapeHtml(modeAria)}">${escapeHtml(modeLabel)}</div>`
     : "";
   return `
     <div class="mother-proposal-card" aria-label="Mother proposal" data-compact="1">
@@ -6268,6 +6964,9 @@ function renderMotherReadout() {
     }
   }
   els.tipsText.classList.toggle("mother-proposal-active", Boolean(proposalCardHtml));
+  if (els.motherPanel) {
+    els.motherPanel.classList.toggle("mother-proposal-overlay", Boolean(proposalCardHtml));
+  }
   els.tipsText.classList.remove("mother-cursor");
 
   if (!changed) {
@@ -6428,6 +7127,188 @@ function syncMotherPortrait() {
   } catch (_) {}
 }
 
+function motherV2CollectCommitSeedIds(intent = null) {
+  const ids = [];
+  const pushId = (rawId) => {
+    const id = String(rawId || "").trim();
+    if (!id) return;
+    if (!isVisibleCanvasImageId(id)) return;
+    if (!ids.includes(id)) ids.push(id);
+  };
+  const pushMany = (list) => {
+    for (const rawId of Array.isArray(list) ? list : []) pushId(rawId);
+  };
+  const normalizedIntent = intent && typeof intent === "object" ? intent : null;
+  const roles = normalizedIntent?.roles && typeof normalizedIntent.roles === "object"
+    ? normalizedIntent.roles
+    : null;
+  for (const role of MOTHER_V2_ROLE_KEYS) {
+    pushMany(roles?.[role]);
+  }
+  pushMany(normalizedIntent?.target_ids);
+  pushMany(normalizedIntent?.reference_ids);
+  pushMany(state.pendingMotherDraft?.sourceIds);
+  if (!ids.length) {
+    pushMany(motherV2RoleContextIds({ limit: Number.POSITIVE_INFINITY }));
+  }
+  return ids;
+}
+
+function motherV2OfferingHiddenSeedIds() {
+  const idle = state.motherIdle;
+  if (!idle) return new Set();
+  if (idle.phase !== MOTHER_IDLE_STATES.OFFERING) return new Set();
+  if (state.canvasMode !== "multi") return new Set();
+  if (!motherV2CurrentDraft()) return new Set();
+  const intent = idle.intent && typeof idle.intent === "object" ? idle.intent : null;
+  const seedIds = motherV2CollectCommitSeedIds(intent);
+  return new Set(
+    seedIds
+      .map((rawId) => String(rawId || "").trim())
+      .filter((id) => Boolean(id) && state.imagesById.has(id))
+  );
+}
+
+function motherV2SnapshotImageForUndo(imageId) {
+  const id = String(imageId || "").trim();
+  if (!id) return null;
+  const item = state.imagesById.get(id) || null;
+  if (!item?.path) return null;
+  const rect = state.freeformRects.get(id) || null;
+  const imageIndex = (state.images || []).findIndex((entry) => String(entry?.id || "") === id);
+  const zIndex = (state.freeformZOrder || []).indexOf(id);
+  const selectedIndex = getSelectedIds().indexOf(id);
+  return {
+    id,
+    imageIndex,
+    zIndex,
+    selectedIndex,
+    wasActive: state.activeId === id,
+    rect: rect ? { ...rect } : null,
+    item: {
+      id,
+      path: String(item.path),
+      receiptPath: item.receiptPath ? String(item.receiptPath) : null,
+      kind: item.kind ? String(item.kind) : null,
+      source: item.source ? String(item.source) : null,
+      label: item.label ? String(item.label) : null,
+      timelineNodeId: item.timelineNodeId ? String(item.timelineNodeId) : null,
+      visionDesc: item.visionDesc ? String(item.visionDesc) : null,
+      visionDescMeta: item.visionDescMeta && typeof item.visionDescMeta === "object" ? { ...item.visionDescMeta } : null,
+      width: Number(item.width) || null,
+      height: Number(item.height) || null,
+    },
+  };
+}
+
+async function motherV2DiscardCommitSeedImages({ seedIds = [], keepIds = [] } = {}) {
+  const keep = new Set(
+    (Array.isArray(keepIds) ? keepIds : [])
+      .map((v) => String(v || "").trim())
+      .filter(Boolean)
+  );
+  const removed = [];
+  const seen = new Set();
+  for (const rawId of Array.isArray(seedIds) ? seedIds : []) {
+    const id = String(rawId || "").trim();
+    if (!id || seen.has(id) || keep.has(id)) continue;
+    seen.add(id);
+    const snapshot = motherV2SnapshotImageForUndo(id);
+    if (!snapshot) continue;
+    const ok = await removeImageFromCanvas(id).catch(() => false);
+    if (ok) removed.push(snapshot);
+  }
+  return removed;
+}
+
+function motherV2MoveImageToIndex(imageId, targetIndex) {
+  const id = String(imageId || "").trim();
+  if (!id || !Array.isArray(state.images) || !state.images.length) return;
+  const from = state.images.findIndex((entry) => String(entry?.id || "") === id);
+  if (from < 0) return;
+  const maxIndex = Math.max(0, state.images.length - 1);
+  const desired = Math.max(0, Math.min(maxIndex, Math.floor(Number(targetIndex) || 0)));
+  if (from === desired) return;
+  const [entry] = state.images.splice(from, 1);
+  state.images.splice(desired, 0, entry);
+}
+
+function motherV2MoveFreeformZToIndex(imageId, targetIndex) {
+  const id = String(imageId || "").trim();
+  if (!id || !Array.isArray(state.freeformZOrder) || !state.freeformZOrder.length) return;
+  const from = state.freeformZOrder.indexOf(id);
+  if (from < 0) return;
+  const maxIndex = Math.max(0, state.freeformZOrder.length - 1);
+  const desired = Math.max(0, Math.min(maxIndex, Math.floor(Number(targetIndex) || 0)));
+  if (from === desired) return;
+  state.freeformZOrder.splice(from, 1);
+  state.freeformZOrder.splice(desired, 0, id);
+}
+
+async function motherV2RestoreDiscardedSeeds(removedSeeds = []) {
+  const snapshots = (Array.isArray(removedSeeds) ? removedSeeds : [])
+    .filter((entry) => entry?.item?.id && entry?.item?.path)
+    .sort((a, b) => {
+      const ai = Number.isFinite(Number(a?.imageIndex)) ? Number(a.imageIndex) : Number.MAX_SAFE_INTEGER;
+      const bi = Number.isFinite(Number(b?.imageIndex)) ? Number(b.imageIndex) : Number.MAX_SAFE_INTEGER;
+      if (ai !== bi) return ai - bi;
+      const az = Number.isFinite(Number(a?.zIndex)) ? Number(a.zIndex) : Number.MAX_SAFE_INTEGER;
+      const bz = Number.isFinite(Number(b?.zIndex)) ? Number(b.zIndex) : Number.MAX_SAFE_INTEGER;
+      return az - bz;
+    });
+  if (!snapshots.length) return;
+  for (const snapshot of snapshots) {
+    const saved = snapshot.item;
+    const id = String(saved?.id || "").trim();
+    if (!id || state.imagesById.has(id)) continue;
+    addImage(
+      {
+        id,
+        path: String(saved.path),
+        receiptPath: saved.receiptPath ? String(saved.receiptPath) : null,
+        kind: saved.kind ? String(saved.kind) : null,
+        source: saved.source ? String(saved.source) : null,
+        label: saved.label ? String(saved.label) : basename(saved.path),
+        timelineNodeId: saved.timelineNodeId ? String(saved.timelineNodeId) : null,
+        visionDesc: saved.visionDesc ? String(saved.visionDesc) : null,
+        visionDescMeta:
+          saved.visionDescMeta && typeof saved.visionDescMeta === "object"
+            ? { ...saved.visionDescMeta }
+            : null,
+        width: Number(saved.width) || null,
+        height: Number(saved.height) || null,
+      },
+      { select: false }
+    );
+    if (snapshot.rect) {
+      state.freeformRects.set(id, { ...snapshot.rect });
+    }
+    if (Number.isFinite(Number(snapshot.imageIndex)) && Number(snapshot.imageIndex) >= 0) {
+      motherV2MoveImageToIndex(id, Number(snapshot.imageIndex));
+    }
+    if (Number.isFinite(Number(snapshot.zIndex)) && Number(snapshot.zIndex) >= 0) {
+      motherV2MoveFreeformZToIndex(id, Number(snapshot.zIndex));
+    }
+  }
+  const selected = getSelectedIds();
+  let selectedChanged = false;
+  const withSelection = snapshots
+    .filter((entry) => Number.isFinite(Number(entry?.selectedIndex)) && Number(entry.selectedIndex) >= 0)
+    .sort((a, b) => Number(a.selectedIndex) - Number(b.selectedIndex));
+  for (const entry of withSelection) {
+    const id = String(entry?.item?.id || "").trim();
+    if (!id || !state.imagesById.has(id) || selected.includes(id)) continue;
+    const index = Math.max(0, Math.min(selected.length, Math.floor(Number(entry.selectedIndex) || 0)));
+    selected.splice(index, 0, id);
+    selectedChanged = true;
+  }
+  if (selectedChanged) setSelectedIds(selected.filter((id) => state.imagesById.has(id)));
+  const active = snapshots.find((entry) => entry?.wasActive && state.imagesById.has(String(entry?.item?.id || "")));
+  if (active?.item?.id) {
+    await setActiveImage(String(active.item.id), { preserveSelection: true }).catch(() => {});
+  }
+}
+
 async function motherV2CommitSelectedDraft() {
   const idle = state.motherIdle;
   if (!idle) return false;
@@ -6438,6 +7319,7 @@ async function motherV2CommitSelectedDraft() {
   const targetIds = Array.isArray(intent.target_ids) ? intent.target_ids.map((v) => String(v || "").trim()).filter(Boolean) : [];
   const targetId = targetIds[0] || getVisibleActiveId();
   const policy = String(intent.placement_policy || "adjacent").trim() || "adjacent";
+  const seedIds = motherV2CollectCommitSeedIds(intent);
   const beforeTarget = targetId && state.imagesById.has(targetId)
     ? (() => {
         const t = state.imagesById.get(targetId);
@@ -6455,6 +7337,8 @@ async function motherV2CommitSelectedDraft() {
   motherIdleTransitionTo(MOTHER_IDLE_EVENTS.DEPLOY);
   idle.commitMutationInFlight = true;
   try {
+    let commitUndo = null;
+    let committedImageId = null;
     if (policy === "replace" && targetId && state.imagesById.has(targetId)) {
       const ok = await replaceImageInPlace(targetId, {
         path: draft.path,
@@ -6465,22 +7349,25 @@ async function motherV2CommitSelectedDraft() {
       if (!ok) throw new Error("Mother commit failed to replace target.");
       const targetItem = state.imagesById.get(targetId) || null;
       if (targetItem) targetItem.source = MOTHER_GENERATED_SOURCE;
-      idle.commitUndo = {
+      committedImageId = String(targetId);
+      commitUndo = {
         mode: "replace",
         targetId: String(targetId),
         before: beforeTarget,
-        expiresAt: Date.now() + 4500,
       };
     } else {
-      let rect = motherIdleComputePlacementCss({ policy, targetId, draftIndex: 0 });
+      const offerRect = motherV2OfferPreviewRectCss({ policy, targetId, draftIndex: 0 });
+      let rect = offerRect || motherIdleComputePlacementCss({ policy, targetId, draftIndex: 0 });
       if (rect) {
         const wrap = els.canvasWrap;
         const canvasCssW = Math.max(1, Number(wrap?.clientWidth) || 1);
         const canvasCssH = Math.max(1, Number(wrap?.clientHeight) || 1);
-        const visibleRatio = rectVisibleRatioInViewport(rect);
-        // Keep accepted Mother artifacts visible to the user.
-        if (reelLocked || visibleRatio < 0.35) {
-          rect = recenterRectToViewport(rect);
+        if (!offerRect) {
+          const visibleRatio = rectVisibleRatioInViewport(rect);
+          // Keep accepted Mother artifacts visible to the user.
+          if (reelLocked || visibleRatio < 0.35) {
+            rect = recenterRectToViewport(rect);
+          }
         }
         rect = clampFreeformRectCss(rect, canvasCssW, canvasCssH);
       }
@@ -6498,12 +7385,21 @@ async function motherV2CommitSelectedDraft() {
         },
         { select: false }
       );
-      idle.commitUndo = {
+      committedImageId = String(draft.id);
+      commitUndo = {
         mode: "insert",
         insertedId: String(draft.id),
-        expiresAt: Date.now() + 4500,
       };
     }
+    const removedSeeds = await motherV2DiscardCommitSeedImages({
+      seedIds,
+      keepIds: committedImageId ? [committedImageId] : [],
+    });
+    idle.commitUndo = {
+      ...(commitUndo || {}),
+      removedSeeds,
+      expiresAt: Date.now() + 4500,
+    };
   } finally {
     idle.commitMutationInFlight = false;
   }
@@ -6516,6 +7412,15 @@ async function motherV2CommitSelectedDraft() {
     deployed: Number(idle.telemetry?.deployed) || 0,
     intent_id: intent.intent_id || null,
     placement_policy: policy,
+  }).catch(() => {});
+  // Prevent immediate auto-reproposal loops right after deploy.
+  idle.blockedUntilUserInteraction = true;
+  state.lastInteractionAt = Date.now();
+  state.lastMotherHotAt = state.lastInteractionAt;
+  appendMotherTraceLog({
+    kind: "post_commit_wait_for_user_interaction",
+    traceId: idle.telemetry?.traceId || null,
+    actionVersion: Number(idle.actionVersion) || 0,
   }).catch(() => {});
   motherV2ClearIntentAndDrafts({ removeFiles: false });
   motherIdleTransitionTo(MOTHER_IDLE_EVENTS.COMMIT_DONE);
@@ -6553,6 +7458,9 @@ async function motherV2UndoCommit() {
         targetItem.source = undo.before.source || null;
       }
     }
+  }
+  if (Array.isArray(undo.removedSeeds) && undo.removedSeeds.length) {
+    await motherV2RestoreDiscardedSeeds(undo.removedSeeds);
   }
   idle.commitUndo = null;
   showToast("Undid Mother commit.", "tip", 1800);
@@ -6859,6 +7767,7 @@ function renderMinimap() {
     el.style.width = `${projected.w}px`;
     el.style.height = `${projected.h}px`;
     el.style.zIndex = String(10 + rec.z);
+    el.style.setProperty("--minimap-rect-fill", googleBrandRectColorForKey(rec.imageId, 0.4));
 
     if (busyIds.has(rec.imageId)) {
       const orb = document.createElement("div");
@@ -7187,7 +8096,7 @@ function motherV2ProposalIconSvg(mode) {
 function motherV2ProposalIconsHtml(intentPayload = null, { phase = null } = {}) {
   const intent = intentPayload && typeof intentPayload === "object" ? intentPayload : null;
   const normalizedPhase = String(phase || state.motherIdle?.phase || "").trim();
-  if (motherIdleBaseImageItems().length <= 0) return "";
+  if (motherIdleBaseImageItems().length < MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL) return "";
   const activePhases = new Set([
     MOTHER_IDLE_STATES.WATCHING,
     MOTHER_IDLE_STATES.OBSERVING,
@@ -7200,6 +8109,8 @@ function motherV2ProposalIconsHtml(intentPayload = null, { phase = null } = {}) 
   if (!activePhases.has(normalizedPhase)) {
     if (!intent) return "";
   }
+  const hasConfirmedIntentSource = Boolean(motherV2IntentSourceKind(intent?._intent_source_kind));
+  if (!hasConfirmedIntentSource) return "";
   let activeMode = null;
   let description = "";
   if (intent) {
@@ -7227,7 +8138,7 @@ function motherV2ProposalIconsHtml(intentPayload = null, { phase = null } = {}) 
     activeMode = MOTHER_V2_DEFAULT_TRANSFORMATION_MODE;
     if (!description) description = "Proposal pending";
   }
-  if (state.motherIdle) {
+  if (state.motherIdle && activeMode) {
     state.motherIdle.lastProposalMode = activeMode;
   }
   const label = motherV2ProposalModeLabel(activeMode);
@@ -8407,6 +9318,7 @@ function motherV2ClearIntentAndDrafts({ removeFiles = false } = {}) {
   idle.pendingIntentUpgradeUntil = 0;
   idle.pendingIntentRealtimePath = null;
   idle.pendingIntentPath = null;
+  idle.promptMotionProfile = null;
   state.pendingMotherDraft = null;
   idle.hintVisibleUntil = 0;
   idle.hintLevel = 0;
@@ -8518,7 +9430,7 @@ function motherV2ForcePhase(nextState, eventName = "force") {
 
 function motherIdleHasArmedCanvas() {
   const base = motherIdleBaseImageItems();
-  if (base.length < MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL) return false;
+  if (!motherV2HasProposalImageSet()) return false;
   if (state.canvasMode === "single") {
     const activeId = String(getVisibleActiveId() || "").trim();
     if (!activeId) return false;
@@ -8535,6 +9447,10 @@ function motherIdleHasArmedCanvas() {
     if ((Number(rect.w) || 0) <= 0 || (Number(rect.h) || 0) <= 0) return false;
   }
   return true;
+}
+
+function motherV2HasProposalImageSet() {
+  return motherIdleBaseImageItems().length >= MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL;
 }
 
 function motherIdleGenerationModelCandidates() {
@@ -8771,6 +9687,7 @@ function resetMotherIdleAndWheelState() {
     state.motherIdle.pendingDispatchToken = 0;
     state.motherIdle.dispatchTimeoutExtensions = 0;
     motherIdleResetDispatchCorrelation({ rememberPendingVersion: false });
+    state.motherIdle.promptMotionProfile = null;
     if (state.motherIdle.ignoredVersionIds instanceof Set) state.motherIdle.ignoredVersionIds.clear();
     state.motherIdle.waitingSince = 0;
     state.motherIdle.pendingSuggestionLog = null;
@@ -9269,6 +10186,59 @@ function motherIdleComputePlacementCss({ policy = "adjacent", targetId = null, d
   return candidate;
 }
 
+function motherV2OfferPreviewRectCss({ policy = "adjacent", targetId = null, draftIndex = 0 } = {}) {
+  const wrap = els.canvasWrap;
+  const canvasCssW = wrap?.clientWidth || 0;
+  const canvasCssH = wrap?.clientHeight || 0;
+  if (!canvasCssW || !canvasCssH) return null;
+  const baseRect = motherIdleComputePlacementCss({ policy, targetId, draftIndex });
+  if (!baseRect) return null;
+  if (String(policy || "") === "replace") return baseRect;
+
+  const ms = Math.max(0.0001, Number(state.multiView?.scale) || 1);
+  const dpr = Math.max(0.0001, getDpr());
+  const offsetCssX = (Number(state.multiView?.offsetX) || 0) / dpr;
+  const offsetCssY = (Number(state.multiView?.offsetY) || 0) / dpr;
+  const viewportX0 = (0 - offsetCssX) / ms;
+  const viewportY0 = (0 - offsetCssY) / ms;
+  const viewportW = Math.max(1, canvasCssW / ms);
+  const viewportH = Math.max(1, canvasCssH / ms);
+
+  const viewportMinCss = Math.max(1, Math.min(canvasCssW, canvasCssH));
+  const minPreviewWorld = (viewportMinCss * MOTHER_OFFER_PREVIEW_MIN_VIEWPORT_COVER) / ms;
+  const maxPreviewWorld = (viewportMinCss * MOTHER_OFFER_PREVIEW_MAX_VIEWPORT_COVER) / ms;
+
+  const baseW = Math.max(1, Number(baseRect.w) || 1);
+  const baseH = Math.max(1, Number(baseRect.h) || 1);
+  let w = baseW * MOTHER_OFFER_PREVIEW_SCALE;
+  let h = baseH * MOTHER_OFFER_PREVIEW_SCALE;
+  let longest = Math.max(w, h);
+  if (longest < minPreviewWorld) {
+    const up = minPreviewWorld / Math.max(1, longest);
+    w *= up;
+    h *= up;
+  }
+  longest = Math.max(w, h);
+  if (longest > maxPreviewWorld) {
+    const down = maxPreviewWorld / Math.max(1, longest);
+    w *= down;
+    h *= down;
+  }
+
+  const cx = (Number(baseRect.x) || 0) + baseW * 0.5;
+  const cy = (Number(baseRect.y) || 0) + baseH * 0.5;
+  const edgePadWorld = Math.max(8, 10) / ms;
+  let x = cx - w * 0.5;
+  let y = cy - h * 0.5;
+  const minX = viewportX0 + edgePadWorld;
+  const minY = viewportY0 + edgePadWorld;
+  const maxX = viewportX0 + viewportW - w - edgePadWorld;
+  const maxY = viewportY0 + viewportH - h - edgePadWorld;
+  x = clamp(x, minX, Math.max(minX, maxX));
+  y = clamp(y, minY, Math.max(minY, maxY));
+  return clampFreeformRectCss({ x, y, w, h, autoAspect: false }, canvasCssW, canvasCssH);
+}
+
 function motherV2ImageHints(images = []) {
   const hints = [];
   for (const img of Array.isArray(images) ? images : []) {
@@ -9332,45 +10302,6 @@ function motherV2RankImageIdsByProminence(images = []) {
     return Number(a.idx) - Number(b.idx);
   });
   return ranked.map((entry) => String(entry.id));
-}
-
-function motherV2InferIntentLocal(payload = {}) {
-  const selected = Array.isArray(payload.selected_ids) ? payload.selected_ids.map((v) => String(v || "").trim()).filter(Boolean) : [];
-  const images = Array.isArray(payload.images) ? payload.images : [];
-  const ids = images.map((img) => String(img?.id || "").trim()).filter(Boolean);
-  const rankedIds = motherV2RankImageIdsByProminence(images);
-  const activeId = String(payload.active_id || "").trim();
-  const targetIds = selected.length ? selected.slice(0, 3) : activeId ? [activeId] : rankedIds.slice(0, 1);
-  const refs = rankedIds.filter((id) => !targetIds.includes(id)).slice(0, 3);
-  const ambientModeHint = motherV2AmbientBranchModeHint(payload);
-  let transformationMode = ambientModeHint || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE;
-  const summary = motherV2ProposalSentence({ transformation_mode: transformationMode });
-  const placement = ids.length >= 4 ? "grid" : targetIds.length && refs.length ? "adjacent" : targetIds.length ? "replace" : "adjacent";
-  const subject = targetIds.slice(0, 1);
-  const model = refs.slice(0, 1);
-  const mediator = refs.slice(1, 2).length ? refs.slice(1, 2) : refs.slice(0, 1);
-  const obj = targetIds.slice(0, 1);
-  const confidence = clamp(targetIds.length ? 0.82 : 0.66, 0.2, 0.99);
-  return {
-    intent_id: `intent-${Number(payload.action_version) || 0}-${Math.random().toString(16).slice(2, 7)}`,
-    summary,
-    creative_directive: MOTHER_CREATIVE_DIRECTIVE,
-    transformation_mode: transformationMode,
-    target_ids: targetIds,
-    reference_ids: refs,
-    placement_policy: placement,
-    confidence,
-    roles: {
-      subject,
-      model,
-      mediator,
-      object: obj,
-    },
-    alternatives: [
-      { placement_policy: "adjacent" },
-      { placement_policy: "grid" },
-    ],
-  };
 }
 
 function motherV2IntentFromRealtimeIcons(iconState = null, payload = {}) {
@@ -9776,6 +10707,7 @@ function motherV2ApplyIntent(intentPayload = {}, { source = "local", preserveMod
   normalizedIntent = motherV2DiversifyIntentForRejectFollowup(normalizedIntent);
   normalizedIntent = motherV2SanitizeIntentImageIds(normalizedIntent);
   normalizedIntent = motherV2EnsureProposalCandidates(normalizedIntent);
+  idle.promptMotionProfile = null;
   if (preserveMode && normalizedIntent && idle.intent && typeof idle.intent === "object") {
     const priorMode = motherV2MaybeTransformationMode(idle.intent.transformation_mode);
     const nextModes = motherV2ProposalModes(normalizedIntent);
@@ -9796,9 +10728,8 @@ function motherV2ApplyIntent(intentPayload = {}, { source = "local", preserveMod
   idle.pendingIntentStartedAt = canUpgradeFromLateRealtime ? (Number(idle.pendingIntentStartedAt) || Date.now()) : 0;
   idle.pendingIntentUpgradeUntil = canUpgradeFromLateRealtime ? Date.now() + MOTHER_V2_INTENT_LATE_REALTIME_UPGRADE_MS : 0;
   idle.pendingIntentPayload = null;
-  // Keep the last request payload path only for local fallback intents so a matching late
-  // engine response can still upgrade this exact request (and only this request).
-  idle.pendingIntentPath = sourceTag.startsWith("local_fallback") && priorPendingIntentPath ? priorPendingIntentPath : null;
+  // Mother proposals are realtime-only; ignore heuristic intent payload upgrades.
+  idle.pendingIntentPath = null;
   clearTimeout(idle.pendingIntentTimeout);
   idle.pendingIntentTimeout = null;
   idle.pendingVisionImageIds = [];
@@ -9819,6 +10750,37 @@ function motherV2ApplyIntent(intentPayload = {}, { source = "local", preserveMod
   }).catch(() => {});
   renderMotherReadout();
   requestRender();
+}
+
+function motherV2ArmRealtimeIntentTimeout({ timeoutMs = MOTHER_V2_INTENT_RT_TIMEOUT_MS } = {}) {
+  const idle = state.motherIdle;
+  if (!idle || !idle.pendingIntent) return;
+  const actionVersion = Number(idle.actionVersion) || 0;
+  const pendingActionVersion = Number(idle.pendingActionVersion) || 0;
+  if (!actionVersion || actionVersion !== pendingActionVersion) return;
+  const requestId = String(idle.pendingIntentRequestId || "").trim() || null;
+  const ms = Math.max(1_000, Number(timeoutMs) || MOTHER_V2_INTENT_RT_TIMEOUT_MS);
+
+  clearTimeout(idle.pendingIntentTimeout);
+  idle.pendingIntentTimeout = setTimeout(() => {
+    const current = state.motherIdle;
+    if (!current || !current.pendingIntent) return;
+    if ((Number(current.actionVersion) || 0) !== actionVersion) return;
+    if ((Number(current.pendingActionVersion) || 0) !== pendingActionVersion) return;
+    const currentRequestId = String(current.pendingIntentRequestId || "").trim() || null;
+    if (requestId && currentRequestId !== requestId) return;
+    const timeoutSec = Math.max(1, Math.round(ms / 1000));
+    const message = `Mother realtime intent timed out after ${timeoutSec}s.`;
+    appendMotherTraceLog({
+      kind: "intent_realtime_failed",
+      traceId: current.telemetry?.traceId || null,
+      actionVersion,
+      request_id: requestId,
+      source: "intent_rt_timeout",
+      error: message,
+    }).catch(() => {});
+    motherIdleHandleGenerationFailed(message);
+  }, ms);
 }
 
 async function motherV2RequestIntentInference() {
@@ -9877,57 +10839,22 @@ async function motherV2RequestIntentInference() {
   const ok = await ensureEngineSpawned({ reason: "mother_intent_rt" });
   if (!ok) return false;
 
-  const applyLocalFallback = (sourceTag, payloadOverride = null) => {
+  const failRealtimeIntent = ({ sourceTag = "intent_rt_failed", message = null } = {}) => {
     const current = state.motherIdle;
     if (!requestMatchesCurrent(current, { requirePending: true })) {
       clearOwnedPendingRequest(current);
       return;
     }
-    const fallbackPayload = payloadOverride && typeof payloadOverride === "object"
-      ? payloadOverride
-      : current.pendingIntentPayload && typeof current.pendingIntentPayload === "object"
-        ? current.pendingIntentPayload
-        : payload;
-    const fallback = motherV2InferIntentLocal(fallbackPayload);
-    motherV2ApplyIntent(fallback, { source: sourceTag, requestId });
-  };
-
-  const armFallbackTimer = (timeoutMs, { sourceTag, dispatchEngineFallback = false } = {}) => {
-    clearTimeout(idle.pendingIntentTimeout);
-    idle.pendingIntentTimeout = setTimeout(() => {
-      const current = state.motherIdle;
-      if (!requestMatchesCurrent(current, { requirePending: true })) {
-        clearOwnedPendingRequest(current);
-        return;
-      }
-      if (dispatchEngineFallback) {
-        const fallbackPath = String(current.pendingIntentPath || "").trim();
-        if (fallbackPath) {
-          setStatus("Mother: realtime slow, using fallback intent inference…");
-          appendMotherTraceLog({
-            kind: "intent_fallback_dispatch",
-            traceId: current.telemetry?.traceId || null,
-            actionVersion,
-            request_id: requestId,
-            source: "intent_infer_after_rt_timeout",
-          }).catch(() => {});
-          invoke("write_pty", { data: `/intent_infer ${quoteForPtyArg(fallbackPath)}\n` })
-            .then(() => {
-              const currentAfterDispatch = state.motherIdle;
-              if (!requestMatchesCurrent(currentAfterDispatch, { requirePending: true })) return;
-              armFallbackTimer(MOTHER_V2_INTENT_ENGINE_FALLBACK_TIMEOUT_MS, {
-                sourceTag: "local_fallback_engine_timeout",
-                dispatchEngineFallback: false,
-              });
-            })
-            .catch(() => {
-              applyLocalFallback("local_fallback_engine_dispatch_failed");
-            });
-          return;
-        }
-      }
-      applyLocalFallback(sourceTag || "local_fallback_timeout");
-    }, Math.max(300, Number(timeoutMs) || 0));
+    const fallbackMessage = String(message || "Mother realtime intent inference failed.").trim();
+    appendMotherTraceLog({
+      kind: "intent_realtime_failed",
+      traceId: current.telemetry?.traceId || null,
+      actionVersion,
+      request_id: requestId,
+      source: String(sourceTag || "intent_rt_failed"),
+      error: fallbackMessage,
+    }).catch(() => {});
+    motherIdleHandleGenerationFailed(fallbackMessage);
   };
 
   let snapshotPath = null;
@@ -9962,7 +10889,7 @@ async function motherV2RequestIntentInference() {
   idle.pendingIntentUpgradeUntil = 0;
   idle.pendingActionVersion = actionVersion;
   idle.pendingIntentRealtimePath = snapshotPath;
-  idle.pendingIntentPath = payloadPath;
+  idle.pendingIntentPath = null;
   idle.pendingIntentPayload = payload;
   clearTimeout(idle.pendingIntentTimeout);
   idle.pendingIntentTimeout = null;
@@ -9979,40 +10906,22 @@ async function motherV2RequestIntentInference() {
 
   let realtimeDispatched = false;
   if (snapshotPath) {
-    await invoke("write_pty", { data: "/intent_rt_start\n" }).catch(() => {});
-    realtimeDispatched = await invoke("write_pty", { data: `/intent_rt ${quoteForPtyArg(snapshotPath)}\n` })
+    await invoke("write_pty", { data: "/intent_rt_mother_start\n" }).catch(() => {});
+    realtimeDispatched = await invoke("write_pty", { data: `/intent_rt_mother ${quoteForPtyArg(snapshotPath)}\n` })
       .then(() => true)
       .catch(() => false);
   }
 
   if (realtimeDispatched) {
-    armFallbackTimer(MOTHER_V2_INTENT_RT_TIMEOUT_MS, {
-      sourceTag: "local_fallback_rt_timeout",
-      dispatchEngineFallback: true,
-    });
-  } else if (payloadPath) {
-    setStatus("Mother: realtime unavailable, using fallback intent inference…");
-    appendMotherTraceLog({
-      kind: "intent_fallback_dispatch",
-      traceId: idle.telemetry?.traceId || null,
-      actionVersion,
-      request_id: requestId,
-      source: "intent_infer_rt_unavailable",
-    }).catch(() => {});
-    await invoke("write_pty", { data: `/intent_infer ${quoteForPtyArg(payloadPath)}\n` })
-      .then(() => {
-        const currentAfterDispatch = state.motherIdle;
-        if (!requestMatchesCurrent(currentAfterDispatch, { requirePending: true })) return;
-        armFallbackTimer(MOTHER_V2_INTENT_ENGINE_FALLBACK_TIMEOUT_MS, {
-          sourceTag: "local_fallback_engine_timeout",
-          dispatchEngineFallback: false,
-        });
-      })
-      .catch(() => {
-        applyLocalFallback("local_fallback_rt_dispatch_failed");
-      });
+    motherV2ArmRealtimeIntentTimeout({ timeoutMs: MOTHER_V2_INTENT_RT_TIMEOUT_MS });
   } else {
-    applyLocalFallback("local_fallback_nowrite");
+    failRealtimeIntent({
+      sourceTag: snapshotPath ? "intent_rt_dispatch_failed" : "intent_rt_snapshot_unavailable",
+      message: snapshotPath
+        ? "Mother realtime intent dispatch failed."
+        : "Mother realtime intent snapshot unavailable.",
+    });
+    return false;
   }
   return true;
 }
@@ -10087,6 +10996,47 @@ function motherV2CollectGenerationImagePaths() {
   const pushMany = (list) => {
     for (const value of Array.isArray(list) ? list : []) push(value);
   };
+  const selectedIds = getVisibleSelectedIds().map((v) => String(v || "").trim()).filter(Boolean);
+  const activeId = String(getVisibleActiveId() || "").trim();
+  const preferredPairIds = (() => {
+    const visibleItems = getVisibleCanvasImages();
+    if (!visibleItems.length) return [];
+    const byId = new Map(
+      visibleItems
+        .map((item) => [String(item?.id || "").trim(), item])
+        .filter(([id]) => Boolean(id))
+    );
+    const findLatestId = (predicate) => {
+      for (let i = (state.images?.length || 0) - 1; i >= 0; i -= 1) {
+        const item = state.images[i];
+        const id = String(item?.id || "").trim();
+        if (!id) continue;
+        const visible = byId.get(id);
+        if (!visible) continue;
+        if (predicate(visible)) return id;
+      }
+      return "";
+    };
+    const latestMotherId = findLatestId((item) => isMotherGeneratedImageItem(item));
+    const latestUploadId = findLatestId((item) => !isMotherGeneratedImageItem(item));
+    if (!latestMotherId || !latestUploadId || latestMotherId === latestUploadId) return [];
+
+    const firstSelectedId = selectedIds[0] || activeId || "";
+    if (firstSelectedId) {
+      const firstItem = byId.get(firstSelectedId) || null;
+      if (firstItem) {
+        if (isMotherGeneratedImageItem(firstItem)) return [firstSelectedId, latestUploadId];
+        return [firstSelectedId, latestMotherId];
+      }
+    }
+    return [latestUploadId, latestMotherId];
+  })();
+
+  // Prioritize explicit user selection first so follow-up proposals use the intended pair/set.
+  pushMany(preferredPairIds);
+  pushMany(selectedIds);
+  push(activeId);
+
   const roles = motherV2RoleMapClone();
   pushMany(roles.subject);
   pushMany(roles.model);
@@ -10094,7 +11044,6 @@ function motherV2CollectGenerationImagePaths() {
   pushMany(roles.object);
   pushMany(intent.target_ids);
   pushMany(intent.reference_ids);
-  pushMany(getVisibleSelectedIds());
   // Always include full canvas context so follow-ups can evolve beyond a small role subset.
   pushMany(motherIdleBaseImageItems().map((item) => String(item?.id || "").trim()));
   if (!ids.length) push(getVisibleActiveId());
@@ -10112,6 +11061,7 @@ function motherV2CollectGenerationImagePaths() {
   const initImage = paths[0] || null;
   const referenceImages = paths.slice(1);
   return {
+    sourceImageIds: ids.slice(),
     sourceImages: paths,
     initImage,
     referenceImages,
@@ -10140,6 +11090,19 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "") {
   };
   const payloadPath = await motherV2WritePayloadFile("mother_generate", payload);
   if (!payloadPath) return false;
+  appendMotherTraceLog({
+    kind: "generation_payload",
+    traceId: idle.telemetry?.traceId || null,
+    actionVersion: Number(idle.actionVersion) || 0,
+    intent_id: sanitizedIntent?.intent_id || idle.intent?.intent_id || null,
+    transformation_mode: motherV2NormalizeTransformationMode(sanitizedIntent?.transformation_mode),
+    placement_policy: sanitizedIntent?.placement_policy || null,
+    selected_ids: getVisibleSelectedIds().map((v) => String(v || "").trim()).filter(Boolean),
+    source_image_ids: Array.isArray(imagePayload.sourceImageIds) ? imagePayload.sourceImageIds.slice(0, 10) : [],
+    init_image_id: Array.isArray(imagePayload.sourceImageIds) && imagePayload.sourceImageIds.length
+      ? String(imagePayload.sourceImageIds[0] || "")
+      : null,
+  }).catch(() => {});
   await invoke("write_pty", { data: `/mother_generate ${quoteForPtyArg(payloadPath)}\n` });
   return true;
 }
@@ -10155,6 +11118,7 @@ async function motherV2DispatchCompiledPrompt(compiled = {}) {
   idle.pendingPromptCompile = false;
   clearTimeout(idle.pendingPromptCompileTimeout);
   idle.pendingPromptCompileTimeout = null;
+  idle.promptMotionProfile = motherV2PromptMotionProfileFromCompiled(compiled);
   const promptLine = motherV2PromptLineFromCompiled(compiled);
   if (!promptLine) {
     motherIdleHandleGenerationFailed("Mother prompt compile produced an empty prompt.");
@@ -10332,6 +11296,7 @@ function motherIdleArmFirstTimer() {
   idle.firstIdleTimer = null;
   clearTimeout(idle.intentIdleTimer);
   idle.intentIdleTimer = null;
+  if (idle.blockedUntilUserInteraction) return;
   if (!motherIdleHasArmedCanvas()) return;
   if (state.pointer.active) return;
   if (motherV2InCooldown()) return;
@@ -10340,6 +11305,7 @@ function motherIdleArmFirstTimer() {
   const delay = Math.max(25, dueAt - Date.now());
   idle.firstIdleTimer = setTimeout(() => {
     idle.firstIdleTimer = null;
+    if (state.motherIdle?.blockedUntilUserInteraction) return;
     if (!motherIdleHasArmedCanvas()) return;
     if (state.pointer.active) return;
     if (motherV2InCooldown()) return;
@@ -10360,6 +11326,7 @@ function motherIdleArmIntentTimer() {
   if (!idle) return;
   clearTimeout(idle.intentIdleTimer);
   idle.intentIdleTimer = null;
+  if (idle.blockedUntilUserInteraction) return;
   if (!motherIdleHasArmedCanvas()) return;
   if (state.pointer.active) return;
   if (motherV2InCooldown()) return;
@@ -10368,6 +11335,7 @@ function motherIdleArmIntentTimer() {
   const delay = Math.max(25, dueAt - Date.now());
   idle.intentIdleTimer = setTimeout(async () => {
     idle.intentIdleTimer = null;
+    if (state.motherIdle?.blockedUntilUserInteraction) return;
     if (!motherIdleHasArmedCanvas()) return;
     if (state.pointer.active) return;
     if (motherV2InCooldown()) return;
@@ -10427,6 +11395,14 @@ function motherIdleSyncFromInteraction({ userInteraction = false, semantic = tru
       // Non-semantic interactions (viewport motion, focus-only selection changes) should not
       // invalidate Mother state or arm the idle-watch timers.
       return;
+    }
+    if (idle.blockedUntilUserInteraction) {
+      idle.blockedUntilUserInteraction = false;
+      appendMotherTraceLog({
+        kind: "post_commit_resumed_on_user_interaction",
+        traceId: idle.telemetry?.traceId || null,
+        actionVersion: Number(idle.actionVersion) || 0,
+      }).catch(() => {});
     }
     idle.actionVersion = (Number(idle.actionVersion) || 0) + 1;
     closeMotherWheelMenu({ immediate: false });
@@ -16542,101 +17518,23 @@ async function handleEvent(event) {
     return;
   }
   if (event.type === "mother_intent_inferred") {
-    const idle = state.motherIdle;
-    if (!idle) return;
-    const requestId = String(idle.pendingIntentRequestId || "").trim() || null;
-    const eventPayloadPath = String(event.payload_path || "").trim();
-    const expectedPayloadPath = String(idle.pendingIntentPath || "").trim();
-    const actionVersion = Number(event.action_version) || 0;
-    if (actionVersion !== (Number(idle.actionVersion) || 0)) {
-      motherV2MarkStale({
-        stage: "intent_inferred",
-        event_action_version: actionVersion,
-      });
-      return;
-    }
-    const lateIntent = !idle.pendingIntent;
-    if (expectedPayloadPath) {
-      if (!eventPayloadPath) {
-        appendMotherTraceLog({
-          kind: "intent_inferred_ignored",
-          traceId: idle.telemetry?.traceId || null,
-          actionVersion: Number(idle.actionVersion) || 0,
-          reason: "missing_payload_path",
-        }).catch(() => {});
-        return;
-      }
-      if (eventPayloadPath !== expectedPayloadPath) {
-        appendMotherTraceLog({
-          kind: "intent_inferred_ignored",
-          traceId: idle.telemetry?.traceId || null,
-          actionVersion: Number(idle.actionVersion) || 0,
-          reason: "payload_path_mismatch",
-        }).catch(() => {});
-        return;
-      }
-    } else if (lateIntent) {
-      appendMotherTraceLog({
-        kind: "intent_inferred_ignored",
-        traceId: idle.telemetry?.traceId || null,
-        actionVersion: Number(idle.actionVersion) || 0,
-        reason: "not_pending_untracked_request",
-      }).catch(() => {});
-      return;
-    }
-    if (lateIntent && idle.phase !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
-      appendMotherTraceLog({
-        kind: "intent_inferred_ignored",
-        traceId: idle.telemetry?.traceId || null,
-        actionVersion: Number(idle.actionVersion) || 0,
-        reason: "not_pending_not_hypothesizing",
-        phase: String(idle.phase || ""),
-      }).catch(() => {});
-      return;
-    }
-    motherV2ApplyIntent(event.intent || null, {
-      source: event.source || "engine",
-      preserveMode: lateIntent,
-      requestId,
-    });
+    appendMotherTraceLog({
+      kind: "intent_inferred_ignored",
+      traceId: state.motherIdle?.telemetry?.traceId || null,
+      actionVersion: Number(state.motherIdle?.actionVersion) || 0,
+      reason: "heuristic_intent_disabled",
+      source: event.source ? String(event.source) : null,
+    }).catch(() => {});
     return;
   }
   if (event.type === "mother_intent_infer_failed") {
-    const idle = state.motherIdle;
-    if (!idle) return;
-    if (!idle.pendingIntent) return;
-    const eventPayloadPath = String(event.payload_path || "").trim();
-    const expectedPayloadPath = String(idle.pendingIntentPath || "").trim();
-    if (expectedPayloadPath) {
-      if (!eventPayloadPath || eventPayloadPath !== expectedPayloadPath) {
-        appendMotherTraceLog({
-          kind: "intent_infer_failed_ignored",
-          traceId: idle.telemetry?.traceId || null,
-          actionVersion: Number(idle.actionVersion) || 0,
-          reason: !eventPayloadPath ? "missing_payload_path" : "payload_path_mismatch",
-        }).catch(() => {});
-        return;
-      }
-    }
-    const requestId = String(idle.pendingIntentRequestId || "").trim() || null;
-    const fallbackPayload = idle.pendingIntentPayload && typeof idle.pendingIntentPayload === "object"
-      ? idle.pendingIntentPayload
-      : motherV2IntentPayload();
-    clearTimeout(idle.pendingIntentTimeout);
-    idle.pendingIntentTimeout = null;
-    if ((Number(idle.pendingActionVersion) || 0) !== (Number(idle.actionVersion) || 0)) {
-      idle.pendingIntent = false;
-      idle.pendingIntentRequestId = null;
-      idle.pendingIntentStartedAt = 0;
-      idle.pendingIntentUpgradeUntil = 0;
-      idle.pendingIntentRealtimePath = null;
-      idle.pendingIntentPath = null;
-      idle.pendingIntentPayload = null;
-      motherV2MarkStale({ stage: "intent_infer_failed" });
-      return;
-    }
-    const fallback = motherV2InferIntentLocal(fallbackPayload);
-    motherV2ApplyIntent(fallback, { source: "local_fallback_failed", requestId });
+    appendMotherTraceLog({
+      kind: "intent_infer_failed_ignored",
+      traceId: state.motherIdle?.telemetry?.traceId || null,
+      actionVersion: Number(state.motherIdle?.actionVersion) || 0,
+      reason: "heuristic_intent_disabled",
+      source: event.source ? String(event.source) : null,
+    }).catch(() => {});
     return;
   }
   if (event.type === "mother_prompt_compiled") {
@@ -17353,23 +18251,39 @@ async function handleEvent(event) {
     const text = event.text;
     const path = event.image_path ? String(event.image_path) : "";
     if (!path) return;
-
-    const matchAmbient = Boolean(ambient?.pendingPath && String(ambient.pendingPath) === path);
-    const matchIntent = Boolean(intent?.pendingPath && String(intent.pendingPath) === path);
-    const matchMother = Boolean(
-      motherCanAcceptRealtime &&
-        motherRealtimePath &&
-        motherRealtimePath === path
-    );
-    if (!matchIntent && !matchAmbient && !matchMother) return;
     const eventActionVersionRaw = Number(event.action_version);
-    if (matchMother && Number.isFinite(eventActionVersionRaw) && eventActionVersionRaw > 0 && eventActionVersionRaw !== motherActionVersion) {
+    const routing = classifyIntentIconsRouting({
+      path,
+      intentPendingPath: intent?.pendingPath,
+      ambientPendingPath: ambient?.pendingPath,
+      motherCanAcceptRealtime,
+      motherRealtimePath,
+      motherActionVersion,
+      eventActionVersion: eventActionVersionRaw,
+    });
+    const { matchAmbient, matchIntent, matchMother, ignoreReason } = routing;
+    if (ignoreReason === "snapshot_path_mismatch" || ignoreReason === "path_mismatch") {
+      if (!isPartial && ignoreReason === "snapshot_path_mismatch") {
+        appendMotherTraceLog({
+          kind: "intent_icons_ignored",
+          traceId: motherIdle?.telemetry?.traceId || null,
+          actionVersion: motherActionVersion,
+          request_id: motherRequestId,
+          reason: ignoreReason,
+          expected_snapshot_path: motherRealtimePath || null,
+          event_snapshot_path: path || null,
+          event_action_version: Number.isFinite(eventActionVersionRaw) ? eventActionVersionRaw : null,
+        }).catch(() => {});
+      }
+      return;
+    }
+    if (ignoreReason === "event_action_version_mismatch") {
       appendMotherTraceLog({
         kind: "intent_icons_ignored",
         traceId: motherIdle?.telemetry?.traceId || null,
         actionVersion: motherActionVersion,
         request_id: motherRequestId,
-        reason: "event_action_version_mismatch",
+        reason: ignoreReason,
         event_action_version: eventActionVersionRaw,
       }).catch(() => {});
       return;
@@ -17390,225 +18304,261 @@ async function handleEvent(event) {
       }
     }
 
-		    if (typeof text === "string" && text.trim()) {
-		      const parsed = parseIntentIconsJson(text);
-		      if (parsed) {
-		        // Capture per-image vision labels from the intent realtime response so we can
-		        // use them as signals without issuing separate /describe calls.
-		        const imageDescs = !isPartial ? extractIntentImageDescriptions(parsed) : [];
-		        let wroteVision = false;
-		        if (!isPartial && imageDescs.length) {
-		          for (const rec of imageDescs) {
-		            const imageId = rec?.image_id ? String(rec.image_id) : "";
-		            const label = rec?.label ? String(rec.label) : "";
-		            if (!imageId || !label) continue;
-		            const imgItem = state.imagesById.get(imageId) || null;
-		            if (!imgItem) continue;
-		            // First-wins for stability (prevents intent-signature churn).
-		            if (imgItem.visionDesc) continue;
-		            imgItem.visionDesc = label;
-		            imgItem.visionPending = false;
-		            imgItem.visionDescMeta = {
-		              source: event.source || null,
-		              model: event.model || null,
-		              at: Date.now(),
-		            };
-		            wroteVision = true;
-			            if (intentModeActive() || intentAmbientActive()) {
-			              appendIntentTrace({
-			                kind: "vision_description",
-			                image_id: imageId,
-		                image_path: imgItem?.path ? String(imgItem.path) : null,
-		                description: label,
-		                source: event.source || null,
-		                model: event.model || null,
-		              }).catch(() => {});
-		            }
-		          }
-		        }
+    const hasText = typeof text === "string" && text.trim();
+    if (hasText) {
+      if (isPartial && matchMother && motherIdle?.pendingIntent) {
+        // Sliding timeout: keep request alive while realtime stream is actively delivering deltas.
+        motherV2ArmRealtimeIntentTimeout({ timeoutMs: MOTHER_V2_INTENT_RT_TIMEOUT_MS });
+      }
+      const parsedResult = parseIntentIconsJsonDetailed(text);
+      const parsed = parsedResult?.ok ? parsedResult.value : null;
+      const parseStrategy = String(parsedResult?.strategy || "none");
+      const parseReason = parsedResult?.reason ? String(parsedResult.reason) : null;
+      const parseError = parsedResult?.error ? String(parsedResult.error) : null;
+      const textLen = text.length;
+      const textHash = intentIconsPayloadChecksum(text);
 
-		        if (wroteVision) {
-		          scheduleVisualPromptWrite();
-		          if (getActiveImage()?.id) renderHudReadout();
-		        }
+      if (!isPartial) {
+        const snippet = parsed ? { head: "", tail: "" } : intentIconsPayloadSafeSnippet(text);
+        if (matchIntent || matchAmbient) {
+          appendIntentTrace({
+            kind: "model_icons_payload_parse",
+            parse_ok: Boolean(parsed),
+            parse_strategy: parseStrategy,
+            parse_reason: parseReason,
+            parse_error: parseError,
+            snapshot_path: path ? String(path) : null,
+            request_id: matchMother ? motherRequestId : null,
+            action_version: matchMother ? motherActionVersion : null,
+            source: event.source || null,
+            model: event.model || null,
+            response_status: event.response_status ? String(event.response_status) : null,
+            response_status_reason: event.response_status_reason ? String(event.response_status_reason) : null,
+            text_len: textLen,
+            text_hash: textHash,
+            snippet_head: snippet.head || null,
+            snippet_tail: snippet.tail || null,
+          }).catch(() => {});
+        }
+        if (matchMother && motherIdle) {
+          appendMotherTraceLog({
+            kind: "intent_payload_parse",
+            traceId: motherIdle.telemetry?.traceId || null,
+            actionVersion: Number(motherIdle.actionVersion) || 0,
+            request_id: motherRequestId,
+            snapshot_path: path || null,
+            parse_ok: Boolean(parsed),
+            parse_strategy: parseStrategy,
+            parse_reason: parseReason,
+            parse_error: parseError,
+            source: event.source || null,
+            model: event.model || null,
+            response_status: event.response_status ? String(event.response_status) : null,
+            response_status_reason: event.response_status_reason ? String(event.response_status_reason) : null,
+            text_len: textLen,
+            text_hash: textHash,
+            snippet_head: snippet.head || null,
+            snippet_tail: snippet.tail || null,
+          }).catch(() => {});
+        }
+      }
 
-			        const parsedAt = Date.now();
-			        if (matchIntent && intent) {
-			          intent.iconState = parsed;
-			          intent.iconStateAt = parsedAt;
-			          intent.rtState = "ready";
-			          intent.disabledReason = null;
-			          intent.lastError = null;
-			          intent.lastErrorAt = 0;
-			          intent.uiHideSuggestion = false;
-			        }
-			        if (matchAmbient && ambient) {
-			          ambient.iconState = parsed;
-			          ambient.iconStateAt = parsedAt;
-			          ambient.rtState = "ready";
-			          ambient.disabledReason = null;
-			          ambient.lastError = null;
-			          ambient.lastErrorAt = 0;
-			          if (!isPartial) {
-			            const touched = imageDescs.map((rec) => String(rec?.image_id || "")).filter(Boolean);
-			            if (touched.length) rememberAmbientTouchedImageIds(touched);
-			            rebuildAmbientIntentSuggestions(parsed, { reason: "realtime", nowMs: parsedAt });
-			          }
-			        }
-			        if (matchMother && motherIdle && !isPartial) {
-			          const payloadForMother = motherIdle.pendingIntentPayload && typeof motherIdle.pendingIntentPayload === "object"
-			            ? motherIdle.pendingIntentPayload
-			            : motherV2IntentPayload();
-			          const realtimeIntent = motherV2IntentFromRealtimeIcons(parsed, payloadForMother);
-			          if (!motherIdle.pendingIntent) {
-			            appendMotherTraceLog({
-			              kind: "intent_realtime_upgrade",
-			              traceId: motherIdle.telemetry?.traceId || null,
-			              actionVersion: Number(motherIdle.actionVersion) || 0,
-			              request_id: motherRequestId,
-			              snapshot_path: path || null,
-			            }).catch(() => {});
-			          }
-			          motherV2ApplyIntent(realtimeIntent, {
-			            source: event.source || "intent_rt_realtime",
-			            requestId: motherRequestId,
-			          });
-			        }
-			        // Keep focus stable if possible (unless rejected); otherwise pick the next suggestion.
-			        const picked = pickSuggestedIntentBranch(parsed);
-			        if (matchIntent && intent) {
-			          intent.focusBranchId = (picked?.branch_id ? String(picked.branch_id) : "") || pickDefaultIntentFocusBranchId(parsed);
-			        }
-			        if (!isPartial && (matchIntent || matchAmbient)) {
-		          const branchIds = Array.isArray(parsed?.branches)
-		            ? parsed.branches.map((b) => (b?.branch_id ? String(b.branch_id) : "")).filter(Boolean)
-		            : [];
-		          const branchRank = Array.isArray(parsed?.branches)
-		            ? parsed.branches
-		                .map((b) => ({
-		                  branch_id: b?.branch_id ? String(b.branch_id) : "",
-		                  confidence: typeof b?.confidence === "number" && Number.isFinite(b.confidence) ? clamp(Number(b.confidence) || 0, 0, 1) : null,
-		                  evidence_image_ids: Array.isArray(b?.evidence_image_ids)
-		                    ? b.evidence_image_ids.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 3)
-		                    : [],
-		                }))
-		                .filter((b) => Boolean(b.branch_id))
-		            : [];
-			          appendIntentTrace({
-			            kind: "model_icons",
-		            partial: false,
-		            frame_id: parsed?.frame_id ? String(parsed.frame_id) : null,
-		            snapshot_path: path ? String(path) : null,
-		            branch_ids: branchIds,
-		            branch_rank: branchRank.length ? branchRank : null,
-			            focus_branch_id: intent?.focusBranchId ? String(intent.focusBranchId) : null,
-		            checkpoint_applies_to: parsed?.checkpoint?.applies_to ? String(parsed.checkpoint.applies_to) : null,
-		            checkpoint_branch_id: picked?.checkpoint_branch_id ? String(picked.checkpoint_branch_id) : null,
-		            ranked_branch_ids: Array.isArray(picked?.ranked_branch_ids) && picked.ranked_branch_ids.length ? picked.ranked_branch_ids : null,
-		            suggestion_reason: picked?.reason ? String(picked.reason) : null,
-		            image_descriptions: imageDescs.length ? imageDescs : null,
-		            text_len: typeof text === "string" ? text.length : 0,
-		          }).catch(() => {});
-		        }
-			        if (matchIntent && intent) {
-			          const total = Math.max(1, Number(intent.totalRounds) || 3);
-			          const round = Math.max(1, Number(intent.round) || 1);
-		          // After the final round proposals arrive, force an explicit YES to proceed.
-		          if (INTENT_FORCE_CHOICE_ENABLED && INTENT_ROUNDS_ENABLED && !isPartial && round >= total && !intent.forceChoice) {
-		            intent.forceChoice = true;
-		            ensureIntentFallbackIconState("final_round");
-		            scheduleIntentStateWrite({ immediate: true });
-		          } else {
-		            if (!INTENT_FORCE_CHOICE_ENABLED) intent.forceChoice = false;
-		            scheduleIntentStateWrite();
-		          }
-			        }
-		      } else if (!isPartial) {
-		        // Treat invalid JSON as a non-fatal failure: fall back to local branches and keep the UI interactive.
-		        if (matchIntent && intent) {
-		          intent.rtState = "failed";
-		          intent.disabledReason = "Intent icons parse failed.";
-		          intent.lastError = intent.disabledReason;
-		          intent.lastErrorAt = Date.now();
-		          intent.uiHideSuggestion = false;
-		          if (!INTENT_FORCE_CHOICE_ENABLED) intent.forceChoice = false;
-		          const icon = ensureIntentFallbackIconState("parse_failed");
-		          if (!intent.focusBranchId) intent.focusBranchId = pickSuggestedIntentBranchId(icon) || pickDefaultIntentFocusBranchId(icon);
-		        }
-		        if (matchAmbient && ambient) {
-		          applyAmbientIntentFallback("parse_failed", { message: "Intent icons parse failed." });
-		        }
-		        if (matchMother && motherIdle) {
-		          const fallbackPayload = motherIdle.pendingIntentPayload && typeof motherIdle.pendingIntentPayload === "object"
-		            ? motherIdle.pendingIntentPayload
-		            : motherV2IntentPayload();
-		          const fallbackPath = String(motherIdle.pendingIntentPath || "").trim();
-		          if (fallbackPath) {
-		            setStatus("Mother: realtime parse failed, using fallback intent inference…");
-		            appendMotherTraceLog({
-		              kind: "intent_fallback_dispatch",
-		              traceId: motherIdle.telemetry?.traceId || null,
-		              actionVersion: Number(motherIdle.actionVersion) || 0,
-		              request_id: motherRequestId,
-		              source: "intent_infer_parse_failed",
-		            }).catch(() => {});
-		            invoke("write_pty", { data: `/intent_infer ${quoteForPtyArg(fallbackPath)}\n` })
-		              .then(() => {
-		                const currentAfterDispatch = state.motherIdle;
-		                if (!currentAfterDispatch || !currentAfterDispatch.pendingIntent) return;
-		                if (
-		                  motherRequestId &&
-		                  (String(currentAfterDispatch.pendingIntentRequestId || "").trim() || null) !== motherRequestId
-		                ) {
-		                  return;
-		                }
-		                clearTimeout(currentAfterDispatch.pendingIntentTimeout);
-		                currentAfterDispatch.pendingIntentTimeout = setTimeout(() => {
-		                  const current = state.motherIdle;
-		                  if (!current || !current.pendingIntent) return;
-		                  if (
-		                    motherRequestId &&
-		                    (String(current.pendingIntentRequestId || "").trim() || null) !== motherRequestId
-		                  ) {
-		                    return;
-		                  }
-		                  if ((Number(current.pendingActionVersion) || 0) !== (Number(current.actionVersion) || 0)) {
-		                    current.pendingIntent = false;
-		                    current.pendingIntentRequestId = null;
-		                    current.pendingIntentStartedAt = 0;
-		                    current.pendingIntentUpgradeUntil = 0;
-		                    current.pendingIntentRealtimePath = null;
-		                    current.pendingIntentPath = null;
-		                    current.pendingIntentPayload = null;
-		                    clearTimeout(current.pendingIntentTimeout);
-		                    current.pendingIntentTimeout = null;
-		                    return;
-		                  }
-		                  const fallback = motherV2InferIntentLocal(fallbackPayload);
-		                  motherV2ApplyIntent(fallback, { source: "local_fallback_rt_parse_failed", requestId: motherRequestId });
-		                }, MOTHER_V2_INTENT_ENGINE_FALLBACK_TIMEOUT_MS);
-		              })
-		              .catch(() => {
-		                const fallback = motherV2InferIntentLocal(fallbackPayload);
-		                motherV2ApplyIntent(fallback, { source: "local_fallback_rt_parse_failed", requestId: motherRequestId });
-		              });
-		          } else {
-		            const fallback = motherV2InferIntentLocal(fallbackPayload);
-		            motherV2ApplyIntent(fallback, { source: "local_fallback_rt_parse_failed", requestId: motherRequestId });
-		          }
-		        }
-		        if (matchIntent || matchAmbient) {
-		          appendIntentTrace({
-		            kind: "model_icons_parse_failed",
-		            reason: intent?.disabledReason || "Intent icons parse failed.",
-		            snapshot_path: path ? String(path) : null,
-		            text_len: typeof text === "string" ? text.length : 0,
-		            text_snippet: String(text || "").slice(0, 1200),
-		            rt_state: intent?.rtState || ambient?.rtState || "failed",
-		          }).catch(() => {});
-		        }
-		        if (matchIntent && intent) scheduleIntentStateWrite({ immediate: true });
-		      }
+      if (parsed) {
+        // Capture per-image vision labels from the intent realtime response so we can
+        // use them as signals without issuing separate /describe calls.
+        const imageDescs = !isPartial ? extractIntentImageDescriptions(parsed) : [];
+        let wroteVision = false;
+        if (!isPartial && imageDescs.length) {
+          for (const rec of imageDescs) {
+            const imageId = rec?.image_id ? String(rec.image_id) : "";
+            const label = rec?.label ? String(rec.label) : "";
+            if (!imageId || !label) continue;
+            const imgItem = state.imagesById.get(imageId) || null;
+            if (!imgItem) continue;
+            // First-wins for stability (prevents intent-signature churn).
+            if (imgItem.visionDesc) continue;
+            imgItem.visionDesc = label;
+            imgItem.visionPending = false;
+            imgItem.visionDescMeta = {
+              source: event.source || null,
+              model: event.model || null,
+              at: Date.now(),
+            };
+            wroteVision = true;
+            if (intentModeActive() || intentAmbientActive()) {
+              appendIntentTrace({
+                kind: "vision_description",
+                image_id: imageId,
+                image_path: imgItem?.path ? String(imgItem.path) : null,
+                description: label,
+                source: event.source || null,
+                model: event.model || null,
+              }).catch(() => {});
+            }
+          }
+        }
+
+        if (wroteVision) {
+          scheduleVisualPromptWrite();
+          if (getActiveImage()?.id) renderHudReadout();
+        }
+
+        const parsedAt = Date.now();
+        if (matchIntent && intent) {
+          intent.iconState = parsed;
+          intent.iconStateAt = parsedAt;
+          intent.rtState = "ready";
+          intent.disabledReason = null;
+          intent.lastError = null;
+          intent.lastErrorAt = 0;
+          intent.uiHideSuggestion = false;
+        }
+        if (matchAmbient && ambient) {
+          ambient.iconState = parsed;
+          ambient.iconStateAt = parsedAt;
+          ambient.rtState = "ready";
+          ambient.disabledReason = null;
+          ambient.lastError = null;
+          ambient.lastErrorAt = 0;
+          if (!isPartial) {
+            const touched = imageDescs.map((rec) => String(rec?.image_id || "")).filter(Boolean);
+            if (touched.length) rememberAmbientTouchedImageIds(touched);
+            rebuildAmbientIntentSuggestions(parsed, { reason: "realtime", nowMs: parsedAt });
+          }
+        }
+        if (matchMother && motherIdle && !isPartial) {
+          const payloadForMother = motherIdle.pendingIntentPayload && typeof motherIdle.pendingIntentPayload === "object"
+            ? motherIdle.pendingIntentPayload
+            : motherV2IntentPayload();
+          const realtimeIntent = motherV2IntentFromRealtimeIcons(parsed, payloadForMother);
+          const isLateRealtimeUpgrade = !motherIdle.pendingIntent;
+          if (!motherIdle.pendingIntent) {
+            appendMotherTraceLog({
+              kind: "intent_realtime_upgrade",
+              traceId: motherIdle.telemetry?.traceId || null,
+              actionVersion: Number(motherIdle.actionVersion) || 0,
+              request_id: motherRequestId,
+              snapshot_path: path || null,
+            }).catch(() => {});
+          }
+          motherV2ApplyIntent(realtimeIntent, {
+            source: event.source || "intent_rt_realtime",
+            requestId: motherRequestId,
+            preserveMode: isLateRealtimeUpgrade,
+          });
+        }
+        // Keep focus stable if possible (unless rejected); otherwise pick the next suggestion.
+        const picked = pickSuggestedIntentBranch(parsed);
+        if (matchIntent && intent) {
+          intent.focusBranchId = (picked?.branch_id ? String(picked.branch_id) : "") || pickDefaultIntentFocusBranchId(parsed);
+        }
+        if (!isPartial && (matchIntent || matchAmbient)) {
+          const branchIds = Array.isArray(parsed?.branches)
+            ? parsed.branches.map((b) => (b?.branch_id ? String(b.branch_id) : "")).filter(Boolean)
+            : [];
+          const branchRank = Array.isArray(parsed?.branches)
+            ? parsed.branches
+                .map((b) => ({
+                  branch_id: b?.branch_id ? String(b.branch_id) : "",
+                  confidence: typeof b?.confidence === "number" && Number.isFinite(b.confidence) ? clamp(Number(b.confidence) || 0, 0, 1) : null,
+                  evidence_image_ids: Array.isArray(b?.evidence_image_ids)
+                    ? b.evidence_image_ids.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 3)
+                    : [],
+                }))
+                .filter((b) => Boolean(b.branch_id))
+            : [];
+          appendIntentTrace({
+            kind: "model_icons",
+            partial: false,
+            frame_id: parsed?.frame_id ? String(parsed.frame_id) : null,
+            snapshot_path: path ? String(path) : null,
+            branch_ids: branchIds,
+            branch_rank: branchRank.length ? branchRank : null,
+            focus_branch_id: intent?.focusBranchId ? String(intent.focusBranchId) : null,
+            checkpoint_applies_to: parsed?.checkpoint?.applies_to ? String(parsed.checkpoint.applies_to) : null,
+            checkpoint_branch_id: picked?.checkpoint_branch_id ? String(picked.checkpoint_branch_id) : null,
+            ranked_branch_ids: Array.isArray(picked?.ranked_branch_ids) && picked.ranked_branch_ids.length ? picked.ranked_branch_ids : null,
+            suggestion_reason: picked?.reason ? String(picked.reason) : null,
+            image_descriptions: imageDescs.length ? imageDescs : null,
+            text_len: textLen,
+            text_hash: textHash,
+            parse_strategy: parseStrategy,
+          }).catch(() => {});
+        }
+        if (matchIntent && intent) {
+          const total = Math.max(1, Number(intent.totalRounds) || 3);
+          const round = Math.max(1, Number(intent.round) || 1);
+          // After the final round proposals arrive, force an explicit YES to proceed.
+          if (INTENT_FORCE_CHOICE_ENABLED && INTENT_ROUNDS_ENABLED && !isPartial && round >= total && !intent.forceChoice) {
+            intent.forceChoice = true;
+            ensureIntentFallbackIconState("final_round");
+            scheduleIntentStateWrite({ immediate: true });
+          } else {
+            if (!INTENT_FORCE_CHOICE_ENABLED) intent.forceChoice = false;
+            scheduleIntentStateWrite();
+          }
+        }
+      } else if (!isPartial) {
+        // Treat invalid JSON as a non-fatal failure: fall back to local branches and keep the UI interactive.
+        const parseReasonLabel = parseReason ? parseReason.replace(/_/g, " ") : "parse failed";
+        const intentParseMessage = `Intent icons parse failed (${parseReasonLabel}).`;
+        const snippet = intentIconsPayloadSafeSnippet(text);
+        if (matchIntent && intent) {
+          intent.rtState = "failed";
+          intent.disabledReason = "Intent icons parse failed.";
+          intent.lastError = intent.disabledReason;
+          intent.lastErrorAt = Date.now();
+          intent.uiHideSuggestion = false;
+          if (!INTENT_FORCE_CHOICE_ENABLED) intent.forceChoice = false;
+          const icon = ensureIntentFallbackIconState("parse_failed");
+          if (!intent.focusBranchId) intent.focusBranchId = pickSuggestedIntentBranchId(icon) || pickDefaultIntentFocusBranchId(icon);
+        }
+        if (matchAmbient && ambient) {
+          applyAmbientIntentFallback("parse_failed", { message: intentParseMessage });
+        }
+        if (matchMother && motherIdle) {
+          const fallbackMessage = parseReason === "truncated_json"
+            ? "Mother realtime intent response was truncated."
+            : "Mother realtime intent parse failed.";
+          appendMotherTraceLog({
+            kind: "intent_realtime_failed",
+            traceId: motherIdle.telemetry?.traceId || null,
+            actionVersion: Number(motherIdle.actionVersion) || 0,
+            request_id: motherRequestId,
+            source: "intent_rt_parse_failed",
+            parse_reason: parseReason,
+            parse_strategy: parseStrategy,
+            parse_error: parseError,
+            response_status: event.response_status ? String(event.response_status) : null,
+            response_status_reason: event.response_status_reason ? String(event.response_status_reason) : null,
+            snapshot_path: path || null,
+            text_len: textLen,
+            text_hash: textHash,
+            snippet_head: snippet.head || null,
+            snippet_tail: snippet.tail || null,
+            error: fallbackMessage,
+          }).catch(() => {});
+          motherIdleHandleGenerationFailed(fallbackMessage);
+        }
+        if (matchIntent || matchAmbient) {
+          appendIntentTrace({
+            kind: "model_icons_parse_failed",
+            reason: intent?.disabledReason || intentParseMessage,
+            parse_reason: parseReason,
+            parse_strategy: parseStrategy,
+            parse_error: parseError,
+            response_status: event.response_status ? String(event.response_status) : null,
+            response_status_reason: event.response_status_reason ? String(event.response_status_reason) : null,
+            snapshot_path: path ? String(path) : null,
+            text_len: textLen,
+            text_hash: textHash,
+            snippet_head: snippet.head || null,
+            snippet_tail: snippet.tail || null,
+            rt_state: intent?.rtState || ambient?.rtState || "failed",
+          }).catch(() => {});
+        }
+        if (matchIntent && intent) scheduleIntentStateWrite({ immediate: true });
+      }
     }
 
     if (!isPartial) {
@@ -17698,63 +18648,15 @@ async function handleEvent(event) {
       applyAmbientIntentFallback("failed", { message: msg, hardDisable });
     }
     if (matchMother && motherIdle) {
-      const fallbackPayload = motherIdle.pendingIntentPayload && typeof motherIdle.pendingIntentPayload === "object"
-        ? motherIdle.pendingIntentPayload
-        : motherV2IntentPayload();
-      const fallbackPath = String(motherIdle.pendingIntentPath || "").trim();
-      if (fallbackPath) {
-        setStatus("Mother: realtime failed, using fallback intent inference…");
-        appendMotherTraceLog({
-          kind: "intent_fallback_dispatch",
-          traceId: motherIdle.telemetry?.traceId || null,
-          actionVersion: Number(motherIdle.actionVersion) || 0,
-          request_id: motherRequestId,
-          source: "intent_infer_rt_failed",
-        }).catch(() => {});
-        invoke("write_pty", { data: `/intent_infer ${quoteForPtyArg(fallbackPath)}\n` })
-          .then(() => {
-            const currentAfterDispatch = state.motherIdle;
-            if (!currentAfterDispatch || !currentAfterDispatch.pendingIntent) return;
-            if (
-              motherRequestId &&
-              (String(currentAfterDispatch.pendingIntentRequestId || "").trim() || null) !== motherRequestId
-            ) {
-              return;
-            }
-            clearTimeout(currentAfterDispatch.pendingIntentTimeout);
-            currentAfterDispatch.pendingIntentTimeout = setTimeout(() => {
-              const current = state.motherIdle;
-              if (!current || !current.pendingIntent) return;
-              if (
-                motherRequestId &&
-                (String(current.pendingIntentRequestId || "").trim() || null) !== motherRequestId
-              ) {
-                return;
-              }
-              if ((Number(current.pendingActionVersion) || 0) !== (Number(current.actionVersion) || 0)) {
-                current.pendingIntent = false;
-                current.pendingIntentRequestId = null;
-                current.pendingIntentStartedAt = 0;
-                current.pendingIntentUpgradeUntil = 0;
-                current.pendingIntentRealtimePath = null;
-                current.pendingIntentPath = null;
-                current.pendingIntentPayload = null;
-                clearTimeout(current.pendingIntentTimeout);
-                current.pendingIntentTimeout = null;
-                return;
-              }
-              const fallback = motherV2InferIntentLocal(fallbackPayload);
-              motherV2ApplyIntent(fallback, { source: "local_fallback_engine_timeout", requestId: motherRequestId });
-            }, MOTHER_V2_INTENT_ENGINE_FALLBACK_TIMEOUT_MS);
-          })
-          .catch(() => {
-            const fallback = motherV2InferIntentLocal(fallbackPayload);
-            motherV2ApplyIntent(fallback, { source: "local_fallback_rt_failed", requestId: motherRequestId });
-          });
-      } else {
-        const fallback = motherV2InferIntentLocal(fallbackPayload);
-        motherV2ApplyIntent(fallback, { source: "local_fallback_rt_failed", requestId: motherRequestId });
-      }
+      appendMotherTraceLog({
+        kind: "intent_realtime_failed",
+        traceId: motherIdle.telemetry?.traceId || null,
+        actionVersion: Number(motherIdle.actionVersion) || 0,
+        request_id: motherRequestId,
+        source: "intent_rt_failed",
+        error: msg,
+      }).catch(() => {});
+      motherIdleHandleGenerationFailed(`Mother realtime intent failed. ${msg}`);
     }
 
     if (matchIntent && intent && !INTENT_FORCE_CHOICE_ENABLED) {
@@ -18552,6 +19454,8 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   const ms = Number(state.multiView?.scale) || 1;
   const mox = Number(state.multiView?.offsetX) || 0;
   const moy = Number(state.multiView?.offsetY) || 0;
+  const hiddenOfferSeedIds = motherV2OfferingHiddenSeedIds();
+  const isHiddenOfferSeedId = (rawId) => hiddenOfferSeedIds.has(String(rawId || "").trim());
 
   const dpr = getDpr();
   wctx.save();
@@ -18563,6 +19467,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     : items.map((it) => it?.id).filter(Boolean);
 
   for (const imageId of drawOrder) {
+    if (isHiddenOfferSeedId(imageId)) continue;
     const item = imageId ? state.imagesById.get(imageId) : null;
     const rect = imageId ? state.multiRects.get(imageId) : null;
     if (!rect) continue;
@@ -18600,10 +19505,12 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   }
   wctx.restore();
 
-  const selectedIds = getSelectedIds().filter((id) => id && !isImageEffectTokenized(id));
+  const selectedIds = getSelectedIds().filter((id) => id && !isImageEffectTokenized(id) && !isHiddenOfferSeedId(id));
   const multiSelectMode = selectedIds.length > 1;
-  const activeRect = state.activeId && !isImageEffectTokenized(state.activeId) ? state.multiRects.get(state.activeId) : null;
-  const activeItem = state.activeId && !isImageEffectTokenized(state.activeId)
+  const activeRect = state.activeId && !isImageEffectTokenized(state.activeId) && !isHiddenOfferSeedId(state.activeId)
+    ? state.multiRects.get(state.activeId)
+    : null;
+  const activeItem = state.activeId && !isImageEffectTokenized(state.activeId) && !isHiddenOfferSeedId(state.activeId)
     ? state.imagesById.get(state.activeId) || null
     : null;
 
@@ -18627,7 +19534,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   } else {
     // Multi-select highlights (non-active).
     const multiSelected = getSelectedIds().filter(
-      (id) => id && id !== state.activeId && !isImageEffectTokenized(id)
+      (id) => id && id !== state.activeId && !isImageEffectTokenized(id) && !isHiddenOfferSeedId(id)
     );
     if (multiSelected.length) {
       octx.save();
@@ -18750,7 +19657,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
 
   // Triplet insights overlays (Extract the Rule / Odd One Out).
   const oddId = state.tripletOddOneOutId;
-  if (oddId) {
+  if (oddId && !isHiddenOfferSeedId(oddId)) {
     const rect = state.multiRects.get(oddId) || null;
     if (rect) {
       octx.save();
@@ -18772,6 +19679,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     const dotR = Math.max(3, Math.round(5 * dpr));
     for (const item of items) {
       if (!item?.id) continue;
+      if (isHiddenOfferSeedId(item.id)) continue;
       const rect = state.multiRects.get(item.id) || null;
       if (!rect) continue;
       const points = state.tripletRuleAnnotations.get(item.id) || [];
@@ -18944,10 +19852,12 @@ function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
   const yInset = Math.max(4, Math.round(8 * dpr));
   const hits = [];
   const roleAnchors = new Map();
+  const hiddenOfferSeedIds = motherV2OfferingHiddenSeedIds();
 
   for (const item of state.images || []) {
     const imageId = String(item?.id || "").trim();
     if (!imageId) continue;
+    if (hiddenOfferSeedIds.has(imageId)) continue;
     const rect = state.multiRects.get(imageId) || null;
     if (!rect) continue;
     const roles = showRoleGlyphs ? MOTHER_V2_ROLE_KEYS.filter((key) => motherV2RoleImageIds(key).includes(imageId)) : [];
@@ -19026,7 +19936,7 @@ function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
     const policy = String(idle.intent?.placement_policy || "adjacent");
     const targets = Array.isArray(idle.intent?.target_ids) ? idle.intent.target_ids : [];
     const targetId = targets.length ? String(targets[0] || "") : state.activeId ? String(state.activeId) : null;
-    const rectCss = motherIdleComputePlacementCss({ policy, targetId, draftIndex: 0 });
+    const rectCss = motherV2OfferPreviewRectCss({ policy, targetId, draftIndex: 0 });
     if (rectCss) {
       const px = {
         x: (Number(rectCss.x) || 0) * dpr * ms + mox,
@@ -22633,12 +23543,12 @@ async function boot() {
     console.log("[desktop-automation] listener hit", event);
     void handleDesktopAutomation(event);
   });
-  await invoke("report_automation_frontend_ready", { ready: true }).catch((err) => {
-    console.warn("desktop automation readiness handshake failed", err);
-  });
 
   // Auto-create a run for speed; users can always "Open Run" later.
   await createRun();
+  await invoke("report_automation_frontend_ready", { ready: true }).catch((err) => {
+    console.warn("desktop automation readiness handshake failed", err);
+  });
   requestRender();
 }
 

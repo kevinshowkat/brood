@@ -1,10 +1,22 @@
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use std::collections::HashMap;
+#[cfg(target_family = "unix")]
+use std::io::{BufRead, BufReader};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::process;
+#[cfg(target_family = "unix")]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(target_family = "unix")]
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::{Manager, State};
 
 fn find_repo_root(start: &Path) -> Option<PathBuf> {
@@ -73,7 +85,9 @@ fn parse_dotenv(path: &Path) -> HashMap<String, String> {
         if let Some(stripped) = line.strip_prefix("export ") {
             line = stripped.trim();
         }
-        let Some((key, value)) = line.split_once('=') else { continue };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
         let key = key.trim();
         if key.is_empty() {
             continue;
@@ -133,6 +147,11 @@ struct PtyState {
     writer: Option<Box<dyn Write + Send>>,
     child: Option<Box<dyn portable_pty::Child + Send>>,
     master: Option<Box<dyn portable_pty::MasterPty + Send>>,
+    run_dir: Option<String>,
+    events_path: Option<String>,
+    automation_frontend_ready: bool,
+    automation_request_seq: u64,
+    automation_waiters: HashMap<String, mpsc::Sender<serde_json::Value>>,
 }
 
 impl PtyState {
@@ -141,23 +160,94 @@ impl PtyState {
             writer: None,
             child: None,
             master: None,
+            run_dir: None,
+            events_path: None,
+            automation_frontend_ready: false,
+            automation_request_seq: 0,
+            automation_waiters: HashMap::new(),
         }
     }
 }
 
+type SharedPtyState = Arc<Mutex<PtyState>>;
+
+fn extract_arg_value(args: &[String], key: &str) -> Option<String> {
+    let mut idx = 0usize;
+    while idx < args.len() {
+        if args[idx] == key {
+            if idx + 1 < args.len() {
+                return Some(args[idx + 1].clone());
+            }
+            return None;
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn write_to_pty(state: &mut PtyState, data: &str) -> Result<(), String> {
+    let Some(writer) = state.writer.as_mut() else {
+        return Err("PTY not running".to_string());
+    };
+    writer
+        .write_all(data.as_bytes())
+        .map_err(|e| e.to_string())?;
+    writer.flush().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn pty_status_value(state: &mut PtyState) -> serde_json::Value {
+    let has_writer = state.writer.is_some();
+    let mut has_child = state.child.is_some();
+    let mut pid: Option<u32> = None;
+    let mut child_running = false;
+
+    if let Some(child) = state.child.as_mut() {
+        pid = child.process_id();
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                has_child = false;
+                state.child = None;
+                state.writer = None;
+                state.master = None;
+                state.run_dir = None;
+                state.events_path = None;
+            }
+            Ok(None) => {
+                child_running = true;
+            }
+            Err(_) => {
+                child_running = true;
+            }
+        }
+    }
+
+    serde_json::json!({
+        "running": child_running && has_writer,
+        "has_child": has_child,
+        "has_writer": has_writer,
+        "pid": pid,
+        "automation_frontend_ready": state.automation_frontend_ready,
+        "run_dir": state.run_dir.clone(),
+        "events_path": state.events_path.clone(),
+    })
+}
+
 #[tauri::command]
 fn spawn_pty(
-    state: State<'_, Mutex<PtyState>>,
+    state: State<'_, SharedPtyState>,
     app: tauri::AppHandle,
     command: String,
     args: Vec<String>,
     cwd: Option<String>,
     env: Option<std::collections::HashMap<String, String>>,
 ) -> Result<(), String> {
-    let mut state = state.lock().map_err(|_| "Lock poisoned")?;
+    let mut state = state.inner().lock().map_err(|_| "Lock poisoned")?;
     if let Some(mut child) = state.child.take() {
         let _ = child.kill();
     }
+    state.run_dir = None;
+    state.events_path = None;
 
     let pty_system = NativePtySystem::default();
     let pair = pty_system
@@ -170,7 +260,7 @@ fn spawn_pty(
         .map_err(|e| e.to_string())?;
 
     let mut cmd = CommandBuilder::new(command);
-    for arg in args {
+    for arg in &args {
         cmd.arg(arg);
     }
     if let Some(dir) = cwd {
@@ -190,15 +280,11 @@ fn spawn_pty(
         cmd.env(key, value);
     }
 
-    let child = pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| e.to_string())?;
+    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    let run_dir = extract_arg_value(&args, "--out");
+    let events_path = extract_arg_value(&args, "--events");
 
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|e| e.to_string())?;
+    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let master = pair.master;
 
@@ -221,23 +307,20 @@ fn spawn_pty(
     state.writer = Some(writer);
     state.child = Some(child);
     state.master = Some(master);
+    state.run_dir = run_dir;
+    state.events_path = events_path;
     Ok(())
 }
 
 #[tauri::command]
-fn write_pty(state: State<'_, Mutex<PtyState>>, data: String) -> Result<(), String> {
-    let mut state = state.lock().map_err(|_| "Lock poisoned")?;
-    let Some(writer) = state.writer.as_mut() else {
-        return Err("PTY not running".to_string());
-    };
-    writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
-    writer.flush().map_err(|e| e.to_string())?;
-    Ok(())
+fn write_pty(state: State<'_, SharedPtyState>, data: String) -> Result<(), String> {
+    let mut state = state.inner().lock().map_err(|_| "Lock poisoned")?;
+    write_to_pty(&mut state, &data)
 }
 
 #[tauri::command]
-fn resize_pty(state: State<'_, Mutex<PtyState>>, cols: u16, rows: u16) -> Result<(), String> {
-    let mut state = state.lock().map_err(|_| "Lock poisoned")?;
+fn resize_pty(state: State<'_, SharedPtyState>, cols: u16, rows: u16) -> Result<(), String> {
+    let mut state = state.inner().lock().map_err(|_| "Lock poisoned")?;
     if let Some(master) = state.master.as_mut() {
         master
             .resize(PtySize {
@@ -386,43 +469,17 @@ fn get_key_status() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn get_pty_status(state: State<'_, Mutex<PtyState>>) -> Result<serde_json::Value, String> {
-    let mut state = state.lock().map_err(|_| "Lock poisoned")?;
-    let has_writer = state.writer.is_some();
-    let mut has_child = state.child.is_some();
-    let mut pid: Option<u32> = None;
-    let mut child_running = false;
-
-    if let Some(child) = state.child.as_mut() {
-        pid = child.process_id();
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                // Child has exited. Drop handles so frontend can re-spawn cleanly.
-                has_child = false;
-                state.child = None;
-                state.writer = None;
-                state.master = None;
-            }
-            Ok(None) => {
-                child_running = true;
-            }
-            Err(_) => {
-                // If we can't poll, assume it's running; the PTY will error on write if not.
-                child_running = true;
-            }
-        }
-    }
-
-    Ok(serde_json::json!({
-        "running": child_running && has_writer,
-        "has_child": has_child,
-        "has_writer": has_writer,
-        "pid": pid,
-    }))
+fn get_pty_status(state: State<'_, SharedPtyState>) -> Result<serde_json::Value, String> {
+    let mut state = state.inner().lock().map_err(|_| "Lock poisoned")?;
+    Ok(pty_status_value(&mut state))
 }
 
 #[tauri::command]
-fn read_file_since(path: String, offset: u64, max_bytes: Option<u64>) -> Result<serde_json::Value, String> {
+fn read_file_since(
+    path: String,
+    offset: u64,
+    max_bytes: Option<u64>,
+) -> Result<serde_json::Value, String> {
     let limit = max_bytes.unwrap_or(1024 * 1024); // 1MB safety cap per poll
     let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
@@ -433,7 +490,9 @@ fn read_file_since(path: String, offset: u64, max_bytes: Option<u64>) -> Result<
 
     let mut buffer = Vec::new();
     // Read up to `limit` bytes to avoid giant allocations if the offset gets reset incorrectly.
-    file.take(limit).read_to_end(&mut buffer).map_err(|e| e.to_string())?;
+    file.take(limit)
+        .read_to_end(&mut buffer)
+        .map_err(|e| e.to_string())?;
     let new_offset = safe_offset + buffer.len() as u64;
     Ok(serde_json::json!({
         "chunk": buffer,
@@ -443,10 +502,348 @@ fn read_file_since(path: String, offset: u64, max_bytes: Option<u64>) -> Result<
     }))
 }
 
+#[derive(serde::Deserialize)]
+struct BridgeRequest {
+    op: String,
+    data: Option<String>,
+    action: Option<String>,
+    payload: Option<serde_json::Value>,
+    timeout_ms: Option<u64>,
+}
+
+#[derive(serde::Deserialize)]
+struct BridgeAutomationResult {
+    request_id: String,
+    ok: Option<bool>,
+    detail: Option<String>,
+    state: Option<serde_json::Value>,
+    events: Option<Vec<serde_json::Value>>,
+    markers: Option<Vec<String>>,
+}
+
+#[cfg(target_family = "unix")]
+fn write_bridge_response(stream: &mut UnixStream, payload: serde_json::Value) {
+    if let Ok(encoded) = serde_json::to_string(&payload) {
+        let _ = stream.write_all(encoded.as_bytes());
+        let _ = stream.write_all(b"\n");
+        let _ = stream.flush();
+    }
+}
+
+#[cfg(target_family = "unix")]
+fn handle_bridge_client(mut stream: UnixStream, state: SharedPtyState, app_handle: tauri::AppHandle) {
+    let reader_stream = match stream.try_clone() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let mut reader = BufReader::new(reader_stream);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = match reader.read_line(&mut line) {
+            Ok(value) => value,
+            Err(_) => break,
+        };
+        if n == 0 {
+            break;
+        }
+        let req: BridgeRequest = match serde_json::from_str(line.trim()) {
+            Ok(value) => value,
+            Err(err) => {
+                write_bridge_response(
+                    &mut stream,
+                    serde_json::json!({
+                        "ok": false,
+                        "error": format!("invalid_json: {err}"),
+                    }),
+                );
+                continue;
+            }
+        };
+
+        match req.op.as_str() {
+            "ping" => {
+                write_bridge_response(&mut stream, serde_json::json!({"ok": true}));
+            }
+            "status" => {
+                let mut guard = match state.lock() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        write_bridge_response(
+                            &mut stream,
+                            serde_json::json!({"ok": false, "error": "lock_poisoned"}),
+                        );
+                        continue;
+                    }
+                };
+                let status = pty_status_value(&mut guard);
+                write_bridge_response(
+                    &mut stream,
+                    serde_json::json!({
+                        "ok": true,
+                        "status": status,
+                    }),
+                );
+            }
+            "write" => {
+                let payload = req.data.unwrap_or_default();
+                let mut guard = match state.lock() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        write_bridge_response(
+                            &mut stream,
+                            serde_json::json!({"ok": false, "error": "lock_poisoned"}),
+                        );
+                        continue;
+                    }
+                };
+                match write_to_pty(&mut guard, &payload) {
+                    Ok(()) => {
+                        let status = pty_status_value(&mut guard);
+                        write_bridge_response(
+                            &mut stream,
+                            serde_json::json!({
+                                "ok": true,
+                                "status": status,
+                            }),
+                        );
+                    }
+                    Err(err) => {
+                        let status = pty_status_value(&mut guard);
+                        write_bridge_response(
+                            &mut stream,
+                            serde_json::json!({
+                                "ok": false,
+                                "error": err,
+                                "status": status,
+                            }),
+                        );
+                    }
+                }
+            }
+            "automation" => {
+                let action = req.action.unwrap_or_default();
+                let action_payload = req.payload.unwrap_or_else(|| serde_json::json!({}));
+                let wait_ms = req.timeout_ms.unwrap_or(10_000);
+                let (request_id, rx) = {
+                    let mut guard = match state.lock() {
+                        Ok(value) => value,
+                        Err(_) => {
+                            write_bridge_response(
+                                &mut stream,
+                                serde_json::json!({"ok": false, "error": "lock_poisoned"}),
+                            );
+                            continue;
+                        }
+                    };
+
+                    if action.trim().is_empty() {
+                        write_bridge_response(
+                            &mut stream,
+                            serde_json::json!({"ok": false, "error": "missing_automation_action"}),
+                        );
+                        continue;
+                    }
+                    if !guard.automation_frontend_ready {
+                        write_bridge_response(
+                            &mut stream,
+                            serde_json::json!({
+                                "ok": false,
+                                "error": "automation_frontend_not_ready",
+                                "detail": "Desktop UI automation handler is not yet registered. Wait for app UI bootstrap.",
+                                "state": pty_status_value(&mut guard),
+                                "markers": ["automation_frontend_not_ready"],
+                            }),
+                        );
+                        continue;
+                    }
+
+                    let id = format!("{}-{}", process::id(), guard.automation_request_seq);
+                    guard.automation_request_seq = guard.automation_request_seq.saturating_add(1);
+                    let (sender, receiver) = mpsc::channel();
+                    let _ = guard.automation_waiters.insert(id.clone(), sender);
+                    (id, receiver)
+                };
+
+                let emit_payload = serde_json::json!({
+                    "request_id": request_id,
+                    "action": action,
+                    "payload": action_payload,
+                    "timeout_ms": wait_ms,
+                });
+
+                eprintln!(
+                    "brood desktop bridge automation request {} dispatched (action={})",
+                    request_id,
+                    action
+                );
+                let _ = app_handle.emit_all("desktop-automation", emit_payload);
+                eprintln!("brood desktop bridge automation event emitted request_id={request_id}");
+
+                let timeout_ms = wait_ms.max(250);
+                let timeout = Duration::from_millis(timeout_ms);
+                let mut result_payload = match rx.recv_timeout(timeout) {
+                    Ok(payload) => payload,
+                    Err(_) => {
+                        let _ = {
+                            if let Ok(mut guard) = state.lock() {
+                                guard.automation_waiters.remove(&request_id)
+                            } else {
+                                None
+                            }
+                        };
+                        serde_json::json!({
+                            "ok": false,
+                            "error": "automation_timeout",
+                            "request_id": request_id,
+                            "detail": "Automation operation timed out waiting for app-side result.",
+                            "state": serde_json::json!({}),
+                            "markers": ["automation_timeout"],
+                        })
+                    }
+                };
+
+                if let Some(map) = result_payload.as_object_mut() {
+                    if map.get("request_id").is_none() {
+                        map.insert("request_id".to_string(), serde_json::json!(request_id.clone()));
+                    }
+                    if map.get("ok").is_none() {
+                        map.insert("ok".to_string(), serde_json::json!(true));
+                    }
+                } else {
+                    result_payload = serde_json::json!({
+                        "ok": false,
+                        "request_id": request_id,
+                        "error": "automation_result_type_invalid",
+                    });
+                }
+
+                write_bridge_response(&mut stream, result_payload);
+            }
+            _ => {
+                write_bridge_response(
+                    &mut stream,
+                    serde_json::json!({
+                        "ok": false,
+                        "error": format!("unsupported_op: {}", req.op),
+                    }),
+                );
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn report_automation_result(
+    state: State<'_, SharedPtyState>,
+    result: BridgeAutomationResult,
+) -> Result<(), String> {
+    let request_id = result.request_id.trim().to_string();
+    if request_id.is_empty() {
+        eprintln!("brood desktop bridge report_automation_result missing request_id");
+        return Err("missing request_id".to_string());
+    }
+    eprintln!("brood desktop bridge received automation result for request_id={request_id}");
+    let sender = {
+        let mut guard = state.lock().map_err(|_| "lock_poisoned")?;
+        guard
+            .automation_waiters
+            .remove(&request_id)
+            .ok_or_else(|| {
+                eprintln!(
+                    "brood desktop bridge unknown_request_id={request_id}; waiter missing or already timed out"
+                );
+                "unknown_request_id".to_string()
+            })
+    }?;
+
+    let mut payload = serde_json::json!({"ok": true, "request_id": request_id});
+    if let Some(ok) = result.ok {
+        payload["ok"] = serde_json::json!(ok);
+    }
+    if let Some(detail) = result.detail {
+        payload["detail"] = serde_json::json!(detail);
+    }
+    if let Some(state_payload) = result.state {
+        payload["state"] = state_payload;
+    }
+    if let Some(events) = result.events {
+        payload["events"] = serde_json::json!(events);
+    }
+    if let Some(markers) = result.markers {
+        payload["markers"] = serde_json::json!(markers);
+    }
+
+    eprintln!("brood desktop bridge automation result accepted request_id={request_id}");
+    sender
+        .send(payload)
+        .map_err(|_| {
+            eprintln!(
+                "brood desktop bridge automation result send failed request_id={request_id}; receiver dropped"
+            );
+            "automation_receiver_dropped".to_string()
+        })
+}
+
+#[tauri::command]
+fn report_automation_frontend_ready(
+    state: State<'_, SharedPtyState>,
+    ready: bool,
+) -> Result<(), String> {
+    let mut guard = state.lock().map_err(|_| "lock_poisoned")?;
+    guard.automation_frontend_ready = ready;
+    Ok(())
+}
+
+fn start_external_bridge(state: SharedPtyState, app_handle: tauri::AppHandle) {
+    #[cfg(target_family = "unix")]
+    {
+        let socket = std::env::var("BROOD_DESKTOP_BRIDGE_SOCKET")
+            .unwrap_or_else(|_| "/tmp/brood_desktop_bridge.sock".to_string());
+        let socket_path = PathBuf::from(socket);
+        if let Some(parent) = socket_path.parent() {
+            if std::fs::create_dir_all(parent).is_err() {
+                return;
+            }
+        }
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = match UnixListener::bind(&socket_path) {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("brood desktop bridge bind failed: {err}");
+                return;
+            }
+        };
+        let _ = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600));
+        std::thread::spawn(move || {
+            for incoming in listener.incoming() {
+                match incoming {
+                    Ok(stream) => {
+                        let clone = state.clone();
+                        let bridge_handle = app_handle.clone();
+                        std::thread::spawn(move || handle_bridge_client(stream, clone, bridge_handle));
+                    }
+                    Err(err) => {
+                        eprintln!("brood desktop bridge accept failed: {err}");
+                        break;
+                    }
+                }
+            }
+        });
+    }
+    #[cfg(not(target_family = "unix"))]
+    {
+        let _ = state;
+    }
+}
+
 fn main() {
+    let pty_state: SharedPtyState = Arc::new(Mutex::new(PtyState::new()));
     tauri::Builder::default()
-        .manage(Mutex::new(PtyState::new()))
+        .manage(pty_state)
         .invoke_handler(tauri::generate_handler![
+            report_automation_result,
+            report_automation_frontend_ready,
             spawn_pty,
             write_pty,
             resize_pty,
@@ -455,8 +852,13 @@ fn main() {
             export_run,
             get_key_status,
             get_pty_status,
-            read_file_since
+            read_file_since,
         ])
+        .setup(|app| {
+            let handle = app.handle();
+            start_external_bridge(app.state::<SharedPtyState>().inner().clone(), handle.clone());
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

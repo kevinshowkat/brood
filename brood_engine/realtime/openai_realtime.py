@@ -13,6 +13,7 @@ import json
 import mimetypes
 import os
 import queue
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -25,8 +26,15 @@ from ..utils import sanitize_payload
 
 _REALTIME_BETA_HEADER = ("OpenAI-Beta", "realtime=v1")
 _SOURCE = "openai_realtime"
+_REALTIME_MODEL_ALIASES = {
+    # Keep compatibility with shorthand names used in local env files.
+    "realtime-gpt": "gpt-realtime",
+}
 
 _STOP = object()
+_CANVAS_CONTEXT_MAX_OUTPUT_TOKENS = 520
+_INTENT_ICONS_MAX_OUTPUT_TOKENS = 2200
+_ACTION_VERSION_RE = re.compile(r"(?:^|[-_])a(?P<value>\d+)(?:[-_.]|$)")
 
 
 @dataclass(frozen=True)
@@ -35,15 +43,35 @@ class CanvasContextJob:
     submitted_at_ms: int
 
 
+def _normalize_realtime_model_name(raw: str | None, *, default: str) -> str:
+    model = str(raw or "").strip()
+    if not model:
+        return default
+    return _REALTIME_MODEL_ALIASES.get(model, model)
+
+
+def _resolve_realtime_model(env_keys: tuple[str, ...], *, default: str) -> str:
+    for key in env_keys:
+        value = str(os.getenv(key) or "").strip()
+        if value:
+            return _normalize_realtime_model_name(value, default=default)
+    return default
+
+
+def _is_mother_intent_snapshot_path(image_path: str) -> bool:
+    name = Path(str(image_path or "")).name.lower()
+    return name.startswith("mother-intent-")
+
+
 class CanvasContextRealtimeSession:
     """Background OpenAI Realtime session that streams Canvas Context text."""
 
     def __init__(self, events: EventWriter) -> None:
         self._events = events
-        self._model = (
-            os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_MODEL") or os.getenv("OPENAI_CANVAS_CONTEXT_REALTIME_MODEL")
+        self._model = _resolve_realtime_model(
+            ("BROOD_CANVAS_CONTEXT_REALTIME_MODEL", "OPENAI_CANVAS_CONTEXT_REALTIME_MODEL"),
+            default="gpt-realtime-mini",
         )
-        self._model = str(self._model or "").strip() or "gpt-realtime-mini"
 
         self._api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY_BACKUP")
         self._disabled = os.getenv("BROOD_CANVAS_CONTEXT_REALTIME_DISABLED") == "1"
@@ -150,7 +178,7 @@ class CanvasContextRealtimeSession:
                                 "modalities": ["text"],
                                 # Temperature is clamped by the API; keep at the minimum for consistent context.
                                 "temperature": 0.6,
-                                "max_response_output_tokens": 520,
+                                "max_response_output_tokens": _CANVAS_CONTEXT_MAX_OUTPUT_TOKENS,
                             },
                         }
                     )
@@ -207,7 +235,7 @@ class CanvasContextRealtimeSession:
                                 "content": content,
                             }
                         ],
-                        "max_output_tokens": 520,
+                        "max_output_tokens": _CANVAS_CONTEXT_MAX_OUTPUT_TOKENS,
                     },
                 }
             )
@@ -253,7 +281,7 @@ class CanvasContextRealtimeSession:
             if event_type == "response.output_text.delta":
                 delta = event.get("delta") or event.get("text")
                 if isinstance(delta, str) and delta:
-                    buffer += delta
+                    buffer = _merge_stream_text(buffer, delta)
                 now_s = time.monotonic()
                 if buffer.strip() and now_s - last_emit_s >= 0.25:
                     last_emit_s = now_s
@@ -262,7 +290,7 @@ class CanvasContextRealtimeSession:
             if event_type == "response.output_text.done":
                 text = event.get("text") or event.get("output_text")
                 if isinstance(text, str) and text:
-                    buffer += text
+                    buffer = _merge_stream_text(buffer, text)
                 continue
 
             if event_type == "response.done":
@@ -271,9 +299,7 @@ class CanvasContextRealtimeSession:
                 if response_id and isinstance(resp, dict) and isinstance(resp.get("id"), str):
                     if resp["id"] != response_id:
                         continue
-                cleaned = buffer.strip()
-                if not cleaned:
-                    cleaned = _extract_realtime_output_text(resp)
+                cleaned, response_meta = _resolve_streamed_response_text(buffer, resp)
                 if not cleaned:
                     meta = _summarize_realtime_response(resp)
                     msg = f"Empty realtime canvas context response.{meta}"
@@ -281,10 +307,17 @@ class CanvasContextRealtimeSession:
                     self._set_fatal_error(msg)
                     self._stop.set()
                     return
-                self._emit_canvas_context(job.image_path, cleaned, partial=False)
+                self._emit_canvas_context(job.image_path, cleaned, partial=False, response_meta=response_meta)
                 return
 
-    def _emit_canvas_context(self, image_path: str, text: str, *, partial: bool) -> None:
+    def _emit_canvas_context(
+        self,
+        image_path: str,
+        text: str,
+        *,
+        partial: bool,
+        response_meta: dict[str, Any] | None = None,
+    ) -> None:
         payload: dict[str, Any] = {
             "image_path": image_path,
             "text": text,
@@ -293,6 +326,8 @@ class CanvasContextRealtimeSession:
         }
         if partial:
             payload["partial"] = True
+        if response_meta:
+            payload.update(response_meta)
         self._events.emit("canvas_context", **payload)
 
     def _emit_failed(self, image_path: str | None, error: str, *, fatal: bool) -> None:
@@ -314,10 +349,20 @@ class CanvasContextRealtimeSession:
 class IntentIconsRealtimeSession:
     """Background OpenAI Realtime session that streams intent-icon JSON for the spatial canvas."""
 
-    def __init__(self, events: EventWriter) -> None:
+    def __init__(
+        self,
+        events: EventWriter,
+        *,
+        model: str | None = None,
+        model_env_keys: tuple[str, ...] = ("BROOD_INTENT_REALTIME_MODEL", "OPENAI_INTENT_REALTIME_MODEL"),
+        default_model: str = "gpt-realtime-mini",
+    ) -> None:
         self._events = events
-        self._model = os.getenv("BROOD_INTENT_REALTIME_MODEL") or os.getenv("OPENAI_INTENT_REALTIME_MODEL")
-        self._model = str(self._model or "").strip() or "gpt-realtime-mini"
+        self._model = (
+            _normalize_realtime_model_name(model, default=default_model)
+            if model is not None
+            else _resolve_realtime_model(model_env_keys, default=default_model)
+        )
 
         self._api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY_BACKUP")
         self._disabled = os.getenv("BROOD_INTENT_REALTIME_DISABLED") == "1"
@@ -419,7 +464,7 @@ class IntentIconsRealtimeSession:
                                 "modalities": ["text"],
                                 # JSON-only: keep temperature at the API minimum for stable schemas.
                                 "temperature": 0.6,
-                                "max_response_output_tokens": 820,
+                                "max_response_output_tokens": _INTENT_ICONS_MAX_OUTPUT_TOKENS,
                             },
                         }
                     )
@@ -438,7 +483,10 @@ class IntentIconsRealtimeSession:
             if not isinstance(job, CanvasContextJob):
                 continue
 
-            # Latest-wins: if several snapshots queued up, keep only the last one.
+            # Latest-wins, but prefer mother proposal snapshots when mixed with ambient traffic.
+            # This prevents Mother proposal intents from being superseded and falling back.
+            latest_job = job
+            latest_mother_job = job if _is_mother_intent_snapshot_path(job.image_path) else None
             while True:
                 try:
                     nxt = self._jobs.get_nowait()
@@ -448,7 +496,11 @@ class IntentIconsRealtimeSession:
                     self._stop.set()
                     break
                 if isinstance(nxt, CanvasContextJob):
-                    job = nxt
+                    latest_job = nxt
+                    if _is_mother_intent_snapshot_path(nxt.image_path):
+                        latest_mother_job = nxt
+
+            job = latest_mother_job or latest_job
 
             if self._stop.is_set():
                 break
@@ -475,7 +527,7 @@ class IntentIconsRealtimeSession:
                                 "content": content,
                             }
                         ],
-                        "max_output_tokens": 820,
+                        "max_output_tokens": _INTENT_ICONS_MAX_OUTPUT_TOKENS,
                     },
                 }
             )
@@ -521,7 +573,7 @@ class IntentIconsRealtimeSession:
             if event_type == "response.output_text.delta":
                 delta = event.get("delta") or event.get("text")
                 if isinstance(delta, str) and delta:
-                    buffer += delta
+                    buffer = _merge_stream_text(buffer, delta)
                 now_s = time.monotonic()
                 if buffer.strip() and now_s - last_emit_s >= 0.25:
                     last_emit_s = now_s
@@ -530,7 +582,7 @@ class IntentIconsRealtimeSession:
             if event_type == "response.output_text.done":
                 text = event.get("text") or event.get("output_text")
                 if isinstance(text, str) and text:
-                    buffer += text
+                    buffer = _merge_stream_text(buffer, text)
                 continue
 
             if event_type == "response.done":
@@ -538,9 +590,7 @@ class IntentIconsRealtimeSession:
                 if response_id and isinstance(resp, dict) and isinstance(resp.get("id"), str):
                     if resp["id"] != response_id:
                         continue
-                cleaned = buffer.strip()
-                if not cleaned:
-                    cleaned = _extract_realtime_output_text(resp)
+                cleaned, response_meta = _resolve_streamed_response_text(buffer, resp)
                 if not cleaned:
                     meta = _summarize_realtime_response(resp)
                     msg = f"Empty realtime intent inference response.{meta}"
@@ -548,18 +598,28 @@ class IntentIconsRealtimeSession:
                     self._set_fatal_error(msg)
                     self._stop.set()
                     return
-                self._emit_intent_icons(job.image_path, cleaned, partial=False)
+                self._emit_intent_icons(job.image_path, cleaned, partial=False, response_meta=response_meta)
                 return
 
-    def _emit_intent_icons(self, image_path: str, text: str, *, partial: bool) -> None:
+    def _emit_intent_icons(
+        self,
+        image_path: str,
+        text: str,
+        *,
+        partial: bool,
+        response_meta: dict[str, Any] | None = None,
+    ) -> None:
         payload: dict[str, Any] = {
             "image_path": image_path,
             "text": text,
             "source": _SOURCE,
             "model": self._model,
         }
+        payload.update(_intent_snapshot_metadata(image_path))
         if partial:
             payload["partial"] = True
+        if response_meta:
+            payload.update(response_meta)
         self._events.emit("intent_icons", **payload)
 
     def _emit_failed(self, image_path: str | None, error: str, *, fatal: bool) -> None:
@@ -569,6 +629,8 @@ class IntentIconsRealtimeSession:
             "source": _SOURCE,
             "model": self._model,
         }
+        if image_path:
+            payload.update(_intent_snapshot_metadata(image_path))
         if fatal:
             payload["fatal"] = True
         self._events.emit("intent_icons_failed", **payload)
@@ -627,6 +689,124 @@ def _format_realtime_error(event: dict[str, Any]) -> str:
         if isinstance(message, str) and message.strip():
             return f"{prefix}: {message.strip()}" if prefix else message.strip()
     return "Realtime API error."
+
+
+def _merge_stream_text(buffer: str, incoming: str) -> str:
+    """Merge streamed text chunks while avoiding duplicate concatenation."""
+    left = str(buffer or "")
+    right = str(incoming or "")
+    if not right:
+        return left
+    if not left:
+        return right
+    if right in left:
+        return left
+    if left in right:
+        return right
+    max_overlap = min(len(left), len(right))
+    for size in range(max_overlap, 0, -1):
+        if left.endswith(right[:size]):
+            return left + right[size:]
+    return left + right
+
+
+def _response_status_reason(response: Any) -> str | None:
+    if not isinstance(response, dict):
+        return None
+    details = response.get("status_details")
+    if isinstance(details, dict):
+        for key in ("reason", "type", "code", "message"):
+            value = details.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return json.dumps(sanitize_payload(details), ensure_ascii=False)
+    if isinstance(details, str) and details.strip():
+        return details.strip()
+    return None
+
+
+def _response_looks_truncated(status: str | None, reason: str | None, text: str) -> bool:
+    status_norm = str(status or "").strip().lower()
+    reason_norm = str(reason or "").strip().lower()
+    if status_norm in {"incomplete", "truncated"}:
+        return True
+    if "max_output_tokens" in reason_norm or "max_output" in reason_norm:
+        return True
+    body = str(text or "").strip()
+    if not body:
+        return False
+    if (body.startswith("{") or body.startswith("[")) and not (body.endswith("}") or body.endswith("]")):
+        return True
+    return False
+
+
+def _resolve_streamed_response_text(buffer: str, response: Any) -> tuple[str, dict[str, Any]]:
+    buffered = str(buffer or "").strip()
+    extracted = _extract_realtime_output_text(response).strip()
+    if buffered and extracted:
+        cleaned = _merge_stream_text(buffered, extracted).strip()
+    else:
+        cleaned = extracted or buffered
+    meta: dict[str, Any] = {}
+    if isinstance(response, dict):
+        rid = response.get("id")
+        status = response.get("status")
+        reason = _response_status_reason(response)
+        if isinstance(rid, str) and rid:
+            meta["response_id"] = rid
+        if isinstance(status, str) and status.strip():
+            meta["response_status"] = status.strip()
+        if reason:
+            meta["response_status_reason"] = reason
+        if _response_looks_truncated(status if isinstance(status, str) else None, reason, cleaned):
+            meta["response_truncated"] = True
+    return cleaned, meta
+
+
+def _extract_action_version(raw: str | None) -> int | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    match = _ACTION_VERSION_RE.search(text)
+    if not match:
+        return None
+    try:
+        return int(match.group("value"))
+    except Exception:
+        return None
+
+
+def _intent_snapshot_metadata(image_path: str) -> dict[str, Any]:
+    path_text = str(image_path or "").strip()
+    if not path_text:
+        return {}
+    path = Path(path_text)
+    out: dict[str, Any] = {}
+    if _is_mother_intent_snapshot_path(path_text):
+        out["intent_scope"] = "mother"
+    elif path.name.lower().startswith("intent-ambient-"):
+        out["intent_scope"] = "ambient"
+
+    frame_id: str | None = None
+    action_version = _extract_action_version(path.name)
+
+    sidecar = path.with_suffix(".ctx.json")
+    if sidecar.exists():
+        try:
+            data = json.loads(sidecar.read_text(encoding="utf-8", errors="ignore"))
+            raw_frame_id = data.get("frame_id") if isinstance(data, dict) else None
+            if isinstance(raw_frame_id, str) and raw_frame_id.strip():
+                frame_id = raw_frame_id.strip()
+                action_version = _extract_action_version(frame_id) or action_version
+        except Exception:
+            pass
+
+    if frame_id:
+        out["frame_id"] = frame_id
+    if isinstance(action_version, int):
+        out["action_version"] = action_version
+    return out
+
 
 def _extract_realtime_output_text(response: Any) -> str:
     """Best-effort extraction of assistant text from a Realtime `response` object."""
