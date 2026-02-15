@@ -1,7 +1,9 @@
 import json
 
 from brood_engine.realtime.openai_realtime import (
+    _append_stream_delta,
     _intent_snapshot_metadata,
+    _merge_stream_text,
     _resolve_streamed_response_text,
 )
 
@@ -59,6 +61,22 @@ def test_resolve_streamed_response_text_recovers_from_truncated_buffer() -> None
     assert meta.get("response_id") == "resp_123"
     assert meta.get("response_status") == "completed"
     assert meta.get("response_truncated") is None
+
+
+def test_append_stream_delta_preserves_repeated_tokens() -> None:
+    buffer = ""
+    for chunk in ("hel", "l", "o", " ", " ", "world", " ", "world"):
+        buffer = _append_stream_delta(buffer, chunk)
+
+    assert buffer == "hello  world world"
+
+
+def test_merge_stream_text_uses_directional_overlap_only() -> None:
+    # Snapshot merge keeps full response replacement when right extends left.
+    assert _merge_stream_text('{"a":', '{"a":1}') == '{"a":1}'
+
+    # Repeated token-like payloads are not dropped by substring checks.
+    assert _merge_stream_text("hel", "l") == "hell"
 
 
 def test_resolve_streamed_response_text_marks_truncated_responses() -> None:

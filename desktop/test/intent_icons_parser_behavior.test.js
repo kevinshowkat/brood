@@ -1,50 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-
-const here = dirname(fileURLToPath(import.meta.url));
-const appPath = join(here, "..", "src", "canvas_app.js");
-const app = readFileSync(appPath, "utf8");
-
-function loadIntentParserFns() {
-  const start = app.indexOf("function _stripJsonFences(");
-  const end = app.indexOf("function _normalizeVisionLabel(");
-  assert.ok(start >= 0, "parser start marker missing");
-  assert.ok(end > start, "parser end marker missing");
-  const parserChunk = app.slice(start, end);
-
-  const clamp = (value, min, max) => {
-    const num = Number(value);
-    if (!Number.isFinite(num)) return min;
-    return Math.min(max, Math.max(min, num));
-  };
-  const allowedModes = new Set([
-    "amplify",
-    "transcend",
-    "destabilize",
-    "purify",
-    "hybridize",
-    "mythologize",
-    "monumentalize",
-    "fracture",
-    "romanticize",
-    "alienate",
-  ]);
-  const motherV2MaybeTransformationMode = (raw) => {
-    const mode = String(raw || "").trim().toLowerCase();
-    return allowedModes.has(mode) ? mode : null;
-  };
-
-  return new Function(
-    "clamp",
-    "motherV2MaybeTransformationMode",
-    `${parserChunk}\nreturn { parseIntentIconsJsonDetailed, classifyIntentIconsRouting };`
-  )(clamp, motherV2MaybeTransformationMode);
-}
-
-const { parseIntentIconsJsonDetailed, classifyIntentIconsRouting } = loadIntentParserFns();
+import { classifyIntentIconsRouting, parseIntentIconsJsonDetailed } from "../src/intent_icons_parser.js";
 
 function baseIntentPayload() {
   return {

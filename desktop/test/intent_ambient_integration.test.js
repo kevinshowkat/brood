@@ -18,7 +18,7 @@ test("Ambient intent: edit triggers schedule background inference", () => {
 });
 
 test("Ambient intent: viewport wheel/gesture handlers do not schedule inference", () => {
-  const wheel = app.match(/addEventListener\(\s*"wheel"[\s\S]*?\{\s*passive:\s*false\s*\}\s*\);/);
+  const wheel = app.match(/const handleOverlayWheel = \(event\) => \{[\s\S]*?\n\s*\};/);
   assert.ok(wheel, "wheel handler not found");
   assert.doesNotMatch(wheel[0], /scheduleAmbientIntentInference\(/);
 
@@ -45,10 +45,9 @@ test("Ambient intent: nudges are clickable and use larger visual sizing", () => 
 });
 
 test("Ambient intent: realtime event de-staling requires a matching active pending path", () => {
-  assert.match(
-    app,
-    /const expectedPaths = \[\];[\s\S]*if \(!expectedPaths\.length\) return;[\s\S]*if \(!path\) return;[\s\S]*if \(!expectedPaths\.includes\(String\(path\)\)\) return;/
-  );
+  assert.match(app, /const routing = classifyIntentIconsRouting\(\{/);
+  assert.match(app, /const \{ matchAmbient, matchIntent, matchMother, ignoreReason \} = routing;/);
+  assert.match(app, /if \(ignoreReason === "snapshot_path_mismatch" \|\| ignoreReason === "path_mismatch"\) \{/);
   assert.doesNotMatch(app, /const matchesAmbient = !path \|\| !ambient\?\.pendingPath \|\| path === ambient\.pendingPath/);
 });
 
