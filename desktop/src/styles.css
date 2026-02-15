@@ -144,6 +144,34 @@ body {
   flex: 0 0 auto;
 }
 
+.mother-intent-source-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 138, 162, 0.86);
+  background: rgba(86, 104, 129, 0.58);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.24),
+    0 0 0 1px rgba(0, 0, 0, 0.44);
+  pointer-events: none;
+}
+
+.mother-intent-source-indicator.is-realtime {
+  border-color: rgba(82, 232, 160, 0.95);
+  background: rgba(82, 232, 160, 0.95);
+  box-shadow:
+    0 0 10px rgba(82, 232, 160, 0.52),
+    inset 0 0 0 1px rgba(236, 255, 246, 0.48);
+}
+
+.mother-intent-source-indicator.is-fallback {
+  border-color: rgba(255, 122, 122, 0.96);
+  background: rgba(255, 122, 122, 0.95);
+  box-shadow:
+    0 0 10px rgba(255, 122, 122, 0.42),
+    inset 0 0 0 1px rgba(255, 234, 234, 0.38);
+}
+
 .menu-toggle {
   width: 34px;
   height: 34px;
@@ -2580,9 +2608,9 @@ button.ghost:hover {
 
 #mother-overlay {
   --mother-portrait-size: clamp(98px, 9.1vw, 144px);
-  --mother-panel-size: clamp(88px, 8.2vw, 126px);
-  --mother-action-size: 28px;
-  --mother-confirm-size: 28px;
+  --mother-panel-size: clamp(164px, 16vw, 248px);
+  --mother-action-size: 32px;
+  --mother-confirm-size: 32px;
   --mother-advanced-label-width: clamp(72px, 36%, 110px);
   --mother-card-border: rgba(0, 0, 0, 0.92);
   --mother-card-border-low: rgba(0, 0, 0, 0.97);
@@ -2656,6 +2684,207 @@ button.ghost:hover {
   border-bottom: 1px solid rgba(0, 0, 0, 0.74);
   position: relative;
   z-index: 1;
+}
+
+#mother-panel .mother-role-preview {
+  --mother-role-preview-inset: 4px;
+  position: relative;
+  margin: 2px 8px 6px;
+  height: clamp(48px, 6.8vw, 80px);
+  border-radius: 8px;
+  border: 1px solid rgba(84, 104, 132, 0.42);
+  background: transparent;
+  overflow: hidden;
+}
+
+#mother-panel .mother-role-preview-surface {
+  position: absolute;
+  inset: var(--mother-role-preview-inset);
+  border-radius: 6px;
+  border: 1px solid rgba(54, 76, 106, 0.56);
+  background: transparent;
+  overflow: hidden;
+}
+
+#mother-panel .mother-role-preview-rect {
+  --mother-role-accent: rgba(255, 72, 72, 0.92);
+  --mother-role-pre-mx: 0px;
+  --mother-role-pre-my: 0px;
+  --mother-role-pre-scale: 1;
+  --mother-role-pre-resize-x: 1;
+  --mother-role-pre-resize-y: 1;
+  --mother-role-pre-rot: 0deg;
+  --mother-role-pre-sat: 1;
+  --mother-role-pre-bright: 1;
+  --mother-role-pre-alpha: 1;
+  --mother-role-mx: 0px;
+  --mother-role-my: 0px;
+  --mother-role-scale: 1;
+  --mother-role-resize-x: 1;
+  --mother-role-resize-y: 1;
+  --mother-role-rot: 0deg;
+  --mother-role-sat: 1;
+  --mother-role-bright: 1;
+  --mother-role-alpha: 1;
+  --mother-role-jitter-ax: 2px;
+  --mother-role-jitter-ay: 1.5px;
+  position: absolute;
+  border-radius: 4px;
+  border: 2px solid color-mix(in srgb, var(--mother-role-accent) 88%, rgba(25, 30, 44, 0.86));
+  background: color-mix(in srgb, var(--mother-role-accent) 12%, transparent);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.68);
+  transform-origin: 50% 50%;
+  transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+  filter: saturate(1) brightness(1);
+  opacity: 1;
+  will-change: transform, filter, opacity;
+}
+
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect {
+  animation: motherRoleModeFlow var(--mother-role-mode-ms, 3000ms) ease-in-out infinite;
+  animation-delay: var(--mother-role-stagger, 0ms);
+  animation-direction: alternate;
+}
+
+#mother-panel .mother-role-preview[data-motion="paused"] .mother-role-preview-rect {
+  animation-play-state: paused;
+}
+
+#mother-panel .mother-role-preview-viewport {
+  position: absolute;
+  z-index: 999;
+  border-radius: 6px;
+  border: 1px solid rgba(82, 255, 148, 0.2);
+  background: rgba(82, 255, 148, 0.012);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.34),
+    0 0 4px rgba(82, 255, 148, 0.06);
+  pointer-events: none;
+}
+
+#mother-panel .mother-role-preview-merge-core {
+  --mother-role-accent: rgba(255, 224, 120, 0.96);
+  position: absolute;
+  z-index: 980;
+  border-radius: 5px;
+  border: 1px solid color-mix(in srgb, var(--mother-role-accent) 76%, rgba(14, 18, 24, 0.72));
+  background: color-mix(in srgb, var(--mother-role-accent) 15%, transparent);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.34),
+    0 0 8px color-mix(in srgb, var(--mother-role-accent) 26%, transparent);
+  opacity: 0.42;
+  pointer-events: none;
+}
+
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-merge-core {
+  animation: motherRoleMergePulse 2300ms ease-in-out infinite;
+}
+
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="jitter"] {
+  animation-name: motherRoleModeJitter;
+  animation-timing-function: linear;
+}
+
+@keyframes motherRoleModeFlow {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+    filter: saturate(1) brightness(1);
+    opacity: 1;
+  }
+  38% {
+    transform: translate3d(var(--mother-role-pre-mx), var(--mother-role-pre-my), 0)
+      scale(var(--mother-role-pre-scale))
+      scaleX(var(--mother-role-pre-resize-x))
+      scaleY(var(--mother-role-pre-resize-y))
+      rotate(var(--mother-role-pre-rot));
+    filter: saturate(var(--mother-role-pre-sat)) brightness(var(--mother-role-pre-bright));
+    opacity: var(--mother-role-pre-alpha);
+  }
+  74%,
+  100% {
+    transform: translate3d(var(--mother-role-mx), var(--mother-role-my), 0)
+      scale(var(--mother-role-scale))
+      scaleX(var(--mother-role-resize-x))
+      scaleY(var(--mother-role-resize-y))
+      rotate(var(--mother-role-rot));
+    filter: saturate(var(--mother-role-sat)) brightness(var(--mother-role-bright));
+    opacity: var(--mother-role-alpha);
+  }
+}
+
+@keyframes motherRoleModeJitter {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+    filter: saturate(1) brightness(1);
+    opacity: 1;
+  }
+  24% {
+    transform: translate3d(
+        calc(var(--mother-role-pre-mx) + var(--mother-role-jitter-ax)),
+        calc(var(--mother-role-pre-my) - var(--mother-role-jitter-ay)),
+        0
+      )
+      scale(var(--mother-role-pre-scale))
+      scaleX(var(--mother-role-pre-resize-x))
+      scaleY(var(--mother-role-pre-resize-y))
+      rotate(var(--mother-role-pre-rot));
+  }
+  49% {
+    transform: translate3d(
+        calc(var(--mother-role-mx) - var(--mother-role-jitter-ax)),
+        calc(var(--mother-role-my) + var(--mother-role-jitter-ay)),
+        0
+      )
+      scale(var(--mother-role-scale))
+      scaleX(var(--mother-role-resize-x))
+      scaleY(var(--mother-role-resize-y))
+      rotate(var(--mother-role-rot));
+    filter: saturate(var(--mother-role-sat)) brightness(var(--mother-role-bright));
+  }
+  74% {
+    transform: translate3d(
+        calc(var(--mother-role-mx) + var(--mother-role-jitter-ax)),
+        calc(var(--mother-role-my) - var(--mother-role-jitter-ay)),
+        0
+      )
+      scale(var(--mother-role-scale))
+      scaleX(var(--mother-role-resize-x))
+      scaleY(var(--mother-role-resize-y))
+      rotate(var(--mother-role-rot));
+  }
+  100% {
+    transform: translate3d(var(--mother-role-mx), var(--mother-role-my), 0)
+      scale(var(--mother-role-scale))
+      scaleX(var(--mother-role-resize-x))
+      scaleY(var(--mother-role-resize-y))
+      rotate(var(--mother-role-rot));
+    filter: saturate(var(--mother-role-sat)) brightness(var(--mother-role-bright));
+    opacity: var(--mother-role-alpha);
+  }
+}
+
+@keyframes motherRoleMergePulse {
+  0%,
+  100% {
+    opacity: 0.28;
+    transform: scale(0.98);
+  }
+  50% {
+    opacity: 0.56;
+    transform: scale(1.02);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect {
+    animation: none !important;
+    transform: none !important;
+    filter: none !important;
+  }
+  #mother-panel .mother-role-preview-merge-core {
+    animation: none !important;
+    transform: none !important;
+  }
 }
 
 #mother-panel .mother-state {
@@ -2933,8 +3162,8 @@ button.ghost:hover {
 
 #mother-panel .panel-readout {
   margin: 0;
-  min-height: 58px;
-  max-height: 114px;
+  min-height: 96px;
+  max-height: 210px;
   overflow: auto;
   border: 0;
   border-radius: 0;
@@ -3023,7 +3252,7 @@ button.ghost:hover {
   align-items: flex-end;
   justify-content: center;
   gap: 4px;
-  width: max(var(--mother-panel-size), 104px);
+  width: max(var(--mother-panel-size), 168px);
   padding: 5px 5px 4px;
   margin-top: -3px;
   border-radius: 8px;
@@ -3056,8 +3285,8 @@ button.ghost:hover {
 
 .mother-action-label {
   font-family: "IBM Plex Mono", monospace;
-  width: 34px;
-  font-size: 7px;
+  width: 54px;
+  font-size: 8px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: rgba(214, 225, 238, 0.9);
@@ -3383,6 +3612,18 @@ button.ghost:hover {
   isolation: isolate;
 }
 
+#tips-text.mother-proposal-active {
+  height: 96px;
+  min-height: 96px;
+  max-height: 96px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: stretch;
+  overflow: hidden;
+  padding: 0 3px 2px;
+}
+
 @keyframes mother-readout-fade {
   0% {
     opacity: 0;
@@ -3400,13 +3641,341 @@ button.ghost:hover {
   animation: mother-readout-fade 220ms cubic-bezier(0.25, 0.8, 0.3, 1);
 }
 
+#tips-text .mother-proposal-card {
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 1px;
+  padding: 0;
+  margin: 0;
+  height: 100%;
+  align-content: stretch;
+  justify-items: stretch;
+  position: relative;
+}
+
+#tips-text .mother-proposal-flow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto;
+  gap: 4px;
+  align-items: center;
+  justify-items: stretch;
+  justify-content: stretch;
+  height: 100%;
+}
+
+#tips-text .mother-proposal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+#tips-text .mother-proposal-title {
+  color: rgba(205, 244, 221, 0.96);
+  font-size: 10px;
+}
+
+#tips-text .mother-proposal-phase {
+  color: rgba(196, 214, 235, 0.9);
+  font-size: 9px;
+}
+
+#tips-text .mother-proposal-stepper {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  height: 100%;
+  margin: 0;
+  padding: 1px 0 0;
+}
+
+#tips-text .mother-proposal-steps {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 3px;
+  min-height: 0;
+  margin: 0;
+}
+
+#tips-text .mother-proposal-step {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 116, 140, 0.58);
+  background: rgba(10, 15, 23, 0.9);
+  color: rgba(145, 166, 194, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+#tips-text .mother-proposal-step.is-active {
+  border-color: rgba(122, 220, 172, 0.72);
+  color: rgba(198, 248, 222, 0.98);
+  background: rgba(18, 44, 32, 0.78);
+}
+
+#tips-text .mother-proposal-step.is-complete {
+  border-color: rgba(104, 178, 220, 0.64);
+  color: rgba(188, 220, 246, 0.95);
+  background: rgba(15, 26, 41, 0.9);
+}
+
+#tips-text .mother-proposal-step-icon {
+  display: inline-flex;
+  width: 6px;
+  height: 6px;
+  align-items: center;
+  justify-content: center;
+}
+
+#tips-text .mother-proposal-step-icon svg {
+  width: 6px;
+  height: 6px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#tips-text .mother-proposal-line {
+  color: rgba(226, 234, 243, 0.94);
+  font-size: 11px;
+  line-height: 1.36;
+}
+
+#tips-text .mother-proposal-line .k {
+  color: rgba(156, 177, 202, 0.92);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 9px;
+  margin-right: 6px;
+}
+
+#tips-text .mother-proposal-visual {
+  display: flex;
+  justify-content: center;
+  min-height: 40px;
+  align-items: center;
+  margin: 0;
+}
+
+#tips-text .mother-proposal-mode {
+  color: var(--proposal-mode-accent, rgba(196, 224, 248, 0.92));
+  font-size: 14px;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  text-transform: uppercase;
+  text-align: center;
+  line-height: 1.06;
+  margin: 0;
+  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+#tips-text .mother-proposal-debug-chip {
+  position: absolute;
+  right: 2px;
+  bottom: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(83, 101, 128, 0.56);
+  background: rgba(8, 12, 20, 0.68);
+  color: rgba(166, 190, 218, 0.88);
+  font-size: 6px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 1px 4px;
+  pointer-events: none;
+}
+
+#tips-text .mother-proposal-debug-chip.is-realtime {
+  border-color: rgba(86, 190, 145, 0.62);
+  color: rgba(176, 242, 210, 0.92);
+}
+
+#tips-text .mother-proposal-debug-chip.is-fallback {
+  border-color: rgba(194, 140, 98, 0.62);
+  color: rgba(241, 203, 168, 0.92);
+}
+
+#tips-text .mother-proposal-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 0;
+  align-items: center;
+  justify-items: center;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  min-height: 16px;
+  overflow: visible;
+  width: 100%;
+}
+
+#tips-text .mother-proposal-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  width: 100%;
+}
+
+#tips-text .mother-proposal-meta-row--counts {
+  min-height: 8px;
+}
+
+#tips-text .mother-proposal-meta-row--provenance {
+  min-height: 8px;
+  gap: 3px;
+  flex-wrap: nowrap;
+}
+
+#tips-text .mother-proposal-card .mother-proposal-icon {
+  opacity: 1;
+  filter: none;
+  transform: none;
+  animation: none;
+}
+
 #tips-text .mother-proposal-icons {
   display: flex;
   align-items: center;
   justify-content: center;
   margin: 0;
   padding: 0;
-  white-space: normal;
+  white-space: nowrap;
+}
+
+#tips-text .mother-proposal-badges {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: nowrap;
+  column-gap: 3px;
+  row-gap: 2px;
+  opacity: 0.9;
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 auto;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+}
+
+#tips-text .mother-proposal-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  border: 1px solid rgba(78, 95, 124, 0.5);
+  border-bottom-color: rgba(20, 30, 42, 0.84);
+  border-radius: 999px;
+  background: rgba(7, 10, 16, 0.52);
+  padding: 0 4px;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  white-space: nowrap;
+}
+
+#tips-text .mother-proposal-badge-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 9px;
+  height: 9px;
+  color: rgba(154, 182, 214, 0.82);
+  flex: 0 0 auto;
+}
+
+#tips-text .mother-proposal-badge-icon svg {
+  width: 6px;
+  height: 6px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#tips-text .mother-proposal-badge.is-output .mother-proposal-badge-icon {
+  color: rgba(142, 221, 184, 0.88);
+}
+
+#tips-text .mother-proposal-badge-text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  min-width: 0;
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+}
+
+#tips-text .mother-proposal-badge-label {
+  display: inline;
+  color: rgba(150, 172, 201, 0.88);
+  font-size: 7px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+#tips-text .mother-proposal-badge-value {
+  color: rgba(203, 220, 241, 0.92);
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+}
+
+#tips-text .mother-proposal-provenance {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  min-width: 0;
+  max-width: 100%;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+}
+
+#tips-text .mother-provenance-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(78, 95, 124, 0.48);
+  background: rgba(8, 12, 20, 0.64);
+  color: rgba(155, 178, 206, 0.86);
+  font-size: 5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+  padding: 1px 4px;
+}
+
+.mother-action-label {
+  display: none;
 }
 
 @keyframes mother-proposal-focus-in {
@@ -3428,8 +3997,8 @@ button.ghost:hover {
 #tips-text .mother-proposal-icon {
   --proposal-accent: rgba(230, 237, 243, 0.94);
   position: relative;
-  width: 56px;
-  height: 56px;
+  width: 36px;
+  height: 36px;
   border-radius: 999px;
   border: 0;
   display: inline-flex;
@@ -3449,7 +4018,7 @@ button.ghost:hover {
 #tips-text .mother-proposal-icon::before {
   content: "";
   position: absolute;
-  inset: 6px;
+  inset: 4px;
   border-radius: 999px;
   border: 1px solid rgba(170, 189, 214, 0.34);
 }
@@ -3457,14 +4026,14 @@ button.ghost:hover {
 #tips-text .mother-proposal-icon::after {
   content: "";
   position: absolute;
-  inset: 1px;
+  inset: 0;
   border-radius: 999px;
   border: 1px solid rgba(85, 106, 136, 0.24);
 }
 
 #tips-text .mother-proposal-icon svg {
-  width: 30px;
-  height: 30px;
+  width: 18px;
+  height: 18px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.9;
@@ -3482,6 +4051,12 @@ button.ghost:hover {
 
 #tips-text .mother-proposal-icon.is-active::after {
   border-color: rgba(94, 117, 149, 0.34);
+}
+
+#tips-text .mother-proposal-icon.is-pending {
+  opacity: 0.94;
+  filter: none;
+  transform: none;
 }
 
 #tips-text .mother-phase-icons {
