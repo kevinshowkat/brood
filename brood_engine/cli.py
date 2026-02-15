@@ -167,6 +167,19 @@ def _paths_list(value: Any) -> list[str]:
     return [raw] if raw else []
 
 
+def _intent_realtime_model_name(*, mother: bool = False) -> str:
+    env_keys = (
+        ("BROOD_MOTHER_INTENT_REALTIME_MODEL", "BROOD_INTENT_REALTIME_MODEL", "OPENAI_INTENT_REALTIME_MODEL")
+        if mother
+        else ("BROOD_INTENT_REALTIME_MODEL", "OPENAI_INTENT_REALTIME_MODEL")
+    )
+    for key in env_keys:
+        value = str(os.getenv(key) or "").strip()
+        if value:
+            return "gpt-realtime" if value == "realtime-gpt" else value
+    return "gpt-realtime" if mother else "gpt-realtime-mini"
+
+
 def _intent_summary_for_mode(mode: str, hints: list[str]) -> str:
     primary_hint = ""
     for hint in hints:
@@ -657,6 +670,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
     last_artifact_path: str | None = None
     canvas_context_rt: CanvasContextRealtimeSession | None = None
     intent_rt: IntentIconsRealtimeSession | None = None
+    mother_intent_rt: IntentIconsRealtimeSession | None = None
 
     print("Brood chat started. Type /help for commands.")
     while True:
@@ -674,6 +688,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 "/diagnose /recast /use "
                 "/canvas_context_rt_start /canvas_context_rt_stop /canvas_context_rt "
                 "/intent_rt_start /intent_rt_stop /intent_rt "
+                "/intent_rt_mother_start /intent_rt_mother_stop /intent_rt_mother "
                 "/blend /swap_dna /argue /bridge /extract_dna /soul_leech /extract_rule /odd_one_out /triforce /export"
             )
             continue
@@ -986,7 +1001,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 intent_rt = IntentIconsRealtimeSession(engine.events)
             ok, err = intent_rt.start()
             if not ok:
-                model = os.getenv("BROOD_INTENT_REALTIME_MODEL") or os.getenv("OPENAI_INTENT_REALTIME_MODEL") or "gpt-realtime-mini"
+                model = _intent_realtime_model_name()
                 engine.events.emit(
                     "intent_icons_failed",
                     image_path=None,
@@ -1015,7 +1030,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
                     image_path=None,
                     error=msg,
                     source="openai_realtime",
-                    model=os.getenv("BROOD_INTENT_REALTIME_MODEL") or "gpt-realtime-mini",
+                    model=_intent_realtime_model_name(),
                     fatal=True,
                 )
                 print(msg)
@@ -1028,7 +1043,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
                     image_path=str(path),
                     error=msg,
                     source="openai_realtime",
-                    model=os.getenv("BROOD_INTENT_REALTIME_MODEL") or "gpt-realtime-mini",
+                    model=_intent_realtime_model_name(),
                     fatal=True,
                 )
                 print(msg)
@@ -1042,12 +1057,98 @@ def _handle_chat(args: argparse.Namespace) -> int:
                     image_path=str(path),
                     error=err or "Realtime submit failed.",
                     source="openai_realtime",
-                    model=os.getenv("BROOD_INTENT_REALTIME_MODEL") or "gpt-realtime-mini",
+                    model=_intent_realtime_model_name(),
                     fatal=True,
                 )
                 print(f"Intent realtime submit failed: {err}")
                 intent_rt.stop()
                 intent_rt = None
+                continue
+            # No blocking here. Results stream via `intent_icons` events.
+            continue
+        if intent.action == "intent_rt_mother_start":
+            if mother_intent_rt is None:
+                mother_intent_rt = IntentIconsRealtimeSession(
+                    engine.events,
+                    model_env_keys=(
+                        "BROOD_MOTHER_INTENT_REALTIME_MODEL",
+                        "BROOD_INTENT_REALTIME_MODEL",
+                        "OPENAI_INTENT_REALTIME_MODEL",
+                    ),
+                    default_model="gpt-realtime",
+                )
+            ok, err = mother_intent_rt.start()
+            if not ok:
+                model = _intent_realtime_model_name(mother=True)
+                engine.events.emit(
+                    "intent_icons_failed",
+                    image_path=None,
+                    error=err or "Realtime start failed.",
+                    source="openai_realtime",
+                    model=model,
+                    fatal=True,
+                )
+                print(f"Mother intent realtime start failed: {err}")
+                mother_intent_rt = None
+                continue
+            print("Mother intent realtime started.")
+            continue
+        if intent.action == "intent_rt_mother_stop":
+            if mother_intent_rt is not None:
+                mother_intent_rt.stop()
+                mother_intent_rt = None
+            print("Mother intent realtime stopped.")
+            continue
+        if intent.action == "intent_rt_mother":
+            raw_path = intent.command_args.get("path") or last_artifact_path
+            if not raw_path:
+                msg = "/intent_rt_mother requires a path (or set an active image with /use)"
+                engine.events.emit(
+                    "intent_icons_failed",
+                    image_path=None,
+                    error=msg,
+                    source="openai_realtime",
+                    model=_intent_realtime_model_name(mother=True),
+                    fatal=True,
+                )
+                print(msg)
+                continue
+            path = Path(str(raw_path))
+            if not path.exists():
+                msg = f"Mother intent realtime failed: file not found ({path})"
+                engine.events.emit(
+                    "intent_icons_failed",
+                    image_path=str(path),
+                    error=msg,
+                    source="openai_realtime",
+                    model=_intent_realtime_model_name(mother=True),
+                    fatal=True,
+                )
+                print(msg)
+                continue
+            if mother_intent_rt is None:
+                mother_intent_rt = IntentIconsRealtimeSession(
+                    engine.events,
+                    model_env_keys=(
+                        "BROOD_MOTHER_INTENT_REALTIME_MODEL",
+                        "BROOD_INTENT_REALTIME_MODEL",
+                        "OPENAI_INTENT_REALTIME_MODEL",
+                    ),
+                    default_model="gpt-realtime",
+                )
+            ok, err = mother_intent_rt.submit_snapshot(path)
+            if not ok:
+                engine.events.emit(
+                    "intent_icons_failed",
+                    image_path=str(path),
+                    error=err or "Realtime submit failed.",
+                    source="openai_realtime",
+                    model=_intent_realtime_model_name(mother=True),
+                    fatal=True,
+                )
+                print(f"Mother intent realtime submit failed: {err}")
+                mother_intent_rt.stop()
+                mother_intent_rt = None
                 continue
             # No blocking here. Results stream via `intent_icons` events.
             continue
@@ -1881,6 +1982,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
 
     if intent_rt is not None:
         intent_rt.stop()
+    if mother_intent_rt is not None:
+        mother_intent_rt.stop()
     if canvas_context_rt is not None:
         canvas_context_rt.stop()
     engine.finish()

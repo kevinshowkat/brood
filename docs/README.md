@@ -7,6 +7,7 @@
 - `docs/aesthetic.md`: planned aesthetic-capture workflow (not implemented).
 - `docs/prds/target_user_agentic_harness_v0.md`: proposed agentic loop that simulates real target-user behavior.
 - `docs/target_user_harness.schema.json`: config schema for target-user simulation runs.
-- `docs/target_user_harness.scenarios.sample.json`: three concrete benchmark scenarios.
+- `docs/target_user_harness.scenarios.sample.json`: benchmark scenarios mapped to core target-user profiles.
+- `docs/target_user_panel_prompt.md`: default panel prompt for screenshot reaction simulation.
 - `docs/param_forge_reference.md`: Param Forge compatibility notes (reference tarball context).
 - `docs/prds/`: product/UX specs and drafts (not all implemented).

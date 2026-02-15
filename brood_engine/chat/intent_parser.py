@@ -136,6 +136,12 @@ def parse_intent(text: str) -> Intent:
             return Intent(action="intent_rt_stop", raw=text, command_args={})
         if command == "intent_rt":
             return Intent(action="intent_rt", raw=text, command_args={"path": _parse_single_path_arg(arg)})
+        if command == "intent_rt_mother_start":
+            return Intent(action="intent_rt_mother_start", raw=text, command_args={})
+        if command == "intent_rt_mother_stop":
+            return Intent(action="intent_rt_mother_stop", raw=text, command_args={})
+        if command == "intent_rt_mother":
+            return Intent(action="intent_rt_mother", raw=text, command_args={"path": _parse_single_path_arg(arg)})
         if command == "diagnose":
             return Intent(action="diagnose", raw=text, command_args={"path": _parse_single_path_arg(arg)})
         if command == "recast":

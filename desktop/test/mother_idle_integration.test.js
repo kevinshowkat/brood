@@ -36,6 +36,7 @@ test("Mother wheel: native-style open/close and dispatch hooks are wired", () =>
 test("Mother v2 idle/cooldown timing constants are explicit", () => {
   assert.match(app, /MOTHER_V2_WATCH_IDLE_MS\s*=\s*800/);
   assert.match(app, /MOTHER_V2_INTENT_IDLE_MS\s*=\s*1500/);
+  assert.match(app, /MOTHER_V2_INTENT_RT_TIMEOUT_MS\s*=\s*30_000/);
   assert.match(app, /MOTHER_V2_COOLDOWN_AFTER_COMMIT_MS\s*=\s*2000/);
   assert.match(app, /MOTHER_V2_COOLDOWN_AFTER_REJECT_MS\s*=\s*1200/);
   assert.match(app, /function motherIdleArmFirstTimer\(/);
@@ -43,6 +44,14 @@ test("Mother v2 idle/cooldown timing constants are explicit", () => {
   assert.match(app, /function motherIdleArmIntentTimer\(/);
   assert.match(app, /if \(state\.motherIdle\?\.phase !== MOTHER_IDLE_STATES\.WATCHING\) return;[\s\S]*await motherV2RequestIntentInference\(\);/);
   assert.match(app, /motherIdleTransitionTo\(MOTHER_IDLE_EVENTS\.COOLDOWN_DONE\)/);
+});
+
+test("Mother realtime intent timeout uses request correlation and extends on stream activity", () => {
+  assert.match(app, /function motherV2ArmRealtimeIntentTimeout\(/);
+  assert.match(app, /if \(!idle \|\| !idle\.pendingIntent\) return;/);
+  assert.match(app, /if \(requestId && currentRequestId !== requestId\) return;/);
+  assert.match(app, /if \(isPartial && matchMother && motherIdle\?\.pendingIntent\) \{/);
+  assert.match(app, /motherV2ArmRealtimeIntentTimeout\(\{ timeoutMs: MOTHER_V2_INTENT_RT_TIMEOUT_MS \}\);/);
 });
 
 test("Mother v2 separates structured intent from prompt compilation", () => {
@@ -56,14 +65,15 @@ test("Mother v2 separates structured intent from prompt compilation", () => {
   assert.match(app, /function motherV2IntentRequiredImageIds\(/);
   assert.match(app, /function motherV2VisionReadyForIntent\(/);
   assert.match(app, /function motherV2RequestIntentInference\(/);
-  assert.match(app, /let transformationMode = ambientModeHint \|\| MOTHER_V2_DEFAULT_TRANSFORMATION_MODE;/);
   assert.match(app, /const visionGate = motherV2VisionReadyForIntent\(\{ schedule: true \}\);/);
   assert.match(app, /if \(!visionGate\.ready\) \{/);
   assert.match(app, /idle\.pendingVisionImageIds = visionGate\.missingIds\.slice\(\);/);
   assert.match(app, /scheduleVisionDescribe\(item\.path,\s*\{ priority: true \}\);/);
   assert.match(app, /motherV2RequestIntentInference\(\)\.catch\(\(\) => \{\}\);/);
   assert.match(app, /setStatus\(\"Mother: reading image context…\"\);/);
-  assert.match(app, /await invoke\(\"write_pty\", \{ data: `\/intent_infer \$\{quoteForPtyArg\(payloadPath\)\}\\n` \}\)/);
+  assert.match(app, /await invoke\(\"write_pty\", \{ data: \"\/intent_rt_mother_start\\n\" \}\)\.catch\(\(\) => \{\}\);/);
+  assert.match(app, /await invoke\(\"write_pty\", \{ data: `\/intent_rt_mother \$\{quoteForPtyArg\(snapshotPath\)\}\\n` \}\)/);
+  assert.doesNotMatch(app, /\/intent_infer \$\{quoteForPtyArg\(payloadPath\)\}\\n/);
   assert.match(app, /function motherV2RequestPromptCompile\(/);
   assert.match(app, /await invoke\(\"write_pty\", \{ data: `\/prompt_compile \$\{quoteForPtyArg\(payloadPath\)\}\\n` \}\)/);
   assert.match(app, /function motherV2CollectGenerationImagePaths\(/);
@@ -100,6 +110,13 @@ test("Mother v2 layered panel exposes sentence-first default and on-demand struc
   assert.match(app, /els\.motherRefineToggle\.classList\.add\(\"hidden\"\);/);
 });
 
+test("Mother proposals hide when fewer than two visible images remain", () => {
+  assert.match(app, /function motherV2HasProposalImageSet\(/);
+  assert.match(app, /if \(!hasProposalImageSet\) \{[\s\S]*root\.classList\.add\(\"hidden\"\);/);
+  assert.match(app, /if \(visibleImageCount < MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL\) return \"\";/);
+  assert.match(app, /if \(motherIdleBaseImageItems\(\)\.length < MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL\) return \"\";/);
+});
+
 test("Mother confirm/reject buttons do not reset interaction state before handling", () => {
   assert.match(
     app,
@@ -109,7 +126,8 @@ test("Mother confirm/reject buttons do not reset interaction state before handli
 });
 
 test("Mother v2 generation is staged as drafts before deployment", () => {
-  assert.match(app, /MOTHER_GENERATION_MODEL\s*=\s*\"gemini-2\.5-flash-image\"/);
+  assert.match(app, /MOTHER_GENERATION_MODEL\s*=\s*DEFAULT_IMAGE_MODEL/);
+  assert.match(app, /DEFAULT_IMAGE_MODEL\s*=\s*\"gemini-3-pro-image-preview\"/);
   assert.match(app, /if \(state\.pointer\.active\) return false;/);
   assert.match(app, /idle\.drafts = \[draft\];/);
   assert.match(app, /motherIdleTransitionTo\(MOTHER_IDLE_EVENTS\.DRAFT_READY\)/);
@@ -164,6 +182,18 @@ test("Mother v2 role glyphs render only during hypothesizing/offering and suppor
   assert.match(app, /if \(motherRoleHit && event\.button === 0\) \{[\s\S]*bumpInteraction\(\{ semantic: false \}\);/);
   assert.match(app, /if \(state\.pointer\.kind === \"mother_role_drag\"\) \{[\s\S]*bumpInteraction\(\{ semantic: false \}\);/);
   assert.doesNotMatch(app, /els\.overlayCanvas\.addEventListener\(\"pointerdown\", \(event\) => \{\s*bumpInteraction\(\);/);
+});
+
+test("Mother offer preview renders larger on canvas for visibility", () => {
+  assert.match(app, /function motherV2OfferPreviewRectCss\(\{ policy = \"adjacent\", targetId = null, draftIndex = 0 \} = \{\}\)/);
+  assert.match(app, /MOTHER_OFFER_PREVIEW_SCALE\s*=\s*1\.62/);
+  assert.match(app, /MOTHER_OFFER_PREVIEW_MIN_VIEWPORT_COVER\s*=\s*0\.46/);
+  assert.match(app, /MOTHER_OFFER_PREVIEW_MAX_VIEWPORT_COVER\s*=\s*0\.92/);
+  assert.match(app, /const baseRect = motherIdleComputePlacementCss\(\{ policy,\s*targetId,\s*draftIndex \}\);/);
+  assert.match(app, /let w = baseW \* MOTHER_OFFER_PREVIEW_SCALE;/);
+  assert.match(app, /x = clamp\(x,\s*minX,\s*Math\.max\(minX,\s*maxX\)\);/);
+  assert.match(app, /const offerRect = motherV2OfferPreviewRectCss\(\{ policy,\s*targetId,\s*draftIndex: 0 \}\);/);
+  assert.match(app, /const rectCss = motherV2OfferPreviewRectCss\(\{ policy,\s*targetId,\s*draftIndex: 0 \}\);/);
 });
 
 test("Mother v2 telemetry includes minimal trace fields", () => {
@@ -242,6 +272,17 @@ test("Mother follow-up reject gating uses live undo availability instead of stal
   assert.match(app, /!motherV2CommitUndoAvailable\(\)/);
 });
 
+test("Mother deploy pauses auto-reproposal until semantic user interaction", () => {
+  assert.match(app, /idle\.blockedUntilUserInteraction = true;/);
+  assert.match(app, /kind:\s*\"post_commit_wait_for_user_interaction\"/);
+  assert.match(app, /if \(idle\.blockedUntilUserInteraction\) return;/);
+  assert.match(app, /if \(state\.motherIdle\?\.blockedUntilUserInteraction\) return;/);
+  assert.match(
+    app,
+    /if \(idle\.blockedUntilUserInteraction\) \{[\s\S]*idle\.blockedUntilUserInteraction = false;[\s\S]*kind:\s*\"post_commit_resumed_on_user_interaction\"/
+  );
+});
+
 test("Mother v2 viewport-only movement does not reset inferred intent state", () => {
   assert.match(app, /function motherIdleSyncFromInteraction\(\{ userInteraction = false, semantic = true \} = \{\}\)/);
   assert.match(app, /if \(!semantic\) \{[\s\S]*return;/);
@@ -274,6 +315,25 @@ test("Mother v2 drafting visuals include role-aware context images", () => {
   assert.match(app, /const overlays = ensureImageFxOverlays\(Math\.max\(1,\s*targets\.length\)\)/);
 });
 
+test("Mother follow-up generation prioritizes latest upload + latest Mother output pair", () => {
+  assert.match(app, /const preferredPairIds = \(\(\) => \{/);
+  assert.match(app, /const latestMotherId = findLatestId\(\(item\) => isMotherGeneratedImageItem\(item\)\);/);
+  assert.match(app, /const latestUploadId = findLatestId\(\(item\) => !isMotherGeneratedImageItem\(item\)\);/);
+  assert.match(app, /if \(isMotherGeneratedImageItem\(firstItem\)\) return \[firstSelectedId,\s*latestUploadId\];/);
+  assert.match(app, /return \[firstSelectedId,\s*latestMotherId\];/);
+  assert.match(app, /pushMany\(preferredPairIds\);/);
+});
+
+test("Mother offer stage hides seed images while previewing draft", () => {
+  assert.match(app, /function motherV2OfferingHiddenSeedIds\(/);
+  assert.match(app, /if \(idle\.phase !== MOTHER_IDLE_STATES\.OFFERING\) return new Set\(\);/);
+  assert.match(app, /if \(!motherV2CurrentDraft\(\)\) return new Set\(\);/);
+  assert.match(app, /const hiddenOfferSeedIds = motherV2OfferingHiddenSeedIds\(\);/);
+  assert.match(app, /if \(isHiddenOfferSeedId\(imageId\)\) continue;/);
+  assert.match(app, /const selectedIds = getSelectedIds\(\)\.filter\(\(id\) => id && !isImageEffectTokenized\(id\) && !isHiddenOfferSeedId\(id\)\)/);
+  assert.match(app, /if \(hiddenOfferSeedIds\.has\(imageId\)\) continue;/);
+});
+
 test("Effect extraction pending state tracks duplicate source paths per selected tile", () => {
   assert.match(app, /state\.pendingExtractDna\s*=\s*createPendingEffectExtractionState\(sources\);/);
   assert.match(app, /state\.pendingSoulLeech\s*=\s*createPendingEffectExtractionState\(sources\);/);
@@ -286,6 +346,55 @@ test("Mother realtime border/video: gated by idle state machine phase", () => {
   assert.match(app, /const idlePhase = state\.motherIdle\?\.phase/);
   assert.match(app, /motherIdleUsesRealtimeVisual\(idlePhase\)/);
   assert.match(app, /videoEl\.classList\.remove\(\"hidden\"\)/);
+});
+
+test("Mother proposal mode visuals stay hidden until intent source is confirmed", () => {
+  assert.match(app, /const hasConfirmedIntentSource = Boolean\(motherV2IntentSourceKind\(intent\?\._intent_source_kind\)\);/);
+  assert.match(app, /const modeLabel = hasConfirmedIntentSource \? motherV2ProposalModeLabel\(modeForDisplay\) : \"\";/);
+  assert.match(app, /if \(!hasConfirmedIntentSource\) return \"\";/);
+  assert.match(app, /els\.motherPanel\.classList\.toggle\(\"mother-proposal-overlay\", Boolean\(proposalCardHtml\)\);/);
+  assert.doesNotMatch(app, /Proposing\.\.\./);
+});
+
+test("Mother panel proposal mode label can overlay without clipping", () => {
+  assert.match(css, /#mother-panel\.mother-proposal-overlay \.panel-readout\s*\{[\s\S]*overflow:\s*visible;/);
+  assert.match(
+    css,
+    /#mother-panel\.mother-proposal-overlay \.mother-panel-body #tips-text\.mother-proposal-active\s*\{[\s\S]*overflow:\s*visible;[\s\S]*z-index:\s*4;/
+  );
+  assert.match(
+    css,
+    /#mother-panel \.mother-panel-body #tips-text \.mother-proposal-mode\s*\{[\s\S]*z-index:\s*8;/
+  );
+});
+
+test("Mother panel preview hides synthetic viewport/merge overlays", () => {
+  assert.match(
+    css,
+    /#mother-panel \.mother-role-preview-viewport,\s*#mother-panel \.mother-role-preview-merge-core\s*\{[\s\S]*display:\s*none !important;/
+  );
+});
+
+test("Mother panel border stays neutral across hints/advanced states", () => {
+  assert.match(
+    css,
+    /#mother-panel\.mother-hints-visible\s*\{[\s\S]*border-color:\s*var\(--mother-card-border\);[\s\S]*border-bottom-color:\s*var\(--mother-card-border-low\);/
+  );
+  assert.match(
+    css,
+    /#mother-panel\.mother-advanced-visible\s*\{[\s\S]*border-color:\s*var\(--mother-card-border\);[\s\S]*border-bottom-color:\s*var\(--mother-card-border-low\);/
+  );
+});
+
+test("Mother proposal glyph ignores glitch burst effect", () => {
+  assert.match(css, /#tips-text\.mother-proposal-active\.mother-glitch\s*\{[\s\S]*animation:\s*none;/);
+  assert.match(css, /#tips-text\.mother-proposal-active\.mother-glitch::before\s*\{[\s\S]*opacity:\s*0;[\s\S]*animation:\s*none;/);
+  assert.match(
+    css,
+    /#mother-panel \.mother-panel-body #tips-text \.mother-proposal-icon,\s*#mother-panel \.mother-panel-body #tips-text \.mother-phase-icon\s*\{[\s\S]*animation:\s*none !important;[\s\S]*opacity:\s*1 !important;[\s\S]*filter:\s*none !important;[\s\S]*transform:\s*none !important;/
+  );
+  assert.match(app, /if \(els\.tipsText\.classList\.contains\(\"mother-proposal-active\"\)\) return;/);
+  assert.match(app, /if \(els\.tipsText\.querySelector\(\"\.mother-proposal-icon, \.mother-phase-icon\"\)\) return;/);
 });
 
 test("Mother wheel visuals: uses app-menu-like treatment with unfurl animation", () => {

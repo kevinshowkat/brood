@@ -213,6 +213,28 @@ def test_parse_intent_intent_rt_quoted_path():
     assert intent.command_args["path"] == "/tmp/a b.png"
 
 
+def test_parse_intent_intent_rt_mother_start():
+    intent = parse_intent("/intent_rt_mother_start")
+    assert intent.action == "intent_rt_mother_start"
+
+
+def test_parse_intent_intent_rt_mother_stop():
+    intent = parse_intent("/intent_rt_mother_stop")
+    assert intent.action == "intent_rt_mother_stop"
+
+
+def test_parse_intent_intent_rt_mother_path():
+    intent = parse_intent("/intent_rt_mother a.png")
+    assert intent.action == "intent_rt_mother"
+    assert intent.command_args["path"] == "a.png"
+
+
+def test_parse_intent_intent_rt_mother_quoted_path():
+    intent = parse_intent('/intent_rt_mother "/tmp/a b.png"')
+    assert intent.action == "intent_rt_mother"
+    assert intent.command_args["path"] == "/tmp/a b.png"
+
+
 def test_parse_intent_profile_and_model_commands() -> None:
     profile = parse_intent("/profile creative")
     assert profile.action == "set_profile"

@@ -1506,23 +1506,28 @@ button.ghost:hover {
 }
 
 .minimap-rect {
+  --minimap-rect-fill: rgba(66, 133, 244, 0.4);
   position: absolute;
-  border: 2px solid rgba(255, 72, 72, 0.92);
-  background: rgba(255, 72, 72, 0.06);
+  border: 0;
+  background: var(--minimap-rect-fill);
   border-radius: 6px;
   box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.62),
-    0 10px 16px rgba(0, 0, 0, 0.22);
+    0 10px 16px rgba(0, 0, 0, 0.22),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
 .minimap-rect.is-selected {
-  border-color: rgba(255, 212, 0, 0.78);
-  background: rgba(255, 212, 0, 0.05);
+  filter: brightness(1.08) saturate(1.06);
+  box-shadow:
+    0 10px 16px rgba(0, 0, 0, 0.24),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
 
 .minimap-rect.is-active {
-  border-color: rgba(255, 212, 0, 0.96);
-  background: rgba(255, 212, 0, 0.07);
+  filter: brightness(1.18) saturate(1.12);
+  box-shadow:
+    0 10px 18px rgba(0, 0, 0, 0.26),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.2);
 }
 
 .minimap-orb {
@@ -2608,7 +2613,8 @@ button.ghost:hover {
 
 #mother-overlay {
   --mother-portrait-size: clamp(98px, 9.1vw, 144px);
-  --mother-panel-size: clamp(164px, 16vw, 248px);
+  --mother-panel-size: clamp(136px, 11.2vw, 174px);
+  --mother-panel-shell-width: max(var(--mother-panel-size), 122px);
   --mother-action-size: 32px;
   --mother-confirm-size: 32px;
   --mother-advanced-label-width: clamp(72px, 36%, 110px);
@@ -2655,7 +2661,10 @@ button.ghost:hover {
 }
 
 #mother-panel {
-  width: var(--mother-panel-size);
+  width: var(--mother-panel-shell-width);
+  min-height: var(--mother-portrait-size);
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--mother-card-border);
   border-bottom-color: var(--mother-card-border-low);
   border-radius: 12px;
@@ -2680,19 +2689,30 @@ button.ghost:hover {
 }
 
 #mother-panel .mother-state-row {
-  padding: 6px 8px 4px;
+  padding: 4px 8px 3px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.74);
   position: relative;
   z-index: 1;
 }
 
+#mother-panel .mother-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(72px, 0.92fr) minmax(0, 1.08fr);
+  align-items: stretch;
+  gap: 7px;
+  padding: 4px 8px 6px;
+}
+
 #mother-panel .mother-role-preview {
   --mother-role-preview-inset: 4px;
   position: relative;
-  margin: 2px 8px 6px;
-  height: clamp(48px, 6.8vw, 80px);
+  margin: 0;
+  min-height: 0;
+  height: 100%;
   border-radius: 8px;
-  border: 1px solid rgba(84, 104, 132, 0.42);
+  border: 0;
   background: transparent;
   overflow: hidden;
 }
@@ -2701,7 +2721,7 @@ button.ghost:hover {
   position: absolute;
   inset: var(--mother-role-preview-inset);
   border-radius: 6px;
-  border: 1px solid rgba(54, 76, 106, 0.56);
+  border: 0;
   background: transparent;
   overflow: hidden;
 }
@@ -2729,14 +2749,15 @@ button.ghost:hover {
   --mother-role-jitter-ax: 2px;
   --mother-role-jitter-ay: 1.5px;
   position: absolute;
-  border-radius: 4px;
-  border: 2px solid color-mix(in srgb, var(--mother-role-accent) 88%, rgba(25, 30, 44, 0.86));
-  background: color-mix(in srgb, var(--mother-role-accent) 12%, transparent);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.68);
+  border-radius: 0;
+  border: 0;
+  background: color-mix(in srgb, var(--mother-role-accent) 44%, transparent);
+  box-shadow:
+    0 0 6px color-mix(in srgb, var(--mother-role-accent) 16%, transparent);
   transform-origin: 50% 50%;
   transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
   filter: saturate(1) brightness(1);
-  opacity: 1;
+  opacity: 0.72;
   will-change: transform, filter, opacity;
 }
 
@@ -2751,6 +2772,7 @@ button.ghost:hover {
 }
 
 #mother-panel .mother-role-preview-viewport {
+  display: none;
   position: absolute;
   z-index: 999;
   border-radius: 6px;
@@ -2760,6 +2782,12 @@ button.ghost:hover {
     0 0 0 1px rgba(0, 0, 0, 0.34),
     0 0 4px rgba(82, 255, 148, 0.06);
   pointer-events: none;
+}
+
+/* Keep panel preview free of synthetic overlay rectangles. */
+#mother-panel .mother-role-preview-viewport,
+#mother-panel .mother-role-preview-merge-core {
+  display: none !important;
 }
 
 #mother-panel .mother-role-preview-merge-core {
@@ -2780,9 +2808,91 @@ button.ghost:hover {
   animation: motherRoleMergePulse 2300ms ease-in-out infinite;
 }
 
-#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="jitter"] {
-  animation-name: motherRoleModeJitter;
-  animation-timing-function: linear;
+#mother-panel .mother-role-preview[data-mode="hybridize"] .mother-role-preview-merge-core {
+  animation-duration: 1650ms;
+  opacity: 0.52;
+}
+
+#mother-panel .mother-role-preview[data-mode="romanticize"] .mother-role-preview-merge-core {
+  animation-name: motherRoleMergeHeartbeat;
+  animation-duration: 2100ms;
+}
+
+#mother-panel .mother-role-preview[data-mode="purify"] .mother-role-preview-merge-core {
+  animation-name: motherRoleMergePurify;
+  animation-duration: 2500ms;
+}
+
+#mother-panel .mother-role-preview[data-mode="fracture"] .mother-role-preview-merge-core {
+  animation-name: motherRoleMergeFracture;
+  animation-duration: 920ms;
+  opacity: 0.36;
+}
+
+#mother-panel .mother-role-preview[data-mode="alienate"] .mother-role-preview-merge-core {
+  animation-name: motherRoleMergeDissipate;
+  animation-duration: 2600ms;
+  opacity: 0.24;
+}
+
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="amplify"] {
+  animation-name: motherRoleModeAmplify;
+  animation-timing-function: cubic-bezier(0.18, 0.92, 0.26, 1);
+  animation-direction: alternate-reverse;
+}
+
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="transcend"] {
+  animation-name: motherRoleModeTranscend;
+  animation-timing-function: cubic-bezier(0.12, 0.52, 0.22, 1);
+  animation-direction: normal;
+}
+
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="destabilize"] {
+  animation-name: motherRoleModeDestabilize;
+  animation-timing-function: steps(2, end);
+  animation-direction: normal;
+}
+
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="purify"] {
+  animation-name: motherRoleModePurify;
+  animation-timing-function: cubic-bezier(0.2, 0.64, 0.28, 1);
+  animation-direction: normal;
+}
+
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="hybridize"] {
+  animation-name: motherRoleModeHybridize;
+  animation-timing-function: cubic-bezier(0.22, 0.88, 0.3, 1);
+  animation-direction: alternate;
+}
+
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="mythologize"] {
+  animation-name: motherRoleModeMythologize;
+  animation-timing-function: cubic-bezier(0.34, 0.16, 0.54, 1);
+  animation-direction: normal;
+}
+
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="monumentalize"] {
+  animation-name: motherRoleModeMonumentalize;
+  animation-timing-function: cubic-bezier(0.12, 0.42, 0.2, 1);
+  animation-direction: normal;
+}
+
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="fracture"] {
+  animation-name: motherRoleModeFracture;
+  animation-timing-function: steps(3, end);
+  animation-direction: normal;
+}
+
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="romanticize"] {
+  animation-name: motherRoleModeRomanticize;
+  animation-timing-function: cubic-bezier(0.24, 0.72, 0.32, 1);
+  animation-direction: alternate-reverse;
+}
+
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="alienate"] {
+  animation-name: motherRoleModeAlienate;
+  animation-timing-function: cubic-bezier(0.08, 0.54, 0.16, 1);
+  animation-direction: normal;
 }
 
 @keyframes motherRoleModeFlow {
@@ -2812,45 +2922,47 @@ button.ghost:hover {
   }
 }
 
-@keyframes motherRoleModeJitter {
+@keyframes motherRoleModeAmplify {
   0% {
-    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
-    filter: saturate(1) brightness(1);
-    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(0.9) rotate(0deg);
+    filter: saturate(1.02) brightness(0.98);
+    opacity: var(--mother-role-pre-alpha);
   }
-  24% {
-    transform: translate3d(
-        calc(var(--mother-role-pre-mx) + var(--mother-role-jitter-ax)),
-        calc(var(--mother-role-pre-my) - var(--mother-role-jitter-ay)),
-        0
-      )
-      scale(var(--mother-role-pre-scale))
-      scaleX(var(--mother-role-pre-resize-x))
-      scaleY(var(--mother-role-pre-resize-y))
-      rotate(var(--mother-role-pre-rot));
+  18% {
+    transform: translate3d(var(--mother-role-pre-mx), var(--mother-role-pre-my), 0)
+      scale(calc(var(--mother-role-pre-scale) + 0.08))
+      scaleX(calc(var(--mother-role-pre-resize-x) + 0.08))
+      scaleY(calc(var(--mother-role-pre-resize-y) + 0.08))
+      rotate(calc(var(--mother-role-pre-rot) + 1.4deg));
+    filter: saturate(calc(var(--mother-role-pre-sat) + 0.2)) brightness(calc(var(--mother-role-pre-bright) + 0.1));
+    opacity: calc(var(--mother-role-pre-alpha) + 0.05);
   }
-  49% {
-    transform: translate3d(
-        calc(var(--mother-role-mx) - var(--mother-role-jitter-ax)),
-        calc(var(--mother-role-my) + var(--mother-role-jitter-ay)),
-        0
-      )
-      scale(var(--mother-role-scale))
-      scaleX(var(--mother-role-resize-x))
-      scaleY(var(--mother-role-resize-y))
-      rotate(var(--mother-role-rot));
-    filter: saturate(var(--mother-role-sat)) brightness(var(--mother-role-bright));
+  36% {
+    transform: translate3d(calc(var(--mother-role-mx) + 2.8px), calc(var(--mother-role-my) + 2px), 0)
+      scale(calc(var(--mother-role-scale) + 0.18))
+      scaleX(calc(var(--mother-role-resize-x) + 0.12))
+      scaleY(calc(var(--mother-role-resize-y) + 0.12))
+      rotate(calc(var(--mother-role-rot) + 2.4deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.28)) brightness(calc(var(--mother-role-bright) + 0.18));
+    opacity: calc(var(--mother-role-alpha) + 0.1);
   }
-  74% {
-    transform: translate3d(
-        calc(var(--mother-role-mx) + var(--mother-role-jitter-ax)),
-        calc(var(--mother-role-my) - var(--mother-role-jitter-ay)),
-        0
-      )
-      scale(var(--mother-role-scale))
-      scaleX(var(--mother-role-resize-x))
-      scaleY(var(--mother-role-resize-y))
-      rotate(var(--mother-role-rot));
+  58% {
+    transform: translate3d(calc(var(--mother-role-pre-mx) - 1.7px), calc(var(--mother-role-pre-my) - 1.1px), 0)
+      scale(calc(var(--mother-role-pre-scale) + 0.03))
+      scaleX(calc(var(--mother-role-pre-resize-x) + 0.02))
+      scaleY(calc(var(--mother-role-pre-resize-y) + 0.02))
+      rotate(calc(var(--mother-role-pre-rot) - 1.8deg));
+    filter: saturate(calc(var(--mother-role-pre-sat) + 0.1)) brightness(calc(var(--mother-role-pre-bright) + 0.05));
+    opacity: calc(var(--mother-role-pre-alpha) + 0.04);
+  }
+  84% {
+    transform: translate3d(calc(var(--mother-role-mx) + 1.1px), calc(var(--mother-role-my) + 0.8px), 0)
+      scale(calc(var(--mother-role-scale) + 0.08))
+      scaleX(calc(var(--mother-role-resize-x) + 0.06))
+      scaleY(calc(var(--mother-role-resize-y) + 0.06))
+      rotate(calc(var(--mother-role-rot) + 0.9deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.16)) brightness(calc(var(--mother-role-bright) + 0.08));
+    opacity: calc(var(--mother-role-alpha) + 0.04);
   }
   100% {
     transform: translate3d(var(--mother-role-mx), var(--mother-role-my), 0)
@@ -2863,6 +2975,578 @@ button.ghost:hover {
   }
 }
 
+@keyframes motherRoleModeTranscend {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+    filter: saturate(1) brightness(1.02);
+    opacity: var(--mother-role-pre-alpha);
+  }
+  26% {
+    transform: translate3d(var(--mother-role-pre-mx), calc(var(--mother-role-pre-my) - 2px), 0)
+      scale(var(--mother-role-pre-scale))
+      scaleX(var(--mother-role-pre-resize-x))
+      scaleY(calc(var(--mother-role-pre-resize-y) + 0.1))
+      rotate(calc(var(--mother-role-pre-rot) + 1.4deg));
+    filter: saturate(calc(var(--mother-role-pre-sat) - 0.04)) brightness(calc(var(--mother-role-pre-bright) + 0.12));
+    opacity: var(--mother-role-pre-alpha);
+  }
+  52% {
+    transform: translate3d(calc(var(--mother-role-mx) + 1px), calc(var(--mother-role-my) - 7px), 0)
+      scale(calc(var(--mother-role-scale) + 0.03))
+      scaleX(calc(var(--mother-role-resize-x) - 0.02))
+      scaleY(calc(var(--mother-role-resize-y) + 0.13))
+      rotate(calc(var(--mother-role-rot) + 3deg));
+    filter: saturate(calc(var(--mother-role-sat) - 0.1)) brightness(calc(var(--mother-role-bright) + 0.2));
+    opacity: calc(var(--mother-role-alpha) + 0.02);
+  }
+  78% {
+    transform: translate3d(calc(var(--mother-role-mx) - 0.5px), calc(var(--mother-role-my) - 9px), 0)
+      scale(calc(var(--mother-role-scale) + 0.05))
+      scaleX(calc(var(--mother-role-resize-x) - 0.05))
+      scaleY(calc(var(--mother-role-resize-y) + 0.17))
+      rotate(calc(var(--mother-role-rot) - 1.4deg));
+    filter: saturate(calc(var(--mother-role-sat) - 0.12)) brightness(calc(var(--mother-role-bright) + 0.24));
+    opacity: calc(var(--mother-role-alpha) + 0.04);
+  }
+  100% {
+    transform: translate3d(var(--mother-role-mx), calc(var(--mother-role-my) - 5px), 0)
+      scale(var(--mother-role-scale))
+      scaleX(var(--mother-role-resize-x))
+      scaleY(var(--mother-role-resize-y))
+      rotate(var(--mother-role-rot));
+    filter: saturate(calc(var(--mother-role-sat) - 0.08)) brightness(calc(var(--mother-role-bright) + 0.16));
+    opacity: var(--mother-role-alpha);
+  }
+}
+
+@keyframes motherRoleModeDestabilize {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+    filter: saturate(1) brightness(1);
+    opacity: var(--mother-role-pre-alpha);
+  }
+  10% {
+    transform: translate3d(
+        calc(var(--mother-role-pre-mx) + (var(--mother-role-jitter-ax) * 1.2)),
+        calc(var(--mother-role-pre-my) - (var(--mother-role-jitter-ay) * 1.2)),
+        0
+      )
+      scale(calc(var(--mother-role-pre-scale) + 0.03))
+      scaleX(calc(var(--mother-role-pre-resize-x) + 0.08))
+      scaleY(calc(var(--mother-role-pre-resize-y) - 0.08))
+      rotate(calc(var(--mother-role-pre-rot) + 4.4deg));
+    filter: saturate(calc(var(--mother-role-pre-sat) + 0.16)) brightness(calc(var(--mother-role-pre-bright) - 0.03));
+    opacity: calc(var(--mother-role-pre-alpha) - 0.06);
+  }
+  22% {
+    transform: translate3d(
+        calc(var(--mother-role-mx) - (var(--mother-role-jitter-ax) * 1.3)),
+        calc(var(--mother-role-my) + (var(--mother-role-jitter-ay) * 1.4)),
+        0
+      )
+      scale(calc(var(--mother-role-scale) + 0.01))
+      scaleX(calc(var(--mother-role-resize-x) + 0.12))
+      scaleY(calc(var(--mother-role-resize-y) - 0.1))
+      rotate(calc(var(--mother-role-rot) - 5.2deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.2)) brightness(calc(var(--mother-role-bright) - 0.04));
+    opacity: calc(var(--mother-role-alpha) - 0.08);
+  }
+  34% {
+    transform: translate3d(
+        calc(var(--mother-role-pre-mx) + (var(--mother-role-jitter-ax) * 1.6)),
+        calc(var(--mother-role-pre-my) + (var(--mother-role-jitter-ay) * 0.6)),
+        0
+      )
+      scale(calc(var(--mother-role-pre-scale) - 0.02))
+      scaleX(calc(var(--mother-role-pre-resize-x) + 0.05))
+      scaleY(calc(var(--mother-role-pre-resize-y) - 0.04))
+      rotate(calc(var(--mother-role-pre-rot) + 6.2deg));
+    filter: saturate(calc(var(--mother-role-pre-sat) + 0.12)) brightness(calc(var(--mother-role-pre-bright) - 0.05));
+    opacity: calc(var(--mother-role-pre-alpha) - 0.1);
+  }
+  46% {
+    transform: translate3d(
+        calc(var(--mother-role-mx) - (var(--mother-role-jitter-ax) * 1.1)),
+        calc(var(--mother-role-my) - (var(--mother-role-jitter-ay) * 1.5)),
+        0
+      )
+      scale(calc(var(--mother-role-scale) + 0.04))
+      scaleX(calc(var(--mother-role-resize-x) + 0.1))
+      scaleY(calc(var(--mother-role-resize-y) - 0.07))
+      rotate(calc(var(--mother-role-rot) - 6.4deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.22)) brightness(calc(var(--mother-role-bright) - 0.06));
+    opacity: calc(var(--mother-role-alpha) - 0.12);
+  }
+  59% {
+    transform: translate3d(
+        calc(var(--mother-role-pre-mx) - (var(--mother-role-jitter-ax) * 1.4)),
+        calc(var(--mother-role-pre-my) + (var(--mother-role-jitter-ay) * 1.5)),
+        0
+      )
+      scale(calc(var(--mother-role-pre-scale) + 0.01))
+      scaleX(calc(var(--mother-role-pre-resize-x) + 0.08))
+      scaleY(calc(var(--mother-role-pre-resize-y) - 0.1))
+      rotate(calc(var(--mother-role-pre-rot) + 5.3deg));
+    filter: saturate(calc(var(--mother-role-pre-sat) + 0.16)) brightness(calc(var(--mother-role-pre-bright) - 0.04));
+    opacity: calc(var(--mother-role-pre-alpha) - 0.1);
+  }
+  72% {
+    transform: translate3d(
+        calc(var(--mother-role-mx) + (var(--mother-role-jitter-ax) * 1.5)),
+        calc(var(--mother-role-my) - (var(--mother-role-jitter-ay) * 1.2)),
+        0
+      )
+      scale(calc(var(--mother-role-scale) + 0.03))
+      scaleX(calc(var(--mother-role-resize-x) + 0.11))
+      scaleY(calc(var(--mother-role-resize-y) - 0.09))
+      rotate(calc(var(--mother-role-rot) - 4.8deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.18)) brightness(calc(var(--mother-role-bright) - 0.03));
+    opacity: calc(var(--mother-role-alpha) - 0.09);
+  }
+  86% {
+    transform: translate3d(
+        calc(var(--mother-role-pre-mx) + (var(--mother-role-jitter-ax) * 0.8)),
+        calc(var(--mother-role-pre-my) - (var(--mother-role-jitter-ay) * 0.8)),
+        0
+      )
+      scale(calc(var(--mother-role-pre-scale) + 0.01))
+      scaleX(calc(var(--mother-role-pre-resize-x) + 0.04))
+      scaleY(calc(var(--mother-role-pre-resize-y) - 0.04))
+      rotate(calc(var(--mother-role-pre-rot) + 2.4deg));
+    filter: saturate(calc(var(--mother-role-pre-sat) + 0.1)) brightness(calc(var(--mother-role-pre-bright) - 0.01));
+    opacity: calc(var(--mother-role-pre-alpha) - 0.05);
+  }
+  100% {
+    transform: translate3d(var(--mother-role-mx), var(--mother-role-my), 0)
+      scale(var(--mother-role-scale))
+      scaleX(var(--mother-role-resize-x))
+      scaleY(var(--mother-role-resize-y))
+      rotate(var(--mother-role-rot));
+    filter: saturate(var(--mother-role-sat)) brightness(var(--mother-role-bright));
+    opacity: var(--mother-role-alpha);
+  }
+}
+
+@keyframes motherRoleModePurify {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+    filter: saturate(0.88) brightness(1.08);
+    opacity: var(--mother-role-pre-alpha);
+  }
+  28% {
+    transform: translate3d(var(--mother-role-pre-mx), var(--mother-role-pre-my), 0)
+      scale(var(--mother-role-pre-scale))
+      scaleX(var(--mother-role-pre-resize-x))
+      scaleY(var(--mother-role-pre-resize-y))
+      rotate(0deg);
+    filter: saturate(calc(var(--mother-role-pre-sat) - 0.18)) brightness(calc(var(--mother-role-pre-bright) + 0.18));
+    opacity: var(--mother-role-pre-alpha);
+  }
+  56% {
+    transform: translate3d(
+        calc((var(--mother-role-pre-mx) * 0.35) + (var(--mother-role-mx) * 0.65)),
+        calc((var(--mother-role-pre-my) * 0.35) + (var(--mother-role-my) * 0.65)),
+        0
+      )
+      scale(calc(var(--mother-role-scale) + 0.02))
+      scaleX(calc(var(--mother-role-resize-x) + 0.08))
+      scaleY(calc(var(--mother-role-resize-y) + 0.12))
+      rotate(0deg);
+    filter: saturate(calc(var(--mother-role-sat) - 0.22)) brightness(calc(var(--mother-role-bright) + 0.3));
+    opacity: calc(var(--mother-role-alpha) + 0.04);
+  }
+  80% {
+    transform: translate3d(var(--mother-role-mx), var(--mother-role-my), 0)
+      scale(calc(var(--mother-role-scale) + 0.01))
+      scaleX(1)
+      scaleY(1.08)
+      rotate(0deg);
+    filter: saturate(calc(var(--mother-role-sat) - 0.26)) brightness(calc(var(--mother-role-bright) + 0.36));
+    opacity: calc(var(--mother-role-alpha) + 0.06);
+  }
+  100% {
+    transform: translate3d(var(--mother-role-mx), var(--mother-role-my), 0)
+      scale(var(--mother-role-scale))
+      scaleX(var(--mother-role-resize-x))
+      scaleY(var(--mother-role-resize-y))
+      rotate(0deg);
+    filter: saturate(calc(var(--mother-role-sat) - 0.2)) brightness(calc(var(--mother-role-bright) + 0.28));
+    opacity: var(--mother-role-alpha);
+  }
+}
+
+@keyframes motherRoleModeHybridize {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+    filter: saturate(1) brightness(1);
+    opacity: var(--mother-role-pre-alpha);
+  }
+  22% {
+    transform: translate3d(var(--mother-role-pre-mx), var(--mother-role-pre-my), 0)
+      scale(var(--mother-role-pre-scale))
+      scaleX(var(--mother-role-pre-resize-x))
+      scaleY(var(--mother-role-pre-resize-y))
+      rotate(calc(var(--mother-role-pre-rot) + 1deg));
+    filter: saturate(calc(var(--mother-role-pre-sat) + 0.08)) brightness(calc(var(--mother-role-pre-bright) + 0.05));
+    opacity: var(--mother-role-pre-alpha);
+  }
+  44% {
+    transform: translate3d(
+        calc((var(--mother-role-pre-mx) * 0.44) + (var(--mother-role-mx) * 0.56) - (var(--mother-role-jitter-ax) * 0.6)),
+        calc((var(--mother-role-pre-my) * 0.44) + (var(--mother-role-my) * 0.56) + (var(--mother-role-jitter-ay) * 0.6)),
+        0
+      )
+      scale(calc(var(--mother-role-scale) + 0.04))
+      scaleX(calc(var(--mother-role-resize-x) + 0.1))
+      scaleY(calc(var(--mother-role-resize-y) - 0.07))
+      rotate(calc(var(--mother-role-rot) - 1.4deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.1)) brightness(calc(var(--mother-role-bright) + 0.07));
+    opacity: calc(var(--mother-role-alpha) + 0.04);
+  }
+  66% {
+    transform: translate3d(var(--mother-role-mx), var(--mother-role-my), 0)
+      scale(calc(var(--mother-role-scale) + 0.12))
+      scaleX(calc(var(--mother-role-resize-x) + 0.08))
+      scaleY(calc(var(--mother-role-resize-y) + 0.08))
+      rotate(calc(var(--mother-role-rot) + 1.4deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.2)) brightness(calc(var(--mother-role-bright) + 0.12));
+    opacity: calc(var(--mother-role-alpha) + 0.1);
+  }
+  88%,
+  100% {
+    transform: translate3d(var(--mother-role-mx), var(--mother-role-my), 0)
+      scale(var(--mother-role-scale))
+      scaleX(var(--mother-role-resize-x))
+      scaleY(var(--mother-role-resize-y))
+      rotate(var(--mother-role-rot));
+    filter: saturate(var(--mother-role-sat)) brightness(var(--mother-role-bright));
+    opacity: var(--mother-role-alpha);
+  }
+}
+
+@keyframes motherRoleModeMythologize {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+    filter: saturate(1) brightness(1);
+    opacity: var(--mother-role-pre-alpha);
+  }
+  20% {
+    transform: translate3d(
+        calc(var(--mother-role-pre-mx) + (var(--mother-role-jitter-ax) * 1.2)),
+        calc(var(--mother-role-pre-my) - (var(--mother-role-jitter-ay) * 1.1)),
+        0
+      )
+      scale(calc(var(--mother-role-pre-scale) + 0.02))
+      scaleX(calc(var(--mother-role-pre-resize-x) + 0.08))
+      scaleY(calc(var(--mother-role-pre-resize-y) - 0.06))
+      rotate(calc(var(--mother-role-pre-rot) + 8deg));
+    filter: saturate(calc(var(--mother-role-pre-sat) + 0.12)) brightness(calc(var(--mother-role-pre-bright) + 0.08));
+    opacity: var(--mother-role-pre-alpha);
+  }
+  40% {
+    transform: translate3d(
+        calc(var(--mother-role-mx) + (var(--mother-role-jitter-ax) * 1.4)),
+        calc(var(--mother-role-my) + (var(--mother-role-jitter-ay) * 1.2)),
+        0
+      )
+      scale(calc(var(--mother-role-scale) + 0.08))
+      scaleX(calc(var(--mother-role-resize-x) + 0.12))
+      scaleY(calc(var(--mother-role-resize-y) - 0.08))
+      rotate(calc(var(--mother-role-rot) + 16deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.22)) brightness(calc(var(--mother-role-bright) + 0.14));
+    opacity: calc(var(--mother-role-alpha) + 0.06);
+  }
+  60% {
+    transform: translate3d(
+        calc(var(--mother-role-mx) - (var(--mother-role-jitter-ax) * 1.3)),
+        calc(var(--mother-role-my) - (var(--mother-role-jitter-ay) * 1.2)),
+        0
+      )
+      scale(calc(var(--mother-role-scale) + 0.03))
+      scaleX(calc(var(--mother-role-resize-x) + 0.06))
+      scaleY(calc(var(--mother-role-resize-y) - 0.04))
+      rotate(calc(var(--mother-role-rot) - 13deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.14)) brightness(calc(var(--mother-role-bright) + 0.1));
+    opacity: calc(var(--mother-role-alpha) + 0.03);
+  }
+  82% {
+    transform: translate3d(var(--mother-role-mx), var(--mother-role-my), 0)
+      scale(calc(var(--mother-role-scale) + 0.02))
+      scaleX(var(--mother-role-resize-x))
+      scaleY(var(--mother-role-resize-y))
+      rotate(calc(var(--mother-role-rot) + 6deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.08)) brightness(calc(var(--mother-role-bright) + 0.04));
+    opacity: calc(var(--mother-role-alpha) + 0.02);
+  }
+  100% {
+    transform: translate3d(var(--mother-role-mx), var(--mother-role-my), 0)
+      scale(var(--mother-role-scale))
+      scaleX(var(--mother-role-resize-x))
+      scaleY(var(--mother-role-resize-y))
+      rotate(var(--mother-role-rot));
+    filter: saturate(var(--mother-role-sat)) brightness(var(--mother-role-bright));
+    opacity: var(--mother-role-alpha);
+  }
+}
+
+@keyframes motherRoleModeMonumentalize {
+  0% {
+    transform: translate3d(0, 0, 0) scale(0.9) rotate(0deg);
+    filter: saturate(0.96) brightness(1.02);
+    opacity: var(--mother-role-pre-alpha);
+  }
+  30% {
+    transform: translate3d(var(--mother-role-pre-mx), var(--mother-role-pre-my), 0)
+      scale(var(--mother-role-pre-scale))
+      scaleX(var(--mother-role-pre-resize-x))
+      scaleY(var(--mother-role-pre-resize-y))
+      rotate(var(--mother-role-pre-rot));
+    filter: saturate(calc(var(--mother-role-pre-sat) - 0.03)) brightness(calc(var(--mother-role-pre-bright) + 0.03));
+    opacity: var(--mother-role-pre-alpha);
+  }
+  62% {
+    transform: translate3d(var(--mother-role-mx), calc(var(--mother-role-my) - 7px), 0)
+      scale(calc(var(--mother-role-scale) + 0.2))
+      scaleX(calc(var(--mother-role-resize-x) + 0.08))
+      scaleY(calc(var(--mother-role-resize-y) + 0.16))
+      rotate(var(--mother-role-rot));
+    filter: saturate(calc(var(--mother-role-sat) + 0.02)) brightness(calc(var(--mother-role-bright) + 0.14));
+    opacity: calc(var(--mother-role-alpha) + 0.08);
+  }
+  84% {
+    transform: translate3d(var(--mother-role-mx), calc(var(--mother-role-my) - 10px), 0)
+      scale(calc(var(--mother-role-scale) + 0.24))
+      scaleX(calc(var(--mother-role-resize-x) + 0.1))
+      scaleY(calc(var(--mother-role-resize-y) + 0.2))
+      rotate(var(--mother-role-rot));
+    filter: saturate(calc(var(--mother-role-sat) + 0.04)) brightness(calc(var(--mother-role-bright) + 0.18));
+    opacity: calc(var(--mother-role-alpha) + 0.1);
+  }
+  100% {
+    transform: translate3d(var(--mother-role-mx), calc(var(--mother-role-my) - 8px), 0)
+      scale(calc(var(--mother-role-scale) + 0.18))
+      scaleX(var(--mother-role-resize-x))
+      scaleY(var(--mother-role-resize-y))
+      rotate(var(--mother-role-rot));
+    filter: saturate(var(--mother-role-sat)) brightness(var(--mother-role-bright));
+    opacity: var(--mother-role-alpha);
+  }
+}
+
+@keyframes motherRoleModeFracture {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+    filter: saturate(1) brightness(1);
+    opacity: var(--mother-role-pre-alpha);
+  }
+  12% {
+    transform: translate3d(
+        calc(var(--mother-role-pre-mx) + (var(--mother-role-jitter-ax) * 2)),
+        calc(var(--mother-role-pre-my) - (var(--mother-role-jitter-ay) * 1.8)),
+        0
+      )
+      scale(calc(var(--mother-role-pre-scale) + 0.06))
+      scaleX(calc(var(--mother-role-pre-resize-x) + 0.12))
+      scaleY(calc(var(--mother-role-pre-resize-y) - 0.12))
+      rotate(calc(var(--mother-role-pre-rot) + 7.5deg));
+    filter: saturate(calc(var(--mother-role-pre-sat) + 0.2)) brightness(calc(var(--mother-role-pre-bright) + 0.03));
+    opacity: calc(var(--mother-role-pre-alpha) - 0.08);
+  }
+  24% {
+    transform: translate3d(
+        calc(var(--mother-role-mx) - (var(--mother-role-jitter-ax) * 2)),
+        calc(var(--mother-role-my) + (var(--mother-role-jitter-ay) * 1.8)),
+        0
+      )
+      scale(calc(var(--mother-role-scale) + 0.04))
+      scaleX(calc(var(--mother-role-resize-x) + 0.14))
+      scaleY(calc(var(--mother-role-resize-y) - 0.14))
+      rotate(calc(var(--mother-role-rot) - 10deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.24)) brightness(calc(var(--mother-role-bright) - 0.05));
+    opacity: calc(var(--mother-role-alpha) - 0.12);
+  }
+  36% {
+    transform: translate3d(
+        calc(var(--mother-role-pre-mx) - (var(--mother-role-jitter-ax) * 1.7)),
+        calc(var(--mother-role-pre-my) + (var(--mother-role-jitter-ay) * 1.5)),
+        0
+      )
+      scale(var(--mother-role-pre-scale))
+      scaleX(calc(var(--mother-role-pre-resize-x) + 0.1))
+      scaleY(calc(var(--mother-role-pre-resize-y) - 0.09))
+      rotate(calc(var(--mother-role-pre-rot) + 9deg));
+    filter: saturate(calc(var(--mother-role-pre-sat) + 0.18)) brightness(calc(var(--mother-role-pre-bright) - 0.04));
+    opacity: calc(var(--mother-role-pre-alpha) - 0.1);
+  }
+  48% {
+    transform: translate3d(
+        calc(var(--mother-role-mx) + (var(--mother-role-jitter-ax) * 1.9)),
+        calc(var(--mother-role-my) - (var(--mother-role-jitter-ay) * 1.7)),
+        0
+      )
+      scale(var(--mother-role-scale))
+      scaleX(calc(var(--mother-role-resize-x) + 0.13))
+      scaleY(calc(var(--mother-role-resize-y) - 0.1))
+      rotate(calc(var(--mother-role-rot) - 8.2deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.2)) brightness(calc(var(--mother-role-bright) - 0.03));
+    opacity: calc(var(--mother-role-alpha) - 0.1);
+  }
+  62% {
+    transform: translate3d(
+        calc(var(--mother-role-pre-mx) + (var(--mother-role-jitter-ax) * 1.4)),
+        calc(var(--mother-role-pre-my) - (var(--mother-role-jitter-ay) * 1.3)),
+        0
+      )
+      scale(calc(var(--mother-role-pre-scale) + 0.02))
+      scaleX(calc(var(--mother-role-pre-resize-x) + 0.08))
+      scaleY(calc(var(--mother-role-pre-resize-y) - 0.06))
+      rotate(calc(var(--mother-role-pre-rot) + 6deg));
+    filter: saturate(calc(var(--mother-role-pre-sat) + 0.14)) brightness(calc(var(--mother-role-pre-bright) - 0.02));
+    opacity: calc(var(--mother-role-pre-alpha) - 0.07);
+  }
+  76% {
+    transform: translate3d(
+        calc(var(--mother-role-mx) - (var(--mother-role-jitter-ax) * 1.3)),
+        calc(var(--mother-role-my) + (var(--mother-role-jitter-ay) * 1.2)),
+        0
+      )
+      scale(calc(var(--mother-role-scale) + 0.01))
+      scaleX(calc(var(--mother-role-resize-x) + 0.07))
+      scaleY(calc(var(--mother-role-resize-y) - 0.06))
+      rotate(calc(var(--mother-role-rot) - 5deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.1)) brightness(var(--mother-role-bright));
+    opacity: calc(var(--mother-role-alpha) - 0.06);
+  }
+  90% {
+    transform: translate3d(
+        calc(var(--mother-role-mx) + (var(--mother-role-jitter-ax) * 0.8)),
+        calc(var(--mother-role-my) - (var(--mother-role-jitter-ay) * 0.7)),
+        0
+      )
+      scale(var(--mother-role-scale))
+      scaleX(calc(var(--mother-role-resize-x) + 0.03))
+      scaleY(calc(var(--mother-role-resize-y) - 0.03))
+      rotate(calc(var(--mother-role-rot) + 2.8deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.06)) brightness(var(--mother-role-bright));
+    opacity: calc(var(--mother-role-alpha) - 0.03);
+  }
+  100% {
+    transform: translate3d(var(--mother-role-mx), var(--mother-role-my), 0)
+      scale(var(--mother-role-scale))
+      scaleX(var(--mother-role-resize-x))
+      scaleY(var(--mother-role-resize-y))
+      rotate(var(--mother-role-rot));
+    filter: saturate(var(--mother-role-sat)) brightness(var(--mother-role-bright));
+    opacity: var(--mother-role-alpha);
+  }
+}
+
+@keyframes motherRoleModeRomanticize {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+    filter: saturate(1) brightness(1);
+    opacity: var(--mother-role-pre-alpha);
+  }
+  18% {
+    transform: translate3d(calc(var(--mother-role-pre-mx) + 1.4px), calc(var(--mother-role-pre-my) - 1.2px), 0)
+      scale(calc(var(--mother-role-pre-scale) + 0.02))
+      scaleX(var(--mother-role-pre-resize-x))
+      scaleY(var(--mother-role-pre-resize-y))
+      rotate(calc(var(--mother-role-pre-rot) + 0.9deg));
+    filter: saturate(calc(var(--mother-role-pre-sat) + 0.06)) brightness(calc(var(--mother-role-pre-bright) + 0.05));
+    opacity: var(--mother-role-pre-alpha);
+  }
+  34% {
+    transform: translate3d(calc(var(--mother-role-mx) - 1.1px), calc(var(--mother-role-my) + 1.5px), 0)
+      scale(calc(var(--mother-role-scale) + 0.1))
+      scaleX(var(--mother-role-resize-x))
+      scaleY(var(--mother-role-resize-y))
+      rotate(calc(var(--mother-role-rot) - 1.1deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.12)) brightness(calc(var(--mother-role-bright) + 0.1));
+    opacity: calc(var(--mother-role-alpha) + 0.1);
+  }
+  52% {
+    transform: translate3d(calc(var(--mother-role-mx) + 0.8px), calc(var(--mother-role-my) - 0.9px), 0)
+      scale(calc(var(--mother-role-scale) + 0.03))
+      scaleX(var(--mother-role-resize-x))
+      scaleY(var(--mother-role-resize-y))
+      rotate(calc(var(--mother-role-rot) + 0.7deg));
+    filter: saturate(calc(var(--mother-role-sat) + 0.06)) brightness(calc(var(--mother-role-bright) + 0.06));
+    opacity: calc(var(--mother-role-alpha) + 0.04);
+  }
+  70% {
+    transform: translate3d(var(--mother-role-mx), var(--mother-role-my), 0)
+      scale(calc(var(--mother-role-scale) + 0.14))
+      scaleX(calc(var(--mother-role-resize-x) + 0.06))
+      scaleY(calc(var(--mother-role-resize-y) + 0.06))
+      rotate(var(--mother-role-rot));
+    filter: saturate(calc(var(--mother-role-sat) + 0.14)) brightness(calc(var(--mother-role-bright) + 0.14));
+    opacity: calc(var(--mother-role-alpha) + 0.12);
+  }
+  85% {
+    transform: translate3d(var(--mother-role-mx), var(--mother-role-my), 0)
+      scale(calc(var(--mother-role-scale) + 0.05))
+      scaleX(calc(var(--mother-role-resize-x) + 0.03))
+      scaleY(calc(var(--mother-role-resize-y) + 0.03))
+      rotate(var(--mother-role-rot));
+    filter: saturate(calc(var(--mother-role-sat) + 0.08)) brightness(calc(var(--mother-role-bright) + 0.07));
+    opacity: calc(var(--mother-role-alpha) + 0.05);
+  }
+  100% {
+    transform: translate3d(var(--mother-role-mx), var(--mother-role-my), 0)
+      scale(var(--mother-role-scale))
+      scaleX(var(--mother-role-resize-x))
+      scaleY(var(--mother-role-resize-y))
+      rotate(var(--mother-role-rot));
+    filter: saturate(var(--mother-role-sat)) brightness(var(--mother-role-bright));
+    opacity: var(--mother-role-alpha);
+  }
+}
+
+@keyframes motherRoleModeAlienate {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+    filter: saturate(1) brightness(1);
+    opacity: var(--mother-role-pre-alpha);
+  }
+  28% {
+    transform: translate3d(var(--mother-role-pre-mx), var(--mother-role-pre-my), 0)
+      scale(var(--mother-role-pre-scale))
+      scaleX(var(--mother-role-pre-resize-x))
+      scaleY(var(--mother-role-pre-resize-y))
+      rotate(var(--mother-role-pre-rot));
+    filter: saturate(calc(var(--mother-role-pre-sat) - 0.12)) brightness(calc(var(--mother-role-pre-bright) - 0.06));
+    opacity: var(--mother-role-pre-alpha);
+  }
+  54% {
+    transform: translate3d(calc(var(--mother-role-mx) * 1.18), calc(var(--mother-role-my) * 1.18), 0)
+      scale(calc(var(--mother-role-scale) - 0.1))
+      scaleX(calc(var(--mother-role-resize-x) - 0.08))
+      scaleY(calc(var(--mother-role-resize-y) + 0.12))
+      rotate(var(--mother-role-rot));
+    filter: saturate(calc(var(--mother-role-sat) - 0.22)) brightness(calc(var(--mother-role-bright) - 0.14));
+    opacity: calc(var(--mother-role-alpha) - 0.12);
+  }
+  78% {
+    transform: translate3d(calc(var(--mother-role-mx) * 1.28), calc(var(--mother-role-my) * 1.28), 0)
+      scale(calc(var(--mother-role-scale) - 0.14))
+      scaleX(calc(var(--mother-role-resize-x) - 0.12))
+      scaleY(calc(var(--mother-role-resize-y) + 0.16))
+      rotate(calc(var(--mother-role-rot) + 1deg));
+    filter: saturate(calc(var(--mother-role-sat) - 0.26)) brightness(calc(var(--mother-role-bright) - 0.18));
+    opacity: calc(var(--mother-role-alpha) - 0.18);
+  }
+  100% {
+    transform: translate3d(calc(var(--mother-role-mx) * 1.36), calc(var(--mother-role-my) * 1.36), 0)
+      scale(calc(var(--mother-role-scale) - 0.2))
+      scaleX(calc(var(--mother-role-resize-x) - 0.16))
+      scaleY(calc(var(--mother-role-resize-y) + 0.2))
+      rotate(var(--mother-role-rot));
+    filter: saturate(calc(var(--mother-role-sat) - 0.3)) brightness(calc(var(--mother-role-bright) - 0.24));
+    opacity: calc(var(--mother-role-alpha) - 0.24);
+  }
+}
+
 @keyframes motherRoleMergePulse {
   0%,
   100% {
@@ -2872,6 +3556,75 @@ button.ghost:hover {
   50% {
     opacity: 0.56;
     transform: scale(1.02);
+  }
+}
+
+@keyframes motherRoleMergeHeartbeat {
+  0%,
+  100% {
+    opacity: 0.32;
+    transform: scale(0.98);
+  }
+  38% {
+    opacity: 0.58;
+    transform: scale(1.04);
+  }
+  70% {
+    opacity: 0.44;
+    transform: scale(1);
+  }
+}
+
+@keyframes motherRoleMergePurify {
+  0% {
+    opacity: 0.22;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 0.46;
+    transform: scale(1.01);
+  }
+  100% {
+    opacity: 0.3;
+    transform: scale(0.99);
+  }
+}
+
+@keyframes motherRoleMergeFracture {
+  0% {
+    opacity: 0.22;
+    transform: scale(0.95);
+  }
+  24% {
+    opacity: 0.56;
+    transform: scale(1.06);
+  }
+  48% {
+    opacity: 0.3;
+    transform: scale(0.93);
+  }
+  74% {
+    opacity: 0.52;
+    transform: scale(1.03);
+  }
+  100% {
+    opacity: 0.22;
+    transform: scale(0.95);
+  }
+}
+
+@keyframes motherRoleMergeDissipate {
+  0% {
+    opacity: 0.32;
+    transform: scale(1);
+  }
+  55% {
+    opacity: 0.14;
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 0.08;
+    transform: scale(1.13);
   }
 }
 
@@ -3139,11 +3892,13 @@ button.ghost:hover {
 }
 
 #mother-panel.mother-hints-visible {
-  border-color: rgba(255, 186, 122, 0.62);
+  border-color: var(--mother-card-border);
+  border-bottom-color: var(--mother-card-border-low);
 }
 
 #mother-panel.mother-advanced-visible {
-  border-color: rgba(128, 216, 252, 0.62);
+  border-color: var(--mother-card-border);
+  border-bottom-color: var(--mother-card-border-low);
 }
 
 #mother-panel::before {
@@ -3162,8 +3917,9 @@ button.ghost:hover {
 
 #mother-panel .panel-readout {
   margin: 0;
-  min-height: 96px;
-  max-height: 210px;
+  min-height: 0;
+  max-height: none;
+  height: 100%;
   overflow: auto;
   border: 0;
   border-radius: 0;
@@ -3174,16 +3930,148 @@ button.ghost:hover {
   z-index: 1;
 }
 
+#mother-panel .mother-panel-body #tips-text {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  font-size: 11px;
+  line-height: 1.3;
+  padding-right: 4px;
+}
+
+#mother-panel .mother-panel-body #tips-text.mother-proposal-active {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  padding: 0 2px 0 0;
+}
+
+#mother-panel.mother-proposal-overlay .panel-readout {
+  overflow: visible;
+}
+
+#mother-panel.mother-proposal-overlay .mother-panel-body #tips-text.mother-proposal-active {
+  overflow: visible;
+  position: relative;
+  z-index: 4;
+}
+
+#mother-panel.mother-proposal-overlay .mother-panel-body #tips-text .mother-proposal-card,
+#mother-panel.mother-proposal-overlay .mother-panel-body #tips-text .mother-proposal-flow {
+  overflow: visible;
+  position: relative;
+  z-index: 5;
+}
+
+#mother-panel .mother-panel-body #tips-text .mother-proposal-card {
+  display: flex;
+  flex-direction: column;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  justify-content: center;
+  justify-items: center;
+  row-gap: 0;
+  gap: 0;
+  align-content: center;
+  transform: translateY(-8px);
+}
+
+#mother-panel .mother-panel-body #tips-text .mother-proposal-flow {
+  display: flex;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  min-height: 0;
+  height: auto;
+  width: auto;
+  gap: 0;
+  align-items: end;
+  justify-content: center;
+  justify-items: center;
+  line-height: 0;
+}
+
+#mother-panel .mother-panel-body #tips-text .mother-proposal-mode {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  margin: -9px 0 0;
+  align-self: center;
+  width: max-content;
+  text-align: center;
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  line-height: 0.96;
+  padding: 0 2px;
+  white-space: nowrap;
+  overflow: visible;
+  position: relative;
+  z-index: 8;
+}
+
+#mother-panel .mother-panel-body #tips-text .mother-proposal-visual {
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  min-height: 0;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  line-height: 0;
+}
+
+#mother-panel .mother-panel-body #tips-text .mother-proposal-icons {
+  margin: 0;
+  padding: 0;
+  justify-content: center;
+  width: 100%;
+  line-height: 0;
+}
+
+#mother-panel .mother-panel-body #tips-text .mother-proposal-icon {
+  width: clamp(64px, 5.4vw, 84px);
+  height: clamp(64px, 5.4vw, 84px);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+#mother-panel .mother-panel-body #tips-text .mother-proposal-icon::before,
+#mother-panel .mother-panel-body #tips-text .mother-proposal-icon::after {
+  content: none;
+  display: none;
+}
+
+#mother-panel .mother-panel-body #tips-text .mother-proposal-icon svg {
+  width: clamp(48px, 4.1vw, 63px);
+  height: clamp(48px, 4.1vw, 63px);
+}
+
+#mother-panel .mother-panel-body #tips-text .mother-proposal-icon,
+#mother-panel .mother-panel-body #tips-text .mother-phase-icon {
+  animation: none !important;
+  opacity: 1 !important;
+  filter: none !important;
+  transform: none !important;
+}
+
 #mother-panel .mother-panel-controls {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 6px 8px 8px;
-  border-top: 1px solid rgba(0, 0, 0, 0.72);
+  padding: 0 8px;
+  border-top: 0;
   background:
     linear-gradient(180deg, rgba(24, 30, 38, 0.72), rgba(9, 12, 18, 0.90));
   position: relative;
   z-index: 1;
+  max-height: 0;
+  overflow: hidden;
+}
+
+#mother-panel.mother-advanced-visible .mother-panel-controls {
+  padding: 6px 8px 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.72);
+  max-height: 320px;
 }
 
 .mother-refine-toggle {
@@ -3252,7 +4140,7 @@ button.ghost:hover {
   align-items: flex-end;
   justify-content: center;
   gap: 4px;
-  width: max(var(--mother-panel-size), 168px);
+  width: var(--mother-panel-shell-width);
   padding: 5px 5px 4px;
   margin-top: -3px;
   border-radius: 8px;
@@ -3627,7 +4515,7 @@ button.ghost:hover {
 @keyframes mother-readout-fade {
   0% {
     opacity: 0;
-    transform: translate3d(0, 5px, 0);
+    transform: translate3d(0, 0, 0);
     filter: blur(2px);
   }
   100% {
@@ -3982,7 +4870,7 @@ button.ghost:hover {
   0% {
     opacity: 0;
     filter: blur(8px) saturate(1.18);
-    transform: translate3d(0, 7px, 0) scale(0.9);
+    transform: translate3d(0, 0, 0) scale(0.9);
   }
   65% {
     opacity: 1;
@@ -4011,7 +4899,7 @@ button.ghost:hover {
   box-shadow: none;
   opacity: 0;
   filter: blur(10px) saturate(1.12);
-  transform: translate3d(0, 8px, 0) scale(0.86);
+  transform: translate3d(0, 0, 0) scale(0.86);
   animation: mother-proposal-focus-in 420ms cubic-bezier(0.22, 0.8, 0.3, 1) forwards;
 }
 
@@ -4070,7 +4958,7 @@ button.ghost:hover {
 @keyframes mother-phase-focus-in {
   0% {
     opacity: 0;
-    transform: translate3d(0, 7px, 0) scale(0.92);
+    transform: translate3d(0, 0, 0) scale(0.92);
     filter: blur(6px) saturate(1.06);
   }
   100% {
@@ -4107,7 +4995,7 @@ button.ghost:hover {
     linear-gradient(180deg, rgba(25, 33, 44, 0.42), rgba(10, 14, 20, 0.14));
   box-shadow: none;
   opacity: 0;
-  transform: translate3d(0, 7px, 0) scale(0.92);
+  transform: translate3d(0, 0, 0) scale(0.92);
   filter: blur(6px) saturate(1.06);
   animation: mother-phase-focus-in 360ms cubic-bezier(0.22, 0.8, 0.3, 1) forwards;
 }
@@ -4245,6 +5133,18 @@ button.ghost:hover {
 #tips-text.mother-glitch::before {
   opacity: 0.58;
   animation: mother-glitch-scan 220ms steps(2, end) infinite;
+}
+
+/* Keep proposal glyphs stable even when ambient glitch bursts fire. */
+#tips-text.mother-proposal-active.mother-glitch {
+  animation: none;
+  text-shadow: none;
+  filter: none;
+}
+
+#tips-text.mother-proposal-active.mother-glitch::before {
+  opacity: 0;
+  animation: none;
 }
 
 @keyframes mother-cursor-blink {
@@ -5333,10 +6233,31 @@ button.ghost:hover {
 
   #mother-overlay {
     --mother-panel-size: clamp(86px, 20vw, 118px);
+    --mother-panel-shell-width: max(var(--mother-panel-size), 116px);
+  }
+
+  #mother-panel .mother-panel-body {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 4px 6px 6px;
+  }
+
+  #mother-panel .mother-role-preview {
+    display: none;
+  }
+
+  #mother-panel .mother-panel-body #tips-text .mother-proposal-card {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 0;
+  }
+
+  #mother-panel .mother-panel-body #tips-text .mother-proposal-flow,
+  #mother-panel .mother-panel-body #tips-text .mother-proposal-mode {
+    grid-column: 1;
+    text-align: center;
   }
 
   #mother-panel-stack .mother-actions {
-    width: max(var(--mother-panel-size), 84px);
+    width: var(--mother-panel-shell-width);
   }
 }
 
@@ -5358,7 +6279,7 @@ button.ghost:hover {
   }
 
   #mother-panel-stack .mother-actions {
-    width: max(var(--mother-panel-size), 76px);
+    width: var(--mother-panel-shell-width);
   }
 }
 
