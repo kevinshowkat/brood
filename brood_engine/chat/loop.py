@@ -126,6 +126,8 @@ class ChatLoop:
                     source=inference.source,
                     model=inference.model,
                     max_chars=max_chars,
+                    input_tokens=inference.input_tokens,
+                    output_tokens=inference.output_tokens,
                 )
                 meta = []
                 if inference.source:
@@ -160,6 +162,8 @@ class ChatLoop:
                     text=inference.text,
                     source=inference.source,
                     model=inference.model,
+                    input_tokens=inference.input_tokens,
+                    output_tokens=inference.output_tokens,
                 )
                 print(inference.text)
                 continue
@@ -282,6 +286,8 @@ class ChatLoop:
                     text=inference.text,
                     source=inference.source,
                     model=inference.model,
+                    input_tokens=inference.input_tokens,
+                    output_tokens=inference.output_tokens,
                 )
                 print(inference.text)
                 continue
@@ -330,6 +336,8 @@ class ChatLoop:
                         summary=inference.summary,
                         source=inference.source,
                         model=inference.model,
+                        input_tokens=inference.input_tokens,
+                        output_tokens=inference.output_tokens,
                     )
                     summary = inference.summary.strip() if inference.summary else ""
                     print(f"DNA extracted ({path.name})")
@@ -379,6 +387,8 @@ class ChatLoop:
                         summary=inference.summary,
                         source=inference.source,
                         model=inference.model,
+                        input_tokens=inference.input_tokens,
+                        output_tokens=inference.output_tokens,
                     )
                     summary = inference.summary.strip() if inference.summary else ""
                     print(f"Soul extracted ({path.name})")
@@ -425,6 +435,8 @@ class ChatLoop:
                     source=inference.source,
                     model=inference.model,
                     confidence=inference.confidence,
+                    input_tokens=inference.input_tokens,
+                    output_tokens=inference.output_tokens,
                 )
                 print(f"RULE:\n{inference.principle}")
                 if inference.evidence:
@@ -473,6 +485,8 @@ class ChatLoop:
                     source=inference.source,
                     model=inference.model,
                     confidence=inference.confidence,
+                    input_tokens=inference.input_tokens,
+                    output_tokens=inference.output_tokens,
                 )
                 print(f"ODD ONE OUT: {inference.odd_image}")
                 if inference.pattern:

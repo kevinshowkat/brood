@@ -83,6 +83,10 @@ class GeminiProvider:
 
         candidates = getattr(response, "candidates", []) or []
         raw_response = {"model": model, "candidates": len(candidates)}
+        usage_summary = _extract_usage_summary(response)
+        if usage_summary:
+            raw_response["usage"] = usage_summary
+            raw_response["usage_metadata"] = usage_summary
         image_blobs = _extract_image_bytes(candidates)
         # Gemini can return multiple image parts per candidate; cap to the requested count.
         image_blobs = image_blobs[: max(1, int(request.n))]
@@ -230,3 +234,23 @@ def _to_dict(value: Any) -> Any:
     if hasattr(value, "__dict__"):
         return {str(k): _to_dict(v) for k, v in value.__dict__.items() if not str(k).startswith("_")}
     return str(value)
+
+
+def _extract_usage_summary(response: Any) -> Mapping[str, Any] | None:
+    if response is None:
+        return None
+    for key in ("usage_metadata", "usage", "usageMetadata"):
+        if isinstance(response, Mapping):
+            raw = response.get(key)
+        else:
+            raw = getattr(response, key, None)
+        mapped = _to_dict(raw)
+        if isinstance(mapped, Mapping):
+            return dict(mapped)
+    mapped_response = _to_dict(response)
+    if isinstance(mapped_response, Mapping):
+        for key in ("usage_metadata", "usage", "usageMetadata"):
+            nested = mapped_response.get(key)
+            if isinstance(nested, Mapping):
+                return dict(nested)
+    return None

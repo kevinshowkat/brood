@@ -1,6 +1,6 @@
 from brood_engine.cli import _compile_prompt, _infer_structured_intent, _mother_generate_request
 
-DIRECTIVE = "stunningly awe-inspiring and tearfully joyous"
+DIRECTIVE = "stunningly awe-inspiring and joyous"
 MODES = {
     "amplify",
     "transcend",

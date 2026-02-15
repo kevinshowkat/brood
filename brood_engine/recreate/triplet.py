@@ -23,6 +23,7 @@ from .caption import (
     _openai_api_key,
     _post_openai_json,
     _prepare_vision_image,
+    extract_token_usage_pair,
 )
 
 
@@ -34,6 +35,8 @@ class TripletRuleInference:
     source: str
     model: str | None = None
     confidence: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +48,8 @@ class TripletOddOneOutInference:
     source: str
     model: str | None = None
     confidence: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 def infer_triplet_rule(path_a: Path, path_b: Path, path_c: Path) -> TripletRuleInference | None:
@@ -204,6 +209,7 @@ def _triplet_rule_with_openai(path_a: Path, path_b: Path, path_c: Path) -> Tripl
         _, response = _post_openai_json(endpoint, payload, api_key, timeout_s=60.0)
     except Exception:
         return None
+    input_tokens, output_tokens = extract_token_usage_pair(response)
     text = _extract_openai_output_text(response)
     data = _extract_json_dict(text)
     if not data:
@@ -250,6 +256,8 @@ def _triplet_rule_with_openai(path_a: Path, path_b: Path, path_c: Path) -> Tripl
         source="openai_vision",
         model=model,
         confidence=_as_confidence(data.get("confidence")),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
     )
 
 
@@ -294,6 +302,7 @@ def _odd_one_out_with_openai(path_a: Path, path_b: Path, path_c: Path) -> Triple
         _, response = _post_openai_json(endpoint, payload, api_key, timeout_s=60.0)
     except Exception:
         return None
+    input_tokens, output_tokens = extract_token_usage_pair(response)
     text = _extract_openai_output_text(response)
     data = _extract_json_dict(text)
     if not data:
@@ -315,6 +324,8 @@ def _odd_one_out_with_openai(path_a: Path, path_b: Path, path_c: Path) -> Triple
         source="openai_vision",
         model=model,
         confidence=_as_confidence(data.get("confidence")),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
     )
 
 
@@ -349,6 +360,7 @@ def _triplet_rule_with_gemini(path_a: Path, path_b: Path, path_c: Path) -> Tripl
         response = chat.send_message(parts)
     except Exception:
         return None
+    input_tokens, output_tokens = extract_token_usage_pair(response)
 
     text = getattr(response, "text", None)
     if not (isinstance(text, str) and text.strip()):
@@ -409,6 +421,8 @@ def _triplet_rule_with_gemini(path_a: Path, path_b: Path, path_c: Path) -> Tripl
         source="gemini_vision",
         model=model,
         confidence=_as_confidence(data.get("confidence")),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
     )
 
 
@@ -443,6 +457,7 @@ def _odd_one_out_with_gemini(path_a: Path, path_b: Path, path_c: Path) -> Triple
         response = chat.send_message(parts)
     except Exception:
         return None
+    input_tokens, output_tokens = extract_token_usage_pair(response)
 
     text = getattr(response, "text", None)
     if not (isinstance(text, str) and text.strip()):
@@ -479,5 +494,6 @@ def _odd_one_out_with_gemini(path_a: Path, path_b: Path, path_c: Path) -> Triple
         source="gemini_vision",
         model=model,
         confidence=_as_confidence(data.get("confidence")),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
     )
-

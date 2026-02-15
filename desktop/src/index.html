@@ -11,15 +11,46 @@
 	      <div id="boot-error" class="boot-error hidden">
 	        App failed to initialize. Check the terminal for errors.
 	      </div>
-		      <div class="brand-strip" aria-label="Brood">
-			        <div class="brand-stack">
-			          <img class="brand-strip-logo" src="./assets/logo.jpeg" alt="Brood" />
-			          <div id="engine-status" class="engine-status">API calls: 0</div>
-			        </div>
+			      <div class="brand-strip" aria-label="Brood">
+                <img class="brand-strip-logo" src="./assets/logo.jpeg" alt="Brood" />
+                <div id="top-metrics" class="top-metrics" aria-label="Session metrics ribbon">
+                  <span id="top-metric-tokens" class="top-metric-chip" data-heat="nodata">
+                    <span class="top-metric-chip-label">TOK</span>
+                    <span id="top-metric-tokens-value" class="top-metric-chip-value">
+                      <span class="top-metric-token-in">↓ ··········</span>
+                      <span class="top-metric-token-out">↑ ··········</span>
+                    </span>
+                    <span id="top-metric-tokens-spark-in" class="top-metric-chip-spark">--</span>
+                    <span id="top-metric-api-calls" class="top-metric-chip-sub">API 0</span>
+                    <span id="top-metric-tokens-spark-out" class="hidden" aria-hidden="true"></span>
+                  </span>
+                  <span id="top-metric-cost" class="top-metric-chip" data-heat="nodata">
+                    <span class="top-metric-chip-label">COST</span>
+                    <span id="top-metric-cost-value" class="top-metric-chip-value">$0.00</span>
+                  </span>
+                  <span id="top-metric-queue" class="top-metric-chip" data-heat="nodata">
+                    <span class="top-metric-chip-label">QUEUE</span>
+                    <span id="top-metric-queue-value" class="top-metric-chip-value">P0 R0</span>
+                    <span id="top-metric-queue-trend" class="top-metric-chip-spark">··········</span>
+                  </span>
+                  <span id="top-metric-render" class="top-metric-chip" data-heat="nodata">
+                    <span class="top-metric-chip-label">AVG</span>
+                    <span id="top-metric-render-value" class="top-metric-chip-value">--</span>
+                  </span>
+                </div>
               <div class="brand-actions" aria-label="Menu">
                 <span
+                  id="engine-status"
+                  class="engine-status engine-status-dot"
+                  data-state="idle"
+                  role="status"
+                  aria-label="Engine status: idle"
+                  title="Engine status dot&#10;Shows current engine activity.&#10;State: idle&#10;Engine: idle"
+                ></span>
+                <span
                   id="mother-intent-source-indicator"
-                  class="mother-intent-source-indicator hidden"
+                  class="mother-intent-source-indicator"
+                  title="Intent source dot&#10;Shows where Mother intent came from.&#10;Source: idle"
                   aria-hidden="true"
                 ></span>
                 <button
@@ -197,22 +228,6 @@
                           <span class="mother-advanced-label">Transformation mode</span>
                           <select id="mother-transformation-mode"></select>
                         </label>
-                        <label class="mother-advanced-row">
-                          <span class="mother-advanced-label">SUBJECT</span>
-                          <select id="mother-role-subject"></select>
-                        </label>
-                        <label class="mother-advanced-row">
-                          <span class="mother-advanced-label">MODEL</span>
-                          <select id="mother-role-model"></select>
-                        </label>
-                        <label class="mother-advanced-row">
-                          <span class="mother-advanced-label">MEDIATOR</span>
-                          <select id="mother-role-mediator"></select>
-                        </label>
-                        <label class="mother-advanced-row">
-                          <span class="mother-advanced-label">OBJECT</span>
-                          <select id="mother-role-object"></select>
-                        </label>
                       </div>
                     </div>
                   </div>
@@ -235,8 +250,58 @@
 
               <div id="control-strip" class="control-strip" aria-label="HUD and Actions">
                 <div class="canvas-bumper canvas-bumper--left" aria-hidden="true"></div>
-                <div id="minimap" class="minimap" aria-label="Minimap">
-                  <div id="minimap-surface" class="minimap-surface" aria-hidden="true"></div>
+                <div id="file-browser-dock" class="file-browser-dock" aria-label="File browser">
+                  <div id="file-browser-header" class="file-browser-header">
+                    <button
+                      id="file-browser-choose"
+                      class="file-browser-btn file-browser-btn-icon"
+                      type="button"
+                      aria-label="Choose folder"
+                      title="Choose folder"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path
+                          d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2H18.5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-9z"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.8"
+                          stroke-linejoin="round"
+                        />
+                        <path d="M12 10.5v5M9.5 13h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                      </svg>
+                    </button>
+                    <button
+                      id="file-browser-up"
+                      class="file-browser-btn file-browser-btn-icon"
+                      type="button"
+                      aria-label="Up"
+                      title="Up"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M12 17V7M8 11l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+                      </svg>
+                    </button>
+                    <button
+                      id="file-browser-refresh"
+                      class="file-browser-btn file-browser-btn-icon"
+                      type="button"
+                      aria-label="Refresh"
+                      title="Refresh"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path
+                          d="M19.5 8.5A7.5 7.5 0 1 0 20 12"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.8"
+                          stroke-linecap="round"
+                        />
+                        <path d="M20 4.5v5h-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div id="file-browser-path" class="file-browser-path" title="No folder selected">No folder selected</div>
+                  <div id="file-browser-list" class="file-browser-list" role="listbox" aria-label="Local images"></div>
                 </div>
                 <div id="hud" class="hud" aria-label="HUD">
                   <div class="hud-shell">

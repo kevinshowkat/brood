@@ -96,6 +96,11 @@ class OpenAIProvider:
             "responses_count": len(responses),
             "response_ids": [resp.get("id") for resp in responses if isinstance(resp, Mapping)],
         }
+        usage_summary = _aggregate_usage(
+            [resp.get("usage") for resp in responses if isinstance(resp, Mapping)]
+        )
+        if usage_summary:
+            provider_response["usage"] = usage_summary
         return ProviderResponse(
             results=results,
             provider_request={"endpoint": endpoint, "payloads": payloads},
@@ -330,6 +335,98 @@ def _summarize_response(response: Mapping[str, Any], status_code: int, count: in
     if "usage" in response:
         summary["usage"] = response.get("usage")
     return summary
+
+
+def _safe_nonnegative_int(value: Any) -> int | None:
+    try:
+        number = int(round(float(value)))
+    except Exception:
+        return None
+    if number < 0:
+        return None
+    return number
+
+
+def _read_usage_value(usage: Mapping[str, Any], keys: tuple[str, ...]) -> int | None:
+    for key in keys:
+        if key not in usage:
+            continue
+        parsed = _safe_nonnegative_int(usage.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _extract_usage_pair(usage: Mapping[str, Any]) -> tuple[int | None, int | None]:
+    input_tokens = _read_usage_value(
+        usage,
+        (
+            "input_tokens",
+            "prompt_tokens",
+            "prompt_token_count",
+            "promptTokenCount",
+            "tokens_in",
+            "tokensIn",
+            "inputTokenCount",
+            "input_text_tokens",
+        ),
+    )
+    output_tokens = _read_usage_value(
+        usage,
+        (
+            "output_tokens",
+            "completion_tokens",
+            "completion_token_count",
+            "completionTokenCount",
+            "tokens_out",
+            "tokensOut",
+            "outputTokenCount",
+            "output_text_tokens",
+            "candidates_token_count",
+            "candidatesTokenCount",
+        ),
+    )
+    total_tokens = _read_usage_value(
+        usage,
+        (
+            "total_tokens",
+            "total_token_count",
+            "totalTokenCount",
+            "totalTokens",
+            "token_count",
+            "tokenCount",
+        ),
+    )
+    if output_tokens is None and total_tokens is not None and input_tokens is not None and total_tokens >= input_tokens:
+        output_tokens = total_tokens - input_tokens
+    return input_tokens, output_tokens
+
+
+def _aggregate_usage(values: Iterable[Any]) -> Mapping[str, int] | None:
+    total_input = 0
+    total_output = 0
+    has_input = False
+    has_output = False
+    for value in values:
+        if not isinstance(value, Mapping):
+            continue
+        input_tokens, output_tokens = _extract_usage_pair(value)
+        if input_tokens is not None:
+            total_input += input_tokens
+            has_input = True
+        if output_tokens is not None:
+            total_output += output_tokens
+            has_output = True
+    if not has_input and not has_output:
+        return None
+    usage: dict[str, int] = {}
+    if has_input:
+        usage["input_tokens"] = total_input
+    if has_output:
+        usage["output_tokens"] = total_output
+    if has_input and has_output:
+        usage["total_tokens"] = total_input + total_output
+    return usage
 
 
 def fetch_reasoning_summary(
