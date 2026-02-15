@@ -22,6 +22,9 @@ Set these secrets in your GitHub repository:
 - `APPLE_ID`: Apple ID email used for notarization.
 - `APPLE_PASSWORD`: App-specific password (or notarization password) for `APPLE_ID`.
 - `APPLE_TEAM_ID`: Your Apple Team ID (example: `JU3DQ69K6R`).
+- `BROOD_RELEASE_TOKEN` (recommended): PAT used for GitHub Release create/upload calls in `publish.yml`.
+  - Use a token with repo contents write access (`repo` scope for classic PAT, or equivalent fine-grained permission).
+  - If omitted, workflow falls back to the default workflow token.
 
 Notes:
 - The workflow imports the certificate into a temporary build keychain and auto-detects the `Developer ID Application` identity to use.
