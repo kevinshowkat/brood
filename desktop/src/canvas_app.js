@@ -125,7 +125,7 @@ const MOTHER_V2_ROLE_GLYPH = Object.freeze({
 const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator?.platform || "");
 // Use a more intuitive hold key for Mother option/hints reveal on macOS.
 const MOTHER_OPTION_REVEAL_HOLD_KEY = IS_MAC ? "h" : "i";
-const MOTHER_CREATIVE_DIRECTIVE = "stunningly awe-inspiring and tearfully joyous";
+const MOTHER_CREATIVE_DIRECTIVE = "stunningly awe-inspiring and joyous";
 const MOTHER_CREATIVE_DIRECTIVE_SENTENCE = `Create outputs that are ${MOTHER_CREATIVE_DIRECTIVE}.`;
 const MOTHER_V2_TRANSFORMATION_MODES = Object.freeze([
   "amplify",
@@ -179,6 +179,19 @@ const MOTHER_INTENT_USECASE_DEFAULT_ORDER = Object.freeze([
 ]);
 // Minimap world overscan: keep viewport box from filling the minimap immediately when zooming out.
 const MINIMAP_WORLD_OVERSCAN_RATIO = 0.75;
+const ENABLE_FILE_BROWSER_DOCK = true;
+const FILE_BROWSER_ROOT_DIR_LS_KEY = "brood.fileBrowser.rootDir";
+const FILE_BROWSER_DRAG_MIME = "application/x-brood-local-image-path";
+const FILE_BROWSER_IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".heic"]);
+const TOP_METRICS_WINDOW_MINUTES = 30;
+const TOP_METRICS_RENDER_SAMPLE_MAX = 20;
+const TOP_METRICS_THRESHOLDS = Object.freeze({
+  tokens_per_minute: { cool_max: 2000, warm_max: 8000 },
+  session_cost_usd: { cool_max: 1, warm_max: 5 },
+  queued_calls: { cool_max: 1, warm_max: 3 },
+  avg_render_s: { cool_max: 8, warm_max: 18 },
+});
+const SPARKLINE_GLYPHS = Object.freeze(["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]);
 const REEL_PRESET = Object.freeze({
   width: 540,
   height: 960,
@@ -187,6 +200,19 @@ const REEL_PRESET = Object.freeze({
 const els = {
   runInfo: document.getElementById("run-info"),
   engineStatus: document.getElementById("engine-status"),
+  topMetricsRoot: document.getElementById("top-metrics"),
+  topMetricTokens: document.getElementById("top-metric-tokens"),
+  topMetricTokensValue: document.getElementById("top-metric-tokens-value"),
+  topMetricTokensSparkIn: document.getElementById("top-metric-tokens-spark-in"),
+  topMetricTokensSparkOut: document.getElementById("top-metric-tokens-spark-out"),
+  topMetricApiCalls: document.getElementById("top-metric-api-calls"),
+  topMetricCost: document.getElementById("top-metric-cost"),
+  topMetricCostValue: document.getElementById("top-metric-cost-value"),
+  topMetricQueue: document.getElementById("top-metric-queue"),
+  topMetricQueueValue: document.getElementById("top-metric-queue-value"),
+  topMetricQueueTrend: document.getElementById("top-metric-queue-trend"),
+  topMetricRender: document.getElementById("top-metric-render"),
+  topMetricRenderValue: document.getElementById("top-metric-render-value"),
   brandStrip: document.querySelector(".brand-strip"),
   appMenuToggle: document.getElementById("app-menu-toggle"),
   appMenu: document.getElementById("app-menu"),
@@ -222,6 +248,13 @@ const els = {
   controlStrip: document.getElementById("control-strip"),
   minimap: document.getElementById("minimap"),
   minimapSurface: document.getElementById("minimap-surface"),
+  fileBrowserDock: document.getElementById("file-browser-dock"),
+  fileBrowserHeader: document.getElementById("file-browser-header"),
+  fileBrowserChoose: document.getElementById("file-browser-choose"),
+  fileBrowserUp: document.getElementById("file-browser-up"),
+  fileBrowserRefresh: document.getElementById("file-browser-refresh"),
+  fileBrowserPath: document.getElementById("file-browser-path"),
+  fileBrowserList: document.getElementById("file-browser-list"),
   annotatePanel: document.getElementById("annotate-panel"),
   annotateClose: document.getElementById("annotate-close"),
   annotateMeta: document.getElementById("annotate-meta"),
@@ -328,6 +361,7 @@ const state = {
   eventsDecoder: new TextDecoder("utf-8"),
   images: [],
   imagesById: new Map(),
+  imagePaletteSeed: 0, // monotonic assignment for rotating Google palette accents
   imageEffectTokenByImageId: new Map(), // imageId -> effectTokenId (collapsed visual replacement)
   effectTokensById: new Map(), // effectTokenId -> token payload
   activeId: null,
@@ -403,6 +437,7 @@ const state = {
     startOffsetX: 0,
     startOffsetY: 0,
     importPointCss: null, // { x, y }
+    wheelOnTap: false,
     moved: false,
   },
   reelTouch: {
@@ -525,6 +560,34 @@ const state = {
   minimap: {
     lastSignature: null,
   },
+  fileBrowser: {
+    enabled: ENABLE_FILE_BROWSER_DOCK,
+    rootDir: String(localStorage.getItem(FILE_BROWSER_ROOT_DIR_LS_KEY) || "").trim() || null,
+    cwd: null,
+    entries: [],
+    importPathMap: new Map(),
+    selectedPath: null,
+    loading: false,
+    error: null,
+    draggingPath: null,
+    history: [],
+    loadSeq: 0,
+    thumbCache: new Map(), // path -> { url, urlPromise, imgPromise }
+    observer: null,
+    clickImportTimer: null,
+    dragClearTimer: null,
+    suppressClickUntil: 0,
+    manualDrag: {
+      active: false,
+      pointerId: null,
+      path: null,
+      previewPath: null,
+      startX: 0,
+      startY: 0,
+      moved: false,
+      ghostEl: null,
+    },
+  },
   spawnNodes: [],
   spawnTimer: null,
   larvaTargets: [], // { turbEl, dispEl, seed }
@@ -540,6 +603,13 @@ const state = {
   lastDirectorMeta: null, // { kind, source, model, at, paths }
   lastCostLatency: null, // { provider, model, cost_total_usd, cost_per_1k_images_usd, latency_per_image_s, at }
   sessionApiCalls: 0,
+  topMetrics: {
+    tokenInByMinute: new Map(), // minute -> tokens in
+    tokenOutByMinute: new Map(), // minute -> tokens out
+    queueDepthByMinute: new Map(), // minute -> pending+running depth
+    sessionEstimatedCostUsd: 0,
+    renderDurationsS: [], // rolling last successful render durations
+  },
   lastStatusText: "Engine: idle",
   lastStatusError: false,
   fallbackToFullRead: false,
@@ -820,6 +890,395 @@ function formatSeconds(value) {
   return `${Math.round(value)}s`;
 }
 
+function formatCompactNumber(value) {
+  const n = Math.max(0, Number(value) || 0);
+  if (!Number.isFinite(n)) return "0";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  return String(Math.round(n));
+}
+
+function topMetricMinuteAt(ms = Date.now()) {
+  return Math.floor((Number(ms) || Date.now()) / 60_000);
+}
+
+function topMetricPruneMinuteMap(map, { keepMinutes = TOP_METRICS_WINDOW_MINUTES, nowMs = Date.now() } = {}) {
+  if (!(map instanceof Map)) return;
+  const cutoff = topMetricMinuteAt(nowMs) - Math.max(keepMinutes, 1) - 2;
+  for (const key of map.keys()) {
+    if (Number(key) < cutoff) map.delete(key);
+  }
+}
+
+function topMetricBumpMinuteMap(map, minute, delta) {
+  if (!(map instanceof Map)) return;
+  const key = Math.floor(Number(minute) || 0);
+  if (!Number.isFinite(key)) return;
+  const add = Math.max(0, Number(delta) || 0);
+  if (!Number.isFinite(add) || add <= 0) return;
+  map.set(key, (Number(map.get(key)) || 0) + add);
+}
+
+function topMetricSetMinuteMap(map, minute, value) {
+  if (!(map instanceof Map)) return;
+  const key = Math.floor(Number(minute) || 0);
+  if (!Number.isFinite(key)) return;
+  const next = Math.max(0, Number(value) || 0);
+  if (!Number.isFinite(next)) return;
+  map.set(key, next);
+}
+
+function readFirstFinite(obj, keys) {
+  if (!obj || typeof obj !== "object") return null;
+  for (const key of keys) {
+    const n = Number(obj[key]);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return null;
+}
+
+function extractTokenUsageFromObject(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  let input = readFirstFinite(obj, [
+    "input_tokens",
+    "prompt_tokens",
+    "prompt_token_count",
+    "promptTokenCount",
+    "promptTokens",
+    "tokens_in",
+    "tokensIn",
+    "inputTokenCount",
+    "input_text_tokens",
+    "text_count_tokens",
+  ]);
+  let output = readFirstFinite(obj, [
+    "output_tokens",
+    "completion_tokens",
+    "completion_token_count",
+    "completionTokenCount",
+    "tokens_out",
+    "tokensOut",
+    "outputTokenCount",
+    "output_text_tokens",
+    "candidates_token_count",
+    "candidatesTokenCount",
+  ]);
+  const total = readFirstFinite(obj, [
+    "total_token_count",
+    "totalTokenCount",
+    "total_tokens",
+    "totalTokens",
+    "token_count",
+    "tokenCount",
+  ]);
+  if (!Number.isFinite(input) && Number.isFinite(total) && Number.isFinite(output) && total >= output) {
+    input = total - output;
+  }
+  if (!Number.isFinite(output) && Number.isFinite(total) && Number.isFinite(input) && total >= input) {
+    output = total - input;
+  }
+  if (!Number.isFinite(input) && !Number.isFinite(output) && Number.isFinite(total)) {
+    input = total;
+    output = 0;
+  }
+  if (!Number.isFinite(input) && !Number.isFinite(output)) return null;
+  return {
+    input_tokens: Math.max(0, Math.round(Number(input) || 0)),
+    output_tokens: Math.max(0, Math.round(Number(output) || 0)),
+  };
+}
+
+function extractTokenUsage(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const visited = new Set();
+  const queue = [payload];
+  let steps = 0;
+  while (queue.length && steps < 180) {
+    const node = queue.shift();
+    steps += 1;
+    if (!node || typeof node !== "object") continue;
+    if (visited.has(node)) continue;
+    visited.add(node);
+    const direct = extractTokenUsageFromObject(node);
+    if (direct) return direct;
+    const usage = node.usage;
+    if (usage && typeof usage === "object") {
+      const nested = extractTokenUsageFromObject(usage);
+      if (nested) return nested;
+      queue.push(usage);
+    }
+    for (const value of Object.values(node)) {
+      if (!value) continue;
+      if (Array.isArray(value)) {
+        for (let i = 0; i < value.length && i < 8; i += 1) queue.push(value[i]);
+      } else if (typeof value === "object") {
+        queue.push(value);
+      }
+    }
+  }
+  return null;
+}
+
+function topMetricMinuteSeries(map, { windowMinutes = TOP_METRICS_WINDOW_MINUTES, nowMs = Date.now() } = {}) {
+  const nowMinute = topMetricMinuteAt(nowMs);
+  const out = [];
+  let hasData = false;
+  for (let i = windowMinutes - 1; i >= 0; i -= 1) {
+    const minute = nowMinute - i;
+    const raw = Number(map.get(minute)) || 0;
+    const value = Math.max(0, raw);
+    if (value > 0) hasData = true;
+    out.push(value);
+  }
+  return { values: out, hasData };
+}
+
+function topMetricSmoothedRolling(values, { minutes = 5 } = {}) {
+  const list = Array.isArray(values) ? values.map((v) => Math.max(0, Number(v) || 0)) : [];
+  const n = Math.max(1, Math.min(Math.floor(Number(minutes) || 5), list.length));
+  const slice = list.slice(-n);
+  if (!slice.length) return 0;
+  // Triangular weighting favors the center of the short window for smoother readout.
+  const weights = [];
+  for (let i = 0; i < slice.length; i += 1) {
+    const mid = (slice.length - 1) / 2;
+    const dist = Math.abs(i - mid);
+    weights.push(Math.max(1, Math.round(slice.length - dist)));
+  }
+  let sum = 0;
+  let wsum = 0;
+  for (let i = 0; i < slice.length; i += 1) {
+    const w = Number(weights[i]) || 1;
+    sum += (Number(slice[i]) || 0) * w;
+    wsum += w;
+  }
+  return wsum > 0 ? sum / wsum : 0;
+}
+
+function sparkline(values, { fallback = "--", maxValue = null } = {}) {
+  const list = Array.isArray(values) ? values.map((v) => Math.max(0, Number(v) || 0)) : [];
+  if (!list.length) return fallback;
+  const overrideMax = Number(maxValue);
+  const maxVal = Number.isFinite(overrideMax) && overrideMax > 0 ? overrideMax : Math.max(...list);
+  if (!maxVal) return "·".repeat(Math.min(20, list.length));
+  const last = SPARKLINE_GLYPHS.length - 1;
+  return list
+    .map((v) => {
+      const idx = Math.round((Math.max(0, Number(v) || 0) / maxVal) * last);
+      return SPARKLINE_GLYPHS[clamp(idx, 0, last)];
+    })
+    .join("");
+}
+
+function topMetricHeat(metric, value) {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return "nodata";
+  const t = TOP_METRICS_THRESHOLDS[metric];
+  if (!t) return "nodata";
+  if (v < t.cool_max) return "cool";
+  if (v <= t.warm_max) return "warm";
+  return "hot";
+}
+
+function ribbonStatusLabel(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return "idle";
+  return text
+    .replace(/^(engine|director|mother|app)\s*:\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function ribbonStatusIcon(raw, isError = false) {
+  if (isError) return "✕";
+  const label = ribbonStatusLabel(raw);
+  if (!label) return "○";
+  if (/\b(idle|off|disabled|exited|stopped)\b/i.test(label)) return "○";
+  if (/\b(ready|started|connected|imported|enabled|locked|committed|exported)\b/i.test(label)) return "●";
+  if (/\b(failed|error|boot failed)\b/i.test(label)) return "✕";
+  return "◔";
+}
+
+function ribbonStatusState(raw, isError = false) {
+  if (isError) return "error";
+  const label = ribbonStatusLabel(raw);
+  if (!label) return "idle";
+  if (/\b(idle|off|disabled|exited|stopped)\b/i.test(label)) return "idle";
+  if (/\b(ready|started|connected|imported|enabled|locked|committed|exported)\b/i.test(label)) return "ready";
+  if (/\b(failed|error|boot failed)\b/i.test(label)) return "error";
+  return "busy";
+}
+
+function engineStatusDotTooltip(statusText = "", stateKey = "idle") {
+  const stateLabel = String(stateKey || "idle").trim() || "idle";
+  const detail = String(statusText || "").trim() || "Engine: idle";
+  return `Engine status dot\nShows current engine activity.\nState: ${stateLabel}\n${detail}`;
+}
+
+function intentSourceDotTooltip(kind = "") {
+  const normalized = String(kind || "").trim().toLowerCase();
+  const source = normalized === "realtime" || normalized === "fallback" ? normalized : "idle";
+  return `Intent source dot\nShows where Mother intent came from.\nSource: ${source}`;
+}
+
+function topMetricQueueCounts() {
+  const pending = Math.max(0, Number(state.actionQueue?.length) || 0);
+  const running = state.actionQueueActive || isEngineBusy() ? 1 : 0;
+  return { pending, running };
+}
+
+function topMetricIngestTokens({ inputTokens = 0, outputTokens = 0, atMs = Date.now() } = {}) {
+  const inTokens = Math.max(0, Math.round(Number(inputTokens) || 0));
+  const outTokens = Math.max(0, Math.round(Number(outputTokens) || 0));
+  if (!inTokens && !outTokens) return;
+  const metrics = state.topMetrics || null;
+  if (!metrics) return;
+  const minute = topMetricMinuteAt(atMs);
+  topMetricBumpMinuteMap(metrics.tokenInByMinute, minute, inTokens);
+  topMetricBumpMinuteMap(metrics.tokenOutByMinute, minute, outTokens);
+  topMetricPruneMinuteMap(metrics.tokenInByMinute, { nowMs: atMs });
+  topMetricPruneMinuteMap(metrics.tokenOutByMinute, { nowMs: atMs });
+}
+
+function topMetricIngestTokensFromPayload(payload, { atMs = Date.now(), render = false } = {}) {
+  const tokens = extractTokenUsage(payload);
+  if (!tokens) return false;
+  topMetricIngestTokens({
+    inputTokens: tokens.input_tokens,
+    outputTokens: tokens.output_tokens,
+    atMs,
+  });
+  if (render) renderSessionApiCallsReadout();
+  return true;
+}
+
+function topMetricIngestCost(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return;
+  const metrics = state.topMetrics || null;
+  if (!metrics) return;
+  metrics.sessionEstimatedCostUsd = Math.max(0, Number(metrics.sessionEstimatedCostUsd) || 0) + n;
+}
+
+function topMetricIngestRenderDuration(seconds) {
+  const n = Number(seconds);
+  if (!Number.isFinite(n) || n <= 0) return;
+  const metrics = state.topMetrics || null;
+  if (!metrics) return;
+  metrics.renderDurationsS.push(n);
+  while (metrics.renderDurationsS.length > TOP_METRICS_RENDER_SAMPLE_MAX) metrics.renderDurationsS.shift();
+}
+
+function topMetricSampleQueueDepth({ nowMs = Date.now() } = {}) {
+  const metrics = state.topMetrics || null;
+  if (!metrics) return;
+  const minute = topMetricMinuteAt(nowMs);
+  const counts = topMetricQueueCounts();
+  topMetricSetMinuteMap(metrics.queueDepthByMinute, minute, counts.pending + counts.running);
+  topMetricPruneMinuteMap(metrics.queueDepthByMinute, { nowMs });
+}
+
+function renderTopMetricsGrid() {
+  if (!els.topMetricsRoot) return;
+  const metrics = state.topMetrics || null;
+  if (!metrics) return;
+  const nowMs = Date.now();
+  topMetricSampleQueueDepth({ nowMs });
+
+  const tokenInSeries = topMetricMinuteSeries(metrics.tokenInByMinute, { nowMs });
+  const tokenOutSeries = topMetricMinuteSeries(metrics.tokenOutByMinute, { nowMs });
+  const tokenInSmooth5 = topMetricSmoothedRolling(tokenInSeries.values, { minutes: 5 });
+  const tokenOutSmooth5 = topMetricSmoothedRolling(tokenOutSeries.values, { minutes: 5 });
+  const tokenSmoothedPerMinute = tokenInSmooth5 + tokenOutSmooth5;
+  const hasTokenData = tokenInSeries.hasData || tokenOutSeries.hasData;
+  const tokenInWindow = tokenInSeries.values.slice(-10);
+  const tokenOutWindow = tokenOutSeries.values.slice(-10);
+  const sharedTokenMax = Math.max(
+    0,
+    ...tokenInWindow.map((v) => Math.max(0, Number(v) || 0)),
+    ...tokenOutWindow.map((v) => Math.max(0, Number(v) || 0))
+  );
+
+  if (els.topMetricTokensValue) {
+    const inSpark = sparkline(tokenInWindow, { fallback: "··········", maxValue: sharedTokenMax });
+    const outSpark = sparkline(tokenOutWindow, { fallback: "··········", maxValue: sharedTokenMax });
+    els.topMetricTokensValue.innerHTML = [
+      `<span class="top-metric-token-in">↓ ${escapeHtml(inSpark)}</span>`,
+      `<span class="top-metric-token-out">↑ ${escapeHtml(outSpark)}</span>`,
+    ].join("");
+  }
+  if (els.topMetricTokensSparkIn) {
+    els.topMetricTokensSparkIn.textContent = "";
+    els.topMetricTokensSparkIn.classList.add("hidden");
+  }
+  if (els.topMetricTokensSparkOut) {
+    els.topMetricTokensSparkOut.textContent = "";
+    els.topMetricTokensSparkOut.classList.add("hidden");
+  }
+  if (els.topMetricApiCalls) {
+    els.topMetricApiCalls.textContent = "";
+    els.topMetricApiCalls.classList.add("hidden");
+  }
+  if (els.topMetricTokens) {
+    els.topMetricTokens.dataset.heat = hasTokenData ? topMetricHeat("tokens_per_minute", tokenSmoothedPerMinute) : "nodata";
+  }
+
+  const sessionCost = Number(metrics.sessionEstimatedCostUsd);
+  const hasCost = Number.isFinite(sessionCost) && sessionCost >= 0;
+  if (els.topMetricCostValue) {
+    els.topMetricCostValue.textContent = hasCost ? formatUsd(sessionCost) || "$0.00" : "--";
+  }
+  if (els.topMetricCost) {
+    els.topMetricCost.dataset.heat = hasCost ? topMetricHeat("session_cost_usd", sessionCost) : "nodata";
+  }
+
+  const queue = topMetricQueueCounts();
+  const queueDepth = queue.pending + queue.running;
+  const queueSeries = topMetricMinuteSeries(metrics.queueDepthByMinute, { nowMs });
+  if (els.topMetricQueueValue) {
+    els.topMetricQueueValue.textContent = `P${queue.pending} R${queue.running}`;
+  }
+  if (els.topMetricQueueTrend) {
+    els.topMetricQueueTrend.textContent = sparkline(queueSeries.values.slice(-10));
+  }
+  if (els.topMetricQueue) {
+    els.topMetricQueue.dataset.heat = topMetricHeat("queued_calls", queueDepth);
+  }
+
+  const durations = Array.isArray(metrics.renderDurationsS) ? metrics.renderDurationsS : [];
+  const avgRender =
+    durations.length > 0 ? durations.reduce((sum, v) => sum + (Number(v) || 0), 0) / Math.max(1, durations.length) : null;
+  if (els.topMetricRenderValue) {
+    const sampleCount = durations.length;
+    els.topMetricRenderValue.textContent = Number.isFinite(avgRender)
+      ? `${(Number(avgRender) || 0).toFixed(1)}s/${sampleCount}`
+      : "--";
+  }
+  if (els.topMetricRender) {
+    els.topMetricRender.dataset.heat = Number.isFinite(avgRender) ? topMetricHeat("avg_render_s", avgRender) : "nodata";
+  }
+
+  if (els.engineStatus) {
+    const status = state.lastStatusText ? String(state.lastStatusText) : "Engine: idle";
+    const stateKey = ribbonStatusState(status, Boolean(state.lastStatusError));
+    els.engineStatus.dataset.state = stateKey;
+    els.engineStatus.textContent = "";
+    els.engineStatus.title = engineStatusDotTooltip(status, stateKey);
+    els.engineStatus.setAttribute("aria-label", `Engine status: ${ribbonStatusLabel(status) || "idle"}`);
+  }
+}
+
+function resetTopMetrics() {
+  const metrics = state.topMetrics || null;
+  if (!metrics) return;
+  metrics.tokenInByMinute.clear();
+  metrics.tokenOutByMinute.clear();
+  metrics.queueDepthByMinute.clear();
+  metrics.sessionEstimatedCostUsd = 0;
+  metrics.renderDurationsS = [];
+}
+
 function extractReceiptMeta(payload) {
   if (!payload || typeof payload !== "object") return null;
   const request = payload?.request || {};
@@ -835,7 +1294,16 @@ function extractReceiptMeta(payload) {
     null;
   const cost_total_usd = typeof result?.cost_total_usd === "number" ? result.cost_total_usd : null;
   const latency_per_image_s = typeof result?.latency_per_image_s === "number" ? result.latency_per_image_s : null;
-  return { provider, model, operation, cost_total_usd, latency_per_image_s };
+  const tokens = extractTokenUsage(payload);
+  return {
+    provider,
+    model,
+    operation,
+    cost_total_usd,
+    latency_per_image_s,
+    input_tokens: tokens?.input_tokens ?? null,
+    output_tokens: tokens?.output_tokens ?? null,
+  };
 }
 
 async function ensureReceiptMeta(item) {
@@ -857,11 +1325,77 @@ async function ensureReceiptMeta(item) {
   }
 }
 
+async function ingestTopMetricsFromReceiptPath(receiptPath, { allowCostFallback = false, allowLatencyFallback = false } = {}) {
+  const path = String(receiptPath || "").trim();
+  if (!path) return;
+  try {
+    const payload = JSON.parse(await readTextFile(path));
+    const meta = extractReceiptMeta(payload);
+    if (!meta) return;
+    if (allowCostFallback) topMetricIngestCost(meta.cost_total_usd);
+    if (allowLatencyFallback) topMetricIngestRenderDuration(meta.latency_per_image_s);
+    topMetricIngestTokens({
+      inputTokens: meta.input_tokens,
+      outputTokens: meta.output_tokens,
+    });
+    renderSessionApiCallsReadout();
+  } catch {
+    // ignore
+  }
+}
+
 function clampText(text, maxLen) {
   const s = String(text || "").trim();
   if (!s) return "";
   if (s.length <= maxLen) return s;
   return `${s.slice(0, Math.max(0, maxLen - 1))}…`;
+}
+
+let hudDescTypeoutTimer = null;
+let hudDescTypeoutTarget = "";
+let hudDescTypeoutIndex = 0;
+let hudDescTypeoutImageId = null;
+
+function stopHudDescTypeout() {
+  clearTimeout(hudDescTypeoutTimer);
+  hudDescTypeoutTimer = null;
+  hudDescTypeoutTarget = "";
+  hudDescTypeoutIndex = 0;
+  hudDescTypeoutImageId = null;
+  if (els.hudUnitDesc) els.hudUnitDesc.classList.remove("is-typing");
+}
+
+function hudDescTypeoutTick() {
+  if (!els.hudUnitDesc) {
+    stopHudDescTypeout();
+    return;
+  }
+  const remaining = hudDescTypeoutTarget.length - hudDescTypeoutIndex;
+  if (remaining <= 0) {
+    els.hudUnitDesc.classList.remove("is-typing");
+    hudDescTypeoutTimer = null;
+    return;
+  }
+  let step = 1;
+  if (remaining > 42) step = 3;
+  else if (remaining > 18) step = 2;
+  hudDescTypeoutIndex = Math.min(hudDescTypeoutTarget.length, hudDescTypeoutIndex + step);
+  els.hudUnitDesc.textContent = hudDescTypeoutTarget.slice(0, hudDescTypeoutIndex);
+  hudDescTypeoutTimer = setTimeout(hudDescTypeoutTick, 42);
+}
+
+function startHudDescTypeout(imageId, text) {
+  const targetImageId = String(imageId || "").trim();
+  const targetText = String(text || "").trim();
+  if (!targetImageId || !targetText || !els.hudUnitDesc) return;
+  if (hudDescTypeoutImageId === targetImageId && hudDescTypeoutTarget === targetText && hudDescTypeoutTimer) return;
+  stopHudDescTypeout();
+  hudDescTypeoutImageId = targetImageId;
+  hudDescTypeoutTarget = targetText;
+  hudDescTypeoutIndex = 0;
+  els.hudUnitDesc.textContent = "";
+  els.hudUnitDesc.classList.add("is-typing");
+  hudDescTypeoutTick();
 }
 
 function renderHudReadout() {
@@ -871,6 +1405,7 @@ function renderHudReadout() {
   const zoomScale = state.canvasMode === "multi" ? state.multiView.scale || 1 : state.view.scale || 1;
   // HUD is always visible; show placeholders when no image is loaded.
   if (!hasImage) {
+    stopHudDescTypeout();
     const sel = state.selection?.points?.length >= 3 ? `${state.selection.points.length} pts` : "none";
     const zoomPct = Math.round(zoomScale * 100);
     if (els.hudUnitName) els.hudUnitName.textContent = "NO IMAGE";
@@ -894,8 +1429,10 @@ function renderHudReadout() {
   if (els.hudUnitName) els.hudUnitName.textContent = `${name}${dims}`;
 
   let desc = "";
+  let descFromVision = false;
   if (img?.visionDesc) {
     desc = clampText(img.visionDesc, 32);
+    descFromVision = true;
   } else if (img?.visionPending) {
     desc = "ANALYZING…";
   } else if (img?.path && describeQueued.has(img.path)) {
@@ -905,7 +1442,18 @@ function renderHudReadout() {
     if (!state.ptySpawned) desc = "ENGINE OFFLINE";
     else desc = allowVision ? "—" : "NO VISION KEYS";
   }
-  if (els.hudUnitDesc) els.hudUnitDesc.textContent = desc || "—";
+  const descText = desc || "—";
+  const typeoutLocked =
+    descFromVision &&
+    hudDescTypeoutImageId === String(img?.id || "") &&
+    hudDescTypeoutTarget === descText &&
+    hudDescTypeoutTimer;
+  if (!typeoutLocked && els.hudUnitDesc) {
+    els.hudUnitDesc.textContent = descText;
+  }
+  if (!descFromVision) {
+    stopHudDescTypeout();
+  }
 
   const sel = state.selection?.points?.length >= 3 ? `${state.selection.points.length} pts` : "none";
   const imgSel = selectedCount();
@@ -3976,6 +4524,957 @@ async function ensureImageUrl(path, cache = state.imageCache) {
   }
 }
 
+function isBrowserImagePath(path) {
+  const ext = extname(path).toLowerCase();
+  return FILE_BROWSER_IMAGE_EXTS.has(ext);
+}
+
+function fileBrowserIsSuppressedArtifactName(name) {
+  const lowered = String(name || "").trim().toLowerCase();
+  if (!lowered) return false;
+  if (lowered === "_raw_provider_outputs") return true;
+  if (lowered === "manifest.json") return true;
+  if (/^contact_sheet(?:_.*)?\.(png|jpg|jpeg|webp)$/i.test(lowered)) return true;
+  return false;
+}
+
+function parentDirPath(path) {
+  const raw = String(path || "").trim();
+  if (!raw) return null;
+  const trimmed = raw.replace(/[\\/]+$/, "");
+  if (!trimmed) return null;
+  if (trimmed === "/" || trimmed === "\\") return null;
+  const slashIdx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (slashIdx < 0) return null;
+  if (slashIdx === 0) return trimmed.slice(0, 1);
+  if (slashIdx === 2 && /^[A-Za-z]:/.test(trimmed)) return `${trimmed.slice(0, 2)}\\`;
+  return trimmed.slice(0, slashIdx);
+}
+
+function fileBrowserDisplayPathLabel({ cwd = "", rootDir = "" } = {}) {
+  const current = String(cwd || "").trim();
+  const root = String(rootDir || "").trim();
+  const fallback = current || root;
+  if (!fallback) return "No folder selected";
+  const normalizedCurrent = current.replace(/[\\/]+$/, "");
+  const normalizedRoot = root.replace(/[\\/]+$/, "");
+  const leaf = basename(normalizedCurrent || normalizedRoot) || fallback;
+  if (!normalizedCurrent || !normalizedRoot || normalizedCurrent === normalizedRoot) {
+    return leaf;
+  }
+  const rootLeaf = basename(normalizedRoot) || normalizedRoot;
+  if (normalizedCurrent.startsWith(normalizedRoot)) {
+    const relative = normalizedCurrent.slice(normalizedRoot.length).replace(/^[\\/]+/, "");
+    const parts = relative.split(/[\\/]+/).filter(Boolean);
+    if (parts.length === 1) return `${rootLeaf}/${parts[0]}`;
+    if (parts.length > 1) return `${rootLeaf}/.../${parts[parts.length - 1]}`;
+  }
+  return `${rootLeaf}/.../${leaf}`;
+}
+
+function normalizeLocalFsPath(rawPath) {
+  let path = String(rawPath || "").trim();
+  if (!path) return "";
+  if (path.startsWith("file://")) {
+    try {
+      const u = new URL(path);
+      path = decodeURIComponent(u.pathname || "");
+      if (/^\/[A-Za-z]:\//.test(path)) {
+        path = path.slice(1);
+      }
+    } catch {
+      path = path.replace(/^file:\/\//i, "");
+      try {
+        path = decodeURIComponent(path);
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return path;
+}
+
+function isAbsoluteLocalFsPath(path) {
+  const target = String(path || "").trim();
+  if (!target) return false;
+  if (target.startsWith("/") || target.startsWith("\\")) return true;
+  return /^[A-Za-z]:[\\/]/.test(target);
+}
+
+async function resolveLocalFsPathMaybeRelative(baseDir, rawPath) {
+  const target = normalizeLocalFsPath(rawPath);
+  if (!target) return "";
+  if (isAbsoluteLocalFsPath(target)) return target;
+  const base = String(baseDir || "").trim();
+  if (!base) return "";
+  try {
+    return normalizeLocalFsPath(await join(base, target));
+  } catch {
+    return "";
+  }
+}
+
+async function fileBrowserLoadImportPathMap(dir) {
+  const targetDir = String(dir || "").trim();
+  const out = new Map();
+  if (!targetDir) return out;
+  const manifestCandidates = [];
+  try {
+    manifestCandidates.push(await join(targetDir, "manifest.json"));
+  } catch {
+    manifestCandidates.push(`${targetDir}/manifest.json`);
+  }
+  const parent = parentDirPath(targetDir);
+  if (parent) {
+    try {
+      manifestCandidates.push(await join(parent, "manifest.json"));
+    } catch {
+      manifestCandidates.push(`${parent}/manifest.json`);
+    }
+  }
+  let payload = null;
+  for (const candidate of manifestCandidates) {
+    if (!candidate) continue;
+    try {
+      payload = JSON.parse(await readTextFile(candidate));
+      if (payload && typeof payload === "object") break;
+    } catch {
+      payload = null;
+    }
+  }
+  if (!payload || typeof payload !== "object") {
+    return out;
+  }
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const rawOutput =
+      item.output ??
+      item.preview ??
+      item.rendered ??
+      item.styled ??
+      item.preview_path ??
+      item.path ??
+      "";
+    const rawInput =
+      item.input ??
+      item.source ??
+      item.original ??
+      item.source_path ??
+      item.input_path ??
+      item.original_path ??
+      "";
+    const outputPath = await resolveLocalFsPathMaybeRelative(targetDir, rawOutput);
+    const inputPath = await resolveLocalFsPathMaybeRelative(targetDir, rawInput);
+    if (!outputPath || !inputPath) continue;
+    if (!isBrowserImagePath(outputPath) || !isBrowserImagePath(inputPath)) continue;
+    out.set(outputPath, inputPath);
+    const outputKey = fileBrowserPathMapKey(outputPath);
+    if (outputKey) out.set(outputKey, inputPath);
+    const outBase = basename(outputPath);
+    if (outBase) out.set(`name:${outBase}`, inputPath);
+    if (outBase) out.set(`name:${outBase.toLowerCase()}`, inputPath);
+    const outStem = outBase.replace(/\.[^.]+$/, "");
+    if (outStem) out.set(`stem:${outStem}`, inputPath);
+    if (outStem) out.set(`stem:${outStem.toLowerCase()}`, inputPath);
+    const relaxedStem = outStem.replace(/_wire_subject(?:-\d+)?$/i, "");
+    if (relaxedStem && relaxedStem !== outStem) out.set(`stem:${relaxedStem}`, inputPath);
+    if (relaxedStem && relaxedStem !== outStem) out.set(`stem:${relaxedStem.toLowerCase()}`, inputPath);
+  }
+  return out;
+}
+
+function canvasWorldPointFromClient(clientX, clientY) {
+  const cx = Number(clientX);
+  const cy = Number(clientY);
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
+  const wrapRect = els.canvasWrap?.getBoundingClientRect?.();
+  if (!wrapRect) return null;
+  if (cx < wrapRect.left || cx > wrapRect.right || cy < wrapRect.top || cy > wrapRect.bottom) return null;
+  const overlayRect = els.overlayCanvas?.getBoundingClientRect?.() || wrapRect;
+  return canvasScreenCssToWorldCss({ x: cx - overlayRect.left, y: cy - overlayRect.top });
+}
+
+function fileBrowserCreateDragGhost(path) {
+  const targetPath = String(path || "").trim();
+  if (!targetPath) return null;
+  const ghost = document.createElement("div");
+  ghost.className = "file-browser-drag-ghost";
+  ghost.setAttribute("aria-hidden", "true");
+  ghost.dataset.path = targetPath;
+  const thumb = document.createElement("img");
+  thumb.className = "file-browser-drag-ghost-thumb";
+  thumb.alt = "";
+  thumb.src = THUMB_PLACEHOLDER_SRC;
+  ghost.appendChild(thumb);
+  const label = document.createElement("div");
+  label.className = "file-browser-drag-ghost-label";
+  const base = basename(targetPath) || "image";
+  label.textContent = base.length > 20 ? `${base.slice(0, 19)}…` : base;
+  ghost.appendChild(label);
+  document.body.appendChild(ghost);
+  const cache = state.fileBrowser?.thumbCache || state.imageCache;
+  ensureImageUrl(targetPath, cache)
+    .then((url) => {
+      if (!url || !ghost.isConnected) return;
+      thumb.src = url;
+    })
+    .catch(() => {});
+  return ghost;
+}
+
+function fileBrowserUpdateDragGhost(el, clientX, clientY) {
+  if (!el) return;
+  const cx = Number(clientX);
+  const cy = Number(clientY);
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
+  el.classList.remove("is-drop");
+  el.style.transition = "none";
+  el.style.opacity = "0.98";
+  el.style.filter = "";
+  el.style.left = `${Math.round(cx)}px`;
+  el.style.top = `${Math.round(cy)}px`;
+  el.style.transform = "translate3d(-34%, -76%, 0) scale(0.84)";
+}
+
+function fileBrowserDestroyDragGhost(el) {
+  if (!el) return;
+  try {
+    el.remove();
+  } catch {
+    // ignore
+  }
+}
+
+function fileBrowserAnimateDropPulse(clientX, clientY) {
+  if (!els.canvasWrap) return;
+  const cx = Number(clientX);
+  const cy = Number(clientY);
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
+  const wrapRect = els.canvasWrap.getBoundingClientRect();
+  if (!wrapRect) return;
+  if (cx < wrapRect.left || cx > wrapRect.right || cy < wrapRect.top || cy > wrapRect.bottom) return;
+  const pulse = document.createElement("div");
+  pulse.className = "file-browser-drop-pulse";
+  pulse.style.left = `${Math.round(cx - wrapRect.left)}px`;
+  pulse.style.top = `${Math.round(cy - wrapRect.top)}px`;
+  els.canvasWrap.appendChild(pulse);
+  requestAnimationFrame(() => {
+    pulse.classList.add("is-live");
+  });
+  setTimeout(() => {
+    try {
+      pulse.remove();
+    } catch {
+      // ignore
+    }
+  }, 420);
+}
+
+function fileBrowserAnimateDropGhost(ghostEl, { clientX, clientY, path = "" } = {}) {
+  const cx = Number(clientX);
+  const cy = Number(clientY);
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
+    if (ghostEl) fileBrowserDestroyDragGhost(ghostEl);
+    return;
+  }
+  const ghost = ghostEl || fileBrowserCreateDragGhost(path);
+  fileBrowserAnimateDropPulse(cx, cy);
+  if (!ghost) return;
+  ghost.classList.add("is-drop");
+  ghost.style.left = `${Math.round(cx)}px`;
+  ghost.style.top = `${Math.round(cy)}px`;
+  ghost.style.opacity = "1";
+  ghost.style.filter = "";
+  ghost.style.transition =
+    "transform 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease-out, filter 220ms ease-out";
+  requestAnimationFrame(() => {
+    if (!ghost.isConnected) return;
+    ghost.style.transform = "translate3d(-50%, -50%, 0) scale(2.08)";
+    ghost.style.opacity = "0";
+    ghost.style.filter = "saturate(1.2) brightness(1.12)";
+  });
+  const cleanup = () => fileBrowserDestroyDragGhost(ghost);
+  ghost.addEventListener("transitionend", cleanup, { once: true });
+  setTimeout(cleanup, 320);
+}
+
+function clearFileBrowserThumbCache({ keepPaths = null } = {}) {
+  const fb = state.fileBrowser;
+  if (!fb?.thumbCache) return;
+  const keep = keepPaths instanceof Set ? keepPaths : null;
+  for (const [path, rec] of fb.thumbCache.entries()) {
+    if (keep && keep.has(path)) continue;
+    const url = rec?.url;
+    if (url) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        // ignore
+      }
+    }
+    fb.thumbCache.delete(path);
+  }
+}
+
+function fileBrowserRenderMessage(message, { isError = false } = {}) {
+  if (!els.fileBrowserList) return;
+  const div = document.createElement("div");
+  div.className = `file-browser-message${isError ? " is-error" : ""}`;
+  div.textContent = String(message || "");
+  els.fileBrowserList.innerHTML = "";
+  els.fileBrowserList.appendChild(div);
+}
+
+function ensureFileBrowserObserver() {
+  const fb = state.fileBrowser;
+  if (!fb?.enabled) return null;
+  if (!els.fileBrowserList) return null;
+  if (fb.observer) return fb.observer;
+  if (!("IntersectionObserver" in window)) return null;
+  fb.observer = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const imgEl = entry.target;
+        const path = imgEl?.dataset?.path ? String(imgEl.dataset.path) : "";
+        if (!path) continue;
+        fb.observer.unobserve(imgEl);
+        ensureImageUrl(path, fb.thumbCache)
+          .then((url) => {
+            if (url && imgEl && imgEl.dataset.path === path) imgEl.src = url;
+          })
+          .catch(() => {});
+      }
+    },
+    { root: els.fileBrowserList, rootMargin: "140px" }
+  );
+  return fb.observer;
+}
+
+function fileBrowserSetSelectedPath(path) {
+  const fb = state.fileBrowser;
+  if (!fb) return;
+  fb.selectedPath = path ? String(path) : null;
+  if (!els.fileBrowserList) return;
+  const rows = els.fileBrowserList.querySelectorAll(".file-browser-item");
+  rows.forEach((row) => {
+    const rowPath = String(row?.dataset?.path || "");
+    const selected = Boolean(fb.selectedPath && rowPath && rowPath === fb.selectedPath);
+    row.classList.toggle("is-selected", selected);
+    row.setAttribute("aria-selected", selected ? "true" : "false");
+  });
+}
+
+function fileBrowserEntriesForUi() {
+  const fb = state.fileBrowser;
+  if (!fb) return [];
+  const list = Array.isArray(fb.entries) ? fb.entries : [];
+  return list.slice(0, 550);
+}
+
+function renderFileBrowserDock() {
+  const fb = state.fileBrowser;
+  if (!fb?.enabled) return;
+  if (!els.fileBrowserDock || !els.fileBrowserList) return;
+
+  if (els.fileBrowserPath) {
+    const fullPath = String(fb.cwd || fb.rootDir || "").trim();
+    els.fileBrowserPath.textContent = fileBrowserDisplayPathLabel({ cwd: fb.cwd, rootDir: fb.rootDir });
+    els.fileBrowserPath.title = fullPath || "No folder selected";
+  }
+  if (els.fileBrowserUp) {
+    els.fileBrowserUp.disabled = Boolean(!fb.cwd || !parentDirPath(fb.cwd));
+  }
+  if (els.fileBrowserRefresh) {
+    els.fileBrowserRefresh.disabled = Boolean(!fb.cwd || fb.loading);
+  }
+  if (els.fileBrowserChoose) {
+    els.fileBrowserChoose.disabled = Boolean(fb.loading);
+  }
+
+  if (!fb.cwd) {
+    fileBrowserRenderMessage("Choose Folder to browse local images.");
+    return;
+  }
+  if (fb.loading) {
+    fileBrowserRenderMessage("Loading folder…");
+    return;
+  }
+  if (fb.error) {
+    fileBrowserRenderMessage(String(fb.error || "Unable to read folder."), { isError: true });
+    return;
+  }
+
+  const entries = fileBrowserEntriesForUi();
+  if (!entries.length) {
+    fileBrowserRenderMessage("No image files found in this folder.");
+    return;
+  }
+
+  const observer = ensureFileBrowserObserver();
+  const frag = document.createDocumentFragment();
+  for (const entry of entries) {
+    const row = document.createElement("div");
+    row.className = "file-browser-item";
+    row.dataset.path = entry.path;
+    row.dataset.kind = entry.kind;
+    if (entry.kind === "file") {
+      row.dataset.importPath = String(entry.importPath || entry.path || "");
+    }
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", "false");
+
+    const thumb = document.createElement(entry.kind === "file" ? "img" : "div");
+    thumb.className = "file-browser-thumb";
+    if (entry.kind === "file") {
+      thumb.alt = "";
+      thumb.src = THUMB_PLACEHOLDER_SRC;
+      thumb.dataset.path = entry.path;
+      if (observer) observer.observe(thumb);
+      else {
+        ensureImageUrl(entry.path, fb.thumbCache)
+          .then((url) => {
+            if (url) thumb.src = url;
+          })
+          .catch(() => {});
+      }
+    }
+
+    const name = document.createElement("div");
+    name.className = "file-browser-name";
+    name.textContent = entry.name;
+    if (entry.kind === "file" && entry.importPath && entry.importPath !== entry.path) {
+      name.title = `${entry.path}\nimports: ${entry.importPath}`;
+    } else {
+      name.title = entry.path;
+    }
+
+    row.appendChild(thumb);
+    row.appendChild(name);
+    frag.appendChild(row);
+  }
+  els.fileBrowserList.innerHTML = "";
+  els.fileBrowserList.appendChild(frag);
+  fileBrowserSetSelectedPath(fb.selectedPath);
+}
+
+async function fileBrowserResolveEntryKind(entry, path) {
+  const target = String(path || "").trim();
+  if (!target) return "other";
+  if (/[\\/]$/.test(target)) return "dir";
+  if (entry && typeof entry === "object" && Object.prototype.hasOwnProperty.call(entry, "children")) {
+    if (Array.isArray(entry.children)) return "dir";
+    if (entry.children === null) return "file";
+  }
+  try {
+    await readDir(target, { recursive: false });
+    return "dir";
+  } catch {
+    return "file";
+  }
+}
+
+async function normalizeFileBrowserEntries(rawEntries, { importPathMap = null } = {}) {
+  const dirs = [];
+  const files = [];
+  const entries = await Promise.all(
+    (Array.isArray(rawEntries) ? rawEntries : []).map(async (entry) => {
+      const path = entry?.path ? String(entry.path).trim() : "";
+      if (!path) return null;
+      const name = String(entry?.name || basename(path) || path).trim();
+      if (!name || name.startsWith(".")) return null;
+      if (fileBrowserIsSuppressedArtifactName(name)) return null;
+      const resolvedKind = await fileBrowserResolveEntryKind(entry, path);
+      if (resolvedKind === "dir") return { name, path, kind: "dir" };
+      const ext = extname(path).toLowerCase();
+      if (!FILE_BROWSER_IMAGE_EXTS.has(ext)) return null;
+      let mappedImportPath = "";
+      if (importPathMap instanceof Map) {
+        mappedImportPath = normalizeLocalFsPath(importPathMap.get(path) || "");
+        if (!mappedImportPath) {
+          mappedImportPath = normalizeLocalFsPath(importPathMap.get(`name:${basename(path)}`) || "");
+        }
+        if (!mappedImportPath) {
+          const stem = basename(path).replace(/\.[^.]+$/, "");
+          mappedImportPath = normalizeLocalFsPath(importPathMap.get(`stem:${stem}`) || "");
+        }
+        if (!mappedImportPath) {
+          const relaxed = basename(path).replace(/\.[^.]+$/, "").replace(/_wire_subject(?:-\d+)?$/i, "");
+          if (relaxed) mappedImportPath = normalizeLocalFsPath(importPathMap.get(`stem:${relaxed}`) || "");
+        }
+      }
+      const importPath = mappedImportPath && isBrowserImagePath(mappedImportPath) ? mappedImportPath : path;
+      return { name, path, importPath, kind: "file", ext };
+    })
+  );
+  for (const entry of entries) {
+    if (!entry) continue;
+    if (entry.kind === "dir") dirs.push(entry);
+    else if (entry.kind === "file") files.push(entry);
+  }
+  dirs.sort((a, b) => a.name.localeCompare(b.name));
+  files.sort((a, b) => a.name.localeCompare(b.name));
+  return [...dirs, ...files];
+}
+
+async function fileBrowserLoadDir(dir, { pushHistory = true } = {}) {
+  const fb = state.fileBrowser;
+  if (!fb?.enabled) return;
+  const target = String(dir || "").trim();
+  if (!target) return;
+  const seq = (Number(fb.loadSeq) || 0) + 1;
+  fb.loadSeq = seq;
+  fb.loading = true;
+  fb.error = null;
+  if (pushHistory && fb.cwd && fb.cwd !== target) {
+    fb.history.push(fb.cwd);
+    if (fb.history.length > 80) fb.history.shift();
+  }
+  fb.cwd = target;
+  renderFileBrowserDock();
+  let entries = [];
+  try {
+    entries = await readDir(target, { recursive: false });
+  } catch (err) {
+    if (fb.loadSeq !== seq) return;
+    fb.loading = false;
+    fb.error = err?.message ? `File browser: ${err.message}` : "File browser: cannot read folder";
+    fb.entries = [];
+    fb.importPathMap = new Map();
+    renderFileBrowserDock();
+    return;
+  }
+  if (fb.loadSeq !== seq) return;
+  let importPathMap = null;
+  try {
+    importPathMap = await fileBrowserLoadImportPathMap(target);
+  } catch {
+    importPathMap = null;
+  }
+  const normalized = await normalizeFileBrowserEntries(entries, { importPathMap });
+  if (fb.loadSeq !== seq) return;
+  fb.importPathMap = importPathMap instanceof Map ? importPathMap : new Map();
+  const keepThumbs = new Set(normalized.filter((it) => it.kind === "file").map((it) => it.path));
+  clearFileBrowserThumbCache({ keepPaths: keepThumbs });
+  fb.entries = normalized;
+  fb.loading = false;
+  fb.error = null;
+  if (fb.selectedPath && !fb.entries.some((it) => it.path === fb.selectedPath)) {
+    fb.selectedPath = null;
+  }
+  renderFileBrowserDock();
+}
+
+async function fileBrowserPickFolder() {
+  const fb = state.fileBrowser;
+  if (!fb?.enabled) return;
+  bumpInteraction();
+  const picked = await open({ directory: true, multiple: false });
+  const dir = Array.isArray(picked) ? picked[0] : picked;
+  if (!dir) return;
+  const root = String(dir).trim();
+  fb.rootDir = root || null;
+  localStorage.setItem(FILE_BROWSER_ROOT_DIR_LS_KEY, root);
+  await fileBrowserLoadDir(root, { pushHistory: false });
+}
+
+async function fileBrowserRefresh() {
+  const fb = state.fileBrowser;
+  if (!fb?.enabled || !fb.cwd) return;
+  await fileBrowserLoadDir(fb.cwd, { pushHistory: false });
+}
+
+async function fileBrowserNavigateTo(path) {
+  const fb = state.fileBrowser;
+  if (!fb?.enabled) return;
+  const target = String(path || "").trim();
+  if (!target) return;
+  await fileBrowserLoadDir(target);
+}
+
+async function fileBrowserNavigateUp() {
+  const fb = state.fileBrowser;
+  if (!fb?.enabled || !fb.cwd) return;
+  const parent = parentDirPath(fb.cwd);
+  if (!parent) return;
+  await fileBrowserNavigateTo(parent);
+}
+
+async function fileBrowserImportPath(path, { focus = false } = {}) {
+  const src = String(path || "").trim();
+  if (!src || !isBrowserImagePath(src)) return;
+  const center = canvasScreenCssToWorldCss(_defaultImportPointCss());
+  await importLocalPathsAtCanvasPoint([src], center, {
+    source: "browser",
+    focusImported: focus,
+    idPrefix: "dock",
+  });
+}
+
+function fileBrowserCancelPendingClickImport() {
+  const fb = state.fileBrowser;
+  if (!fb) return;
+  clearTimeout(fb.clickImportTimer);
+  fb.clickImportTimer = null;
+}
+
+function fileBrowserScheduleClickImport(path) {
+  const fb = state.fileBrowser;
+  if (!fb?.enabled) return;
+  fileBrowserCancelPendingClickImport();
+  const target = String(path || "").trim();
+  if (!target) return;
+  fb.clickImportTimer = setTimeout(() => {
+    fb.clickImportTimer = null;
+    fileBrowserImportPath(target, { focus: false }).catch((err) => console.error(err));
+  }, 210);
+}
+
+function fileBrowserSetDragPath(path) {
+  const fb = state.fileBrowser;
+  if (!fb) return;
+  clearTimeout(fb.dragClearTimer);
+  fb.dragClearTimer = null;
+  fb.draggingPath = path ? String(path) : null;
+}
+
+function fileBrowserImportPathForEntry(entry) {
+  const mapped = normalizeLocalFsPath(String(entry?.importPath || ""));
+  if (mapped && isBrowserImagePath(mapped)) return mapped;
+  const plain = normalizeLocalFsPath(String(entry?.path || ""));
+  if (plain && isBrowserImagePath(plain)) return plain;
+  return "";
+}
+
+function fileBrowserImportPathForRow(row) {
+  if (!row) return "";
+  return fileBrowserImportPathForEntry({
+    path: String(row.dataset?.path || ""),
+    importPath: String(row.dataset?.importPath || ""),
+  });
+}
+
+function fileBrowserPathMapKey(path) {
+  const target = normalizeLocalFsPath(path);
+  if (!target) return "";
+  return target.replace(/\\/g, "/").normalize("NFC");
+}
+
+function fileBrowserResolveMappedPath(path, map = null) {
+  const target = normalizeLocalFsPath(path);
+  if (!target || !isBrowserImagePath(target)) return "";
+  const candidateMap =
+    map instanceof Map
+      ? map
+      : state.fileBrowser?.importPathMap instanceof Map
+        ? state.fileBrowser.importPathMap
+        : null;
+  if (!(candidateMap instanceof Map) || candidateMap.size <= 0) return target;
+  const targetKey = fileBrowserPathMapKey(target);
+  const name = basename(target);
+  const stem = name.replace(/\.[^.]+$/, "");
+  const relaxed = stem.replace(/_wire_subject(?:-\d+)?$/i, "");
+  const candidates = [target, targetKey, `name:${name}`, `name:${name.toLowerCase()}`, `stem:${stem}`, `stem:${stem.toLowerCase()}`];
+  if (relaxed && relaxed !== stem) candidates.push(`stem:${relaxed}`);
+  if (relaxed && relaxed !== stem) candidates.push(`stem:${relaxed.toLowerCase()}`);
+  for (const key of candidates) {
+    const mapped = normalizeLocalFsPath(candidateMap.get(key) || "");
+    if (mapped && isBrowserImagePath(mapped)) return mapped;
+  }
+  return target;
+}
+
+async function fileBrowserDeriveOriginalForWirePath(path) {
+  const target = normalizeLocalFsPath(path);
+  if (!target || !/_wire_subject(?:-\d+)?\.[^.]+$/i.test(target)) return "";
+  const outDir = parentDirPath(target);
+  const rootDir = outDir ? parentDirPath(outDir) : null;
+  if (!rootDir) return "";
+  const stem = basename(target).replace(/\.[^.]+$/, "").replace(/_wire_subject(?:-\d+)?$/i, "");
+  if (!stem) return "";
+  const imageExts = [".png", ".jpg", ".jpeg", ".webp", ".heic", ".bmp", ".tif", ".tiff"];
+  const imagesDir = await join(rootDir, "images").catch(() => "");
+  if (!imagesDir) return "";
+  for (const ext of imageExts) {
+    const candidate = await join(imagesDir, `${stem}${ext}`).catch(() => "");
+    if (!candidate) continue;
+    const ok = await exists(candidate).catch(() => false);
+    if (ok) return normalizeLocalFsPath(candidate);
+  }
+  return "";
+}
+
+async function fileBrowserResolveImportPaths(paths) {
+  const list = (Array.isArray(paths) ? paths : [paths]).map((p) => normalizeLocalFsPath(p)).filter(Boolean);
+  if (!list.length) return [];
+  const fb = state.fileBrowser;
+  let activeMap = fb?.importPathMap instanceof Map ? fb.importPathMap : null;
+  const out = [];
+  let triedLazyLoad = false;
+  for (const raw of list) {
+    let resolved = fileBrowserResolveMappedPath(raw, activeMap);
+    if (resolved === raw && /_wire_subject(?:-\d+)?\.[^.]+$/i.test(raw) && !triedLazyLoad) {
+      triedLazyLoad = true;
+      try {
+        const cwd = String(fb?.cwd || "").trim();
+        if (cwd) {
+          activeMap = await fileBrowserLoadImportPathMap(cwd);
+          if (fb) fb.importPathMap = activeMap instanceof Map ? activeMap : new Map();
+        }
+      } catch {
+        // ignore
+      }
+      resolved = fileBrowserResolveMappedPath(raw, activeMap);
+    }
+    if (resolved === raw && /_wire_subject(?:-\d+)?\.[^.]+$/i.test(raw)) {
+      try {
+        const derived = await fileBrowserDeriveOriginalForWirePath(raw);
+        if (derived && isBrowserImagePath(derived)) resolved = derived;
+      } catch {
+        // ignore
+      }
+    }
+    out.push(resolved || raw);
+  }
+  return out;
+}
+
+function fileBrowserClearDragPathDeferred(delayMs = 320) {
+  const fb = state.fileBrowser;
+  if (!fb) return;
+  clearTimeout(fb.dragClearTimer);
+  const delay = Math.max(0, Number(delayMs) || 0);
+  fb.dragClearTimer = setTimeout(() => {
+    fb.dragClearTimer = null;
+    fb.draggingPath = null;
+  }, delay);
+}
+
+function fileBrowserReadInternalDragPath(dataTransfer) {
+  const fallback = normalizeLocalFsPath(state.fileBrowser?.draggingPath || "");
+  if (!dataTransfer) return fallback;
+  if (typeof dataTransfer.getData === "function") {
+    const custom = normalizeLocalFsPath(dataTransfer.getData(FILE_BROWSER_DRAG_MIME) || "");
+    if (custom) return custom;
+    const plain = normalizeLocalFsPath(dataTransfer.getData("text/plain") || "");
+    if (plain && isBrowserImagePath(plain)) return plain;
+  }
+  if (fallback) return fallback;
+  return "";
+}
+
+async function initializeFileBrowserDock() {
+  const fb = state.fileBrowser;
+  if (!fb?.enabled) return;
+  if (!els.fileBrowserDock) return;
+  if (els.fileBrowserChoose) {
+    els.fileBrowserChoose.addEventListener("click", () => {
+      fileBrowserPickFolder().catch((err) => console.error(err));
+    });
+  }
+  if (els.fileBrowserUp) {
+    els.fileBrowserUp.addEventListener("click", () => {
+      fileBrowserNavigateUp().catch((err) => console.error(err));
+    });
+  }
+  if (els.fileBrowserRefresh) {
+    els.fileBrowserRefresh.addEventListener("click", () => {
+      fileBrowserRefresh().catch((err) => console.error(err));
+    });
+  }
+  if (els.fileBrowserList) {
+    els.fileBrowserList.tabIndex = 0;
+
+    const endManualPointerDrag = ({ clearPath = true, keepGhost = false } = {}) => {
+      const drag = fb.manualDrag;
+      if (!drag) return null;
+      const ghostEl = drag.ghostEl || null;
+      if (ghostEl && !keepGhost) {
+        fileBrowserDestroyDragGhost(drag.ghostEl);
+      }
+      drag.ghostEl = null;
+      drag.active = false;
+      drag.pointerId = null;
+      drag.path = null;
+      drag.previewPath = null;
+      drag.moved = false;
+      els.canvasWrap?.classList?.remove("is-browser-drag-over");
+      if (clearPath) fileBrowserClearDragPathDeferred(80);
+      return keepGhost ? ghostEl : null;
+    };
+
+    const onManualPointerMove = (event) => {
+      const drag = fb.manualDrag;
+      if (!drag?.active) return;
+      if (drag.pointerId !== null && Number(event?.pointerId) !== Number(drag.pointerId)) return;
+      const cx = Number(event?.clientX) || 0;
+      const cy = Number(event?.clientY) || 0;
+      const dx = cx - (Number(drag.startX) || 0);
+      const dy = cy - (Number(drag.startY) || 0);
+      const ghostPath = String(drag.previewPath || drag.path || "").trim();
+      if (!drag.moved && Math.hypot(dx, dy) > 2) {
+        drag.moved = true;
+        if (!drag.ghostEl && ghostPath) {
+          drag.ghostEl = fileBrowserCreateDragGhost(ghostPath);
+        }
+      }
+      if (!drag.moved) return;
+      if (!drag.ghostEl && ghostPath) {
+        drag.ghostEl = fileBrowserCreateDragGhost(ghostPath);
+      }
+      fileBrowserUpdateDragGhost(drag.ghostEl, cx, cy);
+      const overCanvas = Boolean(canvasWorldPointFromClient(cx, cy));
+      els.canvasWrap?.classList?.toggle("is-browser-drag-over", overCanvas);
+      event?.preventDefault?.();
+    };
+
+    const onManualPointerUp = (event) => {
+      const drag = fb.manualDrag;
+      if (!drag?.active) return;
+      if (drag.pointerId !== null && Number(event?.pointerId) !== Number(drag.pointerId)) return;
+      const cx = Number(event?.clientX) || 0;
+      const cy = Number(event?.clientY) || 0;
+      const path = normalizeLocalFsPath(drag.path || "");
+      const previewPath = normalizeLocalFsPath(drag.previewPath || path);
+      const didMove = Boolean(drag.moved);
+      const keepGhost = Boolean(didMove && path && isBrowserImagePath(path));
+      const ghostEl = endManualPointerDrag({ clearPath: false, keepGhost });
+      if (!didMove || !path || !isBrowserImagePath(path)) {
+        if (ghostEl) fileBrowserDestroyDragGhost(ghostEl);
+        fileBrowserClearDragPathDeferred(80);
+        return;
+      }
+      fb.suppressClickUntil = Date.now() + 380;
+      const world = canvasWorldPointFromClient(cx, cy);
+      if (!world) {
+        if (ghostEl) fileBrowserDestroyDragGhost(ghostEl);
+        fileBrowserClearDragPathDeferred(80);
+        return;
+      }
+      fileBrowserAnimateDropGhost(ghostEl, { clientX: cx, clientY: cy, path: previewPath || path });
+      importLocalPathsAtCanvasPoint([path], world, {
+        source: "browser_pointer_drag",
+        idPrefix: "dockdrag",
+        enforceIntentLimit: true,
+        focusImported: true,
+      })
+        .then((result) => {
+          if (!result?.ok) showToast("Could not import dropped image.", "error", 2600);
+        })
+        .catch((err) => {
+          console.error(err);
+          showToast("Could not import dropped image.", "error", 2600);
+        })
+        .finally(() => {
+          fileBrowserClearDragPathDeferred(80);
+        });
+    };
+
+    const onManualPointerCancel = (event) => {
+      const drag = fb.manualDrag;
+      if (!drag?.active) return;
+      if (drag.pointerId !== null && Number(event?.pointerId) !== Number(drag.pointerId)) return;
+      endManualPointerDrag({ clearPath: true });
+    };
+
+    window.addEventListener("pointermove", onManualPointerMove, { passive: false });
+    window.addEventListener("pointerup", onManualPointerUp, { passive: false });
+    window.addEventListener("pointercancel", onManualPointerCancel, { passive: true });
+
+    els.fileBrowserList.addEventListener("pointerdown", (event) => {
+      const row = event?.target?.closest ? event.target.closest(".file-browser-item") : null;
+      if (!row || !els.fileBrowserList.contains(row)) return;
+      const displayPath = normalizeLocalFsPath(String(row.dataset?.path || ""));
+      const importPath = fileBrowserImportPathForRow(row);
+      const kind = String(row.dataset?.kind || "").trim();
+      if (kind !== "file" || !displayPath || !importPath) return;
+      event.preventDefault();
+      fileBrowserSetDragPath(importPath);
+      fileBrowserSetSelectedPath(displayPath);
+      fb.manualDrag.active = true;
+      fb.manualDrag.pointerId = Number(event?.pointerId);
+      fb.manualDrag.path = importPath;
+      fb.manualDrag.previewPath = displayPath;
+      fb.manualDrag.startX = Number(event?.clientX) || 0;
+      fb.manualDrag.startY = Number(event?.clientY) || 0;
+      fb.manualDrag.moved = false;
+      if (fb.manualDrag.ghostEl) {
+        fileBrowserDestroyDragGhost(fb.manualDrag.ghostEl);
+        fb.manualDrag.ghostEl = null;
+      }
+    });
+    els.fileBrowserList.addEventListener("click", (event) => {
+      if (Date.now() < (Number(fb.suppressClickUntil) || 0)) return;
+      const row = event?.target?.closest ? event.target.closest(".file-browser-item") : null;
+      if (!row || !els.fileBrowserList.contains(row)) return;
+      const path = normalizeLocalFsPath(String(row.dataset?.path || ""));
+      const importPath = fileBrowserImportPathForRow(row);
+      const kind = String(row.dataset?.kind || "").trim();
+      if (!path) return;
+      fileBrowserSetSelectedPath(path);
+      if (kind === "dir") {
+        fileBrowserCancelPendingClickImport();
+        fileBrowserNavigateTo(path).catch((err) => console.error(err));
+        return;
+      }
+      if (!importPath) return;
+      fileBrowserScheduleClickImport(importPath);
+    });
+    els.fileBrowserList.addEventListener("dblclick", (event) => {
+      if (Date.now() < (Number(fb.suppressClickUntil) || 0)) return;
+      const row = event?.target?.closest ? event.target.closest(".file-browser-item") : null;
+      if (!row || !els.fileBrowserList.contains(row)) return;
+      const path = normalizeLocalFsPath(String(row.dataset?.path || ""));
+      const importPath = fileBrowserImportPathForRow(row);
+      const kind = String(row.dataset?.kind || "").trim();
+      if (!path) return;
+      fileBrowserCancelPendingClickImport();
+      fileBrowserSetSelectedPath(path);
+      if (kind === "dir") {
+        fileBrowserNavigateTo(path).catch((err) => console.error(err));
+        return;
+      }
+      if (!importPath) return;
+      fileBrowserImportPath(importPath, { focus: true }).catch((err) => console.error(err));
+    });
+    els.fileBrowserList.addEventListener("keydown", (event) => {
+      const key = String(event?.key || "");
+      const entries = fileBrowserEntriesForUi();
+      if (!entries.length) return;
+      const current = state.fileBrowser?.selectedPath || "";
+      let idx = entries.findIndex((item) => item.path === current);
+      if (key === "ArrowDown") {
+        event.preventDefault();
+        idx = clamp(idx + 1, 0, entries.length - 1);
+        fileBrowserSetSelectedPath(entries[idx]?.path || null);
+      } else if (key === "ArrowUp") {
+        event.preventDefault();
+        idx = clamp(idx < 0 ? 0 : idx - 1, 0, entries.length - 1);
+        fileBrowserSetSelectedPath(entries[idx]?.path || null);
+      } else if (key === "Enter") {
+        event.preventDefault();
+        if (idx < 0) idx = 0;
+        const entry = entries[idx] || null;
+        if (!entry?.path) return;
+        fileBrowserCancelPendingClickImport();
+        if (entry.kind === "dir") fileBrowserNavigateTo(entry.path).catch((err) => console.error(err));
+        else {
+          const importPath = fileBrowserImportPathForEntry(entry);
+          if (!importPath) return;
+          fileBrowserImportPath(importPath, { focus: true }).catch((err) => console.error(err));
+        }
+      }
+    });
+  }
+
+  if (fb.rootDir) {
+    await fileBrowserLoadDir(fb.rootDir, { pushHistory: false });
+  } else {
+    renderFileBrowserDock();
+  }
+}
+
 function providerFromModel(model) {
   const name = String(model || "").toLowerCase();
   if (!name) return null;
@@ -3994,6 +5493,15 @@ function googleBrandRectColorForKey(key = "", alpha = 0.44) {
   const palette = GOOGLE_BRAND_RECT_PALETTE_RGB;
   if (!Array.isArray(palette) || !palette.length) return `rgba(66, 133, 244, ${alpha})`;
   const idx = Math.abs(Number(hash32(String(key || ""))) || 0) % palette.length;
+  return googleBrandRectColorForIndex(idx, alpha);
+}
+
+function googleBrandRectColorForIndex(index = 0, alpha = 0.44) {
+  const palette = GOOGLE_BRAND_RECT_PALETTE_RGB;
+  if (!Array.isArray(palette) || !palette.length) return `rgba(66, 133, 244, ${alpha})`;
+  const len = Math.max(1, palette.length);
+  const rawIndex = Math.floor(Number(index) || 0);
+  const idx = ((rawIndex % len) + len) % len;
   const rgb = Array.isArray(palette[idx]) ? palette[idx] : palette[0];
   const a = Math.max(0, Math.min(1, Number(alpha) || 0));
   return `rgba(${Number(rgb[0]) || 66}, ${Number(rgb[1]) || 133}, ${Number(rgb[2]) || 244}, ${a})`;
@@ -4770,11 +6278,7 @@ function setStatus(message, isError = false) {
 }
 
 function renderSessionApiCallsReadout() {
-  if (!els.engineStatus) return;
-  const n = Math.max(0, Number(state.sessionApiCalls) || 0);
-  els.engineStatus.textContent = `API calls: ${n}`;
-  els.engineStatus.title = state.lastStatusText ? String(state.lastStatusText) : `API calls: ${n}`;
-  els.engineStatus.classList.toggle("error", Boolean(state.lastStatusError));
+  renderTopMetricsGrid();
 }
 
 function bumpSessionApiCalls({ n = 1 } = {}) {
@@ -4785,6 +6289,7 @@ function bumpSessionApiCalls({ n = 1 } = {}) {
 }
 
 let toastTimer = null;
+let topMetricsTickTimer = null;
 function showToast(message, kind = "info", timeoutMs = 2400) {
   if (shouldSuppressToastInReelMode(message, kind)) return;
   if (!els.toast) return;
@@ -4806,6 +6311,8 @@ let motherTypeoutTarget = "";
 let motherTypeoutIndex = 0;
 let motherGlitchTimer = null;
 let motherReadoutFadeTimer = null;
+let motherPhaseCardExitTimer = null;
+let motherPhaseCardExitInFlight = false;
 let wheelForcePanHeld = false;
 const REEL_PRESET_MARGIN_PX = 24;
 let reelPresetWindowResizeAttached = false;
@@ -5080,6 +6587,34 @@ function motherV2ImageLabelById(imageId) {
   return String(item.id || "").trim();
 }
 
+function motherV2PaletteKeyByImageId(imageId) {
+  const id = String(imageId || "").trim();
+  if (!id) return "";
+  const item = state.imagesById.get(id) || null;
+  if (!item) return id;
+  const path = String(item.path || "").trim();
+  if (path) return `${id}|${path}`;
+  const label = String(item.label || "").trim();
+  if (label) return `${id}|${label}`;
+  return id;
+}
+
+function motherV2PaletteIndexByImageId(imageId) {
+  const id = String(imageId || "").trim();
+  if (!id) return 0;
+  const paletteLen = Math.max(1, Number(GOOGLE_BRAND_RECT_PALETTE_RGB?.length) || 0);
+  const item = state.imagesById.get(id) || null;
+  const assigned = Number(item?.uiPaletteIndex);
+  if (Number.isFinite(assigned) && assigned >= 0) {
+    return Math.floor(assigned) % paletteLen;
+  }
+  const fallbackOrder = Array.isArray(state.images)
+    ? state.images.findIndex((entry) => String(entry?.id || "").trim() === id)
+    : -1;
+  if (fallbackOrder >= 0) return fallbackOrder % paletteLen;
+  return Math.abs(Number(hash32(id)) || 0) % paletteLen;
+}
+
 function motherV2SyncSelectOptions(selectEl, currentId = "") {
   if (!selectEl) return;
   const normalizedCurrent = String(currentId || "").trim();
@@ -5153,15 +6688,13 @@ function syncMotherIntentSourceIndicator() {
   if (!indicator) return;
   const sourceKind = String(state.motherIdle?.intent?._intent_source_kind || "").trim().toLowerCase();
   const normalized = sourceKind === "realtime" || sourceKind === "fallback" ? sourceKind : "";
-  indicator.classList.remove("is-realtime", "is-fallback");
+  indicator.classList.remove("hidden", "is-realtime", "is-fallback");
   if (!normalized) {
-    indicator.classList.add("hidden");
-    indicator.removeAttribute("title");
+    indicator.title = intentSourceDotTooltip("");
     return;
   }
   indicator.classList.add(`is-${normalized}`);
-  indicator.classList.remove("hidden");
-  indicator.title = `Intent source: ${normalized}`;
+  indicator.title = intentSourceDotTooltip(normalized);
 }
 
 function motherV2RolePreviewEntries() {
@@ -5202,11 +6735,14 @@ function motherV2RolePreviewEntries() {
       .toLowerCase();
     const roleKey = MOTHER_V2_ROLE_KEYS.includes(roleCandidate) ? roleCandidate : "";
     const roleLabel = roleKey ? String(MOTHER_V2_ROLE_LABEL[roleKey] || roleKey.toUpperCase()) : "";
-    const accent = googleBrandRectColorForKey(imageId, 0.94);
+    const paletteIndex = motherV2PaletteIndexByImageId(imageId);
+    const accentKey = `palette:${paletteIndex}:${motherV2PaletteKeyByImageId(imageId) || imageId}`;
+    const accent = googleBrandRectColorForIndex(paletteIndex, 0.94);
     entries.push({
       imageId,
       roleKey,
       roleLabel,
+      accentKey,
       accent,
       imageLabel: clampText(motherV2ImageLabelById(imageId), 28),
       rect: {
@@ -5237,7 +6773,9 @@ function motherV2RolePreviewSignature(
     if (!entry) continue;
     const rect = entry.rect || {};
     parts.push(
-      `${entry.imageId}:${entry.roleKey}:${Math.round(Number(rect.x) || 0)},${Math.round(Number(rect.y) || 0)},${Math.round(
+      `${entry.imageId}:${entry.roleKey}:${entry.accentKey || ""}:${Math.round(Number(rect.x) || 0)},${Math.round(
+        Number(rect.y) || 0
+      )},${Math.round(
         Number(rect.w) || 0
       )},${Math.round(Number(rect.h) || 0)}`
     );
@@ -6100,7 +7638,10 @@ function motherV2RolePreviewHtml(
     ].includes(animKindRaw)
       ? animKindRaw
       : "flow";
-    const accent = String(entry.accent || googleBrandRectColorForKey(entry.imageId || `${i}`, 0.94));
+    const accentKey = String(
+      entry.accentKey || motherV2PaletteKeyByImageId(entry.imageId) || entry.imageId || entry.imagePath || entry.imageLabel || ""
+    );
+    const accent = String(entry.accent || googleBrandRectColorForKey(accentKey, 0.94));
     rects.push(`
       <div
         class="mother-role-preview-rect${roleClass}"
@@ -6121,6 +7662,13 @@ function motherV2RolePreviewHtml(
 function renderMotherRolePreview() {
   const root = els.motherRolePreview;
   if (!root) return;
+  const phase = state.motherIdle?.phase || motherIdleInitialState();
+  if (phase === MOTHER_IDLE_STATES.DRAFTING || phase === MOTHER_IDLE_STATES.COOLDOWN) {
+    root.innerHTML = "";
+    root.dataset.previewSig = "";
+    root.classList.add("hidden");
+    return;
+  }
   const hasProposalImageSet = motherV2HasProposalImageSet();
   if (!hasProposalImageSet) {
     root.innerHTML = "";
@@ -6522,6 +8070,8 @@ function motherV2IntentSourceKind(source = "") {
 
 function motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml }) {
   const normalizedPhase = String(phase || "").trim();
+  const isDraftingPhase = normalizedPhase === MOTHER_IDLE_STATES.DRAFTING;
+  const isCooldownPhase = normalizedPhase === MOTHER_IDLE_STATES.COOLDOWN;
   const visibleImageCount = motherIdleBaseImageItems().length;
   if (visibleImageCount < MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL) return "";
   const cardVisiblePhases = new Set([
@@ -6560,10 +8110,10 @@ function motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml }) {
   const modeAccent = hasConfirmedIntentSource ? motherV2ProposalIconAccent(modeForDisplay) : "";
   const modeAria = hasConfirmedIntentSource ? `Proposal mode ${modeLabel}` : "";
   const proposalVisualHtml = motherV2ProposalIconsHtml(intent, { phase: normalizedPhase });
-  const visualHtml = proposalVisualHtml || readoutHtml;
+  const visualHtml = readoutHtml || proposalVisualHtml;
   const visualLine = visualHtml ? `<div class="mother-proposal-visual">${visualHtml}</div>` : "";
   const flowLine = `<div class="mother-proposal-flow">${visualLine}</div>`;
-  const modeLine = modeLabel
+  const modeLine = !isDraftingPhase && !isCooldownPhase && modeLabel
     ? `<div class="mother-proposal-mode" style="--proposal-mode-accent:${escapeHtml(modeAccent)}" aria-label="${escapeHtml(modeAria)}">${escapeHtml(modeLabel)}</div>`
     : "";
   return `
@@ -6574,24 +8124,47 @@ function motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml }) {
   `;
 }
 
+function motherV2PhaseCardKind(phase = null) {
+  const statePhase = phase || state.motherIdle?.phase || motherIdleInitialState();
+  if (statePhase === MOTHER_IDLE_STATES.COOLDOWN) return "cooldown";
+  if (statePhase !== MOTHER_IDLE_STATES.DRAFTING) return "";
+  return state.motherIdle?.pendingPromptCompile ? "braiding" : "drafting";
+}
+
 function renderMotherReadout() {
   renderMotherControls();
   syncMotherIntentSourceIndicator();
+  const phase = state.motherIdle?.phase || motherIdleInitialState();
+  const isPhaseCardState = phase === MOTHER_IDLE_STATES.DRAFTING || phase === MOTHER_IDLE_STATES.COOLDOWN;
+  if (els.motherPanel) {
+    els.motherPanel.classList.toggle(
+      "mother-drafting-view",
+      isPhaseCardState || motherPhaseCardExitInFlight
+    );
+  }
   renderMotherRolePreview();
   if (!els.tipsText) return;
+  if (isPhaseCardState && !motherPhaseCardExitInFlight) {
+    clearTimeout(motherPhaseCardExitTimer);
+    els.tipsText.classList.remove("mother-phase-card-exit");
+  }
   motherV2SyncLayeredPanel();
   const next = buildMotherText();
   const aov = state.alwaysOnVision;
   const isRealtime = String(aov?.lastMeta?.source || "") === "openai_realtime";
   const hasOutput = typeof aov?.lastText === "string" && aov.lastText.trim();
-  const phase = state.motherIdle?.phase || motherIdleInitialState();
   const proposalIconsHtml = motherV2ProposalIconsHtml(state.motherIdle?.intent || null, { phase });
   const draftStatusHtml = motherV2DraftStatusHtml({ phase });
   const statusText = motherV2StatusText();
-  const readoutHtml = proposalIconsHtml || draftStatusHtml;
+  const readoutHtml = phase === MOTHER_IDLE_STATES.DRAFTING || phase === MOTHER_IDLE_STATES.COOLDOWN
+    ? draftStatusHtml
+    : proposalIconsHtml || draftStatusHtml;
   const proposalCardHtml = motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml });
   const renderKey = proposalCardHtml || readoutHtml || next;
-  const changed = renderKey !== lastMotherRenderedText;
+  const nextPhaseCardKind = motherV2PhaseCardKind(phase);
+  const currentPhaseCardKind = String(els.tipsText.dataset.phaseCardKind || "").trim();
+  const phaseCardMissing = isPhaseCardState && !els.tipsText.querySelector(".mother-phase-icons.is-draft-card");
+  const changed = phaseCardMissing || renderKey !== lastMotherRenderedText;
   const shouldTypeout = Boolean(
     phase === MOTHER_IDLE_STATES.OBSERVING && aov?.enabled && isRealtime && hasOutput && !aov.pending
   );
@@ -6629,6 +8202,36 @@ function renderMotherReadout() {
     els.motherPanel.classList.toggle("mother-proposal-overlay", Boolean(proposalCardHtml));
   }
   els.tipsText.classList.remove("mother-cursor");
+  const showingPhaseCard = Boolean(els.tipsText.querySelector(".mother-phase-icons.is-draft-card"));
+  const isPhaseToPhaseSwap = Boolean(
+    isPhaseCardState && nextPhaseCardKind && currentPhaseCardKind && nextPhaseCardKind !== currentPhaseCardKind
+  );
+  const shouldFadeOutExistingPhaseCard = Boolean(
+    showingPhaseCard &&
+      !motherPhaseCardExitInFlight &&
+      (
+        !isPhaseCardState ||
+        isPhaseToPhaseSwap
+      )
+  );
+  if (shouldFadeOutExistingPhaseCard) {
+    clearTimeout(motherPhaseCardExitTimer);
+    motherPhaseCardExitInFlight = true;
+    els.tipsText.classList.add("mother-phase-card-exit");
+    motherPhaseCardExitTimer = setTimeout(() => {
+      if (!els.tipsText) return;
+      els.tipsText.classList.remove("mother-phase-card-exit");
+      delete els.tipsText.dataset.phaseCardKind;
+      if (!isPhaseToPhaseSwap) {
+        els.tipsText.innerHTML = "";
+      }
+      motherPhaseCardExitInFlight = false;
+      lastMotherRenderedText = null;
+      renderMotherReadout();
+    }, 170);
+    return;
+  }
+  if (motherPhaseCardExitInFlight) return;
 
   if (!changed) {
     return;
@@ -6644,14 +8247,25 @@ function renderMotherReadout() {
   stopMotherTypeout();
   if (proposalCardHtml) {
     els.tipsText.innerHTML = proposalCardHtml;
+    if (nextPhaseCardKind) {
+      els.tipsText.dataset.phaseCardKind = nextPhaseCardKind;
+    } else {
+      delete els.tipsText.dataset.phaseCardKind;
+    }
     motherV2TriggerReadoutFade();
     return;
   }
   if (readoutHtml) {
     els.tipsText.innerHTML = readoutHtml;
+    if (nextPhaseCardKind) {
+      els.tipsText.dataset.phaseCardKind = nextPhaseCardKind;
+    } else {
+      delete els.tipsText.dataset.phaseCardKind;
+    }
     motherV2TriggerReadoutFade();
     return;
   }
+  delete els.tipsText.dataset.phaseCardKind;
   els.tipsText.textContent = next;
   motherV2TriggerReadoutFade();
 }
@@ -7428,7 +9042,10 @@ function renderMinimap() {
     el.style.width = `${projected.w}px`;
     el.style.height = `${projected.h}px`;
     el.style.zIndex = String(10 + rec.z);
-    el.style.setProperty("--minimap-rect-fill", googleBrandRectColorForKey(rec.imageId, 0.4));
+    el.style.setProperty(
+      "--minimap-rect-fill",
+      googleBrandRectColorForIndex(motherV2PaletteIndexByImageId(rec.imageId), 0.4)
+    );
 
     if (busyIds.has(rec.imageId)) {
       const orb = document.createElement("div");
@@ -7815,6 +9432,8 @@ function motherV2DraftStatusIconSvg(kind = "drafting") {
   let inner = "";
   if (iconKind === "braiding") {
     inner = '<path d="M4.8 8c2.9 0 3.3 7.8 7.2 7.8s4.3-7.8 7.2-7.8"/><path d="M4.8 16c2.9 0 3.3-7.8 7.2-7.8s4.3 7.8 7.2 7.8"/><circle cx="4.8" cy="8" r="1.2"/><circle cx="4.8" cy="16" r="1.2"/><circle cx="19.2" cy="8" r="1.2"/><circle cx="19.2" cy="16" r="1.2"/>';
+  } else if (iconKind === "cooldown") {
+    inner = '<circle cx="12" cy="12" r="7.4"/><path d="M12 8.4v4.4l2.9 2"/><path d="M9.6 3.8h4.8"/><path d="M6.2 6.2 4.6 4.6"/><path d="M17.8 6.2 19.4 4.6"/>';
   } else {
     inner = '<path d="M4.6 5.2h10.2M4.6 9.5h8.4M4.6 13.8h6.8"/><path d="M14.2 14.4 19 9.6l2.4 2.4-4.8 4.8-3 1z"/><path d="M18 8.2l2.8 2.8"/>';
   }
@@ -7823,7 +9442,14 @@ function motherV2DraftStatusIconSvg(kind = "drafting") {
 
 function motherV2DraftStatusHtml({ phase = null } = {}) {
   const statePhase = phase || state.motherIdle?.phase || motherIdleInitialState();
-  if (statePhase !== MOTHER_IDLE_STATES.DRAFTING) return "";
+  if (statePhase !== MOTHER_IDLE_STATES.DRAFTING && statePhase !== MOTHER_IDLE_STATES.COOLDOWN) return "";
+  if (statePhase === MOTHER_IDLE_STATES.COOLDOWN) {
+    const accent = "rgba(143, 222, 255, 0.95)";
+    const tooltip = "Mother is cooling down before the next intent cycle.";
+    const label = "COOLDOWN";
+    const icon = motherV2DraftStatusIconSvg("cooldown");
+    return `<div class="mother-phase-icons is-draft-card" aria-label="${escapeHtml(tooltip)}"><span class="mother-phase-icon is-cooldown is-draft-card" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}" style="--phase-accent:${escapeHtml(accent)}">${icon}</span><span class="mother-phase-label is-draft-card" style="--phase-accent:${escapeHtml(accent)}">${escapeHtml(label)}</span></div>`;
+  }
   const idle = state.motherIdle || null;
   const isBraiding = Boolean(idle?.pendingPromptCompile);
   const iconKind = isBraiding ? "braiding" : "drafting";
@@ -7831,8 +9457,9 @@ function motherV2DraftStatusHtml({ phase = null } = {}) {
   const tooltip = isBraiding
     ? "Mother is braiding intent into form."
     : "Mother is drafting now. No canvas mutation until deploy.";
+  const label = isBraiding ? "BRAIDING" : "DRAFTING";
   const icon = motherV2DraftStatusIconSvg(iconKind);
-  return `<div class="mother-phase-icons" aria-label="${escapeHtml(tooltip)}"><span class="mother-phase-icon is-${escapeHtml(iconKind)}" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}" style="--phase-accent:${escapeHtml(accent)}">${icon}</span></div>`;
+  return `<div class="mother-phase-icons is-draft-card" aria-label="${escapeHtml(tooltip)}"><span class="mother-phase-icon is-${escapeHtml(iconKind)} is-draft-card" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}" style="--phase-accent:${escapeHtml(accent)}">${icon}</span><span class="mother-phase-label is-draft-card" style="--phase-accent:${escapeHtml(accent)}">${escapeHtml(label)}</span></div>`;
 }
 
 function motherV2CycleProposal(step = 1) {
@@ -13887,6 +15514,7 @@ function resetActionQueue() {
   state.actionQueue = [];
   state.actionQueueActive = null;
   state.actionQueueRunning = false;
+  renderSessionApiCallsReadout();
 }
 
 function _actionQueueMakeId() {
@@ -13939,6 +15567,7 @@ function enqueueAction({ label, key = null, priority = ACTION_QUEUE_PRIORITY.use
 
   showToast(`Queued: ${label}`, "tip", 1400);
   renderQuickActions();
+  renderSessionApiCallsReadout();
   processActionQueue().catch(() => {});
   return true;
 }
@@ -13969,6 +15598,7 @@ async function processActionQueue() {
     if (state.actionQueueActive && !isEngineBusy()) {
       state.actionQueueActive = null;
       renderQuickActions();
+      renderSessionApiCallsReadout();
     }
 
     while (!state.actionQueueActive && !isEngineBusy() && state.actionQueue.length) {
@@ -13995,6 +15625,7 @@ async function processActionQueue() {
         source: item.source || "user",
       };
       renderQuickActions();
+      renderSessionApiCallsReadout();
 
       try {
         await Promise.resolve(item.run());
@@ -14011,9 +15642,11 @@ async function processActionQueue() {
       // Completed immediately (local action or no-op); continue draining.
       state.actionQueueActive = null;
       renderQuickActions();
+      renderSessionApiCallsReadout();
     }
   } finally {
     state.actionQueueRunning = false;
+    renderSessionApiCallsReadout();
   }
 }
 
@@ -14955,6 +16588,10 @@ async function setActiveImage(id, { preserveSelection = false } = {}) {
     console.error(err);
   }
   renderHudReadout();
+  if (prevActive !== id) {
+    const nextDesc = item?.visionDesc ? clampText(item.visionDesc, 32) : "";
+    if (nextDesc) startHudDescTypeout(id, nextDesc);
+  }
   resetViewToFit();
   requestRender();
   if (state.timelineOpen) renderTimeline();
@@ -14963,6 +16600,17 @@ async function setActiveImage(id, { preserveSelection = false } = {}) {
 function addImage(item, { select = false } = {}) {
   if (!item || !item.id || !item.path) return;
   if (state.imagesById.has(item.id)) return;
+  const assignedPaletteIndex = Number(item.uiPaletteIndex);
+  if (!Number.isFinite(assignedPaletteIndex) || assignedPaletteIndex < 0) {
+    const nextPaletteIndex = Math.max(0, Math.floor(Number(state.imagePaletteSeed) || 0));
+    item.uiPaletteIndex = nextPaletteIndex;
+    state.imagePaletteSeed = nextPaletteIndex + 1;
+  } else {
+    state.imagePaletteSeed = Math.max(
+      Math.floor(Number(state.imagePaletteSeed) || 0),
+      Math.floor(assignedPaletteIndex) + 1
+    );
+  }
   state.imagesById.set(item.id, item);
   state.images.push(item);
   if (!state.freeformZOrder.includes(item.id)) {
@@ -15064,6 +16712,7 @@ async function removeImageFromCanvas(imageId) {
 
   if (state.images.length === 0) {
     clearImageCache();
+    state.imagePaletteSeed = 0;
     state.activeId = null;
     state.selectedIds = [];
     state.canvasMode = "multi";
@@ -15511,30 +17160,44 @@ function _computeImportPlacementsCss(n, center, tile, gap, canvasCssW, canvasCss
   return out;
 }
 
-async function importPhotosAtCanvasPoint(pointCss) {
-  bumpInteraction();
-  setStatus("Engine: pick photos…");
-
-  const picked = await open({
-    multiple: true,
-    filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "heic"] }],
-  });
-  const pickedPaths = Array.isArray(picked) ? picked : picked ? [picked] : [];
-  if (pickedPaths.length === 0) {
+async function importLocalPathsAtCanvasPoint(
+  paths,
+  pointCss,
+  { source = "picker", idPrefix = "input", enforceIntentLimit = true, focusImported = false } = {}
+) {
+  let list = (Array.isArray(paths) ? paths : [paths])
+    .map((v) => normalizeLocalFsPath(typeof v === "string" ? v : ""))
+    .filter(Boolean);
+  if (String(source || "").startsWith("browser")) {
+    try {
+      list = await fileBrowserResolveImportPaths(list);
+    } catch {
+      // keep original list on resolver errors
+    }
+  }
+  if (!list.length) {
     setStatus("Engine: ready");
-    return;
+    return { ok: 0, failed: 0, importedIds: [] };
   }
 
   const INTENT_MAX_PHOTOS = 5;
   const intentActive = intentModeActive();
-  const remaining = intentActive ? Math.max(0, INTENT_MAX_PHOTOS - (state.images?.length || 0)) : Infinity;
-  const pickedLimited = Number.isFinite(remaining) ? pickedPaths.slice(0, remaining) : pickedPaths;
-  if (intentActive && pickedLimited.length < pickedPaths.length) {
-    showToast(`Intent Mode: only ${INTENT_MAX_PHOTOS} photos allowed.`, "tip", 2600);
+  let importable = list.filter((path) => isBrowserImagePath(path));
+  if (enforceIntentLimit && intentActive) {
+    const remaining = Math.max(0, INTENT_MAX_PHOTOS - (state.images?.length || 0));
+    if (remaining <= 0) {
+      showToast(`Intent Mode: only ${INTENT_MAX_PHOTOS} photos allowed.`, "tip", 2600);
+      setStatus("Engine: ready");
+      return { ok: 0, failed: 0, importedIds: [] };
+    }
+    if (importable.length > remaining) {
+      importable = importable.slice(0, remaining);
+      showToast(`Intent Mode: only ${INTENT_MAX_PHOTOS} photos allowed.`, "tip", 2600);
+    }
   }
-  if (pickedLimited.length === 0) {
+  if (!importable.length) {
     setStatus("Engine: ready");
-    return;
+    return { ok: 0, failed: 0, importedIds: [] };
   }
 
   await ensureRun();
@@ -15545,35 +17208,33 @@ async function importPhotosAtCanvasPoint(pointCss) {
   const wrap = els.canvasWrap;
   const canvasCssW = wrap?.clientWidth || 0;
   const canvasCssH = wrap?.clientHeight || 0;
-  const totalAfter = (state.images?.length || 0) + pickedLimited.length;
+  const totalAfter = (state.images?.length || 0) + importable.length;
   const tile = freeformDefaultTileCss(canvasCssW, canvasCssH, { count: totalAfter });
   const gap = Math.round(tile * 0.11);
-  const placements = _computeImportPlacementsCss(pickedLimited.length, pointCss, tile, gap, canvasCssW, canvasCssH);
+  const placements = _computeImportPlacementsCss(importable.length, pointCss, tile, gap, canvasCssW, canvasCssH);
 
   let ok = 0;
   let failed = 0;
   let lastErr = null;
+  const importedIds = [];
   const importedVisionPaths = [];
-  for (let idx = 0; idx < pickedLimited.length; idx += 1) {
-    const src = pickedLimited[idx];
-    if (typeof src !== "string" || !src) continue;
+  for (let idx = 0; idx < importable.length; idx += 1) {
+    const src = importable[idx];
     try {
       const ext = extname(src);
       const safeExt = ext && ext.length <= 8 ? ext : ".png";
-      const artifactId = `input-${stamp}-${String(idx).padStart(2, "0")}`;
+      const artifactId = `${idPrefix}-${stamp}-${String(idx).padStart(2, "0")}`;
       const dest = `${inputsDir}/${artifactId}${safeExt}`;
-
       const place = placements[idx] || null;
       if (place && artifactId) {
         state.freeformRects.set(artifactId, { ...place, autoAspect: true });
       }
-
       await copyFile(src, dest);
       const receiptPath = await writeLocalReceipt({
         artifactId,
         imagePath: dest,
         operation: "import",
-        meta: { source_path: src },
+        meta: { source_path: src, source },
       });
       addImage(
         {
@@ -15583,8 +17244,9 @@ async function importPhotosAtCanvasPoint(pointCss) {
           receiptPath,
           label: basename(src),
         },
-        { select: ok === 0 && !state.activeId }
+        { select: focusImported ? ok === 0 : ok === 0 && !state.activeId }
       );
+      importedIds.push(artifactId);
       importedVisionPaths.push(dest);
       ok += 1;
     } catch (err) {
@@ -15594,42 +17256,62 @@ async function importPhotosAtCanvasPoint(pointCss) {
     }
   }
 
-  if (ok > 0) {
-    motherV2ArmMultiUploadIdleBoost(ok);
-    scheduleVisionDescribeBurst(importedVisionPaths, {
-      priority: true,
-      maxConcurrent: UPLOAD_DESCRIBE_PRIORITY_BURST,
-    });
-    const suffix = failed ? ` (${failed} failed)` : "";
-    setStatus(`Engine: imported ${ok} photo${ok === 1 ? "" : "s"}${suffix}`, failed > 0);
-    if (state.images.length > 1 && state.canvasMode !== "multi") {
-      setCanvasMode("multi");
-      if (!intentActive) {
-        setTip("Multiple photos loaded. Click a photo to focus it. Press M to toggle multi view.");
-      }
-    }
-    if (intentActive && !state.intent.startedAt) {
-      state.intent.startedAt = Date.now();
-      state.intent.deadlineAt = state.intent.startedAt + INTENT_DEADLINE_MS;
-      state.intent.rtState = "connecting";
-      ensureIntentTicker();
-    }
-    if (intentActive) {
-      updateEmptyCanvasHint();
-      scheduleIntentInference({ immediate: true, reason: "import" });
-      scheduleIntentStateWrite({ immediate: true });
-    }
-    if (intentAmbientActive()) {
-      const touched = pickedLimited
-        .map((_, idx) => `input-${stamp}-${String(idx).padStart(2, "0")}`)
-        .filter((id) => state.imagesById.has(id));
-      scheduleAmbientIntentInference({ immediate: true, reason: "import", imageIds: touched });
-    }
-    requestRender();
-  } else {
+  if (ok <= 0) {
     const msg = lastErr?.message || String(lastErr || "unknown error");
     setStatus(`Engine: import failed (${msg})`, true);
+    return { ok, failed, importedIds };
   }
+
+  motherV2ArmMultiUploadIdleBoost(ok);
+  scheduleVisionDescribeBurst(importedVisionPaths, {
+    priority: true,
+    maxConcurrent: UPLOAD_DESCRIBE_PRIORITY_BURST,
+  });
+  const suffix = failed ? ` (${failed} failed)` : "";
+  setStatus(`Engine: imported ${ok} photo${ok === 1 ? "" : "s"}${suffix}`, failed > 0);
+
+  if (state.images.length > 1 && state.canvasMode !== "multi") {
+    setCanvasMode("multi");
+    if (!intentActive) {
+      setTip("Multiple photos loaded. Click a photo to focus it. Press M to toggle multi view.");
+    }
+  }
+  if (intentActive && !state.intent.startedAt) {
+    state.intent.startedAt = Date.now();
+    state.intent.deadlineAt = state.intent.startedAt + INTENT_DEADLINE_MS;
+    state.intent.rtState = "connecting";
+    ensureIntentTicker();
+  }
+  if (intentActive) {
+    updateEmptyCanvasHint();
+    scheduleIntentInference({ immediate: true, reason: "import" });
+    scheduleIntentStateWrite({ immediate: true });
+  }
+  if (intentAmbientActive()) {
+    const touched = importedIds.filter((id) => state.imagesById.has(id));
+    if (touched.length) scheduleAmbientIntentInference({ immediate: true, reason: "import", imageIds: touched });
+  }
+  requestRender();
+  return { ok, failed, importedIds };
+}
+
+async function importPhotosAtCanvasPoint(pointCss) {
+  bumpInteraction();
+  setStatus("Engine: pick photos…");
+  const picked = await open({
+    multiple: true,
+    filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "heic"] }],
+  });
+  const pickedPaths = Array.isArray(picked) ? picked : picked ? [picked] : [];
+  if (!pickedPaths.length) {
+    setStatus("Engine: ready");
+    return;
+  }
+  await importLocalPathsAtCanvasPoint(pickedPaths, pointCss, {
+    source: "picker",
+    idPrefix: "input",
+    enforceIntentLimit: true,
+  });
 }
 
 async function importPhotos() {
@@ -16784,12 +18466,15 @@ async function createRun() {
   state.eventsDecoder = new TextDecoder("utf-8");
   state.fallbackToFullRead = false;
   fallbackLineOffset = 0;
+  state.sessionApiCalls = 0;
+  resetTopMetrics();
   resetDescribeQueue();
   // Run-local interaction history for canvas context envelopes.
   state.userEvents = [];
   state.userEventSeq = 0;
   state.images = [];
   state.imagesById.clear();
+  state.imagePaletteSeed = 0;
   state.activeId = null;
   state.selectedIds = [];
   state.timelineNodes = [];
@@ -16897,12 +18582,15 @@ async function openExistingRun() {
   state.eventsDecoder = new TextDecoder("utf-8");
   state.fallbackToFullRead = false;
   fallbackLineOffset = 0;
+  state.sessionApiCalls = 0;
+  resetTopMetrics();
   resetDescribeQueue();
   // Run-local interaction history for canvas context envelopes.
   state.userEvents = [];
   state.userEventSeq = 0;
   state.images = [];
   state.imagesById.clear();
+  state.imagePaletteSeed = 0;
   state.activeId = null;
   state.timelineNodes = [];
   state.timelineNodesById.clear();
@@ -17231,16 +18919,20 @@ async function handleEvent(event) {
 
 async function handleEventLegacy(event) {
   if (!event || typeof event !== "object") return;
-  if (event.type === DESKTOP_EVENT_TYPES.PLAN_PREVIEW) {
+  const eventType = String(event.type || "");
+  if (eventType && eventType !== DESKTOP_EVENT_TYPES.ARTIFACT_CREATED) {
+    topMetricIngestTokensFromPayload(event, { atMs: Date.now(), render: false });
+  }
+  if (eventType === DESKTOP_EVENT_TYPES.PLAN_PREVIEW) {
     const cached = Boolean(event?.plan && event.plan.cached);
     if (!cached) bumpSessionApiCalls();
     return;
   }
-  if (event.type === DESKTOP_EVENT_TYPES.VERSION_CREATED) {
+  if (eventType === DESKTOP_EVENT_TYPES.VERSION_CREATED) {
     motherIdleTrackVersionCreated(event);
     return;
   }
-  if (event.type === DESKTOP_EVENT_TYPES.MOTHER_INTENT_INFERRED) {
+  if (eventType === DESKTOP_EVENT_TYPES.MOTHER_INTENT_INFERRED) {
     appendMotherTraceLog({
       kind: "intent_inferred_ignored",
       traceId: state.motherIdle?.telemetry?.traceId || null,
@@ -17250,7 +18942,7 @@ async function handleEventLegacy(event) {
     }).catch(() => {});
     return;
   }
-  if (event.type === DESKTOP_EVENT_TYPES.MOTHER_INTENT_INFER_FAILED) {
+  if (eventType === DESKTOP_EVENT_TYPES.MOTHER_INTENT_INFER_FAILED) {
     appendMotherTraceLog({
       kind: "intent_infer_failed_ignored",
       traceId: state.motherIdle?.telemetry?.traceId || null,
@@ -17260,7 +18952,7 @@ async function handleEventLegacy(event) {
     }).catch(() => {});
     return;
   }
-  if (event.type === DESKTOP_EVENT_TYPES.MOTHER_PROMPT_COMPILED) {
+  if (eventType === DESKTOP_EVENT_TYPES.MOTHER_PROMPT_COMPILED) {
     const idle = state.motherIdle;
     if (!idle) return;
     const actionVersion = Number(event.action_version) || 0;
@@ -17288,7 +18980,7 @@ async function handleEventLegacy(event) {
     });
     return;
   }
-  if (event.type === DESKTOP_EVENT_TYPES.MOTHER_PROMPT_COMPILE_FAILED) {
+  if (eventType === DESKTOP_EVENT_TYPES.MOTHER_PROMPT_COMPILE_FAILED) {
     const idle = state.motherIdle;
     if (!idle) return;
     if (!idle.pendingPromptCompile) return;
@@ -17312,10 +19004,21 @@ async function handleEventLegacy(event) {
     });
     return;
   }
-  if (event.type === DESKTOP_EVENT_TYPES.ARTIFACT_CREATED) {
+  if (eventType === DESKTOP_EVENT_TYPES.ARTIFACT_CREATED) {
     const id = event.artifact_id;
     const path = event.image_path;
     if (!id || !path) return;
+    const eventMetrics = event.metrics && typeof event.metrics === "object" ? event.metrics : null;
+    if (eventMetrics) {
+      topMetricIngestRenderDuration(eventMetrics.latency_per_image_s);
+    }
+    if (event.receipt_path) {
+      ingestTopMetricsFromReceiptPath(event.receipt_path, {
+        allowCostFallback: false,
+        allowLatencyFallback: !eventMetrics,
+      }).catch(() => {});
+    }
+    renderSessionApiCallsReadout();
     const idleForCancel = state.motherIdle;
     const noForegroundPendingForCancel =
       !state.pendingReplace &&
@@ -17671,7 +19374,7 @@ async function handleEventLegacy(event) {
     renderQuickActions();
     renderHudReadout();
     processActionQueue().catch(() => {});
-  } else if (event.type === DESKTOP_EVENT_TYPES.GENERATION_FAILED) {
+  } else if (eventType === DESKTOP_EVENT_TYPES.GENERATION_FAILED) {
     const idleDrafting = state.motherIdle?.phase === MOTHER_IDLE_STATES.DRAFTING;
     const idleDispatching = Boolean(state.motherIdle?.pendingDispatchToken);
     if (idleDrafting && idleDispatching) {
@@ -17843,7 +19546,7 @@ async function handleEventLegacy(event) {
     chooseSpawnNodes();
     requestRender();
     processActionQueue().catch(() => {});
-  } else if (event.type === DESKTOP_EVENT_TYPES.COST_LATENCY_UPDATE) {
+  } else if (eventType === DESKTOP_EVENT_TYPES.COST_LATENCY_UPDATE) {
     state.lastCostLatency = {
       provider: event.provider,
       model: event.model,
@@ -17852,8 +19555,10 @@ async function handleEventLegacy(event) {
       latency_per_image_s: event.latency_per_image_s,
       at: Date.now(),
     };
+    topMetricIngestCost(event.cost_total_usd);
     renderHudReadout();
-  } else if (event.type === DESKTOP_EVENT_TYPES.CANVAS_CONTEXT) {
+    renderSessionApiCallsReadout();
+  } else if (eventType === DESKTOP_EVENT_TYPES.CANVAS_CONTEXT) {
     const text = event.text;
     const isPartial = Boolean(event.partial);
     const aov = state.alwaysOnVision;
@@ -17903,7 +19608,7 @@ async function handleEventLegacy(event) {
         : null;
       renderQuickActions();
     }
-  } else if (event.type === DESKTOP_EVENT_TYPES.CANVAS_CONTEXT_FAILED) {
+  } else if (eventType === DESKTOP_EVENT_TYPES.CANVAS_CONTEXT_FAILED) {
     const aov = state.alwaysOnVision;
     if (aov) {
       aov.pending = false;
@@ -21129,19 +22834,21 @@ function installCanvasHandlers() {
   const handlePointerDown = (event) => {
 			    closeMotherWheelMenu({ immediate: false });
 		    hideDesignateMenu();
+        state.pointer.wheelOnTap = false;
 		    if (state.canvasMode === "multi") {
 		      const canvas = els.workCanvas;
 		      if (canvas && state.multiRects.size === 0) {
 		        state.multiRects = computeFreeformRectsPx(canvas.width, canvas.height);
 		      }
 
-			      const p = canvasPointFromEvent(event);
+	      const p = canvasPointFromEvent(event);
           if (isReelSizeLocked()) {
             reelTouchPulseFromCanvasPoint(p, { down: event.button === 0, lingerMs: REEL_TOUCH_TAP_VISIBLE_MS });
             requestRender();
           }
-			      const pCss = canvasCssPointFromEvent(event);
+	      const pCss = canvasCssPointFromEvent(event);
           const intentActive = intentModeActive();
+          const wheelModifier = Boolean(event.metaKey || event.ctrlKey);
           const motherRoleHit = motherV2InInteractivePhase() && motherV2IsAdvancedVisible() ? hitTestMotherRoleGlyph(p) : null;
 
           if (motherRoleHit && event.button === 0) {
@@ -21260,15 +22967,36 @@ function installCanvasHandlers() {
 			      }
 
             // Avoid accidental click-to-import when the user is trying to grab a tile edge/handle.
-            if (!hit && intentActive) {
-              const paddedHit = hitTestMultiWithPad(p, Math.round(10 * getDpr()));
-              if (paddedHit) hit = paddedHit;
+	            if (!hit && intentActive) {
+	              const paddedHit = hitTestMultiWithPad(p, Math.round(10 * getDpr()));
+	              if (paddedHit) hit = paddedHit;
+	            }
+
+            if (!intentActive && wheelModifier && event.button === 0) {
+              els.overlayCanvas.setPointerCapture(event.pointerId);
+              state.pointer.active = true;
+              state.pointer.imageId = null;
+              state.pointer.corner = null;
+              state.pointer.startX = p.x;
+              state.pointer.startY = p.y;
+              state.pointer.lastX = p.x;
+              state.pointer.lastY = p.y;
+              state.pointer.startCssX = pCss.x;
+              state.pointer.startCssY = pCss.y;
+              state.pointer.startOffsetX = state.multiView.offsetX;
+              state.pointer.startOffsetY = state.multiView.offsetY;
+              state.pointer.importPointCss = { x: pCss.x, y: pCss.y };
+              state.pointer.kind = POINTER_KINDS.FREEFORM_WHEEL;
+              state.pointer.wheelOnTap = true;
+              state.pointer.moved = false;
+              requestRender();
+              return;
             }
 
-				      if (hit) {
-	              const toggle = Boolean(event.metaKey || event.ctrlKey || (event.shiftKey && state.tool !== "annotate"));
+	      if (hit) {
+	              const toggle = Boolean(event.shiftKey && state.tool !== "annotate");
 	              selectCanvasImage(hit, { toggle }).catch(() => {});
-	              // Modifier-click is reserved for multi-select toggling; don't start a drag/tool action.
+	              // Shift-click is reserved for multi-select toggling; don't start a drag/tool action.
 	              if (toggle) return;
 	            }
 
@@ -21284,7 +23012,10 @@ function installCanvasHandlers() {
 	            state.pointer.lastY = p.y;
 	            state.pointer.startCssX = pCss.x;
 	            state.pointer.startCssY = pCss.y;
+	            state.pointer.startOffsetX = state.multiView.offsetX;
+	            state.pointer.startOffsetY = state.multiView.offsetY;
 	            state.pointer.importPointCss = { x: pCss.x, y: pCss.y };
+              state.pointer.wheelOnTap = false;
 	            state.pointer.moved = false;
 	            if (intentActive) {
 	              // Keep legacy import behavior in forced intent mode.
@@ -21293,8 +23024,8 @@ function installCanvasHandlers() {
 	                state.intent.rtState = "connecting";
 	              }
 	            } else {
-	              // Empty-space click in normal mode opens the Mother wheel on pointerup.
-	              state.pointer.kind = POINTER_KINDS.FREEFORM_WHEEL;
+	              // Empty-space click-drag pans the multi-canvas working set.
+	              state.pointer.kind = POINTER_KINDS.SINGLE_PAN;
 	            }
 	            requestRender();
 	            return;
@@ -21325,6 +23056,7 @@ function installCanvasHandlers() {
 		        state.pointer.startCssX = pCss.x;
 		        state.pointer.startCssY = pCss.y;
 		        state.pointer.startRectCss = rectCss ? { ...rectCss } : null;
+		        state.pointer.wheelOnTap = false;
 		        state.pointer.moved = false;
 		        requestRender();
 		        return;
@@ -21426,9 +23158,30 @@ function installCanvasHandlers() {
 		    if (!img) return;
         const p = canvasPointFromEvent(event);
         const pCss = canvasCssPointFromEvent(event);
+        const wheelModifier = Boolean(event.metaKey || event.ctrlKey);
         if (isReelSizeLocked()) {
           reelTouchPulseFromCanvasPoint(p, { down: event.button === 0, lingerMs: REEL_TOUCH_TAP_VISIBLE_MS });
           requestRender();
+        }
+        if (wheelModifier && event.button === 0) {
+          els.overlayCanvas.setPointerCapture(event.pointerId);
+          state.pointer.active = true;
+          state.pointer.kind = POINTER_KINDS.FREEFORM_WHEEL;
+          state.pointer.imageId = null;
+          state.pointer.corner = null;
+          state.pointer.startX = p.x;
+          state.pointer.startY = p.y;
+          state.pointer.lastX = p.x;
+          state.pointer.lastY = p.y;
+          state.pointer.startCssX = pCss.x;
+          state.pointer.startCssY = pCss.y;
+          state.pointer.startOffsetX = state.view.offsetX;
+          state.pointer.startOffsetY = state.view.offsetY;
+          state.pointer.importPointCss = { x: pCss.x, y: pCss.y };
+          state.pointer.wheelOnTap = true;
+          state.pointer.moved = false;
+          requestRender();
+          return;
         }
 		    if (state.tool === "designate") {
 		      const imgPt = canvasToImage(p);
@@ -21451,12 +23204,13 @@ function installCanvasHandlers() {
           }
         }
 
-		    els.overlayCanvas.setPointerCapture(event.pointerId);
-		    state.pointer.active = true;
-		    state.pointer.kind = state.tool === "pan" ? POINTER_KINDS.SINGLE_PAN : null;
-		    state.pointer.importPointCss = { x: pCss.x, y: pCss.y };
-		    state.pointer.startX = p.x;
-		    state.pointer.startY = p.y;
+	    els.overlayCanvas.setPointerCapture(event.pointerId);
+	    state.pointer.active = true;
+	    state.pointer.kind = state.tool === "pan" ? POINTER_KINDS.SINGLE_PAN : null;
+	    state.pointer.importPointCss = { x: pCss.x, y: pCss.y };
+	    state.pointer.wheelOnTap = false;
+	    state.pointer.startX = p.x;
+	    state.pointer.startY = p.y;
 		    state.pointer.startCssX = pCss.x;
 		    state.pointer.startCssY = pCss.y;
 		    state.pointer.lastX = p.x;
@@ -21740,23 +23494,23 @@ function installCanvasHandlers() {
 			      requestRender();
 			      return;
 			    }
-	    if (state.tool === "pan") {
-	      if (state.pointer.kind === POINTER_KINDS.SINGLE_PAN) {
-	        const dist = Math.hypot((Number(pCss.x) || 0) - state.pointer.startCssX, (Number(pCss.y) || 0) - state.pointer.startCssY);
-	        if (!state.pointer.moved && dist <= 6) return;
-	        state.pointer.moved = true;
-	      }
-	      if (state.canvasMode === "multi") {
-	        state.multiView.offsetX = state.pointer.startOffsetX + dx;
-	        state.multiView.offsetY = state.pointer.startOffsetY + dy;
-	      } else {
-	        state.view.offsetX = state.pointer.startOffsetX + dx;
-	        state.view.offsetY = state.pointer.startOffsetY + dy;
-	      }
-        scheduleVisualPromptWrite();
-	      requestRender();
-	      return;
-	    }
+    if (state.pointer.kind === POINTER_KINDS.SINGLE_PAN || state.tool === "pan") {
+      if (state.pointer.kind === POINTER_KINDS.SINGLE_PAN) {
+        const dist = Math.hypot((Number(pCss.x) || 0) - state.pointer.startCssX, (Number(pCss.y) || 0) - state.pointer.startCssY);
+        if (!state.pointer.moved && dist <= 6) return;
+        state.pointer.moved = true;
+      }
+      if (state.canvasMode === "multi") {
+        state.multiView.offsetX = state.pointer.startOffsetX + dx;
+        state.multiView.offsetY = state.pointer.startOffsetY + dy;
+      } else {
+        state.view.offsetX = state.pointer.startOffsetX + dx;
+        state.view.offsetY = state.pointer.startOffsetY + dy;
+      }
+      scheduleVisualPromptWrite();
+      requestRender();
+      return;
+    }
     if (state.tool === "lasso") {
       const imgPt = canvasToImage(p);
 		      const last = state.lassoDraft[state.lassoDraft.length - 1];
@@ -21792,6 +23546,7 @@ function installCanvasHandlers() {
 		    const startRectCss = state.pointer.startRectCss;
 		    const corner = state.pointer.corner;
         const importPt = state.pointer.importPointCss;
+        const wheelOnTap = Boolean(state.pointer.wheelOnTap);
 		    const moved = Boolean(state.pointer.moved);
 		    state.pointer.active = false;
 		    state.pointer.kind = null;
@@ -21800,6 +23555,7 @@ function installCanvasHandlers() {
 		    state.pointer.corner = null;
 		    state.pointer.startRectCss = null;
 		    state.pointer.importPointCss = null;
+        state.pointer.wheelOnTap = false;
 		    state.pointer.moved = false;
         setOverlayCursor(INTENT_IMPORT_CURSOR);
         if (isReelSizeLocked()) {
@@ -21865,7 +23621,7 @@ function installCanvasHandlers() {
               }
 			      }
 			    }
-          if (kind === POINTER_KINDS.SINGLE_PAN) {
+          if (kind === POINTER_KINDS.SINGLE_PAN && wheelOnTap) {
             if (!moved && importPt) {
               const opened = openMotherWheelMenuAt(importPt);
               if (opened) {
@@ -22212,9 +23968,58 @@ function installDnD() {
     event.preventDefault();
   };
 
+  const canvasWorldPointFromClient = (clientX, clientY) => {
+    const wrapRect = els.canvasWrap?.getBoundingClientRect?.();
+    if (!wrapRect || !Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+    if (clientX < wrapRect.left || clientX > wrapRect.right || clientY < wrapRect.top || clientY > wrapRect.bottom) {
+      return null;
+    }
+    const overlayRect = els.overlayCanvas?.getBoundingClientRect?.() || wrapRect;
+    const css = { x: clientX - overlayRect.left, y: clientY - overlayRect.top };
+    return canvasScreenCssToWorldCss(css);
+  };
+
+  const tryImportInternalDragAtClient = async (clientX, clientY, { source = "browser_drag_fallback" } = {}) => {
+    const path = normalizeLocalFsPath(state.fileBrowser?.draggingPath || "");
+    if (!path || !isBrowserImagePath(path)) return false;
+    const world = canvasWorldPointFromClient(clientX, clientY);
+    if (!world) return false;
+    const result = await importLocalPathsAtCanvasPoint([path], world, {
+      source,
+      idPrefix: "dockdrop",
+      enforceIntentLimit: true,
+      focusImported: true,
+    });
+    if (!result?.ok) {
+      showToast("Could not import dropped image.", "error", 2600);
+      return false;
+    }
+    fileBrowserSetDragPath(null);
+    return true;
+  };
+
+  let lastInternalImportAt = 0;
   try {
     window.addEventListener("dragover", preventNav, { passive: false });
-    window.addEventListener("drop", preventNav, { passive: false });
+    window.addEventListener(
+      "drop",
+      (event) => {
+        preventNav(event);
+        const now = Date.now();
+        if (now - lastInternalImportAt < 500) {
+          fileBrowserSetDragPath(null);
+          return;
+        }
+        const clientX = Number(event?.clientX);
+        const clientY = Number(event?.clientY);
+        if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+          fileBrowserSetDragPath(null);
+          return;
+        }
+        tryImportInternalDragAtClient(clientX, clientY, { source: "browser_drag_window" }).catch(() => {});
+      },
+      { passive: false }
+    );
   } catch {
     // ignore
   }
@@ -22224,12 +24029,85 @@ function installDnD() {
     event?.stopPropagation?.();
   }
 
-  els.canvasWrap.addEventListener("dragover", stop, { passive: false });
-  els.canvasWrap.addEventListener("dragenter", stop, { passive: false });
-  let disabledToastAt = 0;
-  els.canvasWrap.addEventListener("drop", async (event) => {
+  let browserDragDepth = 0;
+  const setBrowserDragHover = (on) => {
+    els.canvasWrap.classList.toggle("is-browser-drag-over", Boolean(on));
+  };
+  const clearBrowserDragHover = () => {
+    browserDragDepth = 0;
+    setBrowserDragHover(false);
+  };
+
+  try {
+    window.addEventListener("dragend", clearBrowserDragHover, { passive: true });
+    window.addEventListener(
+      "dragend",
+      (event) => {
+        const clientX = Number(event?.clientX);
+        const clientY = Number(event?.clientY);
+        if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+          fileBrowserClearDragPathDeferred(120);
+          return;
+        }
+        tryImportInternalDragAtClient(clientX, clientY, { source: "browser_drag_end" })
+          .catch(() => {})
+          .finally(() => {
+            fileBrowserClearDragPathDeferred(120);
+          });
+      },
+      { passive: true }
+    );
+    window.addEventListener("drop", clearBrowserDragHover, { passive: false });
+  } catch {
+    // ignore
+  }
+
+  const handleDragEnter = (event) => {
     stop(event);
+    const internalPath = fileBrowserReadInternalDragPath(event?.dataTransfer);
+    if (internalPath) {
+      browserDragDepth += 1;
+      setBrowserDragHover(true);
+    }
+  };
+  const handleDragLeave = (event) => {
+    stop(event);
+    const internalPath = fileBrowserReadInternalDragPath(event?.dataTransfer);
+    if (!internalPath) return;
+    browserDragDepth = Math.max(0, browserDragDepth - 1);
+    if (!browserDragDepth) setBrowserDragHover(false);
+  };
+  const handleDragOver = (event) => {
+    stop(event);
+    const internalPath = fileBrowserReadInternalDragPath(event?.dataTransfer);
+    if (internalPath) {
+      if (event?.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      setBrowserDragHover(true);
+    }
+  };
+
+  let disabledToastAt = 0;
+  const handleDrop = async (event) => {
+    stop(event);
+    clearBrowserDragHover();
     bumpInteraction();
+    const internalPath = fileBrowserReadInternalDragPath(event?.dataTransfer);
+    if (internalPath) {
+      const world = canvasScreenCssToWorldCss(canvasCssPointFromEvent(event));
+      lastInternalImportAt = Date.now();
+      const result = await importLocalPathsAtCanvasPoint([internalPath], world, {
+        source: "browser_drag",
+        idPrefix: "dockdrop",
+        enforceIntentLimit: true,
+        focusImported: true,
+      });
+      if (!result?.ok) {
+        showToast("Could not import dropped image.", "error", 2600);
+      }
+      fileBrowserSetDragPath(null);
+      return;
+    }
+    fileBrowserSetDragPath(null);
     const files = Array.from(event.dataTransfer?.files || []);
     const paths = files.map((f) => f?.path).filter(Boolean);
     if (paths.length === 0) return;
@@ -22241,47 +24119,23 @@ function installDnD() {
       }
       return;
     }
-    await ensureRun();
-    const inputsDir = `${state.runDir}/inputs`;
-    await createDir(inputsDir, { recursive: true }).catch(() => {});
-    const stamp = Date.now();
-    const importedVisionPaths = [];
-    for (let idx = 0; idx < paths.length; idx += 1) {
-      const src = paths[idx];
-      const ext = extname(src);
-      const safeExt = ext && ext.length <= 8 ? ext : ".png";
-      const artifactId = `drop-${stamp}-${String(idx).padStart(2, "0")}`;
-      const dest = `${inputsDir}/${artifactId}${safeExt}`;
-      await copyFile(src, dest);
-      const receiptPath = await writeLocalReceipt({
-        artifactId,
-        imagePath: dest,
-        operation: "import",
-        meta: { source_path: src },
-      });
-      addImage(
-        {
-          id: artifactId,
-          kind: "import",
-          path: dest,
-          receiptPath,
-          label: basename(src),
-        },
-        { select: idx === 0 && !state.activeId }
-      );
-      importedVisionPaths.push(dest);
-    }
-    motherV2ArmMultiUploadIdleBoost(importedVisionPaths.length);
-    scheduleVisionDescribeBurst(importedVisionPaths, {
-      priority: true,
-      maxConcurrent: UPLOAD_DESCRIBE_PRIORITY_BURST,
+    const world = canvasScreenCssToWorldCss(canvasCssPointFromEvent(event));
+    await importLocalPathsAtCanvasPoint(paths, world, {
+      source: "drop",
+      idPrefix: "drop",
+      enforceIntentLimit: true,
     });
-    setStatus(`Engine: imported ${paths.length} dropped file${paths.length === 1 ? "" : "s"}`);
-    if (state.images.length > 1) {
-      setCanvasMode("multi");
-      setTip("Multiple photos loaded. Click a photo to focus it. Press M to toggle multi view.");
-    }
-  });
+  };
+
+  const dndTargets = [els.canvasWrap, els.overlayCanvas].filter(Boolean);
+  for (const target of dndTargets) {
+    target.addEventListener("dragenter", handleDragEnter, { passive: false });
+    target.addEventListener("dragleave", handleDragLeave, { passive: false });
+    target.addEventListener("dragover", handleDragOver, { passive: false });
+    target.addEventListener("drop", (event) => {
+      handleDrop(event).catch((err) => console.error(err));
+    });
+  }
 }
 
 function installUi() {
@@ -23165,6 +25019,11 @@ async function boot() {
   refreshKeyStatus().catch(() => {});
   updateAlwaysOnVisionReadout();
   renderQuickActions();
+  renderSessionApiCallsReadout();
+  clearInterval(topMetricsTickTimer);
+  topMetricsTickTimer = setInterval(() => {
+    renderSessionApiCallsReadout();
+  }, 15_000);
   syncBrandStripHeightVar();
   if (typeof ResizeObserver === "function" && els.brandStrip) {
     try {
@@ -23231,6 +25090,9 @@ async function boot() {
   installCanvasHandlers();
   installDnD();
   installUi();
+  if (ENABLE_FILE_BROWSER_DOCK) {
+    await initializeFileBrowserDock();
+  }
   startMotherGlitchLoop();
   startSpawnTimer();
 

@@ -49,7 +49,7 @@ from urllib.request import Request, urlopen
 DEFAULT_API_BASE = "https://api.openai.com/v1"
 
 # Prompts are designed for portrait output that will often be center-cropped to square in the UI.
-MOOD_PHRASE = "stunningly awe-inspiring and tearfully joyous"
+MOOD_PHRASE = "stunningly awe-inspiring and joyous"
 MOOD_LINE = f"Mood: {MOOD_PHRASE}."
 LOOP_LINE = (
     "Perfect loop: last frame == first frame (pose, tools, lighting, background match)."

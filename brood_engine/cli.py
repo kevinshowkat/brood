@@ -42,7 +42,7 @@ from .utils import (
     is_flux_model,
 )
 
-MOTHER_CREATIVE_DIRECTIVE = "stunningly awe-inspiring and tearfully joyous"
+MOTHER_CREATIVE_DIRECTIVE = "stunningly awe-inspiring and joyous"
 MOTHER_TRANSFORMATION_MODES = (
     "amplify",
     "transcend",
@@ -756,6 +756,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 source=inference.source,
                 model=inference.model,
                 max_chars=max_chars,
+                input_tokens=inference.input_tokens,
+                output_tokens=inference.output_tokens,
             )
             meta = []
             if inference.source:
@@ -790,6 +792,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 text=inference.text,
                 source=inference.source,
                 model=inference.model,
+                input_tokens=inference.input_tokens,
+                output_tokens=inference.output_tokens,
             )
             print(inference.text)
             continue
@@ -1195,6 +1199,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 text=inference.text,
                 source=inference.source,
                 model=inference.model,
+                input_tokens=inference.input_tokens,
+                output_tokens=inference.output_tokens,
             )
             print(inference.text)
             continue
@@ -1348,6 +1354,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 text=inference.text,
                 source=inference.source,
                 model=inference.model,
+                input_tokens=inference.input_tokens,
+                output_tokens=inference.output_tokens,
             )
             print(inference.text)
             continue
@@ -1396,6 +1404,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
                     summary=inference.summary,
                     source=inference.source,
                     model=inference.model,
+                    input_tokens=inference.input_tokens,
+                    output_tokens=inference.output_tokens,
                 )
                 summary = inference.summary.strip() if inference.summary else ""
                 print(f"DNA extracted ({path.name})")
@@ -1445,6 +1455,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
                     summary=inference.summary,
                     source=inference.source,
                     model=inference.model,
+                    input_tokens=inference.input_tokens,
+                    output_tokens=inference.output_tokens,
                 )
                 summary = inference.summary.strip() if inference.summary else ""
                 print(f"Soul extracted ({path.name})")
@@ -1491,6 +1503,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 source=inference.source,
                 model=inference.model,
                 confidence=inference.confidence,
+                input_tokens=inference.input_tokens,
+                output_tokens=inference.output_tokens,
             )
             print(f"RULE:\n{inference.principle}")
             if inference.evidence:
@@ -1539,6 +1553,8 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 source=inference.source,
                 model=inference.model,
                 confidence=inference.confidence,
+                input_tokens=inference.input_tokens,
+                output_tokens=inference.output_tokens,
             )
             print(f"ODD ONE OUT: {inference.odd_image}")
             if inference.pattern:

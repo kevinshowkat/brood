@@ -37,6 +37,8 @@ class DescriptionInference:
     description: str
     source: str
     model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,8 @@ class TextInference:
     text: str
     source: str
     model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,8 @@ class DnaExtractionInference:
     summary: str
     source: str
     model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -62,6 +68,8 @@ class SoulExtractionInference:
     summary: str
     source: str
     model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 def infer_prompt(reference_path: Path) -> PromptInference:
@@ -420,6 +428,127 @@ def _clean_description(text: str, *, max_chars: int) -> str:
     return cleaned
 
 
+def _safe_nonnegative_int(value: Any) -> int | None:
+    try:
+        number = int(round(float(value)))
+    except Exception:
+        return None
+    if number < 0:
+        return None
+    return number
+
+
+def _as_mapping(value: Any) -> Mapping[str, Any] | None:
+    if isinstance(value, Mapping):
+        return value
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        try:
+            dumped = value.model_dump()
+            if isinstance(dumped, Mapping):
+                return dumped
+        except Exception:
+            pass
+    if hasattr(value, "to_dict"):
+        try:
+            dumped = value.to_dict()
+            if isinstance(dumped, Mapping):
+                return dumped
+        except Exception:
+            pass
+    raw = getattr(value, "__dict__", None)
+    if isinstance(raw, Mapping):
+        return raw
+    return None
+
+
+def _read_usage_value(obj: Mapping[str, Any], keys: tuple[str, ...]) -> int | None:
+    for key in keys:
+        if key not in obj:
+            continue
+        parsed = _safe_nonnegative_int(obj.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _extract_usage_pair_from_mapping(obj: Mapping[str, Any]) -> tuple[int | None, int | None]:
+    input_tokens = _read_usage_value(
+        obj,
+        (
+            "input_tokens",
+            "prompt_tokens",
+            "prompt_token_count",
+            "promptTokenCount",
+            "tokens_in",
+            "tokensIn",
+            "inputTokenCount",
+            "input_text_tokens",
+            "text_count_tokens",
+        ),
+    )
+    output_tokens = _read_usage_value(
+        obj,
+        (
+            "output_tokens",
+            "completion_tokens",
+            "completion_token_count",
+            "completionTokenCount",
+            "tokens_out",
+            "tokensOut",
+            "outputTokenCount",
+            "output_text_tokens",
+            "candidates_token_count",
+            "candidatesTokenCount",
+        ),
+    )
+    total_tokens = _read_usage_value(
+        obj,
+        (
+            "total_token_count",
+            "totalTokenCount",
+            "total_tokens",
+            "totalTokens",
+            "token_count",
+            "tokenCount",
+        ),
+    )
+    if output_tokens is None and total_tokens is not None and input_tokens is not None and total_tokens >= input_tokens:
+        output_tokens = total_tokens - input_tokens
+    return input_tokens, output_tokens
+
+
+def extract_token_usage_pair(payload: Any) -> tuple[int | None, int | None]:
+    root = _as_mapping(payload)
+    if not root:
+        return None, None
+    queue: list[Mapping[str, Any]] = [root]
+    visited: set[int] = set()
+    steps = 0
+    while queue and steps < 120:
+        current = queue.pop(0)
+        steps += 1
+        ident = id(current)
+        if ident in visited:
+            continue
+        visited.add(ident)
+
+        input_tokens, output_tokens = _extract_usage_pair_from_mapping(current)
+        if input_tokens is not None or output_tokens is not None:
+            return input_tokens, output_tokens
+
+        for nested_key in ("usage", "usage_metadata"):
+            nested = _as_mapping(current.get(nested_key))
+            if nested:
+                queue.append(nested)
+        for value in current.values():
+            nested = _as_mapping(value)
+            if nested:
+                queue.append(nested)
+    return None, None
+
+
 def _openai_api_key() -> str | None:
     return os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY_BACKUP")
 
@@ -522,10 +651,17 @@ def _describe_with_openai(reference_path: Path, *, max_chars: int) -> Descriptio
                 _, response = _post_openai_json(endpoint, candidate, api_key, timeout_s=22.0)
             except Exception:
                 continue
+            input_tokens, output_tokens = extract_token_usage_pair(response)
             text = _extract_openai_output_text(response)
             cleaned = _clean_description(text, max_chars=max_chars)
             if cleaned:
-                return DescriptionInference(description=cleaned, source="openai_vision", model=model)
+                return DescriptionInference(
+                    description=cleaned,
+                    source="openai_vision",
+                    model=model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                )
 
             incomplete = response.get("incomplete_details")
             if isinstance(incomplete, dict) and incomplete.get("reason") == "max_output_tokens":
@@ -534,10 +670,17 @@ def _describe_with_openai(reference_path: Path, *, max_chars: int) -> Descriptio
                     retry = dict(candidate)
                     retry["max_output_tokens"] = max(int(candidate.get("max_output_tokens", 0)) * 2, 240)
                     _, retry_resp = _post_openai_json(endpoint, retry, api_key, timeout_s=22.0)
+                    retry_input_tokens, retry_output_tokens = extract_token_usage_pair(retry_resp)
                     text = _extract_openai_output_text(retry_resp)
                     cleaned = _clean_description(text, max_chars=max_chars)
                     if cleaned:
-                        return DescriptionInference(description=cleaned, source="openai_vision", model=model)
+                        return DescriptionInference(
+                            description=cleaned,
+                            source="openai_vision",
+                            model=model,
+                            input_tokens=retry_input_tokens,
+                            output_tokens=retry_output_tokens,
+                        )
                 except Exception:
                     pass
 
@@ -683,7 +826,13 @@ def _describe_with_gemini(reference_path: Path, *, max_chars: int) -> Descriptio
     if isinstance(text, str) and text.strip():
         cleaned = _clean_description(text, max_chars=max_chars)
         if cleaned:
-            return DescriptionInference(description=cleaned, source="gemini_vision", model=model)
+            return DescriptionInference(
+                description=cleaned,
+                source="gemini_vision",
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
 
     candidates = getattr(response, "candidates", []) or []
     for candidate in candidates:
@@ -694,7 +843,13 @@ def _describe_with_gemini(reference_path: Path, *, max_chars: int) -> Descriptio
             if isinstance(chunk, str) and chunk.strip():
                 cleaned = _clean_description(chunk, max_chars=max_chars)
                 if cleaned:
-                    return DescriptionInference(description=cleaned, source="gemini_vision", model=model)
+                    return DescriptionInference(
+                        description=cleaned,
+                        source="gemini_vision",
+                        model=model,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                    )
 
     return None
 
@@ -844,11 +999,18 @@ def _diagnose_with_openai(reference_path: Path) -> TextInference | None:
         _, response = _post_openai_json(endpoint, payload, api_key, timeout_s=45.0)
     except Exception:
         return None
+    input_tokens, output_tokens = extract_token_usage_pair(response)
     text = _extract_openai_output_text(response)
     cleaned = _clean_text_inference(text, max_chars=8000)
     if not cleaned:
         return None
-    return TextInference(text=cleaned, source="openai_vision", model=model)
+    return TextInference(
+        text=cleaned,
+        source="openai_vision",
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
 
 
 def _canvas_context_with_openai(reference_path: Path) -> TextInference | None:
@@ -887,10 +1049,17 @@ def _canvas_context_with_openai(reference_path: Path) -> TextInference | None:
             _, response = _post_openai_json(endpoint, payload, api_key, timeout_s=28.0)
         except Exception:
             continue
+        input_tokens, output_tokens = extract_token_usage_pair(response)
         text = _extract_openai_output_text(response)
         cleaned = _clean_text_inference(text, max_chars=12000)
         if cleaned:
-            return TextInference(text=cleaned, source="openai_vision", model=model)
+            return TextInference(
+                text=cleaned,
+                source="openai_vision",
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
 
     return None
 
@@ -919,12 +1088,19 @@ def _canvas_context_with_gemini(reference_path: Path) -> TextInference | None:
         response = chat.send_message(parts)
     except Exception:
         return None
+    input_tokens, output_tokens = extract_token_usage_pair(response)
 
     text = getattr(response, "text", None)
     if isinstance(text, str) and text.strip():
         cleaned = _clean_text_inference(text, max_chars=12000)
         if cleaned:
-            return TextInference(text=cleaned, source="gemini_vision", model=model)
+            return TextInference(
+                text=cleaned,
+                source="gemini_vision",
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
 
     candidates = getattr(response, "candidates", []) or []
     for candidate in candidates:
@@ -935,7 +1111,13 @@ def _canvas_context_with_gemini(reference_path: Path) -> TextInference | None:
             if isinstance(chunk, str) and chunk.strip():
                 cleaned = _clean_text_inference(chunk, max_chars=12000)
                 if cleaned:
-                    return TextInference(text=cleaned, source="gemini_vision", model=model)
+                    return TextInference(
+                        text=cleaned,
+                        source="gemini_vision",
+                        model=model,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                    )
 
     return None
 
@@ -971,11 +1153,18 @@ def _argue_with_openai(path_a: Path, path_b: Path) -> TextInference | None:
         _, response = _post_openai_json(endpoint, payload, api_key, timeout_s=55.0)
     except Exception:
         return None
+    input_tokens, output_tokens = extract_token_usage_pair(response)
     text = _extract_openai_output_text(response)
     cleaned = _clean_text_inference(text, max_chars=10000)
     if not cleaned:
         return None
-    return TextInference(text=cleaned, source="openai_vision", model=model)
+    return TextInference(
+        text=cleaned,
+        source="openai_vision",
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
 
 
 def _diagnose_with_gemini(reference_path: Path) -> TextInference | None:
@@ -1002,12 +1191,19 @@ def _diagnose_with_gemini(reference_path: Path) -> TextInference | None:
         response = chat.send_message(parts)
     except Exception:
         return None
+    input_tokens, output_tokens = extract_token_usage_pair(response)
 
     text = getattr(response, "text", None)
     if isinstance(text, str) and text.strip():
         cleaned = _clean_text_inference(text, max_chars=8000)
         if cleaned:
-            return TextInference(text=cleaned, source="gemini_vision", model=model)
+            return TextInference(
+                text=cleaned,
+                source="gemini_vision",
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
 
     candidates = getattr(response, "candidates", []) or []
     for candidate in candidates:
@@ -1018,7 +1214,13 @@ def _diagnose_with_gemini(reference_path: Path) -> TextInference | None:
             if isinstance(chunk, str) and chunk.strip():
                 cleaned = _clean_text_inference(chunk, max_chars=8000)
                 if cleaned:
-                    return TextInference(text=cleaned, source="gemini_vision", model=model)
+                    return TextInference(
+                        text=cleaned,
+                        source="gemini_vision",
+                        model=model,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                    )
 
     return None
 
@@ -1051,12 +1253,19 @@ def _argue_with_gemini(path_a: Path, path_b: Path) -> TextInference | None:
         response = chat.send_message(parts)
     except Exception:
         return None
+    input_tokens, output_tokens = extract_token_usage_pair(response)
 
     text = getattr(response, "text", None)
     if isinstance(text, str) and text.strip():
         cleaned = _clean_text_inference(text, max_chars=10000)
         if cleaned:
-            return TextInference(text=cleaned, source="gemini_vision", model=model)
+            return TextInference(
+                text=cleaned,
+                source="gemini_vision",
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
 
     candidates = getattr(response, "candidates", []) or []
     for candidate in candidates:
@@ -1067,7 +1276,13 @@ def _argue_with_gemini(path_a: Path, path_b: Path) -> TextInference | None:
             if isinstance(chunk, str) and chunk.strip():
                 cleaned = _clean_text_inference(chunk, max_chars=10000)
                 if cleaned:
-                    return TextInference(text=cleaned, source="gemini_vision", model=model)
+                    return TextInference(
+                        text=cleaned,
+                        source="gemini_vision",
+                        model=model,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                    )
 
     return None
 
@@ -1097,6 +1312,7 @@ def _extract_dna_with_openai(reference_path: Path) -> DnaExtractionInference | N
         _, response = _post_openai_json(endpoint, payload, api_key, timeout_s=35.0)
     except Exception:
         return None
+    input_tokens, output_tokens = extract_token_usage_pair(response)
     text = _extract_openai_output_text(response)
     payload_obj = _extract_json_object(text)
     if not payload_obj:
@@ -1112,6 +1328,8 @@ def _extract_dna_with_openai(reference_path: Path) -> DnaExtractionInference | N
         summary=summary,
         source="openai_vision",
         model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
     )
 
 
@@ -1140,6 +1358,7 @@ def _extract_soul_with_openai(reference_path: Path) -> SoulExtractionInference |
         _, response = _post_openai_json(endpoint, payload, api_key, timeout_s=35.0)
     except Exception:
         return None
+    input_tokens, output_tokens = extract_token_usage_pair(response)
     text = _extract_openai_output_text(response)
     payload_obj = _extract_json_object(text)
     if not payload_obj:
@@ -1153,6 +1372,8 @@ def _extract_soul_with_openai(reference_path: Path) -> SoulExtractionInference |
         summary=summary,
         source="openai_vision",
         model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
     )
 
 
@@ -1180,6 +1401,7 @@ def _extract_dna_with_gemini(reference_path: Path) -> DnaExtractionInference | N
         response = chat.send_message(parts)
     except Exception:
         return None
+    input_tokens, output_tokens = extract_token_usage_pair(response)
 
     text = getattr(response, "text", None)
     payload_obj = _extract_json_object(text) if isinstance(text, str) else None
@@ -1194,6 +1416,8 @@ def _extract_dna_with_gemini(reference_path: Path) -> DnaExtractionInference | N
                 summary=summary,
                 source="gemini_vision",
                 model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
             )
 
     candidates = getattr(response, "candidates", []) or []
@@ -1218,6 +1442,8 @@ def _extract_dna_with_gemini(reference_path: Path) -> DnaExtractionInference | N
                 summary=summary,
                 source="gemini_vision",
                 model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
             )
     return None
 
@@ -1246,6 +1472,7 @@ def _extract_soul_with_gemini(reference_path: Path) -> SoulExtractionInference |
         response = chat.send_message(parts)
     except Exception:
         return None
+    input_tokens, output_tokens = extract_token_usage_pair(response)
 
     text = getattr(response, "text", None)
     payload_obj = _extract_json_object(text) if isinstance(text, str) else None
@@ -1258,6 +1485,8 @@ def _extract_soul_with_gemini(reference_path: Path) -> SoulExtractionInference |
                 summary=summary,
                 source="gemini_vision",
                 model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
             )
 
     candidates = getattr(response, "candidates", []) or []
@@ -1280,5 +1509,7 @@ def _extract_soul_with_gemini(reference_path: Path) -> SoulExtractionInference |
                 summary=summary,
                 source="gemini_vision",
                 model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
             )
     return None
