@@ -675,7 +675,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
 
     print("Brood chat started. Type /help for commands.")
 
-    def _handle_help_command() -> bool:
+    def _handle_help_command(_intent) -> bool:
         print(f"Commands: {' '.join(CHAT_HELP_COMMANDS)}")
         return True
 
