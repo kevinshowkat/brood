@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import uuid
+import copy
 from pathlib import Path
 from typing import Any
 
@@ -154,6 +155,7 @@ class BroodEngine:
         output_format = settings.get("output_format")
         seed = settings.get("seed")
         inputs = _coerce_image_inputs(settings)
+        request_metadata = _request_metadata_from_intent(intent)
         request = ImageRequest(
             prompt=prompt,
             size=size,
@@ -165,9 +167,19 @@ class BroodEngine:
             inputs=inputs,
             provider_options=settings.get("provider_options", {}),
             out_dir=str(self.run_dir),
+            metadata=request_metadata,
         )
 
-        cache_key = stable_hash({"prompt": prompt, "size": size, "n": n, "model": model_spec.name, "options": settings})
+        cache_key = stable_hash(
+            {
+                "prompt": prompt,
+                "size": size,
+                "n": n,
+                "model": model_spec.name,
+                "options": settings,
+                "metadata": request_metadata,
+            }
+        )
         cached = self.cache.get(cache_key)
 
         plan_payload = {
@@ -631,6 +643,19 @@ def _coerce_image_inputs(settings: dict[str, Any]) -> ImageInputs:
         mask=str(mask) if mask else None,
         reference_images=reference_images,
     )
+
+
+def _request_metadata_from_intent(intent: dict[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    if not isinstance(intent, dict):
+        return metadata
+    direct_metadata = intent.get("request_metadata")
+    if isinstance(direct_metadata, dict):
+        metadata.update(copy.deepcopy(direct_metadata))
+    gemini_context_packet = intent.get("gemini_context_packet")
+    if isinstance(gemini_context_packet, dict):
+        metadata["gemini_context_packet"] = copy.deepcopy(gemini_context_packet)
+    return metadata
 
 
 def _map_quality_value_to_preset(value: str) -> str:

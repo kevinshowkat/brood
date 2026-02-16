@@ -11878,11 +11878,236 @@ function motherV2CollectGenerationImagePaths() {
   };
 }
 
+function motherV2CollectImageInteractionSignals(imageIds = []) {
+  const ids = (Array.isArray(imageIds) ? imageIds : [])
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+  const idSet = new Set(ids);
+  const ensure = (map, imageId) => {
+    if (!idSet.has(imageId)) return null;
+    if (!map.has(imageId)) {
+      map.set(imageId, {
+        move_count: 0,
+        resize_count: 0,
+        selection_hits: 0,
+        action_grid_hits: 0,
+        last_event_at_ms: 0,
+      });
+    }
+    return map.get(imageId);
+  };
+  const out = new Map();
+  for (const id of ids) {
+    ensure(out, id);
+  }
+  const events = Array.isArray(state.userEvents) ? state.userEvents : [];
+  for (const entry of events) {
+    if (!entry || typeof entry !== "object") continue;
+    const type = String(entry.type || "").trim();
+    const atMs = Number(entry.at_ms) || 0;
+    if (type === "image_move" || type === "image_resize") {
+      const imageId = String(entry.image_id || "").trim();
+      const row = ensure(out, imageId);
+      if (!row) continue;
+      if (type === "image_move") row.move_count += 1;
+      if (type === "image_resize") row.resize_count += 1;
+      if (atMs > row.last_event_at_ms) row.last_event_at_ms = atMs;
+      continue;
+    }
+    if (type === "selection_change") {
+      const selectedIds = Array.isArray(entry.selected_ids)
+        ? entry.selected_ids.map((v) => String(v || "").trim()).filter(Boolean)
+        : [];
+      for (const imageId of selectedIds) {
+        const row = ensure(out, imageId);
+        if (!row) continue;
+        row.selection_hits += 1;
+        if (atMs > row.last_event_at_ms) row.last_event_at_ms = atMs;
+      }
+      continue;
+    }
+    if (type === "action_grid_press") {
+      const selectedIds = Array.isArray(entry.selected_ids)
+        ? entry.selected_ids.map((v) => String(v || "").trim()).filter(Boolean)
+        : [];
+      const activeId = String(entry.active_id || "").trim();
+      for (const imageId of selectedIds) {
+        const row = ensure(out, imageId);
+        if (!row) continue;
+        row.action_grid_hits += 1;
+        if (atMs > row.last_event_at_ms) row.last_event_at_ms = atMs;
+      }
+      if (activeId) {
+        const row = ensure(out, activeId);
+        if (row) {
+          row.action_grid_hits += 1;
+          if (atMs > row.last_event_at_ms) row.last_event_at_ms = atMs;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sanitizedIntent = null, imagePayload = null } = {}) {
+  const idle = state.motherIdle;
+  const intent = sanitizedIntent && typeof sanitizedIntent === "object" ? sanitizedIntent : {};
+  const sourceImageIds = Array.isArray(imagePayload?.sourceImageIds)
+    ? imagePayload.sourceImageIds.map((v) => String(v || "").trim()).filter(Boolean)
+    : [];
+  if (!sourceImageIds.length) return null;
+
+  const actionVersion = Number(idle?.actionVersion) || 0;
+  const summary = String(intent.summary || motherV2ProposalSentence(intent) || "").trim();
+  const creativeDirective = String(compiled?.creative_directive || intent.creative_directive || MOTHER_CREATIVE_DIRECTIVE || "").trim();
+  const transformationMode = motherV2NormalizeTransformationMode(
+    intent.transformation_mode || compiled?.transformation_mode || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE
+  );
+  const placementPolicy = String(
+    intent.placement_policy ||
+      compiled?.generation_params?.layout_hint ||
+      "adjacent"
+  ).trim() || "adjacent";
+  const selectedIds = getVisibleSelectedIds().map((v) => String(v || "").trim()).filter(Boolean).slice(0, 3);
+  const activeId = String(getVisibleActiveId() || "").trim() || null;
+  const targetIds = motherV2NormalizeImageIdList(intent.target_ids || []).slice(0, 3);
+  const referenceIds = motherV2NormalizeImageIdList(intent.reference_ids || []).slice(0, 3);
+  const roleMapRaw = intent.roles && typeof intent.roles === "object" ? intent.roles : motherV2RoleMapClone();
+  const roleMap = {
+    subject: motherV2NormalizeImageIdList(roleMapRaw.subject || []).slice(0, 3),
+    model: motherV2NormalizeImageIdList(roleMapRaw.model || []).slice(0, 3),
+    mediator: motherV2NormalizeImageIdList(roleMapRaw.mediator || []).slice(0, 3),
+    object: motherV2NormalizeImageIdList(roleMapRaw.object || []).slice(0, 3),
+  };
+  const signalsById = motherV2CollectImageInteractionSignals(sourceImageIds);
+
+  const draft = [];
+  for (const imageId of sourceImageIds) {
+    const item = state.imagesById.get(imageId) || null;
+    const signal = signalsById.get(imageId) || {
+      move_count: 0,
+      resize_count: 0,
+      selection_hits: 0,
+      action_grid_hits: 0,
+      last_event_at_ms: 0,
+    };
+    const isTarget = targetIds.includes(imageId);
+    const isReference = referenceIds.includes(imageId);
+    const isSubject = roleMap.subject.includes(imageId);
+    const isModel = roleMap.model.includes(imageId);
+    const isMediator = roleMap.mediator.includes(imageId);
+    const isObject = roleMap.object.includes(imageId);
+
+    let score = 1;
+    if (selectedIds.includes(imageId)) score += 2.4;
+    if (activeId && imageId === activeId) score += 1.7;
+    if (isTarget) score += 1.2;
+    if (isReference) score += 0.8;
+    if (isSubject || isObject) score += 0.9;
+    if (isModel || isMediator) score += 0.55;
+    score += Math.min(2.2, Number(signal.move_count || 0) * 0.22);
+    score += Math.min(2.0, Number(signal.resize_count || 0) * 0.28);
+    score += Math.min(1.8, Number(signal.selection_hits || 0) * 0.16);
+    score += Math.min(1.8, Number(signal.action_grid_hits || 0) * 0.18);
+
+    const preserve = [];
+    if (isTarget || isSubject || isObject || imageId === sourceImageIds[0]) preserve.push("subject identity");
+    if (Number(signal.resize_count) > 0) preserve.push("user framing emphasis");
+    if (Number(signal.selection_hits) > 0 || Number(signal.action_grid_hits) > 0) preserve.push("user focus cues");
+
+    const transform = [];
+    if (isReference || isModel || isMediator) transform.push("material and style cues");
+    if (Number(signal.move_count) > 0) transform.push("composition relationship cues");
+
+    draft.push({
+      id: imageId,
+      file: item?.path ? basename(item.path) : null,
+      origin: item && isMotherGeneratedImageItem(item) ? "mother_generated" : "uploaded",
+      role_tags: MOTHER_V2_ROLE_KEYS.filter((key) => roleMap[key]?.includes(imageId)),
+      preserve,
+      transform,
+      score,
+      signal,
+    });
+  }
+
+  const scoreTotal = draft.reduce((sum, entry) => sum + Math.max(0, Number(entry.score) || 0), 0) || 1;
+  const imageManifest = draft
+    .map((entry) => ({
+      id: entry.id,
+      file: entry.file,
+      origin: entry.origin,
+      role_tags: entry.role_tags,
+      preserve: Array.from(new Set(entry.preserve)).slice(0, 3),
+      transform: Array.from(new Set(entry.transform)).slice(0, 3),
+      weight: Math.round((Math.max(0, Number(entry.score) || 0) / scoreTotal) * 10000) / 10000,
+    }))
+    .sort((a, b) => Number(b.weight) - Number(a.weight))
+    .slice(0, 10);
+
+  const interactionWeightBasis = draft
+    .map((entry) => ({
+      id: entry.id,
+      move_count: Number(entry.signal.move_count) || 0,
+      resize_count: Number(entry.signal.resize_count) || 0,
+      selection_hits: Number(entry.signal.selection_hits) || 0,
+      action_grid_hits: Number(entry.signal.action_grid_hits) || 0,
+      last_event_at_ms: Number(entry.signal.last_event_at_ms) || 0,
+    }))
+    .filter((entry) => entry.move_count || entry.resize_count || entry.selection_hits || entry.action_grid_hits)
+    .slice(0, 8);
+
+  const mustNot = [];
+  for (const constraint of Array.isArray(compiled?.compile_constraints) ? compiled.compile_constraints : []) {
+    const text = String(constraint || "").trim();
+    if (text && !mustNot.includes(text)) mustNot.push(text);
+  }
+  const negativePrompt = String(compiled?.negative_prompt || "").trim();
+  if (negativePrompt) mustNot.push(clampText(negativePrompt, 280));
+
+  return {
+    schema: "brood.gemini.context_packet.v1",
+    action_version: actionVersion,
+    intent_id: String(intent.intent_id || idle?.intent?.intent_id || "").trim() || null,
+    goal: `Intent summary: ${summary || MOTHER_V2_PROPOSAL_BY_MODE[transformationMode] || "Create one coherent image."}`,
+    creative_directive: creativeDirective || MOTHER_CREATIVE_DIRECTIVE,
+    optimization_target: "stunningly awe-inspiring and joyous + novel",
+    prompt_preview: clampText(String(promptLine || ""), 320),
+    proposal_lock: {
+      transformation_mode: transformationMode,
+      placement_policy: placementPolicy,
+      active_id: activeId,
+      selected_ids: selectedIds,
+      target_ids: targetIds,
+      reference_ids: referenceIds,
+    },
+    image_manifest: imageManifest,
+    behavior_signals: {
+      focus_rank: imageManifest.map((entry) => entry.id).slice(0, 5),
+      interaction_weight_basis: interactionWeightBasis,
+    },
+    constraints: {
+      must_not: mustNot.slice(0, 10),
+    },
+    output: {
+      count: 1,
+      layout: placementPolicy,
+      quality: "production-ready",
+    },
+  };
+}
+
 async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "") {
   const idle = state.motherIdle;
   if (!idle) return false;
   const imagePayload = motherV2CollectGenerationImagePaths();
   const sanitizedIntent = motherV2SanitizeIntentImageIds(idle.intent) || idle.intent || null;
+  const geminiContextPacket = motherV2BuildGeminiContextPacket({
+    compiled,
+    promptLine,
+    sanitizedIntent,
+    imagePayload,
+  });
   const compiledGenerationParams =
     compiled?.generation_params && typeof compiled.generation_params === "object" ? compiled.generation_params : {};
   const generationParams = {};
@@ -11918,6 +12143,7 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "") {
     generation_params: generationParams,
     init_image: imagePayload.initImage,
     reference_images: imagePayload.referenceImages,
+    gemini_context_packet: geminiContextPacket,
   };
   const payloadPath = await motherV2WritePayloadFile("mother_generate", payload);
   if (!payloadPath) return false;

@@ -68,6 +68,9 @@ class GeminiProvider:
             "prompt": request.prompt,
             "config": _to_dict(content_config),
         }
+        context_packet = _gemini_context_packet(request)
+        if context_packet is not None:
+            raw_request["gemini_context_packet"] = context_packet
         debug_manifest_path = _maybe_write_debug_request_manifest(
             request=request,
             model=model,
@@ -173,8 +176,24 @@ def _build_message_parts(request: ImageRequest) -> list[types.Part]:
         parts.extend(_coerce_input_parts([request.inputs.init_image]))
     if request.inputs.reference_images:
         parts.extend(_coerce_input_parts(list(request.inputs.reference_images)))
+    context_packet = _gemini_context_packet(request)
+    if context_packet is not None:
+        parts.append(types.Part(text=_format_gemini_context_packet_text(context_packet)))
     parts.append(types.Part(text=request.prompt))
     return parts
+
+
+def _gemini_context_packet(request: ImageRequest) -> dict[str, Any] | None:
+    metadata = request.metadata if isinstance(request.metadata, Mapping) else {}
+    packet = metadata.get("gemini_context_packet")
+    if not isinstance(packet, Mapping):
+        return None
+    payload = _to_dict(packet)
+    return payload if isinstance(payload, dict) else None
+
+
+def _format_gemini_context_packet_text(packet: Mapping[str, Any]) -> str:
+    return "BROOD_CONTEXT_PACKET_JSON:\n" + json.dumps(_to_dict(packet), sort_keys=True, ensure_ascii=False)
 
 
 def _coerce_input_parts(inputs: Sequence[Any]) -> Sequence[types.Part]:
@@ -334,6 +353,20 @@ def _describe_input_parts(request: ImageRequest) -> list[dict[str, Any]]:
                     source_index=source_index,
                 )
             )
+        part_index += 1
+    context_packet = _gemini_context_packet(request)
+    if context_packet is not None:
+        packet_text = _format_gemini_context_packet_text(context_packet)
+        entries.append(
+            {
+                "part_type": "text",
+                "role": "context_packet",
+                "part_index": part_index,
+                "text_chars": len(packet_text),
+                "text_preview": packet_text,
+                "packet": context_packet,
+            }
+        )
         part_index += 1
     entries.append(
         {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import random
@@ -218,6 +219,14 @@ def _mother_sanitize_provider_options(
     if not allowlist:
         return dict(provider_options)
     return {str(k): v for k, v in provider_options.items() if str(k) in allowlist}
+
+
+def _mother_extract_gemini_context_packet(payload: dict[str, Any]) -> dict[str, Any] | None:
+    packet = payload.get("gemini_context_packet")
+    if not isinstance(packet, dict):
+        return None
+    # Keep provider-facing context immutable downstream and avoid accidental mutation.
+    return copy.deepcopy(packet)
 
 
 def _intent_realtime_model_name(*, mother: bool = False) -> str:
@@ -730,6 +739,9 @@ def _mother_generate_request(
         "transformation_mode": transformation_mode,
         "source_images": source_images,
     }
+    gemini_context_packet = _mother_extract_gemini_context_packet(payload)
+    if gemini_context_packet is not None:
+        action_meta["gemini_context_packet"] = gemini_context_packet
     return prompt, settings, source_images, action_meta
 
 def _handle_chat(args: argparse.Namespace) -> int:
