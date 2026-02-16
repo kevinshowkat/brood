@@ -24,3 +24,21 @@ test("Mother Gemini context packet carries spatial size/proximity/overlap hints"
   assert.match(fnText, /\bon_b\b/);
   assert.match(fnText, /\bregion\b/);
 });
+
+test("Mother Gemini context packet keeps weighting/staleness/constraint invariants", () => {
+  const fnMatch = app.match(/function motherV2BuildGeminiContextPacket[\s\S]*?\n}\n\nasync function motherV2DispatchViaImagePayload/);
+  assert.ok(fnMatch, "motherV2BuildGeminiContextPacket block not found");
+  const fnText = fnMatch[0];
+
+  assert.match(fnText, /\bMUST_NOT_DEFAULTS\b/);
+  assert.match(fnText, /\bINTERACTION_STALE_CUTOFF_MS = 10 \* 60 \* 1000\b/);
+  assert.match(fnText, /\binteractionStale = transformAgeMs > INTERACTION_STALE_CUTOFF_MS\b/);
+  assert.match(fnText, /Identity guardrails apply only for the single-target case/);
+  assert.match(fnText, /if \(targetIdList\.length === 1\)/);
+  assert.match(fnText, /const mustNotFinal = mustNot\.slice\(0, 6\)/);
+  assert.match(fnText, /\bgeometry_trace\b/);
+  assert.match(fnText, /\bcx:\s*round4\(entry\.rect_norm\?\.cx\s*\?\?\s*0\)/);
+  assert.match(fnText, /\bcy:\s*round4\(entry\.rect_norm\?\.cy\s*\?\?\s*0\)/);
+  assert.match(fnText, /\brelative_scale:\s*round4\(entry\.relative_scale_to_largest\)/);
+  assert.match(fnText, /\biou_to_primary:\s*round4\(iouToPrimary\)/);
+});
