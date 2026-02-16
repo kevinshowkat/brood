@@ -11429,6 +11429,325 @@ function motherV2CanvasContextSummaryHint() {
   return clampText(normalized, 240);
 }
 
+function motherV2BuildProposalContextForIntentPayload({ images = [], selectedIds = [], activeId = null } = {}) {
+  const sourceImages = Array.isArray(images) ? images : [];
+  if (!sourceImages.length) return null;
+
+  const SATURATION_K = Object.freeze({
+    move: 8,
+    resize: 4,
+    selection: 8,
+    action: 4,
+  });
+  const INTERACTION_DECAY_TAU_MS = 90_000;
+  const INTERACTION_STALE_CUTOFF_MS = 10 * 60 * 1000;
+  const EPS = 1e-9;
+  const nowMs = Date.now();
+  const selectedIdSet = new Set(
+    (Array.isArray(selectedIds) ? selectedIds : [])
+      .map((v) => String(v || "").trim())
+      .filter(Boolean)
+  );
+  const activeIdNorm = String(activeId || "").trim();
+  const clamp01 = (value) => clamp(Number(value) || 0, 0, 1);
+  const round4 = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(n * 10000) / 10000;
+  };
+  const round2 = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(n * 100) / 100;
+  };
+  const sat = (count, k) => {
+    const c = Math.max(0, Number(count) || 0);
+    const cap = Math.max(1, Number(k) || 1);
+    const v = Math.log(1 + c) / Math.log(1 + cap);
+    return clamp01(v);
+  };
+  const slotLabelForIndex = (index) => {
+    const i = Math.max(0, Math.floor(Number(index) || 0));
+    if (i < 26) return String.fromCharCode(65 + i);
+    return `I${i + 1}`;
+  };
+  const sizeTierFromArea = (areaRatio) => {
+    const n = Math.max(0, Number(areaRatio) || 0);
+    if (n >= 0.07) return "DOMINANT";
+    if (n >= 0.03) return "MEDIUM";
+    return "SMALL";
+  };
+  const positionTierFromRect = (rectNorm) => {
+    const cx = Number(rectNorm?.cx);
+    const cy = Number(rectNorm?.cy);
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return "CENTER_MIDDLE";
+    const xTier = cx < 0.34 ? "LEFT" : cx > 0.66 ? "RIGHT" : "CENTER";
+    const yTier = cy < 0.34 ? "TOP" : cy > 0.66 ? "BOTTOM" : "MIDDLE";
+    return `${xTier}_${yTier}`;
+  };
+  const relationFromDelta = (dx, dy, overlaps = false) => {
+    if (overlaps) return "OVERLAP";
+    return Math.abs(dx) >= Math.abs(dy)
+      ? (dx >= 0 ? "RIGHT" : "LEFT")
+      : (dy >= 0 ? "BELOW" : "ABOVE");
+  };
+
+  const rows = [];
+  const imageIds = [];
+  for (let i = 0; i < sourceImages.length; i += 1) {
+    const image = sourceImages[i];
+    const id = String(image?.id || "").trim();
+    if (!id || imageIds.includes(id)) continue;
+    imageIds.push(id);
+    const rectNormRaw = image?.rect_norm && typeof image.rect_norm === "object" ? image.rect_norm : null;
+    const rectNorm = rectNormRaw
+      ? {
+          x: round4(Number(rectNormRaw.x) || 0),
+          y: round4(Number(rectNormRaw.y) || 0),
+          w: round4(Math.max(0, Number(rectNormRaw.w) || 0)),
+          h: round4(Math.max(0, Number(rectNormRaw.h) || 0)),
+          cx: round4((Number(rectNormRaw.x) || 0) + (Math.max(0, Number(rectNormRaw.w) || 0) / 2)),
+          cy: round4((Number(rectNormRaw.y) || 0) + (Math.max(0, Number(rectNormRaw.h) || 0) / 2)),
+        }
+      : null;
+    const canvasAreaRatio = rectNorm ? Math.max(0, Number(rectNorm.w) * Number(rectNorm.h)) : 0;
+    rows.push({
+      id,
+      slot: slotLabelForIndex(rows.length),
+      rect_norm: rectNorm,
+      canvas_area_ratio: canvasAreaRatio,
+      selected: selectedIdSet.has(id),
+      active: Boolean(activeIdNorm && activeIdNorm === id),
+      interaction_base: 0,
+      interaction_raw: 0,
+      interaction_stale: true,
+      focus_score_raw: 0,
+      focus_score: 0,
+      geometry_score_raw: 0,
+      geometry_score: 0,
+      relative_scale_to_largest: 0,
+      score: 0,
+      weight_hint: 0,
+      size_tier: sizeTierFromArea(canvasAreaRatio),
+      position_tier: positionTierFromRect(rectNorm),
+      geometry_trace: null,
+    });
+  }
+  if (!rows.length) return null;
+
+  const signalsById = motherV2CollectImageInteractionSignals(imageIds);
+  for (const row of rows) {
+    const signal = signalsById.get(row.id) || {
+      move_count: 0,
+      resize_count: 0,
+      selection_hits: 0,
+      action_grid_hits: 0,
+      last_event_at_ms: 0,
+      last_transform_at_ms: 0,
+    };
+    const moveSat = sat(signal.move_count, SATURATION_K.move);
+    const resizeSat = sat(signal.resize_count, SATURATION_K.resize);
+    const selectionSat = sat(signal.selection_hits, SATURATION_K.selection);
+    const actionSat = sat(signal.action_grid_hits, SATURATION_K.action);
+    const interactionBase =
+      0.35 * moveSat + 0.35 * resizeSat + 0.25 * selectionSat + 0.05 * actionSat;
+    const transformRecencyMs = Number(signal.last_transform_at_ms) || 0;
+    const recencyMs = transformRecencyMs || Number(signal.last_event_at_ms) || 0;
+    const ageMs = recencyMs ? Math.max(0, nowMs - recencyMs) : INTERACTION_STALE_CUTOFF_MS + 1;
+    const transformAgeMs = transformRecencyMs
+      ? Math.max(0, nowMs - transformRecencyMs)
+      : INTERACTION_STALE_CUTOFF_MS + 1;
+    const interactionStale = transformAgeMs > INTERACTION_STALE_CUTOFF_MS;
+    let interactionRaw = interactionStale
+      ? 0
+      : interactionBase * Math.exp(-ageMs / INTERACTION_DECAY_TAU_MS);
+    if (
+      Number(signal.move_count) <= 1 &&
+      Number(signal.resize_count) === 0 &&
+      Number(signal.selection_hits) <= 2 &&
+      Number(signal.action_grid_hits) === 0
+    ) {
+      interactionRaw = 0;
+    }
+    row.interaction_base = interactionBase;
+    row.interaction_raw = Math.max(0, Number(interactionRaw) || 0);
+    row.interaction_stale = interactionStale;
+  }
+
+  const interactionBaseMax = rows.reduce(
+    (maxVal, row) => Math.max(maxVal, Math.max(0, Number(row.interaction_base) || 0)),
+    0
+  );
+  const interactionRawMax = rows.reduce(
+    (maxVal, row) => Math.max(maxVal, Math.max(0, Number(row.interaction_raw) || 0)),
+    0
+  );
+  const interactionConfidence = clamp01((interactionBaseMax - 0.15) / 0.35);
+  for (const row of rows) {
+    const focusRaw = interactionRawMax > 0 ? (Number(row.interaction_raw) || 0) / (interactionRawMax + EPS) : 0;
+    row.focus_score_raw = clamp01(focusRaw);
+    row.focus_score = clamp01(interactionConfidence * row.focus_score_raw);
+  }
+
+  const areaValues = rows
+    .map((row) => Math.max(0, Number(row.canvas_area_ratio) || 0))
+    .filter((value) => value > 0);
+  const areaMax = areaValues.length ? Math.max(...areaValues) : 0;
+  const areaMin = areaValues.length ? Math.min(...areaValues) : 0;
+  const sqrtAreaMax = areaMax > 0 ? Math.sqrt(areaMax) : 0;
+  const geometryConfidence =
+    areaMax > 0 && areaMin > 0
+      ? clamp01(Math.log((areaMax + EPS) / (areaMin + EPS)) / Math.log(2.5))
+      : 0;
+  let geometryRawMax = 0;
+  for (const row of rows) {
+    const area = Math.max(0, Number(row.canvas_area_ratio) || 0);
+    const size = sqrtAreaMax > 0 ? Math.sqrt(area) / (sqrtAreaMax + EPS) : 0;
+    row.relative_scale_to_largest = clamp01(size);
+    const cx = Number(row.rect_norm?.cx);
+    const cy = Number(row.rect_norm?.cy);
+    const centerDist = Number.isFinite(cx) && Number.isFinite(cy) ? Math.hypot(cx - 0.5, cy - 0.5) : 0.7071;
+    const centrality = clamp01(1 - centerDist / 0.7071);
+    const geometryRaw = 0.8 * size + 0.2 * centrality;
+    row.geometry_score_raw = clamp01(geometryRaw);
+    geometryRawMax = Math.max(geometryRawMax, row.geometry_score_raw);
+  }
+  for (const row of rows) {
+    const normalized = geometryRawMax > 0 ? row.geometry_score_raw / (geometryRawMax + EPS) : 0;
+    row.geometry_score = clamp01(geometryConfidence * normalized);
+    row.score =
+      (1 + 0.8 * row.focus_score) *
+      (1 + 0.5 * row.geometry_score) *
+      (1 + (row.selected ? 0.25 : 0) + (row.active ? 0.15 : 0));
+  }
+
+  let scoreTotal = rows.reduce((sum, row) => sum + Math.max(0, Number(row.score) || 0), 0);
+  if (!(scoreTotal > 0)) {
+    for (const row of rows) row.score = 1;
+    scoreTotal = rows.length;
+  }
+  for (const row of rows) {
+    row.weight_hint = scoreTotal > 0 ? (Number(row.score) || 0) / (scoreTotal + EPS) : 0;
+    row.geometry_trace = {
+      cx: round4(row.rect_norm?.cx ?? 0),
+      cy: round4(row.rect_norm?.cy ?? 0),
+      relative_scale: round4(row.relative_scale_to_largest),
+    };
+  }
+
+  const rowsByWeight = rows
+    .slice()
+    .sort((a, b) => Number(b.weight_hint || 0) - Number(a.weight_hint || 0));
+  const tierById = new Map();
+  for (let i = 0; i < rowsByWeight.length; i += 1) {
+    const row = rowsByWeight[i];
+    const weight = Number(row.weight_hint || 0);
+    const tier = i === 0 ? "PRIMARY" : weight >= 0.25 ? "SECONDARY" : "ACCENT";
+    tierById.set(row.id, tier);
+  }
+
+  const spatialRows = rows.filter((row) => row.rect_norm && typeof row.rect_norm === "object").slice(0, 8);
+  const relations = [];
+  const diagonalNorm = Math.sqrt(2);
+  for (let i = 0; i < spatialRows.length; i += 1) {
+    for (let j = i + 1; j < spatialRows.length; j += 1) {
+      const a = spatialRows[i];
+      const b = spatialRows[j];
+      const ar = a.rect_norm || null;
+      const br = b.rect_norm || null;
+      if (!ar || !br) continue;
+      const ax1 = Number(ar.x) || 0;
+      const ay1 = Number(ar.y) || 0;
+      const ax2 = ax1 + Math.max(0, Number(ar.w) || 0);
+      const ay2 = ay1 + Math.max(0, Number(ar.h) || 0);
+      const bx1 = Number(br.x) || 0;
+      const by1 = Number(br.y) || 0;
+      const bx2 = bx1 + Math.max(0, Number(br.w) || 0);
+      const by2 = by1 + Math.max(0, Number(br.h) || 0);
+      const acx = ax1 + (ax2 - ax1) / 2;
+      const acy = ay1 + (ay2 - ay1) / 2;
+      const bcx = bx1 + (bx2 - bx1) / 2;
+      const bcy = by1 + (by2 - by1) / 2;
+      const dx = bcx - acx;
+      const dy = bcy - acy;
+      const centerDistanceNorm = diagonalNorm > 0 ? Math.hypot(dx, dy) / diagonalNorm : 0;
+      const gapX = Math.max(0, Math.max(ax1 - bx2, bx1 - ax2));
+      const gapY = Math.max(0, Math.max(ay1 - by2, by1 - ay2));
+      const edgeGapNorm = Math.hypot(gapX, gapY);
+      const ix1 = Math.max(ax1, bx1);
+      const iy1 = Math.max(ay1, by1);
+      const ix2 = Math.min(ax2, bx2);
+      const iy2 = Math.min(ay2, by2);
+      const iw = Math.max(0, ix2 - ix1);
+      const ih = Math.max(0, iy2 - iy1);
+      const overlapArea = Math.max(0, iw * ih);
+      const overlaps = overlapArea > 1e-8;
+      const areaA = Math.max(0, (ax2 - ax1) * (ay2 - ay1));
+      const areaB = Math.max(0, (bx2 - bx1) * (by2 - by1));
+      const union = Math.max(0, areaA + areaB - overlapArea);
+      const iou = union > 1e-8 ? overlapArea / union : 0;
+
+      let confidence = 0;
+      if (overlaps) {
+        const overlapRatioA = areaA > 1e-8 ? overlapArea / areaA : 0;
+        const overlapRatioB = areaB > 1e-8 ? overlapArea / areaB : 0;
+        const areaNorm = overlapArea;
+        const confIou = clamp01((iou - 0.03) / 0.12);
+        const confArea = clamp01((areaNorm - 0.005) / 0.02);
+        const confCov = clamp01((Math.max(overlapRatioA, overlapRatioB) - 0.25) / 0.5);
+        confidence = Math.max(confIou, confArea, confCov);
+      } else {
+        confidence =
+          clamp01((0.35 - Number(centerDistanceNorm || 0)) / 0.35) *
+          clamp01((0.12 - Number(edgeGapNorm || 0)) / 0.12);
+      }
+      if (confidence < 0.55) continue;
+
+      relations.push({
+        id_a: a.id,
+        id_b: b.id,
+        slot_a: a.slot,
+        slot_b: b.slot,
+        relation: relationFromDelta(dx, dy, overlaps),
+        confidence: round4(confidence),
+        iou: round4(iou),
+      });
+    }
+  }
+  relations.sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0));
+  const relationLimit = rows.length <= 4 ? 4 : 6;
+
+  const overallConfidence = round4(clamp01(0.6 * interactionConfidence + 0.4 * geometryConfidence));
+  return {
+    schema: "brood.mother.proposal_context.v1",
+    interaction_decay_tau_ms: INTERACTION_DECAY_TAU_MS,
+    interaction_stale_cutoff_ms: INTERACTION_STALE_CUTOFF_MS,
+    focus_rank: rows
+      .slice()
+      .sort((a, b) => Number(b.focus_score || 0) - Number(a.focus_score || 0))
+      .map((row) => row.id)
+      .slice(0, 8),
+    interaction_confidence: round4(interactionConfidence),
+    geometry_confidence: round4(geometryConfidence),
+    overall_confidence: overallConfidence,
+    images: rowsByWeight.slice(0, 8).map((row) => ({
+      id: row.id,
+      slot: row.slot,
+      selected: row.selected,
+      active: row.active,
+      tier: tierById.get(row.id) || "ACCENT",
+      weight_hint: round2(row.weight_hint),
+      focus_score: round2(row.focus_score),
+      geometry_score: round2(row.geometry_score),
+      interaction_stale: row.interaction_stale,
+      size_tier: row.size_tier,
+      position_tier: row.position_tier,
+      geometry_trace: row.geometry_trace,
+    })),
+    relations: relations.slice(0, relationLimit),
+  };
+}
+
 function motherV2IntentPayload() {
   const idle = state.motherIdle;
   const wrap = els.canvasWrap;
@@ -11464,6 +11783,11 @@ function motherV2IntentPayload() {
         : null,
     };
   });
+  const proposalContext = motherV2BuildProposalContextForIntentPayload({
+    images,
+    selectedIds,
+    activeId,
+  });
   return {
     schema: "brood.mother.intent_infer.v1",
     action_version: Number(idle?.actionVersion) || 0,
@@ -11483,6 +11807,7 @@ function motherV2IntentPayload() {
           transformation_mode_candidates: ambientModeHints.candidates,
         }
       : null,
+    proposal_context: proposalContext,
     images,
   };
 }
