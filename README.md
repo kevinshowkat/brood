@@ -42,6 +42,15 @@ Notes:
 
 More usage details: `docs/desktop.md`.
 
+## Mother Context Packets
+
+Brood now ships compact context packets for both proposal inference and Gemini generation:
+- `brood.mother.proposal_context.v1` (intent/proposal soft priors)
+- `brood.gemini.context_packet.v2` (generation-time proposal lock + spatial hints)
+
+Details and scoring math:
+- `docs/desktop.md#mother-proposal--gemini-context-v2`
+
 ## Features
 
 ### Remove People
