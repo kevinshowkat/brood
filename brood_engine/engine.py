@@ -24,7 +24,7 @@ from .runs.feedback import FeedbackWriter
 from .runs.receipts import ImageInputs, ImageRequest, ResolvedRequest, build_receipt, write_receipt
 from .runs.summary import RunSummary, write_summary
 from .runs.thread_manifest import ThreadManifest
-from .utils import now_utc_iso, stable_hash, read_json, getenv_flag
+from .utils import now_utc_iso, stable_hash, read_json, getenv_flag, write_json
 
 
 class BroodEngine:
@@ -254,6 +254,7 @@ class BroodEngine:
         for idx, result in enumerate(response.results, start=1):
             artifact_id = f"{version.version_id}-{idx:02d}-{uuid.uuid4().hex[:8]}"
             receipt_path = self.run_dir / f"receipt-{artifact_id}.json"
+            gemini_receipt_path = self._gemini_provider_receipt_path(artifact_id) if model_spec.provider == "gemini" else None
             resolved = ResolvedRequest(
                 provider=model_spec.provider,
                 model=model_spec.name,
@@ -277,6 +278,8 @@ class BroodEngine:
                 "cost_per_1k_images_usd": cost_per_1k_images_usd,
                 "latency_per_image_s": latency_value,
             }
+            if gemini_receipt_path is not None:
+                metadata["gemini_receipt_path"] = str(gemini_receipt_path)
             receipt = build_receipt(
                 request=request,
                 resolved=resolved,
@@ -288,6 +291,8 @@ class BroodEngine:
                 result_metadata=metadata,
             )
             write_receipt(receipt_path, receipt)
+            if gemini_receipt_path is not None:
+                self._write_provider_receipt_copy(gemini_receipt_path, receipt)
 
             artifact = {
                 "artifact_id": artifact_id,
@@ -598,6 +603,17 @@ class BroodEngine:
         )
         write_summary(self.summary_path, summary)
         self.events.emit("run_finished", summary_path=str(self.summary_path))
+
+    def _gemini_provider_receipt_path(self, artifact_id: str) -> Path:
+        safe_id = str(artifact_id or "").strip() or uuid.uuid4().hex[:8]
+        return self.run_dir / "_raw_provider_outputs" / f"gemini-receipt-{safe_id}.json"
+
+    def _write_provider_receipt_copy(self, path: Path, payload: dict[str, Any]) -> None:
+        try:
+            write_json(path, payload)
+        except Exception:
+            # Debug receipt writes should never fail the generation flow.
+            return
 
 
 def _coerce_image_inputs(settings: dict[str, Any]) -> ImageInputs:

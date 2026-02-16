@@ -1,0 +1,821 @@
+{
+  "created_at": "2026-02-15T20:29:04.579684+00:00",
+  "items": [
+    {
+      "attempts": [
+        {
+          "attempt": 1,
+          "metrics": {
+            "bright_ratio": 0.2441358096030572,
+            "coverage": 0.5716136202539448,
+            "mean_green": 110.60222625732422
+          },
+          "used_key_pass": true
+        }
+      ],
+      "chosen_metrics": {
+        "bright_ratio": 0.2441358096030572,
+        "coverage": 0.5716136202539448,
+        "mean_green": 110.60222625732422
+      },
+      "flattened_to_picker_bg": true,
+      "input": "/Users/mainframe/Desktop/projects/brood/images/2019-08-30-10-19-13.jpg",
+      "output": "/Users/mainframe/Desktop/projects/brood/images_gemini_wire_subject_20260215_202748/2019-08-30-10-19-13_wire_subject.png",
+      "provider_response": {
+        "candidates": 1,
+        "model": "gemini-2.5-flash-image",
+        "usage": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        },
+        "usage_metadata": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        }
+      },
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null
+      },
+      "used_key_pass": true,
+      "warnings": [
+        "Gemini aspect ratio snapped to 3:2."
+      ]
+    },
+    {
+      "attempts": [
+        {
+          "attempt": 1,
+          "metrics": {
+            "bright_ratio": 0.1948820035133136,
+            "coverage": 0.36874287321252464,
+            "mean_green": 127.81751251220703
+          },
+          "used_key_pass": true
+        }
+      ],
+      "chosen_metrics": {
+        "bright_ratio": 0.1948820035133136,
+        "coverage": 0.36874287321252464,
+        "mean_green": 127.81751251220703
+      },
+      "flattened_to_picker_bg": true,
+      "input": "/Users/mainframe/Desktop/projects/brood/images/8W9o9ocw7B6jdf6xb6iqCP.jpg",
+      "output": "/Users/mainframe/Desktop/projects/brood/images_gemini_wire_subject_20260215_202748/8W9o9ocw7B6jdf6xb6iqCP_wire_subject.png",
+      "provider_response": {
+        "candidates": 1,
+        "model": "gemini-2.5-flash-image",
+        "usage": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        },
+        "usage_metadata": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        }
+      },
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null
+      },
+      "used_key_pass": true,
+      "warnings": [
+        "Gemini aspect ratio snapped to 3:2."
+      ]
+    },
+    {
+      "attempts": [
+        {
+          "attempt": 1,
+          "metrics": {
+            "bright_ratio": 0.16648657082100593,
+            "coverage": 0.2940348788831361,
+            "mean_green": 123.20051574707031
+          },
+          "used_key_pass": true
+        }
+      ],
+      "chosen_metrics": {
+        "bright_ratio": 0.16648657082100593,
+        "coverage": 0.2940348788831361,
+        "mean_green": 123.20051574707031
+      },
+      "flattened_to_picker_bg": true,
+      "input": "/Users/mainframe/Desktop/projects/brood/images/CBGOrchidsMarch2018-5086-Edit.jpg",
+      "output": "/Users/mainframe/Desktop/projects/brood/images_gemini_wire_subject_20260215_202748/CBGOrchidsMarch2018-5086-Edit_wire_subject.png",
+      "provider_response": {
+        "candidates": 1,
+        "model": "gemini-2.5-flash-image",
+        "usage": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        },
+        "usage_metadata": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        }
+      },
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null
+      },
+      "used_key_pass": true,
+      "warnings": [
+        "Gemini aspect ratio snapped to 3:2."
+      ]
+    },
+    {
+      "attempts": [
+        {
+          "attempt": 1,
+          "metrics": {
+            "bright_ratio": 0.348114498077877,
+            "coverage": 0.5286487397693452,
+            "mean_green": 137.6629180908203
+          },
+          "used_key_pass": true
+        }
+      ],
+      "chosen_metrics": {
+        "bright_ratio": 0.348114498077877,
+        "coverage": 0.5286487397693452,
+        "mean_green": 137.6629180908203
+      },
+      "flattened_to_picker_bg": true,
+      "input": "/Users/mainframe/Desktop/projects/brood/images/LeBron_James_(51959977144)_(cropped2).jpg",
+      "output": "/Users/mainframe/Desktop/projects/brood/images_gemini_wire_subject_20260215_202748/LeBron_James_(51959977144)_(cropped2)_wire_subject.png",
+      "provider_response": {
+        "candidates": 1,
+        "model": "gemini-2.5-flash-image",
+        "usage": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        },
+        "usage_metadata": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        }
+      },
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null
+      },
+      "used_key_pass": true,
+      "warnings": [
+        "Gemini aspect ratio snapped to 4:5."
+      ]
+    },
+    {
+      "attempts": [
+        {
+          "attempt": 1,
+          "metrics": {
+            "bright_ratio": 0.23092917135885885,
+            "coverage": 0.4056712962962963,
+            "mean_green": 125.15393829345703
+          },
+          "used_key_pass": true
+        }
+      ],
+      "chosen_metrics": {
+        "bright_ratio": 0.23092917135885885,
+        "coverage": 0.4056712962962963,
+        "mean_green": 125.15393829345703
+      },
+      "flattened_to_picker_bg": true,
+      "input": "/Users/mainframe/Desktop/projects/brood/images/Mark-Freeth-Venus-Fly-Trap.webp",
+      "output": "/Users/mainframe/Desktop/projects/brood/images_gemini_wire_subject_20260215_202748/Mark-Freeth-Venus-Fly-Trap_wire_subject.png",
+      "provider_response": {
+        "candidates": 1,
+        "model": "gemini-2.5-flash-image",
+        "usage": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        },
+        "usage_metadata": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        }
+      },
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null
+      },
+      "used_key_pass": true,
+      "warnings": [
+        "Gemini aspect ratio snapped to 4:3."
+      ]
+    },
+    {
+      "attempts": [
+        {
+          "attempt": 1,
+          "metrics": {
+            "bright_ratio": 0.11110469058185404,
+            "coverage": 0.4632305920241617,
+            "mean_green": 151.30947875976562
+          },
+          "used_key_pass": true
+        }
+      ],
+      "chosen_metrics": {
+        "bright_ratio": 0.11110469058185404,
+        "coverage": 0.4632305920241617,
+        "mean_green": 151.30947875976562
+      },
+      "flattened_to_picker_bg": true,
+      "input": "/Users/mainframe/Desktop/projects/brood/images/Profile_-_Patrick_Star.webp",
+      "output": "/Users/mainframe/Desktop/projects/brood/images_gemini_wire_subject_20260215_202748/Profile_-_Patrick_Star_wire_subject.png",
+      "provider_response": {
+        "candidates": 1,
+        "model": "gemini-2.5-flash-image",
+        "usage": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        },
+        "usage_metadata": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        }
+      },
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null
+      },
+      "used_key_pass": true,
+      "warnings": [
+        "Gemini aspect ratio snapped to 2:3."
+      ]
+    },
+    {
+      "attempts": [
+        {
+          "attempt": 1,
+          "metrics": {
+            "bright_ratio": 0.18414688110351562,
+            "coverage": 0.4291419982910156,
+            "mean_green": 100.7734603881836
+          },
+          "used_key_pass": true
+        }
+      ],
+      "chosen_metrics": {
+        "bright_ratio": 0.18414688110351562,
+        "coverage": 0.4291419982910156,
+        "mean_green": 100.7734603881836
+      },
+      "flattened_to_picker_bg": true,
+      "input": "/Users/mainframe/Desktop/projects/brood/images/m_jordan.webp",
+      "output": "/Users/mainframe/Desktop/projects/brood/images_gemini_wire_subject_20260215_202748/m_jordan_wire_subject.png",
+      "provider_response": {
+        "candidates": 1,
+        "model": "gemini-2.5-flash-image",
+        "usage": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        },
+        "usage_metadata": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        }
+      },
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null
+      },
+      "used_key_pass": true,
+      "warnings": [
+        "Gemini aspect ratio snapped to 1:1."
+      ]
+    },
+    {
+      "attempts": [
+        {
+          "attempt": 1,
+          "metrics": {
+            "bright_ratio": 0.11935279482886904,
+            "coverage": 0.24749949621775794,
+            "mean_green": 122.4010009765625
+          },
+          "used_key_pass": true
+        }
+      ],
+      "chosen_metrics": {
+        "bright_ratio": 0.11935279482886904,
+        "coverage": 0.24749949621775794,
+        "mean_green": 122.4010009765625
+      },
+      "flattened_to_picker_bg": true,
+      "input": "/Users/mainframe/Desktop/projects/brood/images/spongebob.webp",
+      "output": "/Users/mainframe/Desktop/projects/brood/images_gemini_wire_subject_20260215_202748/spongebob_wire_subject.png",
+      "provider_response": {
+        "candidates": 1,
+        "model": "gemini-2.5-flash-image",
+        "usage": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        },
+        "usage_metadata": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        }
+      },
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null
+      },
+      "used_key_pass": true,
+      "warnings": [
+        "Gemini aspect ratio snapped to 4:5."
+      ]
+    },
+    {
+      "attempts": [
+        {
+          "attempt": 1,
+          "metrics": {
+            "bright_ratio": 0.06367904420882936,
+            "coverage": 0.22345261346726192,
+            "mean_green": 81.76927185058594
+          },
+          "used_key_pass": true
+        }
+      ],
+      "chosen_metrics": {
+        "bright_ratio": 0.06367904420882936,
+        "coverage": 0.22345261346726192,
+        "mean_green": 81.76927185058594
+      },
+      "flattened_to_picker_bg": true,
+      "input": "/Users/mainframe/Desktop/projects/brood/images/squidward.jpeg",
+      "output": "/Users/mainframe/Desktop/projects/brood/images_gemini_wire_subject_20260215_202748/squidward_wire_subject.png",
+      "provider_response": {
+        "candidates": 1,
+        "model": "gemini-2.5-flash-image",
+        "usage": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        },
+        "usage_metadata": {
+          "cache_tokens_details": null,
+          "cached_content_token_count": null,
+          "candidates_token_count": 1290,
+          "candidates_tokens_details": [
+            {
+              "modality": "IMAGE",
+              "token_count": 1290
+            }
+          ],
+          "prompt_token_count": 499,
+          "prompt_tokens_details": [
+            {
+              "modality": "TEXT",
+              "token_count": 241
+            },
+            {
+              "modality": "IMAGE",
+              "token_count": 258
+            }
+          ],
+          "thoughts_token_count": null,
+          "tool_use_prompt_token_count": null,
+          "tool_use_prompt_tokens_details": null,
+          "total_token_count": 1789,
+          "traffic_type": null
+        }
+      },
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null
+      },
+      "used_key_pass": true,
+      "warnings": [
+        "Gemini aspect ratio snapped to 4:5."
+      ]
+    }
+  ],
+  "settings": {
+    "image_size": "2K",
+    "input_dir": "/Users/mainframe/Desktop/projects/brood/images",
+    "keying": {
+      "enabled": true,
+      "key_blur": 0.55,
+      "key_high": 74.0,
+      "key_low": 15.0
+    },
+    "model": "gemini-2.5-flash-image",
+    "out_dir": "/Users/mainframe/Desktop/projects/brood/images_gemini_wire_subject_20260215_202748",
+    "picker_bg": {
+      "keep_alpha": false,
+      "rgb": [
+        0,
+        0,
+        0
+      ],
+      "value": "#000000"
+    },
+    "prompt": "Transform the provided photo into a tactical neon wireframe portrait.\nHard requirements:\n1) Identify the primary foreground subject/object only.\n2) Remove all background, environment, shadows, and unrelated objects.\n3) Preserve only a readable high-level silhouette and pose from the source image.\n4) Render the subject as a detailed neon green holographic wireframe mesh,\n   with thin bright edge lines and subtle glow, similar to an RTS unit HUD render.\n   Use Brood HUD green exactly: rgba(82, 255, 148, 0.95) / #52FF94 for the dominant line color.\n5) Remove all source photo colors (skin tones, clothing colors, logos, materials). Only monochrome\n   green wire lines/shapes in the HUD green family are allowed.\n6) It is acceptable to simplify the subject significantly; prioritize clean wire readability over detail.\n7) Output one centered subject only.\n8) Use a pure black (#000000) background always (no transparency).\n9) No text, labels, frames, UI chrome, or watermark.",
+    "recursive": false
+  },
+  "summary": {
+    "contact_sheet": "/Users/mainframe/Desktop/projects/brood/images_gemini_wire_subject_20260215_202748/contact_sheet.jpg",
+    "failure_count": 0,
+    "input_tokens_total": 0,
+    "output_tokens_total": 0,
+    "requested_count": 9,
+    "success_count": 9
+  },
+  "tool": "gemini_subject_wireframe_batch",
+  "version": 1
+}

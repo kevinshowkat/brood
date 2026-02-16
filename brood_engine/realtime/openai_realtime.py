@@ -415,6 +415,7 @@ class IntentIconsRealtimeSession(_BaseRealtimeSnapshotSession):
         model: str | None = None,
         model_env_keys: tuple[str, ...] = ("BROOD_INTENT_REALTIME_MODEL", "OPENAI_INTENT_REALTIME_MODEL"),
         default_model: str = "gpt-realtime-mini",
+        instruction_scope: str = "default",
     ) -> None:
         resolved_model = (
             _normalize_realtime_model_name(model, default=default_model)
@@ -427,11 +428,15 @@ class IntentIconsRealtimeSession(_BaseRealtimeSnapshotSession):
             disabled=os.getenv("BROOD_INTENT_REALTIME_DISABLED") == "1",
             thread_name="brood-intent-realtime",
         )
+        scope = str(instruction_scope or "").strip().lower()
+        self._instruction_scope = "mother" if scope == "mother" else "default"
 
     def _disabled_message(self) -> str:
         return "Realtime intent inference is disabled (BROOD_INTENT_REALTIME_DISABLED=1)."
 
     def _instruction(self) -> str:
+        if self._instruction_scope == "mother":
+            return _intent_icons_instruction_mother()
         return _intent_icons_instruction()
 
     def _max_output_tokens(self) -> int:
@@ -925,6 +930,26 @@ def _intent_icons_instruction() -> str:
         "- Do not produce impersonation or identity abuse flows.\n"
         "- Keep all intent representations general-purpose and constructive.\n\n"
         "Return JSON only."
+    )
+
+
+def _intent_icons_instruction_mother() -> str:
+    return (
+        "MODE\n"
+        "You are in Mother proposal mode for Brood.\n"
+        "Optimization target: stunningly awe-inspiring and joyous + novel.\n"
+        "You must maximize visual wow while preserving coherence and subject identity.\n\n"
+        "MOTHER CONTEXT RULES\n"
+        "- CONTEXT_ENVELOPE_JSON.mother_context is authoritative when present.\n"
+        "- Treat mother_context.creative_directive and mother_context.optimization_target as hard steering.\n"
+        "- Prefer transformation modes that are novel relative to mother_context.recent_rejected_modes_for_context.\n"
+        "- Avoid repeating mother_context.last_accepted_mode unless confidence improvement is substantial.\n"
+        "- Use mother_context.selected_ids and mother_context.active_id to prioritize evidence_image_ids.\n"
+        "- Use images[].origin to balance uploaded references with mother-generated continuity.\n"
+        "- For 2+ images, prefer coherent fusion over collage and preserve a single camera/lighting world.\n"
+        "- Keep anti-artifact behavior conservative: avoid ghosting, duplication, and interface residue.\n\n"
+        "Return the same strict JSON schema contract as the default intent engine.\n\n"
+        f"{_intent_icons_instruction()}"
     )
 
 
