@@ -11956,6 +11956,59 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
     ? imagePayload.sourceImageIds.map((v) => String(v || "").trim()).filter(Boolean)
     : [];
   if (!sourceImageIds.length) return null;
+  const wrap = els.canvasWrap;
+  const canvasCssW = Math.max(1, Number(wrap?.clientWidth) || 1);
+  const canvasCssH = Math.max(1, Number(wrap?.clientHeight) || 1);
+  const round4 = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(n * 10000) / 10000;
+  };
+  const toRectNorm = (rectRaw) => {
+    if (!rectRaw || typeof rectRaw !== "object") return null;
+    const x = (Number(rectRaw.x) || 0) / canvasCssW;
+    const y = (Number(rectRaw.y) || 0) / canvasCssH;
+    const w = Math.max(0, Number(rectRaw.w) || 0) / canvasCssW;
+    const h = Math.max(0, Number(rectRaw.h) || 0) / canvasCssH;
+    return {
+      x: round4(x),
+      y: round4(y),
+      w: round4(w),
+      h: round4(h),
+      cx: round4(x + w / 2),
+      cy: round4(y + h / 2),
+    };
+  };
+  const overlapRegionForRect = (rectNorm, ix1, iy1, ix2, iy2) => {
+    const rw = Math.max(1e-6, Number(rectNorm?.w) || 0);
+    const rh = Math.max(1e-6, Number(rectNorm?.h) || 0);
+    const rx = Number(rectNorm?.x) || 0;
+    const ry = Number(rectNorm?.y) || 0;
+    const cx = ((Number(ix1) || 0) + (Number(ix2) || 0)) / 2;
+    const cy = ((Number(iy1) || 0) + (Number(iy2) || 0)) / 2;
+    const localCx = clamp((cx - rx) / rw, 0, 1);
+    const localCy = clamp((cy - ry) / rh, 0, 1);
+    const hBucket = localCx < 0.34 ? "left" : localCx > 0.66 ? "right" : "center";
+    const vBucket = localCy < 0.34 ? "top" : localCy > 0.66 ? "bottom" : "middle";
+    return {
+      region: `${vBucket}_${hBucket}`,
+      bounds_norm: {
+        x: round4(clamp(((Number(ix1) || 0) - rx) / rw, 0, 1)),
+        y: round4(clamp(((Number(iy1) || 0) - ry) / rh, 0, 1)),
+        w: round4(clamp(((Number(ix2) || 0) - (Number(ix1) || 0)) / rw, 0, 1)),
+        h: round4(clamp(((Number(iy2) || 0) - (Number(iy1) || 0)) / rh, 0, 1)),
+      },
+    };
+  };
+  const invertRelation = (value) => {
+    const rel = String(value || "").trim();
+    if (rel === "left_of") return "right_of";
+    if (rel === "right_of") return "left_of";
+    if (rel === "above") return "below";
+    if (rel === "below") return "above";
+    if (rel === "overlapping") return "overlapping";
+    return rel || "unknown";
+  };
 
   const actionVersion = Number(idle?.actionVersion) || 0;
   const summary = String(intent.summary || motherV2ProposalSentence(intent) || "").trim();
@@ -11984,6 +12037,9 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
   const draft = [];
   for (const imageId of sourceImageIds) {
     const item = state.imagesById.get(imageId) || null;
+    const rectNorm = toRectNorm(state.freeformRects.get(imageId) || null);
+    const canvasAreaRatio = rectNorm ? Math.max(0, Number(rectNorm.w) * Number(rectNorm.h)) : 0;
+    const aspectRatioNorm = rectNorm && Number(rectNorm.h) > 1e-6 ? Number(rectNorm.w) / Number(rectNorm.h) : null;
     const signal = signalsById.get(imageId) || {
       move_count: 0,
       resize_count: 0,
@@ -12009,6 +12065,7 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
     score += Math.min(2.0, Number(signal.resize_count || 0) * 0.28);
     score += Math.min(1.8, Number(signal.selection_hits || 0) * 0.16);
     score += Math.min(1.8, Number(signal.action_grid_hits || 0) * 0.18);
+    score += Math.min(0.8, canvasAreaRatio * 3.2);
 
     const preserve = [];
     if (isTarget || isSubject || isObject || imageId === sourceImageIds[0]) preserve.push("subject identity");
@@ -12028,9 +12085,16 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
       transform,
       score,
       signal,
+      rect_norm: rectNorm,
+      canvas_area_ratio: canvasAreaRatio,
+      aspect_ratio_norm: aspectRatioNorm,
     });
   }
 
+  const largestCanvasAreaRatio = draft.reduce(
+    (maxVal, entry) => Math.max(maxVal, Math.max(0, Number(entry.canvas_area_ratio) || 0)),
+    0
+  );
   const scoreTotal = draft.reduce((sum, entry) => sum + Math.max(0, Number(entry.score) || 0), 0) || 1;
   const imageManifest = draft
     .map((entry) => ({
@@ -12041,6 +12105,11 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
       preserve: Array.from(new Set(entry.preserve)).slice(0, 3),
       transform: Array.from(new Set(entry.transform)).slice(0, 3),
       weight: Math.round((Math.max(0, Number(entry.score) || 0) / scoreTotal) * 10000) / 10000,
+      rect_norm: entry.rect_norm,
+      canvas_area_ratio: round4(entry.canvas_area_ratio),
+      relative_scale_to_largest:
+        largestCanvasAreaRatio > 0 ? round4((Number(entry.canvas_area_ratio) || 0) / largestCanvasAreaRatio) : 0,
+      aspect_ratio_norm: entry.aspect_ratio_norm !== null ? round4(entry.aspect_ratio_norm) : null,
     }))
     .sort((a, b) => Number(b.weight) - Number(a.weight))
     .slice(0, 10);
@@ -12056,6 +12125,108 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
     }))
     .filter((entry) => entry.move_count || entry.resize_count || entry.selection_hits || entry.action_grid_hits)
     .slice(0, 8);
+  const zIndexById = new Map();
+  for (let i = 0; i < (state.freeformZOrder?.length || 0); i += 1) {
+    const id = String(state.freeformZOrder[i] || "").trim();
+    if (!id) continue;
+    if (!zIndexById.has(id)) zIndexById.set(id, i);
+  }
+  const spatialImageEntries = imageManifest.filter((entry) => entry.rect_norm && typeof entry.rect_norm === "object").slice(0, 8);
+  const pairwise = [];
+  const diagonalNorm = Math.sqrt(2);
+  for (let i = 0; i < spatialImageEntries.length; i += 1) {
+    for (let j = i + 1; j < spatialImageEntries.length; j += 1) {
+      const a = spatialImageEntries[i];
+      const b = spatialImageEntries[j];
+      const ar = a.rect_norm || null;
+      const br = b.rect_norm || null;
+      if (!ar || !br) continue;
+      const ax1 = Number(ar.x) || 0;
+      const ay1 = Number(ar.y) || 0;
+      const ax2 = ax1 + Math.max(0, Number(ar.w) || 0);
+      const ay2 = ay1 + Math.max(0, Number(ar.h) || 0);
+      const bx1 = Number(br.x) || 0;
+      const by1 = Number(br.y) || 0;
+      const bx2 = bx1 + Math.max(0, Number(br.w) || 0);
+      const by2 = by1 + Math.max(0, Number(br.h) || 0);
+      const acx = ax1 + (ax2 - ax1) / 2;
+      const acy = ay1 + (ay2 - ay1) / 2;
+      const bcx = bx1 + (bx2 - bx1) / 2;
+      const bcy = by1 + (by2 - by1) / 2;
+      const dx = bcx - acx;
+      const dy = bcy - acy;
+      const centerDistanceNorm = diagonalNorm > 0 ? Math.hypot(dx, dy) / diagonalNorm : 0;
+      const gapX = Math.max(0, Math.max(ax1 - bx2, bx1 - ax2));
+      const gapY = Math.max(0, Math.max(ay1 - by2, by1 - ay2));
+      const edgeGapNorm = Math.hypot(gapX, gapY);
+      const ix1 = Math.max(ax1, bx1);
+      const iy1 = Math.max(ay1, by1);
+      const ix2 = Math.min(ax2, bx2);
+      const iy2 = Math.min(ay2, by2);
+      const iw = Math.max(0, ix2 - ix1);
+      const ih = Math.max(0, iy2 - iy1);
+      const overlapArea = Math.max(0, iw * ih);
+      const overlaps = overlapArea > 1e-8;
+      const areaA = Math.max(0, (ax2 - ax1) * (ay2 - ay1));
+      const areaB = Math.max(0, (bx2 - bx1) * (by2 - by1));
+      const union = Math.max(0, areaA + areaB - overlapArea);
+      const iou = union > 1e-8 ? overlapArea / union : 0;
+      const overlapRatioA = areaA > 1e-8 ? overlapArea / areaA : 0;
+      const overlapRatioB = areaB > 1e-8 ? overlapArea / areaB : 0;
+      const aToB = overlaps
+        ? "overlapping"
+        : Math.abs(dx) >= Math.abs(dy)
+          ? (dx >= 0 ? "left_of" : "right_of")
+          : (dy >= 0 ? "above" : "below");
+      const overlapOnA = overlaps
+        ? {
+            ...overlapRegionForRect(ar, ix1, iy1, ix2, iy2),
+            ratio: round4(overlapRatioA),
+          }
+        : null;
+      const overlapOnB = overlaps
+        ? {
+            ...overlapRegionForRect(br, ix1, iy1, ix2, iy2),
+            ratio: round4(overlapRatioB),
+          }
+        : null;
+      const zA = zIndexById.has(a.id) ? Number(zIndexById.get(a.id)) : null;
+      const zB = zIndexById.has(b.id) ? Number(zIndexById.get(b.id)) : null;
+      const topId = zA === null || zB === null ? null : (zA > zB ? a.id : b.id);
+      pairwise.push({
+        id_a: a.id,
+        id_b: b.id,
+        a_to_b: aToB,
+        b_to_a: invertRelation(aToB),
+        center_distance_norm: round4(centerDistanceNorm),
+        edge_gap_norm: round4(edgeGapNorm),
+        overlaps,
+        overlap: overlaps
+          ? {
+              iou: round4(iou),
+              area_norm: round4(overlapArea),
+              on_a: overlapOnA,
+              on_b: overlapOnB,
+            }
+          : null,
+        z_order: {
+          index_a: zA,
+          index_b: zB,
+          top_id: topId,
+        },
+      });
+    }
+  }
+  pairwise.sort((a, b) => {
+    if (Number(Boolean(b.overlaps)) !== Number(Boolean(a.overlaps))) {
+      return Number(Boolean(b.overlaps)) - Number(Boolean(a.overlaps));
+    }
+    return Number(a.center_distance_norm) - Number(b.center_distance_norm);
+  });
+  const spatialRelations = {
+    image_ids_considered: spatialImageEntries.map((entry) => String(entry.id || "")),
+    pairwise: pairwise.slice(0, 12),
+  };
 
   const mustNot = [];
   for (const constraint of Array.isArray(compiled?.compile_constraints) ? compiled.compile_constraints : []) {
@@ -12082,6 +12253,7 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
       reference_ids: referenceIds,
     },
     image_manifest: imageManifest,
+    spatial_relations: spatialRelations,
     behavior_signals: {
       focus_rank: imageManifest.map((entry) => entry.id).slice(0, 5),
       interaction_weight_basis: interactionWeightBasis,
