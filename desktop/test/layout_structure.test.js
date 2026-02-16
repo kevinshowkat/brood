@@ -12,13 +12,13 @@ const css = readFileSync(cssPath, "utf8");
 
 test("Action Deck: contains Action Grid + Agents Dock with two stacked portrait videos", () => {
   assert.match(html, /id=\"control-strip\"/);
-  assert.match(html, /id=\"minimap\"/);
+  assert.match(html, /id=\"file-browser-dock\"/);
   assert.match(html, /id=\"hud\"/);
   assert.match(html, /id=\"action-grid\"/);
   assert.match(html, /id=\"agents-dock\"/);
   assert.match(html, /id=\"portrait-video\"/);
   assert.match(html, /id=\"portrait-video-2\"/);
-  assert.match(html, /id=\"control-strip\"[\s\S]*canvas-bumper--left[\s\S]*id=\"minimap\"[\s\S]*id=\"hud\"[\s\S]*id=\"action-grid\"[\s\S]*id=\"agents-dock\"[\s\S]*canvas-bumper--right/);
+  assert.match(html, /id=\"control-strip\"[\s\S]*canvas-bumper--left[\s\S]*id=\"file-browser-dock\"[\s\S]*id=\"hud\"[\s\S]*id=\"action-grid\"[\s\S]*id=\"agents-dock\"[\s\S]*canvas-bumper--right/);
 });
 
 test("Agents Dock: CSS stacks portraits vertically and keeps dock height aligned to grid", () => {
