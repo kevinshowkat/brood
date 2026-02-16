@@ -407,6 +407,11 @@ const state = {
   actionQueue: [],
   actionQueueActive: null, // { id, label, key, priority, enqueuedAt, source } | null
   actionQueueRunning: false,
+  actionQueueStats: {
+    replacedByKey: 0,
+    droppedOverflow: 0,
+    lastDropLabel: null,
+  },
   view: {
     scale: 1,
     offsetX: 0,
@@ -1123,6 +1128,39 @@ function topMetricQueueCounts() {
   return { pending, running };
 }
 
+function queuePreviewItems({ limit = 3 } = {}) {
+  const maxItems = clamp(Math.round(Number(limit) || 3), 1, 6);
+  const list = Array.isArray(state.actionQueue) ? state.actionQueue.slice() : [];
+  if (!list.length) return [];
+  return list
+    .sort((a, b) => {
+      const ap = typeof a?.priority === "number" ? a.priority : 0;
+      const bp = typeof b?.priority === "number" ? b.priority : 0;
+      if (ap !== bp) return bp - ap;
+      return (a?.enqueuedAt || 0) - (b?.enqueuedAt || 0);
+    })
+    .slice(0, maxItems)
+    .map((item) => String(item?.label || "Action").trim() || "Action");
+}
+
+function queueChipTooltip() {
+  const queue = topMetricQueueCounts();
+  const runningLabel = String(state.actionQueueActive?.label || "").trim();
+  const preview = queuePreviewItems({ limit: 3 });
+  const stats = state.actionQueueStats && typeof state.actionQueueStats === "object" ? state.actionQueueStats : {};
+  const replaced = Math.max(0, Number(stats.replacedByKey) || 0);
+  const dropped = Math.max(0, Number(stats.droppedOverflow) || 0);
+  const lines = [];
+  lines.push("Action queue");
+  lines.push(`Running: ${runningLabel || (queue.running ? "engine task" : "none")}`);
+  lines.push(`Pending: ${queue.pending}`);
+  if (preview.length) lines.push(`Next: ${preview.join(" -> ")}`);
+  if (replaced) lines.push(`Merged duplicate requests: ${replaced}`);
+  if (dropped) lines.push(`Dropped (queue full): ${dropped}`);
+  if (stats.lastDropLabel) lines.push(`Last dropped: ${stats.lastDropLabel}`);
+  return lines.join("\n");
+}
+
 function topMetricIngestTokens({ inputTokens = 0, outputTokens = 0, atMs = Date.now() } = {}) {
   const inTokens = Math.max(0, Math.round(Number(inputTokens) || 0));
   const outTokens = Math.max(0, Math.round(Number(outputTokens) || 0));
@@ -1231,14 +1269,32 @@ function renderTopMetricsGrid() {
   const queue = topMetricQueueCounts();
   const queueDepth = queue.pending + queue.running;
   const queueSeries = topMetricMinuteSeries(metrics.queueDepthByMinute, { nowMs });
+  const queuePreview = queuePreviewItems({ limit: 1 });
+  const queueStats = state.actionQueueStats && typeof state.actionQueueStats === "object" ? state.actionQueueStats : {};
+  const replacedCount = Math.max(0, Number(queueStats.replacedByKey) || 0);
+  const droppedCount = Math.max(0, Number(queueStats.droppedOverflow) || 0);
+  const queueFlags = [];
+  if (replacedCount) queueFlags.push(`U${Math.min(99, replacedCount)}`);
+  if (droppedCount) queueFlags.push(`D${Math.min(99, droppedCount)}`);
   if (els.topMetricQueueValue) {
-    els.topMetricQueueValue.textContent = `P${queue.pending} R${queue.running}`;
+    const flags = queueFlags.length ? ` ${queueFlags.join("/")}` : "";
+    els.topMetricQueueValue.textContent = `P${queue.pending} R${queue.running}${flags}`;
   }
   if (els.topMetricQueueTrend) {
-    els.topMetricQueueTrend.textContent = sparkline(queueSeries.values.slice(-10));
+    const runningLabel = String(state.actionQueueActive?.label || "").trim();
+    if (runningLabel) {
+      els.topMetricQueueTrend.textContent = `run:${clampText(runningLabel, 10)}`;
+    } else if (queuePreview.length) {
+      els.topMetricQueueTrend.textContent = `next:${clampText(queuePreview[0], 9)}`;
+    } else {
+      els.topMetricQueueTrend.textContent = sparkline(queueSeries.values.slice(-10));
+    }
   }
   if (els.topMetricQueue) {
     els.topMetricQueue.dataset.heat = topMetricHeat("queued_calls", queueDepth);
+    const queueTitle = queueChipTooltip();
+    els.topMetricQueue.title = queueTitle;
+    els.topMetricQueue.setAttribute("aria-label", queueTitle.replace(/\n/g, ". "));
   }
 
   const durations = Array.isArray(metrics.renderDurationsS) ? metrics.renderDurationsS : [];
@@ -6270,6 +6326,77 @@ function setStatus(message, isError = false) {
   state.lastStatusText = String(message || "");
   state.lastStatusError = Boolean(isError);
   renderSessionApiCallsReadout();
+}
+
+function normalizeErrorMessage(err, fallback = "unknown error") {
+  const msg = err?.message || err?.cause?.message || err?.reason?.message || err;
+  const text = String(msg || fallback).replace(/\s+/g, " ").trim();
+  if (!text) return String(fallback);
+  return text.length > 180 ? `${text.slice(0, 179)}…` : text;
+}
+
+function reportUserError(context, err, { statusScope = "Engine", retryHint = "Try again." } = {}) {
+  const label = String(context || "Action").trim() || "Action";
+  const detail = normalizeErrorMessage(err);
+  const statusLabel = label.toLowerCase();
+  setStatus(`${statusScope}: ${statusLabel} failed (${detail})`, true);
+  const hint = String(retryHint || "").trim();
+  const suffix = hint ? ` ${hint}` : "";
+  showToast(`${label} failed: ${detail}.${suffix}`, "error", 4200);
+}
+
+function runWithUserError(context, run, opts = {}) {
+  const fn = typeof run === "function" ? run : null;
+  if (!fn) return Promise.resolve(false);
+  return Promise.resolve()
+    .then(() => fn())
+    .catch((err) => {
+      console.error(`${context} failed:`, err);
+      reportUserError(context, err, opts);
+      return false;
+    });
+}
+
+function captureRunResetSnapshot() {
+  const queue = topMetricQueueCounts();
+  return {
+    runName: state.runDir ? basename(state.runDir) : "none",
+    imageCount: Math.max(0, Number(state.images?.length) || 0),
+    selectedCount: Math.max(0, Number(state.selectedIds?.length) || 0),
+    queueDepth: Math.max(0, Number(queue.pending) || 0) + Math.max(0, Number(queue.running) || 0),
+  };
+}
+
+function announceRunTransition(kind, snapshot) {
+  const mode = String(kind || "").trim().toLowerCase();
+  const summary = snapshot && typeof snapshot === "object" ? snapshot : captureRunResetSnapshot();
+  const pieces = [];
+  if (summary.imageCount > 0) pieces.push(`${summary.imageCount} photo${summary.imageCount === 1 ? "" : "s"}`);
+  if (summary.selectedCount > 0) pieces.push(`${summary.selectedCount} selection${summary.selectedCount === 1 ? "" : "s"}`);
+  if (summary.queueDepth > 0) pieces.push(`${summary.queueDepth} queued action${summary.queueDepth === 1 ? "" : "s"}`);
+  const resetting = pieces.length ? pieces.join(", ") : "workspace state";
+  if (mode === "open") {
+    setStatus("Engine: opening run (resetting workspace)…");
+    showToast(`Open Run: resetting ${resetting}.`, "tip", 3200);
+    return;
+  }
+  setStatus("Engine: creating run (resetting workspace)…");
+  showToast(`New Run: resetting ${resetting}.`, "tip", 3200);
+}
+
+function finalizeRunTransition(kind, { restoredArtifacts = 0 } = {}) {
+  const mode = String(kind || "").trim().toLowerCase();
+  const runName = basename(state.runDir) || "run";
+  if (mode === "open") {
+    const restored = Math.max(0, Number(restoredArtifacts) || 0);
+    showToast(
+      `Opened ${runName}. Workspace reset complete; restored ${restored} artifact${restored === 1 ? "" : "s"}.`,
+      "tip",
+      3600
+    );
+    return;
+  }
+  showToast(`New run ready: ${runName}. Workspace reset complete.`, "tip", 3200);
 }
 
 function renderSessionApiCallsReadout() {
@@ -15332,6 +15459,11 @@ function resetActionQueue() {
   state.actionQueue = [];
   state.actionQueueActive = null;
   state.actionQueueRunning = false;
+  state.actionQueueStats = {
+    replacedByKey: 0,
+    droppedOverflow: 0,
+    lastDropLabel: null,
+  };
   renderSessionApiCallsReadout();
 }
 
@@ -15349,12 +15481,18 @@ function enqueueAction({ label, key = null, priority = ACTION_QUEUE_PRIORITY.use
   }
 
   const now = Date.now();
+  let replacedCount = 0;
   if (key) {
     // De-dupe repeated clicks; keep latest request.
+    const before = state.actionQueue.length;
     state.actionQueue = state.actionQueue.filter((item) => item?.key !== key);
+    replacedCount = Math.max(0, before - state.actionQueue.length);
+    if (replacedCount) {
+      state.actionQueueStats.replacedByKey = Math.max(0, Number(state.actionQueueStats.replacedByKey) || 0) + replacedCount;
+    }
   }
 
-  state.actionQueue.push({
+  const queuedItem = {
     id: _actionQueueMakeId(),
     label: String(label),
     key: key ? String(key) : null,
@@ -15362,9 +15500,11 @@ function enqueueAction({ label, key = null, priority = ACTION_QUEUE_PRIORITY.use
     enqueuedAt: now,
     source: source ? String(source) : "user",
     run: fn,
-  });
+  };
+  state.actionQueue.push(queuedItem);
 
   // Keep queue bounded by dropping the lowest-priority oldest items.
+  const droppedItems = [];
   while (state.actionQueue.length > ACTION_QUEUE_MAX) {
     let dropIdx = 0;
     for (let i = 1; i < state.actionQueue.length; i += 1) {
@@ -15380,14 +15520,32 @@ function enqueueAction({ label, key = null, priority = ACTION_QUEUE_PRIORITY.use
         dropIdx = i;
       }
     }
-    state.actionQueue.splice(dropIdx, 1);
+    const dropped = state.actionQueue.splice(dropIdx, 1)[0];
+    if (dropped) droppedItems.push(dropped);
   }
 
-  showToast(`Queued: ${label}`, "tip", 1400);
+  if (droppedItems.length) {
+    state.actionQueueStats.droppedOverflow =
+      Math.max(0, Number(state.actionQueueStats.droppedOverflow) || 0) + droppedItems.length;
+    state.actionQueueStats.lastDropLabel = String(droppedItems[droppedItems.length - 1]?.label || "Action");
+    const dropLead = String(droppedItems[0]?.label || "action");
+    const more = droppedItems.length > 1 ? ` (+${droppedItems.length - 1} more)` : "";
+    showToast(`Queue full: dropped ${dropLead}${more}.`, "tip", 2600);
+  }
+
+  const queuedKept = state.actionQueue.some((item) => item?.id === queuedItem.id);
+  if (queuedKept) {
+    const mergedNote = replacedCount ? ` (updated ${replacedCount})` : "";
+    showToast(`Queued: ${label}${mergedNote}`, "tip", 1500);
+  } else {
+    showToast(`Queue full: ${label} was not queued.`, "error", 2800);
+  }
   renderQuickActions();
   renderSessionApiCallsReadout();
-  processActionQueue().catch(() => {});
-  return true;
+  processActionQueue().catch((err) => {
+    reportUserError("Queue processing", err, { retryHint: "Wait for current work to finish, then retry." });
+  });
+  return queuedKept;
 }
 
 function _pickNextQueuedActionIndex() {
@@ -15446,10 +15604,11 @@ async function processActionQueue() {
       renderSessionApiCallsReadout();
 
       try {
+        setStatus(`Engine: queued action running (${item.label})`);
         await Promise.resolve(item.run());
       } catch (err) {
         console.error("Queued action failed:", item?.label, err);
-        showToast(`${item?.label || "Action"} failed to start.`, "error", 3200);
+        reportUserError(item?.label || "Queued action", err, { retryHint: "Retry from Abilities." });
       }
 
       if (isEngineBusy()) {
@@ -16003,63 +16162,99 @@ function renderActionGrid() {
       }
       if (key === "bg") {
         const style = ev?.shiftKey ? "sweep" : "white";
-        applyBackground(style).catch((e) => console.error(e));
+        runWithUserError("Background replace", () => applyBackground(style), {
+          retryHint: "Select an image and try again.",
+        });
         return;
       }
       if (key === "extract_dna") {
-        runExtractDnaFromSelection().catch((e) => console.error(e));
+        runWithUserError("Extract DNA", () => runExtractDnaFromSelection(), {
+          statusScope: "Director",
+          retryHint: "Select at least one image and retry.",
+        });
         return;
       }
       if (key === "soul_leech") {
-        runSoulLeechFromSelection().catch((e) => console.error(e));
+        runWithUserError("Soul Leech", () => runSoulLeechFromSelection(), {
+          statusScope: "Director",
+          retryHint: "Select at least one image and retry.",
+        });
         return;
       }
       if (key === "remove_people") {
-        aiRemovePeople().catch((e) => console.error(e));
+        runWithUserError("Remove people", () => aiRemovePeople(), {
+          retryHint: "Select an image and retry.",
+        });
         return;
       }
       if (key === "variations") {
-        runVariations().catch((e) => console.error(e));
+        runWithUserError("Variations", () => runVariations(), {
+          retryHint: "Select an image and retry.",
+        });
         return;
       }
       if (key === "recast") {
-        runRecast().catch((e) => console.error(e));
+        runWithUserError("Recast", () => runRecast(), {
+          retryHint: "Select an image and retry.",
+        });
         return;
       }
       if (key === "diagnose") {
-        runDiagnose().catch((e) => console.error(e));
+        runWithUserError("Diagnose", () => runDiagnose(), {
+          statusScope: "Director",
+          retryHint: "Select an image and retry.",
+        });
         return;
       }
       if (key === "crop_square") {
-        cropSquare().catch((e) => console.error(e));
+        runWithUserError("Square crop", () => cropSquare(), {
+          retryHint: "Select an image and retry.",
+        });
         return;
       }
       if (key === "combine") {
-        runBlendPair().catch((e) => console.error(e));
+        runWithUserError("Combine", () => runBlendPair(), {
+          retryHint: "Select exactly 2 images and retry.",
+        });
         return;
       }
       if (key === "bridge") {
-        runBridgePair().catch((e) => console.error(e));
+        runWithUserError("Bridge", () => runBridgePair(), {
+          retryHint: "Select exactly 2 images and retry.",
+        });
         return;
       }
       if (key === "swap_dna") {
-        runSwapDnaPair({ invert: Boolean(ev?.shiftKey) }).catch((e) => console.error(e));
+        runWithUserError("Swap DNA", () => runSwapDnaPair({ invert: Boolean(ev?.shiftKey) }), {
+          retryHint: "Select exactly 2 images and retry.",
+        });
         return;
       }
       if (key === "argue") {
-        runArguePair().catch((e) => console.error(e));
+        runWithUserError("Argue", () => runArguePair(), {
+          statusScope: "Director",
+          retryHint: "Select exactly 2 images and retry.",
+        });
         return;
       }
       if (key === "extract_rule") {
-        runExtractRuleTriplet().catch((e) => console.error(e));
+        runWithUserError("Extract the Rule", () => runExtractRuleTriplet(), {
+          statusScope: "Director",
+          retryHint: "Select exactly 3 images and retry.",
+        });
         return;
       }
       if (key === "odd_one_out") {
-        runOddOneOutTriplet().catch((e) => console.error(e));
+        runWithUserError("Odd One Out", () => runOddOneOutTriplet(), {
+          statusScope: "Director",
+          retryHint: "Select exactly 3 images and retry.",
+        });
         return;
       }
       if (key === "triforce") {
-        runTriforceTriplet().catch((e) => console.error(e));
+        runWithUserError("Triforce", () => runTriforceTriplet(), {
+          retryHint: "Select exactly 3 images and retry.",
+        });
         return;
       }
     });
@@ -18275,7 +18470,8 @@ async function ensureRun() {
 }
 
 async function createRun() {
-  setStatus("Engine: creating run…");
+  const previous = captureRunResetSnapshot();
+  announceRunTransition("new", previous);
   const payload = await invoke("create_run_dir");
   state.runDir = payload.run_dir;
   state.eventsPath = payload.events_path;
@@ -18387,12 +18583,15 @@ async function createRun() {
   await spawnEngine();
   await startEventsPolling();
   if (state.ptySpawned) setStatus("Engine: ready");
+  finalizeRunTransition("new");
 }
 
 async function openExistingRun() {
   bumpInteraction();
   const selected = await open({ directory: true, multiple: false });
   if (!selected) return;
+  const previous = captureRunResetSnapshot();
+  announceRunTransition("open", previous);
   state.runDir = selected;
   state.eventsPath = `${selected}/events.jsonl`;
   state.eventsByteOffset = 0;
@@ -18410,6 +18609,7 @@ async function openExistingRun() {
   state.imagesById.clear();
   state.imagePaletteSeed = 0;
   state.activeId = null;
+  state.selectedIds = [];
   state.timelineNodes = [];
   state.timelineNodesById.clear();
   closeTimeline();
@@ -18498,7 +18698,7 @@ async function openExistingRun() {
   syncIntentModeClass();
   updateEmptyCanvasHint();
   await restoreIntentStateFromRunDir().catch(() => {});
-  await loadExistingArtifacts();
+  const restoredArtifacts = await loadExistingArtifacts();
   await spawnEngine();
   await startEventsPolling();
   scheduleVisualPromptWrite({ immediate: true });
@@ -18506,11 +18706,13 @@ async function openExistingRun() {
     scheduleAmbientIntentInference({ immediate: true, reason: "composition_change" });
   }
   if (state.ptySpawned) setStatus("Engine: ready");
+  finalizeRunTransition("open", { restoredArtifacts });
 }
 
 async function loadExistingArtifacts() {
   if (!state.runDir) return;
   const entries = await readDir(state.runDir, { recursive: false }).catch(() => []);
+  let restored = 0;
   for (const entry of entries) {
     if (!entry?.name) continue;
     if (!entry.name.startsWith("receipt-") || !entry.name.endsWith(".json")) continue;
@@ -18536,6 +18738,7 @@ async function loadExistingArtifacts() {
       },
       { select: false }
     );
+    restored += 1;
   }
   // Select latest.
   if (state.images.length > 0 && !state.activeId) {
@@ -18545,6 +18748,7 @@ async function loadExistingArtifacts() {
     setCanvasMode("multi");
     setTip("Multiple photos loaded. Click a photo to focus it.");
   }
+  return restored;
 }
 
 async function spawnEngine() {
@@ -22789,6 +22993,13 @@ function installCanvasHandlers() {
 	              if (paddedHit) hit = paddedHit;
 	            }
 
+	      if (hit) {
+	              const toggle = Boolean((event.shiftKey || event.metaKey || event.ctrlKey) && state.tool !== "annotate");
+	              selectCanvasImage(hit, { toggle }).catch(() => {});
+	              // Modifier-click (Shift/Cmd/Ctrl) is reserved for multi-select toggling; don't start a drag/tool action.
+	              if (toggle) return;
+	            }
+
             if (!intentActive && wheelModifier && event.button === 0) {
               els.overlayCanvas.setPointerCapture(event.pointerId);
               state.pointer.active = true;
@@ -22809,13 +23020,6 @@ function installCanvasHandlers() {
               requestRender();
               return;
             }
-
-	      if (hit) {
-	              const toggle = Boolean((event.shiftKey || event.metaKey || event.ctrlKey) && state.tool !== "annotate");
-	              selectCanvasImage(hit, { toggle }).catch(() => {});
-	              // Modifier-click (Shift/Cmd/Ctrl) is reserved for multi-select toggling; don't start a drag/tool action.
-	              if (toggle) return;
-	            }
 
 	          if (!hit) {
 	            if (event.button !== 0) return;
@@ -24034,7 +24238,9 @@ function installUi() {
   if (els.newRun)
     els.newRun.addEventListener("click", () => {
       bumpInteraction();
-      createRun().catch((e) => console.error(e));
+      runWithUserError("Create run", () => createRun(), {
+        retryHint: "Check permissions and try again.",
+      });
     });
   if (els.motherWheelMenu) {
     els.motherWheelMenu.addEventListener("click", (event) => {
@@ -24070,17 +24276,23 @@ function installUi() {
   if (els.openRun)
     els.openRun.addEventListener("click", () => {
       bumpInteraction();
-      openExistingRun().catch((e) => console.error(e));
+      runWithUserError("Open run", () => openExistingRun(), {
+        retryHint: "Choose a valid run folder and retry.",
+      });
     });
   if (els.import)
     els.import.addEventListener("click", () => {
       bumpInteraction();
-      importPhotos().catch((e) => console.error(e));
+      runWithUserError("Import photos", () => importPhotos(), {
+        retryHint: "Choose supported image files and retry.",
+      });
     });
   if (els.export)
     els.export.addEventListener("click", () => {
       bumpInteraction();
-      exportRun().catch((e) => console.error(e));
+      runWithUserError("Export run", () => exportRun(), {
+        retryHint: "Ensure the run directory is writable and retry.",
+      });
     });
 
   if (els.motherAbilityIcon) {
@@ -24775,11 +24987,17 @@ function installUi() {
       return;
     }
     if (key === "x") {
-      runExtractDnaFromSelection().catch((e) => console.error(e));
+      runWithUserError("Extract DNA", () => runExtractDnaFromSelection(), {
+        statusScope: "Director",
+        retryHint: "Select at least one image and retry.",
+      });
       return;
     }
     if (key === "j") {
-      runSoulLeechFromSelection().catch((e) => console.error(e));
+      runWithUserError("Soul Leech", () => runSoulLeechFromSelection(), {
+        statusScope: "Director",
+        retryHint: "Select at least one image and retry.",
+      });
       return;
     }
     if (key === "v") {
@@ -24792,14 +25010,20 @@ function installUi() {
       return;
     }
     if (key === "b") {
-      applyBackground("white").catch((e) => console.error(e));
+      runWithUserError("Background replace", () => applyBackground("white"), {
+        retryHint: "Select an image and try again.",
+      });
       return;
     }
     if (key === "r") {
       if (event.shiftKey) {
-        runRecast().catch((e) => console.error(e));
+        runWithUserError("Recast", () => runRecast(), {
+          retryHint: "Select an image and retry.",
+        });
       } else {
-        runVariations().catch((e) => console.error(e));
+        runWithUserError("Variations", () => runVariations(), {
+          retryHint: "Select an image and retry.",
+        });
       }
       return;
     }
