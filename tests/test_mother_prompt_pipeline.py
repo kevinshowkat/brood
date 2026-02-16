@@ -226,6 +226,34 @@ def test_mother_generate_request_v2_minimal_payload_uses_init_and_reference_path
     assert "provider_options" not in settings or settings["provider_options"] == {}
 
 
+def test_mother_generate_request_v2_carries_gemini_context_packet_in_action_meta() -> None:
+    packet = {
+        "schema": "brood.gemini.context_packet.v1",
+        "proposal_lock": {
+            "transformation_mode": "hybridize",
+            "selected_ids": ["img_a", "img_b"],
+        },
+        "image_manifest": [{"id": "img_a", "weight": 0.7}, {"id": "img_b", "weight": 0.3}],
+    }
+    _, _, _, action_meta = _mother_generate_request(
+        {
+            "schema": "brood.mother.generate.v2",
+            "prompt": "minimal v2 prompt",
+            "action_version": 31,
+            "intent_id": "intent-31",
+            "init_image": "/tmp/one.png",
+            "reference_images": ["/tmp/two.png"],
+            "gemini_context_packet": packet,
+        },
+        {},
+        target_provider="gemini",
+    )
+
+    assert action_meta["intent_id"] == "intent-31"
+    assert action_meta["gemini_context_packet"] == packet
+    assert action_meta["gemini_context_packet"] is not packet
+
+
 def test_mother_generate_request_v1_payload_remains_supported() -> None:
     prompt, settings, source_images, action_meta = _mother_generate_request(
         {
