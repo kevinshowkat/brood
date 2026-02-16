@@ -6384,9 +6384,18 @@ function announceRunTransition(kind, snapshot) {
   showToast(`New Run: resetting ${resetting}.`, "tip", 3200);
 }
 
-function finalizeRunTransition(kind, { restoredArtifacts = 0 } = {}) {
+function finalizeRunTransition(kind, { restoredArtifacts = 0, engineReady = true } = {}) {
   const mode = String(kind || "").trim().toLowerCase();
   const runName = basename(state.runDir) || "run";
+  const ready = Boolean(engineReady);
+  if (!ready) {
+    if (mode === "open") {
+      showToast(`Opened ${runName}, but engine failed to start. Retry Open Run.`, "error", 4200);
+      return;
+    }
+    showToast(`Run ${runName} created, but engine failed to start. Retry New Run.`, "error", 4200);
+    return;
+  }
   if (mode === "open") {
     const restored = Math.max(0, Number(restoredArtifacts) || 0);
     showToast(
@@ -15603,8 +15612,11 @@ async function processActionQueue() {
       renderQuickActions();
       renderSessionApiCallsReadout();
 
+      const queuedStatus = `Engine: queued action running (${item.label})`;
+      const prevStatusText = String(state.lastStatusText || "");
+      const prevStatusError = Boolean(state.lastStatusError);
       try {
-        setStatus(`Engine: queued action running (${item.label})`);
+        setStatus(queuedStatus);
         await Promise.resolve(item.run());
       } catch (err) {
         console.error("Queued action failed:", item?.label, err);
@@ -15614,6 +15626,12 @@ async function processActionQueue() {
       if (isEngineBusy()) {
         // Engine-driven action is in flight; completion events will resume the queue.
         return;
+      }
+
+      // If the queued callback returned without launching engine work, clear the
+      // temporary queue-running status so the ribbon does not appear stuck.
+      if (String(state.lastStatusText || "") === queuedStatus) {
+        setStatus(prevStatusText || (state.ptySpawned ? "Engine: ready" : "Engine: idle"), prevStatusError);
       }
 
       // Completed immediately (local action or no-op); continue draining.
@@ -18583,7 +18601,7 @@ async function createRun() {
   await spawnEngine();
   await startEventsPolling();
   if (state.ptySpawned) setStatus("Engine: ready");
-  finalizeRunTransition("new");
+  finalizeRunTransition("new", { engineReady: state.ptySpawned });
 }
 
 async function openExistingRun() {
@@ -18706,7 +18724,7 @@ async function openExistingRun() {
     scheduleAmbientIntentInference({ immediate: true, reason: "composition_change" });
   }
   if (state.ptySpawned) setStatus("Engine: ready");
-  finalizeRunTransition("open", { restoredArtifacts });
+  finalizeRunTransition("open", { restoredArtifacts, engineReady: state.ptySpawned });
 }
 
 async function loadExistingArtifacts() {
