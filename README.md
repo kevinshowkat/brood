@@ -22,23 +22,31 @@ Install:
 2. Open the DMG and drag `Brood.app` into `/Applications`.
 3. If macOS blocks launch, right-click `Brood.app` and choose **Open**.
 
-## What You Can Do
+## Current App Surface
 
-- 1 image: `Diagnose`, `Recast`
-- 2 images: `Combine`, `Swap DNA`, `Bridge`, `Argue`
-- Multi-view effect tokens: `Extract DNA`, `Soul Leech`
-- Multi-provider model support: OpenAI, Gemini, Imagen, Flux, SDXL
+- Canvas-first desktop with `Single view` and `Multi view`, plus pan/zoom/fit controls.
+- Action Grid + bottom HUD workflow for tooling and execution feedback.
+- Built-in local file-browser dock import flow, plus canvas import drag/drop.
+- Multi-provider model support: OpenAI, Gemini, Imagen, Flux, SDXL.
+
+### Abilities by Image Selection
+
+- 1 image: `Diagnose`, `Recast`, `Background: White`, `Background: Sweep`, `Crop: Square`, `Variations`.
+- 2 images: `Combine`, `Swap DNA`, `Bridge`, `Argue`.
+- Multi-view effect-token pipeline: `Extract DNA`, `Soul Leech`, then drag token onto a target image.
+
+### Mother Workflow
+
+- Mother observes your canvas and proposes edits.
+- Proposal loop supports next/propose, confirm/deploy, reject/stop, and reroll-style follow-ups.
+- Proposal intent and generation are fed by structured context packets (see below).
 
 ## First 5 Minutes (Desktop)
 
-1. Import one or more images (click canvas or use **Import Photos**).
-2. Use **Abilities** to run an operation.
-3. For transfer workflows, use `Extract DNA` / `Soul Leech`, then drag the token to another image.
-4. Watch bottom HUD output for `DIAG` / `ARG` messages.
-
-Notes:
-- Two-image actions return to output-only single view when complete.
-- Adding more images switches back to multi view when needed.
+1. Import one or more images.
+2. Arrange/resize on canvas to communicate intent.
+3. Let Mother propose, then confirm or reject.
+4. Run direct Abilities as needed and inspect HUD output (`DIAG` / `ARG`).
 
 More usage details: `docs/desktop.md`.
 
@@ -50,6 +58,17 @@ Brood now ships compact context packets for both proposal inference and Gemini g
 
 Details and scoring math:
 - `docs/desktop.md#mother-proposal--gemini-context-v2`
+
+## Run Artifacts and Debugging
+
+Each desktop run writes artifacts under `~/brood_runs/run-*`, including:
+- `events.jsonl` (desktop/engine event stream)
+- `mother_intent_infer-*.json`, `mother_prompt_compile-*.json`, `mother_generate-*.json`
+- `receipt-*.json` (generation/edit receipts)
+
+For Gemini wire-level inspection:
+- set `BROOD_DEBUG_GEMINI_WIRE=1` before launching the app
+- inspect `_raw_provider_outputs/gemini-send-message-*.json` and `gemini-receipt-*.json`
 
 ## Features
 
