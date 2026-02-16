@@ -7,9 +7,6 @@
 Brood is a reference-first AI image generation and editing desktop for developers.
 You steer outputs by arranging and combining images on a canvas, then applying abilities.
 
-Reference tagline:
-- **Brood: Reference-First AI Image Editing Desktop for Developers**
-
 ## Live Workflow Highlights
 
 ### Realtime Canvas Proposals
