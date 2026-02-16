@@ -856,7 +856,7 @@ button.ghost:hover {
 	  min-height: 260px;
 	  min-width: 0;
 	  order: 1;
-	  /* Bottom reserved space for multi-canvas layout (keep in sync with computeMultiRects padBottom). */
+	  /* Bottom reserved space for multi-canvas layout. */
 	  --control-surface-h: 250px;
 	  /* Left bumper is decorative; keep it narrower so the browser dock + HUD can breathe. */
 	  --bumper-left-w: clamp(36px, 7vw, 140px);

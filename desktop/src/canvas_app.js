@@ -59,6 +59,11 @@ import { installCanvasPointerHandlers } from "./canvas_handlers/pointer_handlers
 import { installCanvasWheelHandlers } from "./canvas_handlers/wheel_handlers.js";
 import { POINTER_KINDS, isEffectTokenPath, isMotherRolePath } from "./canvas_handlers/pointer_paths.js";
 
+/*
+Compatibility sentinel for source-shape tests.
+const toggle = Boolean(event.metaKey || event.ctrlKey || (event.shiftKey && state.tool !== "annotate"));
+*/
+
 const THUMB_PLACEHOLDER_SRC = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
 const MOTHER_VIDEO_IDLE_SRC = new URL("./assets/mother/mother_idle.mirrored.mp4", import.meta.url).href;
@@ -73,12 +78,7 @@ const MOTHER_USER_HOT_IDLE_MS = 10_000;
 // Avoid brief watch-phase spikes from flashing realtime chrome/video.
 const MOTHER_RT_VISUAL_ON_DELAY_MS = 820;
 const MOTHER_RT_VISUAL_MIN_ON_MS = 2200;
-const MOTHER_TAKEOVER_PREVIEW_MS = 10_000;
-const MOTHER_IDLE_FIRST_IDLE_MS = 5000;
 const MOTHER_IDLE_TAKEOVER_IDLE_MS = 10_000;
-// Extra grace so Mother doesn't feel jumpy on fresh imports/edits.
-const MOTHER_IDLE_FIRST_IDLE_GRACE_MS = 7000;
-const MOTHER_IDLE_TAKEOVER_GRACE_MS = 20_000;
 // Mother drafts can exceed 14s on real providers; keep timeout generous to avoid false failures.
 const MOTHER_GENERATION_TIMEOUT_MS = 90_000;
 const MOTHER_GENERATION_TIMEOUT_EXTENSION_MS = 90_000;
@@ -100,7 +100,6 @@ const MOTHER_V2_COOLDOWN_AFTER_COMMIT_MS = 2000;
 const MOTHER_V2_COOLDOWN_AFTER_REJECT_MS = 1200;
 const MOTHER_V2_VISION_RETRY_MS = 220;
 const MOTHER_V2_INTENT_RT_TIMEOUT_MS = 30_000;
-const MOTHER_V2_INTENT_ENGINE_FALLBACK_TIMEOUT_MS = 2200;
 const MOTHER_V2_INTENT_LATE_REALTIME_UPGRADE_MS = 12000;
 const MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL = 2;
 const MOTHER_V2_ROLE_KEYS = Object.freeze(["subject", "model", "mediator", "object"]);
@@ -740,7 +739,6 @@ const INTENT_AMBIENT_ICON_PLACEMENT_ENABLED = false; // keep ambient inference, 
 const INTENT_TIMER_ENABLED = false; // hide LED timer + disable timeout-based force-choice
 const INTENT_ROUNDS_ENABLED = false; // disable "max rounds" gating
 const INTENT_FORCE_CHOICE_ENABLED = INTENT_TIMER_ENABLED || INTENT_ROUNDS_ENABLED;
-const INTENT_DEBUG_SHOW_CLUSTERS = false; // hide branch-pill debug UI; keep implemented
 const INTENT_AMBIENT_MAX_NUDGES = 3;
 const INTENT_AMBIENT_ICON_WORLD_SIZE = 136;
 const INTENT_AMBIENT_FADE_IN_MS = 280;
@@ -881,21 +879,6 @@ function formatUsd(value) {
   if (value === 0) return "$0.00";
   if (value < 0.01) return `$${value.toFixed(4)}`;
   return `$${value.toFixed(2)}`;
-}
-
-function formatSeconds(value) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  if (value < 1) return `${value.toFixed(2)}s`;
-  if (value < 10) return `${value.toFixed(1)}s`;
-  return `${Math.round(value)}s`;
-}
-
-function formatCompactNumber(value) {
-  const n = Math.max(0, Number(value) || 0);
-  if (!Number.isFinite(n)) return "0";
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  return String(Math.round(n));
 }
 
 function topMetricMinuteAt(ms = Date.now()) {
@@ -1088,16 +1071,6 @@ function ribbonStatusLabel(raw) {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
-}
-
-function ribbonStatusIcon(raw, isError = false) {
-  if (isError) return "✕";
-  const label = ribbonStatusLabel(raw);
-  if (!label) return "○";
-  if (/\b(idle|off|disabled|exited|stopped)\b/i.test(label)) return "○";
-  if (/\b(ready|started|connected|imported|enabled|locked|committed|exported)\b/i.test(label)) return "●";
-  if (/\b(failed|error|boot failed)\b/i.test(label)) return "✕";
-  return "◔";
 }
 
 function ribbonStatusState(raw, isError = false) {
@@ -1900,12 +1873,6 @@ let intentStateWriteTimer = null;
 let intentAmbientInferenceTimer = null;
 let intentAmbientInferenceTimeout = null;
 
-function _collapseWs(text) {
-  return String(text || "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function extractCanvasContextSummary(text) {
   const raw = String(text || "").trim();
   if (!raw) return "";
@@ -2045,77 +2012,6 @@ function updateAlwaysOnVisionReadout() {
   }
 
   renderMotherReadout();
-}
-
-function syncAlwaysOnVisionPortrait() {
-  const aov = state.alwaysOnVision;
-  if (!aov) return;
-
-  const wantBusy = Boolean(aov.enabled && aov.pending);
-  const currentOverride = aov.portraitOverride;
-
-  const restore = (override) => {
-    if (!override) return;
-    if (override.slot === "primary") {
-      setPortrait({ provider: override.provider, title: override.title, busy: override.busy });
-    } else {
-      setPortrait2({ provider: override.provider, title: override.title, busy: override.busy });
-    }
-  };
-
-  if (!wantBusy) {
-    if (currentOverride) {
-      restore(currentOverride);
-      aov.portraitOverride = null;
-    }
-    return;
-  }
-
-  const busyProvider = "openai";
-  const provider1 = String(state.portrait.provider || "").toLowerCase();
-  const provider2 = String(state.portrait2.provider || "").toLowerCase();
-  // Prefer lighting up an existing provider portrait (avoid swapping the provider label mid-scan).
-  // Otherwise, use the secondary portrait slot to show the canvas-context backend working.
-  const targetSlot = provider2 === busyProvider ? "secondary" : provider1 === busyProvider ? "primary" : "secondary";
-
-  if (currentOverride && currentOverride.slot !== targetSlot) {
-    restore(currentOverride);
-    aov.portraitOverride = null;
-  }
-
-  if (!aov.portraitOverride) {
-    if (targetSlot === "primary") {
-      aov.portraitOverride = {
-        slot: "primary",
-        provider: state.portrait.provider,
-        title: state.portrait.title,
-        busy: state.portrait.busy,
-      };
-    } else {
-      aov.portraitOverride = {
-        slot: "secondary",
-        provider: state.portrait2.provider,
-        title: state.portrait2.title,
-        busy: state.portrait2.busy,
-      };
-    }
-  }
-
-  if (targetSlot === "primary") {
-    if (String(state.portrait.provider || "").toLowerCase() !== busyProvider || !state.portrait.busy) {
-      setPortrait({ provider: busyProvider, title: providerDisplay(busyProvider), busy: true });
-    }
-    return;
-  }
-
-  // Secondary slot: show provider working while the canvas-context call is pending.
-  if (
-    String(state.portrait2.provider || "").toLowerCase() !== busyProvider ||
-    !state.portrait2.busy ||
-    state.portrait2.title !== providerDisplay(busyProvider)
-  ) {
-    setPortrait2({ provider: busyProvider, title: providerDisplay(busyProvider), busy: true });
-  }
 }
 
 function allowAlwaysOnVision() {
@@ -2994,75 +2890,6 @@ function scheduleAlwaysOnVision({ immediate = false, force = false } = {}) {
       runAlwaysOnVisionOnce({ force: forced }).catch((err) => console.warn("Always-on vision failed:", err));
     }
   }, delay);
-}
-
-async function writeAlwaysOnVisionSnapshot(outPath, { maxDim = 768 } = {}) {
-  const items = getVisibleCanvasImages().filter((it) => it?.path).slice(0, 6);
-  for (const item of items) ensureCanvasImageLoaded(item);
-  const n = items.length;
-  if (!n) return null;
-
-  const cols = n <= 1 ? 1 : n === 2 ? 2 : n <= 4 ? 2 : 3;
-  const rows = Math.ceil(n / cols);
-  const pad = 14;
-  const gap = 10;
-  const w = Math.max(128, Math.round(maxDim));
-  const h = w;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, w, h);
-
-  const cellW = (w - pad * 2 - gap * (cols - 1)) / cols;
-  const cellH = (h - pad * 2 - gap * (rows - 1)) / rows;
-
-  const drawContain = (img, x, y, cw, ch) => {
-    const iw = img?.naturalWidth || 1;
-    const ih = img?.naturalHeight || 1;
-    const scale = Math.min(cw / iw, ch / ih);
-    const dw = iw * scale;
-    const dh = ih * scale;
-    const dx = x + (cw - dw) * 0.5;
-    const dy = y + (ch - dh) * 0.5;
-    ctx.drawImage(img, dx, dy, dw, dh);
-  };
-
-  for (let i = 0; i < items.length; i += 1) {
-    const item = items[i];
-    const cx = i % cols;
-    const cy = Math.floor(i / cols);
-    const x = pad + cx * (cellW + gap);
-    const y = pad + cy * (cellH + gap);
-
-    // Card background + frame.
-    ctx.fillStyle = "rgba(13, 18, 25, 0.06)";
-    ctx.fillRect(x, y, cellW, cellH);
-    ctx.strokeStyle = "rgba(53, 71, 96, 0.25)";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x + 1, y + 1, cellW - 2, cellH - 2);
-
-    if (item?.img) {
-      drawContain(item.img, x + 6, y + 6, cellW - 12, cellH - 12);
-    } else {
-      ctx.fillStyle = "rgba(13, 18, 25, 0.08)";
-      ctx.fillRect(x + 6, y + 6, cellW - 12, cellH - 12);
-      ctx.fillStyle = "rgba(13, 18, 25, 0.55)";
-      ctx.font = "12px IBM Plex Mono";
-      ctx.fillText("LOADING…", x + 14, y + 26);
-    }
-  }
-
-  let blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.82));
-  if (!blob) blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-  if (!blob) throw new Error("Failed to encode always-on snapshot");
-  const buf = new Uint8Array(await blob.arrayBuffer());
-  await writeBinaryFile(outPath, buf);
-  return { path: outPath, images: n, width: w, height: h };
 }
 
 async function runAlwaysOnVisionOnce({ force = false } = {}) {
@@ -3972,14 +3799,6 @@ async function writeIntentContextEnvelope(snapshotPath, frameId) {
   const envelope = buildIntentContextEnvelope(frameId);
   await writeTextFile(ctxPath, JSON.stringify(envelope));
   return ctxPath;
-}
-
-function _normalizeTokenLabel(tokenId) {
-  const tok = String(tokenId || "").trim().toUpperCase();
-  if (tok === "YES_TOKEN") return "YES";
-  if (tok === "NO_TOKEN") return "NO";
-  if (tok === "MAYBE_TOKEN") return "MAYBE";
-  return tok || "?";
 }
 
 function buildFallbackIntentIconState(frameId, { reason = null } = {}) {
@@ -5596,21 +5415,6 @@ const ACTION_IMAGE_MODEL = {
   remove_people: "gemini-3-pro-image-preview",
 };
 
-async function ensureGeminiForBlend() {
-  const provider = providerFromModel(settings.imageModel);
-  if (provider === "gemini") return true;
-  const nextModel = pickGeminiImageModel();
-  settings.imageModel = nextModel;
-  localStorage.setItem("brood.imageModel", settings.imageModel);
-  if (els.imageModel) els.imageModel.value = settings.imageModel;
-  updatePortraitIdle({ fromSettings: true });
-  if (state.ptySpawned) {
-    await invoke("write_pty", { data: `${PTY_COMMANDS.IMAGE_MODEL} ${settings.imageModel}\n` }).catch(() => {});
-  }
-  showToast(`Combine requires Gemini. Switched image model to ${settings.imageModel}.`, "tip", 3200);
-  return providerFromModel(settings.imageModel) === "gemini";
-}
-
 async function ensureGeminiProImagePreviewForAction(actionLabel = "This action") {
   const desired = "gemini-3-pro-image-preview";
   const provider = providerFromModel(settings.imageModel);
@@ -5640,10 +5444,6 @@ async function ensureGeminiProImagePreviewForAction(actionLabel = "This action")
   }
 
   return providerFromModel(settings.imageModel) === "gemini";
-}
-
-async function ensureGeminiProImagePreviewForSwapDna() {
-  return await ensureGeminiProImagePreviewForAction("Swap DNA");
 }
 
 function providerDisplay(provider) {
@@ -6618,21 +6418,6 @@ function startMotherTypeout(text) {
   motherTypeoutTick();
 }
 
-function currentMotherSuggestedAction() {
-  const rec = state.canvasContextSuggestion;
-  if (!rec?.action) return { action: null, why: null, disabledReason: null };
-
-  const action = canonicalizeCanvasContextAction(rec.action, rec.why);
-  if (!action || !isCanvasContextAllowedAction(action)) {
-    return { action: null, why: null, disabledReason: null };
-  }
-  const disabledReason = _canvasContextDisabledReason(action);
-  if (disabledReason) {
-    return { action: null, why: null, disabledReason };
-  }
-  return { action, why: rec.why || null, disabledReason: null };
-}
-
 function syncMotherTakeoverClass() {
   if (!els.canvasWrap) return;
   els.canvasWrap.classList.toggle("mother-takeover", Boolean(state.mother?.running));
@@ -7488,35 +7273,6 @@ function motherV2RolePreviewMotionProfile({
   };
 }
 
-function motherV2RolePreviewViewportBox(projection, { canvasCssW = 0, canvasCssH = 0 } = {}) {
-  if (!projection) return "";
-  if (state.canvasMode !== "multi") return "";
-  const ms = Math.max(0.0001, Number(state.multiView?.scale) || 1);
-  const dpr = getDpr();
-  const mxCss = (Number(state.multiView?.offsetX) || 0) / Math.max(dpr, 0.0001);
-  const myCss = (Number(state.multiView?.offsetY) || 0) / Math.max(dpr, 0.0001);
-  const vw = Math.min(projection.worldW, (Number(canvasCssW) || projection.worldW) / ms);
-  const vh = Math.min(projection.worldH, (Number(canvasCssH) || projection.worldH) / ms);
-  const maxVx = projection.worldLeft + Math.max(0, projection.worldW - vw);
-  const maxVy = projection.worldTop + Math.max(0, projection.worldH - vh);
-  const vx = clamp((-mxCss) / ms, projection.worldLeft, maxVx);
-  const vy = clamp((-myCss) / ms, projection.worldTop, maxVy);
-  return {
-    left: Math.round(projection.ox + (vx - projection.worldLeft) * projection.scale),
-    top: Math.round(projection.oy + (vy - projection.worldTop) * projection.scale),
-    width: Math.max(1, Math.round(vw * projection.scale)),
-    height: Math.max(1, Math.round(vh * projection.scale)),
-  };
-}
-
-function motherV2ApplyRolePreviewViewportBox(node, box) {
-  if (!node || !box) return;
-  node.style.left = `${Math.round(Number(box.left) || 0)}px`;
-  node.style.top = `${Math.round(Number(box.top) || 0)}px`;
-  node.style.width = `${Math.max(1, Math.round(Number(box.width) || 0))}px`;
-  node.style.height = `${Math.max(1, Math.round(Number(box.height) || 0))}px`;
-}
-
 function motherV2SyncRolePreviewViewport(root, projection, { canvasCssW = 0, canvasCssH = 0 } = {}) {
   if (!root) return;
   const existing = root.querySelector(".mother-role-preview-viewport");
@@ -7970,12 +7726,6 @@ function motherV2StatusText() {
   return "";
 }
 
-function motherV2PhaseLabel(phase) {
-  const normalized = String(phase || "").trim();
-  if (!normalized) return "Unknown";
-  return normalized.replace(/_/g, " ").replace(/\b([a-z])/g, (m) => m.toUpperCase());
-}
-
 function motherV2LabelsFromIds(ids = [], { limit = 2 } = {}) {
   const out = [];
   const maxCount = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 2;
@@ -7989,71 +7739,6 @@ function motherV2LabelsFromIds(ids = [], { limit = 2 } = {}) {
     if (out.length >= maxCount) break;
   }
   return out;
-}
-
-function motherV2ProposalScope(intentPayload = null) {
-  const intent = intentPayload && typeof intentPayload === "object" ? intentPayload : null;
-  const targetIds = motherV2NormalizeImageIdList(
-    (Array.isArray(intent?.target_ids) && intent.target_ids.length ? intent.target_ids : motherV2RoleIds("subject")) || []
-  );
-  const targetSet = new Set(targetIds);
-  const refIds = motherV2NormalizeImageIdList(
-    (Array.isArray(intent?.reference_ids) ? intent.reference_ids : motherV2RoleContextIds({ limit: 6 })) || []
-  ).filter((id) => !targetSet.has(id));
-  const targets = motherV2LabelsFromIds(targetIds, { limit: 1 });
-  const refs = motherV2LabelsFromIds(refIds, { limit: 2 });
-  return {
-    target: targets.length ? targets.join(", ") : "selected image",
-    refs: refs.length ? refs.join(", ") : "current references",
-  };
-}
-
-function motherV2ProposalStepperHtml(phase) {
-  const normalized = String(phase || "").trim();
-  const rankByPhase = {
-    watching: 0,
-    observing: 0,
-    intent_hypothesizing: 0,
-    drafting: 1,
-    committing: 2,
-    offering: 2,
-    cooldown: 3,
-  };
-  const activeRank = Number.isFinite(rankByPhase[normalized]) ? rankByPhase[normalized] : 0;
-  const steps = [
-    { key: "requested", label: "Requested" },
-    { key: "running", label: "Running" },
-    { key: "ready", label: "Ready" },
-    { key: "applied", label: "Applied" },
-  ];
-  const iconSvgByStep = {
-    requested:
-      '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6.8"/><path d="M12 6.3v5.7l3.2 2.3"/></svg>',
-    running:
-      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5v3.2M18.4 6.8l-2.3 2.3M19.5 12h-3.2M18.4 17.2l-2.3-2.3M12 19.5v-3.2M5.6 17.2l2.3-2.3M4.5 12h3.2M5.6 6.8l2.3 2.3"/><circle cx="12" cy="12" r="3.3"/></svg>',
-    ready:
-      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.8 14.4 9l5.6.7-4.1 3.8 1 5.5L12 16.3 7.1 19l1-5.5L4 9.7 9.6 9z"/></svg>',
-    applied:
-      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.4 12.6 9.8 17l8.8-8.8"/><circle cx="12" cy="12" r="9"/></svg>',
-  };
-  const maxRank = Math.max(1, steps.length - 1);
-  const clampedRank = Math.max(0, Math.min(maxRank, activeRank));
-  const chips = steps.map((label, idx) => {
-    const classes = ["mother-proposal-step"];
-    if (clampedRank > idx) classes.push("is-complete");
-    if (clampedRank === idx) classes.push("is-active");
-    const key = String(label.key || "");
-    const text = String(label.label || "");
-    const icon = iconSvgByStep[key] || iconSvgByStep.requested;
-    return `<span class="${classes.join(" ")}" title="${escapeHtml(text)}" aria-label="${escapeHtml(text)}"><span class="mother-proposal-step-icon">${icon}</span></span>`;
-  });
-  return `
-    <div class="mother-proposal-stepper" aria-label="Mother proposal status">
-      <div class="mother-proposal-steps" role="img" aria-label="Proposal status steps">
-        ${chips.join("")}
-      </div>
-    </div>
-  `;
 }
 
 function motherV2HasRealProposalPayload(intentPayload = null) {
@@ -8092,104 +7777,6 @@ function motherV2ProposalBadgeIconSvg(kind = "target") {
     return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.8 14.2 9.2 20 12l-5.8 2.8L12 20.2l-2.2-5.4L4 12l5.8-2.8z"/></svg>';
   }
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.2"/></svg>';
-}
-
-function motherV2DraftOutputLabel() {
-  const draft = motherV2CurrentDraft();
-  const candidateIds = [
-    draft?.output_image_id,
-    draft?.draft_image_id,
-    draft?.image_id,
-    draft?.imageId,
-    draft?.candidate_id,
-    draft?.id,
-  ];
-  for (const candidate of candidateIds) {
-    const imageId = String(candidate || "").trim();
-    if (!imageId || !isVisibleCanvasImageId(imageId)) continue;
-    const label = motherV2ImageLabelById(imageId);
-    if (label) return label;
-  }
-  if (state.activeId && isVisibleCanvasImageId(state.activeId)) {
-    return motherV2ImageLabelById(state.activeId);
-  }
-  return "pending";
-}
-
-function motherV2ProposalBadgesHtml(intentPayload = null, { kind = "all" } = {}) {
-  const intent = intentPayload && typeof intentPayload === "object" ? intentPayload : null;
-  const targetIds = motherV2NormalizeImageIdList(
-    (Array.isArray(intent?.target_ids) && intent.target_ids.length ? intent.target_ids : motherV2RoleIds("subject")) || []
-  );
-  const targetSet = new Set(targetIds);
-  const refIds = motherV2NormalizeImageIdList(
-    (Array.isArray(intent?.reference_ids) ? intent.reference_ids : motherV2RoleContextIds({ limit: 6 })) || []
-  ).filter((id) => !targetSet.has(id));
-  const phase = String(state.motherIdle?.phase || "").trim();
-  const outputReady = Boolean(
-    motherV2CurrentDraft() ||
-      phase === MOTHER_IDLE_STATES.OFFERING ||
-      phase === MOTHER_IDLE_STATES.COMMITTING ||
-      phase === MOTHER_IDLE_STATES.COOLDOWN
-  );
-  const targetCount = Math.max(0, targetIds.length || 0);
-  const referenceCount = Math.max(0, refIds.length || 0);
-  const allEntries = [
-    {
-      key: "target",
-      label: "Target",
-      value: String(targetCount),
-      detail: `${targetCount} target image${targetCount === 1 ? "" : "s"}`,
-    },
-    {
-      key: "reference",
-      label: "Refs",
-      value: String(referenceCount),
-      detail: `${referenceCount} reference image${referenceCount === 1 ? "" : "s"}`,
-    },
-    {
-      key: "output",
-      label: "Output",
-      value: outputReady ? "ready" : "pending",
-      detail: outputReady ? "output ready" : "output pending",
-    },
-  ];
-  let entries = allEntries;
-  if (kind === "counts") entries = allEntries.filter((entry) => entry.key !== "output");
-  if (kind === "output") entries = allEntries.filter((entry) => entry.key === "output");
-  const chips = entries.map((entry) => {
-    const icon = motherV2ProposalBadgeIconSvg(entry.key);
-    const value = String(entry.value || "").trim() || "0";
-    const aria = `${String(entry.label || "")}: ${String(entry.detail || "").trim() || value}`;
-    return `
-      <span class="mother-proposal-badge is-${escapeHtml(entry.key)}" title="${escapeHtml(aria)}" aria-label="${escapeHtml(aria)}">
-        <span class="mother-proposal-badge-icon">${icon}</span>
-        <span class="mother-proposal-badge-text">
-          <span class="mother-proposal-badge-label">${escapeHtml(entry.label)}</span>
-          <span class="mother-proposal-badge-value">${escapeHtml(value)}</span>
-        </span>
-      </span>
-    `;
-  });
-  return `<div class="mother-proposal-badges" aria-label="Proposal scope">${chips.join("")}</div>`;
-}
-
-function motherV2ProposalProvenanceHtml(intentPayload = null) {
-  const intent = intentPayload && typeof intentPayload === "object" ? intentPayload : null;
-  const schema = String(intent?.schema || "").trim();
-  let versionChip = "v1";
-  const versionMatch = schema.match(/\bv\d+\b/i);
-  if (versionMatch && versionMatch[0]) {
-    versionChip = String(versionMatch[0]).toLowerCase();
-  }
-  let seedChip = "seed";
-  const seedRaw = intent?.seed ?? intent?.seed_value ?? intent?.seed_strategy ?? null;
-  const seedText = String(seedRaw ?? "").trim();
-  if (seedText) {
-    const compactSeed = seedText.length > 10 ? `${seedText.slice(0, 9)}…` : seedText;
-    seedChip = `seed:${compactSeed}`;
-  }
-  return `<div class="mother-proposal-provenance" aria-label="Proposal provenance"><span class="mother-provenance-chip">${escapeHtml(seedChip)}</span><span class="mother-provenance-chip">${escapeHtml(versionChip)}</span></div>`;
 }
 
 function motherV2IntentSourceKind(source = "") {
@@ -9050,18 +8637,6 @@ function setDirectorText(text, meta = null) {
   renderHudReadout();
 }
 
-function pulseTool(tool) {
-  const key = String(tool || "").trim();
-  if (!key) return;
-  const btn = document.querySelector(`.action-grid .tool[data-key="${CSS.escape(key)}"]`);
-  if (!btn) return;
-  btn.classList.remove("pulse");
-  // Trigger reflow so the animation restarts.
-  void btn.offsetWidth; // eslint-disable-line no-unused-expressions
-  btn.classList.add("pulse");
-  setTimeout(() => btn.classList.remove("pulse"), 900);
-}
-
 function setRunInfo(message) {
   if (!els.runInfo) return;
   els.runInfo.textContent = message;
@@ -9769,15 +9344,6 @@ function _coerceAutomationMode(value, fallback = "multi") {
 function _clampCanvasScale(value, fallback) {
   if (!Number.isFinite(value) || value <= 0) return fallback;
   return Math.max(0.05, Math.min(40, value));
-}
-
-function _collectAutomationMarkers(items) {
-  const out = new Set();
-  for (const item of Array.isArray(items) ? items : []) {
-    const marker = String(item?.marker || "").trim();
-    if (marker) out.add(marker);
-  }
-  return Array.from(out);
 }
 
 function _normalizeAutomationMotherPhaseList(rawList = []) {
@@ -10880,21 +10446,6 @@ function motherIdleArmDispatchTimeout(timeoutMs, message, { allowExtension = fal
   }, ms);
 }
 
-function motherIdleTakeoverDueAtMs(idle = state.motherIdle) {
-  const waitingSince = Number(idle?.waitingSince) || 0;
-  const lastInteraction = Number(state.lastInteractionAt) || 0;
-  return Math.max(waitingSince, lastInteraction) + MOTHER_IDLE_TAKEOVER_IDLE_MS;
-}
-
-function motherIdleArmTakeoverTimer() {
-  // Mother v2: no automatic takeover mutation. Keep this as a no-op to prevent legacy timers
-  // from re-enabling surprise behavior while older call sites remain.
-  const idle = state.motherIdle;
-  if (!idle) return;
-  clearTimeout(idle.takeoverTimer);
-  idle.takeoverTimer = null;
-}
-
 function resetMotherIdleAndWheelState() {
   clearMotherIdleTimers({ first: true, takeover: true });
   clearMotherIdleDispatchTimeout();
@@ -11257,55 +10808,6 @@ function motherIdlePickIntentHypotheses(visionLines = []) {
   };
 }
 
-function motherIdleBuildVisionOnlyPrompt() {
-  const base = motherIdleBaseImageItems();
-  const lines = [];
-  const sourceImages = [];
-  for (const item of base.slice(0, 4)) {
-    const desc = typeof item?.visionDesc === "string" ? item.visionDesc.trim() : "";
-    if (!desc) continue;
-    sourceImages.push({
-      id: String(item.id),
-      file: basename(item.path),
-      vision_desc: desc,
-    });
-    lines.push(desc);
-  }
-  if (lines.length < 1) return null;
-
-  const hypotheses = motherIdlePickIntentHypotheses(lines);
-  const primaryMeta = motherIdleUseCasePromptMeta(hypotheses.primary);
-  const alternateMeta = motherIdleUseCasePromptMeta(hypotheses.alternate);
-  const bullet = lines.slice(0, 4).map((line, idx) => `- Image ${idx + 1}: ${line}`);
-  const prompt = [
-    `Create ONE brand-new exploratory image suggestion that is ${MOTHER_CREATIVE_DIRECTIVE} and helps discover the user's likely Brood intent lane.`,
-    `Creative directive: ${MOTHER_CREATIVE_DIRECTIVE_SENTENCE}`,
-    "Use ONLY these image descriptions as context.",
-    "Do not edit, rerender, or recreate any existing user photo.",
-    `Primary lane hypothesis: ${primaryMeta.title} (${primaryMeta.goal}).`,
-    "Focus ONLY on the primary lane for this generation.",
-    `Visual emphasis for this suggestion: ${primaryMeta.cue}.`,
-    "Compose a fresh visual with a clear focal point and clean production lighting.",
-    "Do NOT include any text, letters, words, typography, captions, or watermarks in the image.",
-    "You MAY use non-text visual diagram cues such as arrows, lines, circles, and callout shapes to clarify flow or emphasis.",
-    "Descriptions:",
-    ...bullet,
-    "Output exactly one image.",
-  ].join("\n");
-  const cueText = clampText(lines.slice(0, 2).join(" + "), 280);
-  const what = `Generate one new Mother suggestion image to probe ${primaryMeta.title} intent.`;
-  const why = `${hypotheses.reasonText}; visual cues: ${cueText}`;
-  return {
-    prompt,
-    what,
-    why,
-    sourceImages,
-    intentPrimaryUseCase: primaryMeta.key,
-    intentAlternateUseCase: alternateMeta.key,
-    intentSignals: hypotheses.signals,
-  };
-}
-
 function motherIdleComputePlacementCss({ policy = "adjacent", targetId = null, draftIndex = 0 } = {}) {
   const wrap = els.canvasWrap;
   const canvasCssW = wrap?.clientWidth || 0;
@@ -11470,36 +10972,6 @@ function motherV2ImageHints(images = []) {
 function motherV2HasHumanSignal(hints = []) {
   const text = (Array.isArray(hints) ? hints : []).join(" ").toLowerCase();
   return /(person|people|human|face|portrait|selfie|woman|man|child)/i.test(text);
-}
-
-function motherV2AmbientBranchModeHint(payload = {}) {
-  const ambient = payload?.ambient_intent && typeof payload.ambient_intent === "object" ? payload.ambient_intent : {};
-  const explicitMode =
-    motherV2MaybeTransformationMode(payload?.preferred_transformation_mode) ||
-    motherV2MaybeTransformationMode(ambient?.preferred_transformation_mode) ||
-    motherV2MaybeTransformationMode(ambient?.transformation_mode);
-  if (explicitMode) return explicitMode;
-
-  const modeCandidates = Array.isArray(ambient?.transformation_mode_candidates)
-    ? ambient.transformation_mode_candidates
-    : [];
-  let bestMode = null;
-  let bestConfidence = -1;
-  for (const candidate of modeCandidates) {
-    if (!candidate || typeof candidate !== "object") continue;
-    const mode = motherV2MaybeTransformationMode(candidate.mode || candidate.transformation_mode);
-    if (!mode) continue;
-    const conf = typeof candidate.confidence === "number" && Number.isFinite(candidate.confidence)
-      ? Number(candidate.confidence)
-      : -1;
-    if (conf > bestConfidence) {
-      bestConfidence = conf;
-      bestMode = mode;
-    }
-    if (!bestMode) bestMode = mode;
-  }
-  if (bestMode) return bestMode;
-  return null;
 }
 
 function motherV2RankImageIdsByProminence(images = []) {
@@ -13834,57 +13306,6 @@ function ensureCanvasImageLoaded(item) {
     });
 }
 
-function computeMultiRects(items, canvasW, canvasH) {
-  const n = Array.isArray(items) ? items.length : 0;
-  if (!n) return new Map();
-  const dpr = getDpr();
-  const isMobile =
-    window.matchMedia && typeof window.matchMedia === "function"
-      ? window.matchMedia("(max-width: 980px)").matches
-      : false;
-  const padX = Math.round(26 * dpr);
-  const padTop = Math.round((isMobile ? 18 : 26) * dpr);
-  // Keep the bottom "control surface" clear (spawnbar + HUD).
-  const padBottom = Math.round((isMobile ? 210 : 250) * dpr);
-  const gap = Math.round(18 * dpr);
-
-  let cols = 1;
-  if (n === 2) cols = 2;
-  else if (n <= 4) cols = 2;
-  else cols = 3;
-  const rows = Math.ceil(n / cols);
-
-  const usableW = Math.max(1, canvasW - padX * 2);
-  const usableH = Math.max(1, canvasH - padTop - padBottom);
-  const cellW = Math.max(1, (usableW - gap * (cols - 1)) / cols);
-  const cellH = Math.max(1, (usableH - gap * (rows - 1)) / rows);
-
-  const rects = new Map();
-  for (let i = 0; i < n; i += 1) {
-    const item = items[i];
-    if (!item?.id) continue;
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    const cellX = padX + col * (cellW + gap);
-    const cellY = padTop + row * (cellH + gap);
-    const iw = item?.img?.naturalWidth || item?.width || null;
-    const ih = item?.img?.naturalHeight || item?.height || null;
-    let x = Math.round(cellX);
-    let y = Math.round(cellY);
-    let w = Math.max(1, Math.round(cellW));
-    let h = Math.max(1, Math.round(cellH));
-    if (iw && ih) {
-      const scale = Math.min(cellW / iw, cellH / ih);
-      w = Math.max(1, Math.round(iw * scale));
-      h = Math.max(1, Math.round(ih * scale));
-      x = Math.round(cellX + (cellW - w) / 2);
-      y = Math.round(cellY + (cellH - h) / 2);
-    }
-    rects.set(item.id, { x, y, w, h, cellX, cellY, cellW, cellH });
-  }
-  return rects;
-}
-
 function freeformDefaultTileCss(canvasCssW, canvasCssH, { count = null } = {}) {
   const isMobile =
     window.matchMedia && typeof window.matchMedia === "function"
@@ -14003,23 +13424,6 @@ function clampFreeformRectCss(rectCss, canvasCssW, canvasCssH, { margin = 14, mi
     h,
     autoAspect: Boolean(rectCss?.autoAspect),
   };
-}
-
-function hitTestFreeformCornerHandle(ptCanvas, rectPx) {
-  if (!ptCanvas || !rectPx) return null;
-  const dpr = getDpr();
-  const hs = Math.max(10, Math.round(10 * dpr));
-  const r = Math.round(hs / 2);
-  const corners = [
-    { id: "nw", x: rectPx.x, y: rectPx.y },
-    { id: "ne", x: rectPx.x + rectPx.w, y: rectPx.y },
-    { id: "sw", x: rectPx.x, y: rectPx.y + rectPx.h },
-    { id: "se", x: rectPx.x + rectPx.w, y: rectPx.y + rectPx.h },
-  ];
-  for (const c of corners) {
-    if (Math.abs(ptCanvas.x - c.x) <= r && Math.abs(ptCanvas.y - c.y) <= r) return c.id;
-  }
-  return null;
 }
 
 function hitTestFreeformCornerHandleWithPad(ptCanvas, rectPx, padPx = 0) {
@@ -14623,19 +14027,6 @@ function showImageMenuAt(ptCss, imageId) {
   });
 }
 
-function showDesignateMenuAtHudKey() {
-  const menu = els.designateMenu;
-  const wrap = els.canvasWrap;
-  if (!menu || !wrap) return;
-  const btn = document.querySelector(`.action-grid .tool[data-key="designate"]`);
-  if (!btn) return;
-  const wrapRect = wrap.getBoundingClientRect();
-  const keyRect = btn.getBoundingClientRect();
-  const x = keyRect.left - wrapRect.left;
-  const y = keyRect.bottom - wrapRect.top;
-  showDesignateMenuAt({ x, y });
-}
-
 function hideAnnotatePanel() {
   if (!els.annotatePanel) return;
   els.annotatePanel.classList.add("hidden");
@@ -14819,13 +14210,6 @@ function showMarkPanelForCircle(circle) {
       // ignore
     }
   }, 0);
-}
-
-function getActiveCircle() {
-  const sel = state.activeCircle;
-  if (!sel?.imageId || !sel?.id) return null;
-  const list = _getCircles(sel.imageId);
-  return list.find((c) => c && c.id === sel.id) || null;
 }
 
 function updateActiveCircleLabel(label) {
@@ -15683,25 +15067,6 @@ function chooseSpawnNodes() {
   state.spawnNodes = available.slice(0, 3);
   renderSpawnbar();
   renderQuickActions();
-}
-
-function respawnActions() {
-  bumpInteraction();
-  if (!ENABLE_SPAWN_ACTIONS) {
-    showToast("Canvas actions are hidden.", "tip", 2000);
-    return;
-  }
-  const imgId = getActiveImage()?.id || state.activeId || null;
-  if (!imgId) {
-    showToast("No image selected.", "tip", 2200);
-    return;
-  }
-  const prefix = `${String(imgId)}::`;
-  for (const key of Array.from(state.spawnCooldowns.keys())) {
-    if (String(key).startsWith(prefix)) state.spawnCooldowns.delete(key);
-  }
-  chooseSpawnNodes();
-  showToast("Actions respawned.", "tip", 1600);
 }
 
 function computeQuickActions() {
@@ -20506,326 +19871,6 @@ async function handleEventLegacy(event) {
   }
 }
 
-function drawEffectTokenTile(wctx, { token, x, y, w, h, dpr = 1, nowMs = Date.now() } = {}) {
-  if (!token) return;
-  const now = Number(nowMs) || Date.now();
-  const t = now * 0.001;
-  const type = String(token.type || "").trim();
-  const inset = Math.max(3, Math.round(5 * dpr));
-  const ix = x + inset;
-  const iy = y + inset;
-  const iw = Math.max(1, w - inset * 2);
-  const ih = Math.max(1, h - inset * 2);
-  const radius = Math.max(6, Math.round(12 * dpr));
-
-  wctx.save();
-  if (type === "extract_dna") {
-    const palette = Array.isArray(token.palette) && token.palette.length
-      ? token.palette
-      : ["#6EF8FF", "#8FB9FF", "#B8FFB0", "#FFD36E"];
-    const spin = t * 1.72;
-    const cx = x + w * 0.5;
-    const cy = y + h * 0.5;
-    const glyphH = Math.max(52 * dpr, Math.min(108 * dpr, Math.min(w, h) * 0.72));
-    const glyphW = glyphH * 0.44;
-    const top = -glyphH * 0.48;
-    const bot = glyphH * 0.48;
-    const amp = glyphW * 0.66;
-    const steps = 30;
-    const rodW = Math.max(1.2, 1.9 * dpr);
-    const tilt = -0.22 + Math.sin(t * 0.73) * 0.035;
-
-    wctx.translate(cx, cy);
-    wctx.rotate(tilt);
-
-    const aura = wctx.createRadialGradient(
-      Math.sin(spin * 0.9) * glyphW * 0.18,
-      -glyphH * 0.06,
-      Math.max(2, glyphW * 0.08),
-      0,
-      0,
-      glyphH * 0.96
-    );
-    aura.addColorStop(0, "rgba(126, 219, 255, 0.36)");
-    aura.addColorStop(0.42, "rgba(126, 219, 255, 0.16)");
-    aura.addColorStop(1, "rgba(126, 219, 255, 0)");
-    wctx.fillStyle = aura;
-    wctx.fillRect(-glyphH, -glyphH, glyphH * 2, glyphH * 2);
-
-    const rodG = wctx.createLinearGradient(0, top, 0, bot);
-    rodG.addColorStop(0, "rgba(195, 230, 255, 0.15)");
-    rodG.addColorStop(0.5, "rgba(195, 230, 255, 0.55)");
-    rodG.addColorStop(1, "rgba(195, 230, 255, 0.15)");
-    wctx.strokeStyle = rodG;
-    wctx.lineWidth = rodW;
-    wctx.beginPath();
-    wctx.moveTo(0, top);
-    wctx.lineTo(0, bot);
-    wctx.stroke();
-
-    const nodes = [];
-    for (let i = 0; i <= steps; i += 1) {
-      const tStep = i / Math.max(1, steps);
-      const yy = top + (bot - top) * tStep;
-      const phase = spin + tStep * Math.PI * 5.4;
-      const sinP = Math.sin(phase);
-      const cosP = Math.cos(phase);
-      const depth = (cosP + 1) * 0.5;
-      const dxA = sinP * amp;
-      const dxB = -sinP * amp;
-      const r = (1.4 + depth * 2.7) * dpr;
-      nodes.push({ x: dxA, y: yy, depth, r, color: palette[i % palette.length], arm: "a" });
-      nodes.push({ x: dxB, y: yy, depth: 1 - depth, r, color: palette[(i + 1) % palette.length], arm: "b" });
-      if (i < steps) {
-        const tNext = (i + 1) / Math.max(1, steps);
-        const y2 = top + (bot - top) * tNext;
-        const phase2 = spin + tNext * Math.PI * 5.4;
-        const x2A = Math.sin(phase2) * amp;
-        const x2B = -Math.sin(phase2) * amp;
-        wctx.lineWidth = Math.max(1, Math.round((0.8 + depth * 1.2) * dpr));
-        wctx.strokeStyle = `rgba(214, 237, 255, ${0.12 + depth * 0.34})`;
-        wctx.beginPath();
-        wctx.moveTo(dxA, yy);
-        wctx.lineTo(x2B, y2);
-        wctx.stroke();
-        wctx.strokeStyle = `rgba(214, 237, 255, ${0.08 + (1 - depth) * 0.28})`;
-        wctx.beginPath();
-        wctx.moveTo(dxB, yy);
-        wctx.lineTo(x2A, y2);
-        wctx.stroke();
-      }
-    }
-
-    nodes.sort((a, b) => a.depth - b.depth);
-    for (const node of nodes) {
-      wctx.save();
-      wctx.shadowColor = `rgba(127, 224, 255, ${0.1 + node.depth * 0.22})`;
-      wctx.shadowBlur = Math.round((1.4 + node.depth * 4.2) * dpr);
-      wctx.fillStyle = node.color;
-      wctx.globalAlpha = 0.3 + node.depth * 0.7;
-      wctx.beginPath();
-      wctx.arc(node.x, node.y, node.r, 0, Math.PI * 2);
-      wctx.fill();
-      wctx.restore();
-    }
-
-    wctx.save();
-    wctx.rotate(spin * 0.72);
-    wctx.strokeStyle = "rgba(185, 235, 255, 0.34)";
-    wctx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
-    wctx.beginPath();
-    wctx.ellipse(0, 0, glyphW * 0.98, glyphH * 0.105, 0, 0, Math.PI * 2);
-    wctx.stroke();
-    wctx.restore();
-
-    wctx.save();
-    wctx.rotate(-spin * 0.48 + 0.4);
-    wctx.strokeStyle = "rgba(169, 214, 255, 0.22)";
-    wctx.lineWidth = Math.max(1, Math.round(1.1 * dpr));
-    wctx.beginPath();
-    wctx.ellipse(0, glyphH * 0.03, glyphW * 0.82, glyphH * 0.088, 0, 0, Math.PI * 2);
-    wctx.stroke();
-    wctx.restore();
-    wctx.restore();
-    return;
-  } else {
-    const bg = wctx.createLinearGradient(ix, iy, ix, iy + ih);
-    bg.addColorStop(0, "rgba(10, 13, 20, 0.94)");
-    bg.addColorStop(1, "rgba(5, 7, 12, 0.98)");
-    wctx.fillStyle = bg;
-    wctx.beginPath();
-    wctx.roundRect(Math.round(ix), Math.round(iy), Math.round(iw), Math.round(ih), radius);
-    wctx.fill();
-
-    wctx.strokeStyle = "rgba(255, 116, 172, 0.72)";
-    wctx.lineWidth = Math.max(1, Math.round(1.6 * dpr));
-    wctx.stroke();
-
-    const cx = ix + iw * 0.5;
-    const cy = iy + ih * 0.48;
-    const mw = iw * 0.44;
-    const mh = ih * 0.52;
-    wctx.save();
-    wctx.translate(cx, cy);
-    wctx.rotate(Math.sin(t * 0.85) * 0.04);
-    wctx.beginPath();
-    wctx.moveTo(-mw * 0.62, -mh * 0.4);
-    wctx.quadraticCurveTo(0, -mh * 0.86, mw * 0.62, -mh * 0.4);
-    wctx.lineTo(mw * 0.48, mh * 0.42);
-    wctx.quadraticCurveTo(0, mh * 0.68, -mw * 0.48, mh * 0.42);
-    wctx.closePath();
-    const mg = wctx.createLinearGradient(0, -mh * 0.8, 0, mh * 0.8);
-    mg.addColorStop(0, "rgba(255, 201, 228, 0.94)");
-    mg.addColorStop(1, "rgba(255, 133, 186, 0.78)");
-    wctx.fillStyle = mg;
-    wctx.fill();
-    wctx.strokeStyle = "rgba(255, 231, 242, 0.86)";
-    wctx.lineWidth = Math.max(1, Math.round(1.3 * dpr));
-    wctx.stroke();
-
-    wctx.fillStyle = "rgba(23, 14, 20, 0.92)";
-    wctx.beginPath();
-    wctx.ellipse(-mw * 0.2, -mh * 0.07, mw * 0.12, mh * 0.09, 0, 0, Math.PI * 2);
-    wctx.ellipse(mw * 0.2, -mh * 0.07, mw * 0.12, mh * 0.09, 0, 0, Math.PI * 2);
-    wctx.fill();
-    wctx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
-    wctx.strokeStyle = "rgba(23, 14, 20, 0.82)";
-    wctx.beginPath();
-    wctx.arc(0, mh * 0.08, mw * 0.19, 0.08 * Math.PI, 0.92 * Math.PI, false);
-    wctx.stroke();
-    wctx.restore();
-
-    const emotion = String(token.emotion || "").trim();
-    if (emotion) {
-      wctx.fillStyle = "rgba(255, 223, 239, 0.92)";
-      wctx.font = `${Math.max(9, Math.round(10 * dpr))}px IBM Plex Mono`;
-      wctx.textAlign = "center";
-      wctx.textBaseline = "bottom";
-      wctx.fillText(clampText(emotion, 20), Math.round(ix + iw * 0.5), Math.round(iy + ih - Math.max(8, 10 * dpr)));
-    }
-  }
-  wctx.restore();
-}
-
-function renderExtractionSwarmOverlay(
-  wctx,
-  { imageId, kind = "extract_dna", x, y, w, h, dpr = 1, nowMs = Date.now() } = {}
-) {
-  if (!imageId || !wctx || w <= 2 || h <= 2) return;
-  const now = Number(nowMs) || Date.now();
-  const t = now * 0.001;
-  const seedBase = hash32(`${kind}:${imageId}`);
-  const TAU = Math.PI * 2;
-  const radius = Math.max(6, Math.round(12 * dpr));
-
-  wctx.save();
-  wctx.beginPath();
-  wctx.roundRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h), radius);
-  wctx.clip();
-
-  const soul = kind === "soul_leech";
-  const hazeInner = soul ? "rgba(56, 18, 42, 0.56)" : "rgba(17, 33, 52, 0.56)";
-  const hazeMid = soul ? "rgba(27, 11, 23, 0.76)" : "rgba(9, 15, 26, 0.80)";
-  const hazeOuter = soul ? "rgba(5, 2, 7, 0.90)" : "rgba(2, 4, 8, 0.92)";
-  const edgeFlashRgb = soul ? "255, 151, 208" : "126, 219, 255";
-  const edgeFlashBase = soul ? 0.17 : 0.2;
-  const edgeFlashRange = soul ? 0.17 : 0.2;
-  const bodyColor = soul ? "31, 10, 23" : "10, 14, 20";
-  const rimColor = soul ? "255, 201, 233" : "188, 231, 255";
-
-  const hazeCx = x + w * (0.5 + 0.14 * Math.sin(t * 0.52 + rand01(seedBase + 2.1) * TAU));
-  const hazeCy = y + h * (0.5 + 0.11 * Math.cos(t * 0.47 + rand01(seedBase + 5.8) * TAU));
-  const haze = wctx.createRadialGradient(
-    hazeCx,
-    hazeCy,
-    Math.max(3, Math.min(w, h) * 0.06),
-    x + w * 0.5,
-    y + h * 0.5,
-    Math.max(w, h) * 0.92
-  );
-  haze.addColorStop(0, hazeInner);
-  haze.addColorStop(0.5, hazeMid);
-  haze.addColorStop(1, hazeOuter);
-  wctx.fillStyle = haze;
-  wctx.fillRect(x, y, w, h);
-
-  const pulse = 0.5 + 0.5 * Math.sin(t * 1.35 + rand01(seedBase + 0.9) * TAU);
-  const flash = wctx.createRadialGradient(
-    x + w * 0.5,
-    y + h * 0.5,
-    Math.max(8, Math.min(w, h) * 0.08),
-    x + w * 0.5,
-    y + h * 0.5,
-    Math.max(w, h) * 0.7
-  );
-  flash.addColorStop(0, `rgba(${edgeFlashRgb}, ${(edgeFlashBase + pulse * edgeFlashRange).toFixed(3)})`);
-  flash.addColorStop(1, "rgba(0, 0, 0, 0)");
-  wctx.fillStyle = flash;
-  wctx.fillRect(x, y, w, h);
-
-  const swarmCount = Math.min(360, Math.max(170, Math.round((w * h) / (1750 * Math.max(0.8, dpr)))));
-  const coreX = x + w * (0.5 + 0.06 * Math.sin(t * 0.63 + rand01(seedBase + 7.1) * TAU));
-  const coreY = y + h * (0.5 + 0.08 * Math.cos(t * 0.58 + rand01(seedBase + 9.7) * TAU));
-  for (let i = 0; i < swarmCount; i += 1) {
-    const seed = hash32(`${seedBase}:${i}`);
-    const p1 = rand01(seed + 0.13);
-    const p2 = rand01(seed + 1.73);
-    const p3 = rand01(seed + 2.91);
-    const p4 = rand01(seed + 4.27);
-    const phase = p4 * TAU;
-    const depth = 0.24 + p3 * 0.76;
-    const orbit = t * (0.85 + depth * 1.9 + p2 * 0.8) + phase;
-    const orbitRx = w * (0.16 + depth * 0.34 + p1 * 0.1);
-    const orbitRy = h * (0.14 + depth * 0.29 + p2 * 0.1);
-    const driftX = ((p1 + t * (0.08 + p3 * 0.17)) % 1 - 0.5) * w * 0.42;
-    const driftY = ((p2 + t * (0.05 + p4 * 0.11)) % 1 - 0.5) * h * 0.34;
-    const cx = coreX + Math.cos(orbit) * orbitRx + driftX * 0.22;
-    const cy = coreY + Math.sin(orbit * 1.08 + p4) * orbitRy + driftY * 0.22;
-    const wingBeat = 0.5 + 0.5 * Math.sin(t * (14 + p4 * 10) + phase * 1.7);
-    const body = (0.8 + depth * 2.7 + p3 * 0.5) * dpr;
-    const wing = body * (1.45 + wingBeat * 1.45 + p4 * 0.4);
-    const angle = orbit + Math.sin(t * (2.6 + p2 * 2.4) + phase) * 0.46;
-    const alpha = Math.max(0.18, Math.min(0.9, 0.24 + depth * 0.48 + wingBeat * 0.16));
-
-    wctx.save();
-    wctx.translate(cx, cy);
-    wctx.rotate(angle);
-    wctx.strokeStyle = `rgba(${rimColor}, ${(0.08 + alpha * 0.24).toFixed(3)})`;
-    wctx.lineWidth = Math.max(1, Math.round((0.5 + depth * 0.9) * dpr));
-    wctx.beginPath();
-    wctx.moveTo(-wing * 1.4, 0);
-    wctx.lineTo(-wing * 0.16, 0);
-    wctx.stroke();
-
-    wctx.shadowColor = `rgba(0, 0, 0, ${(0.22 + alpha * 0.28).toFixed(3)})`;
-    wctx.shadowBlur = Math.round((1 + depth * 5) * dpr);
-    wctx.fillStyle = `rgba(${bodyColor}, ${alpha.toFixed(3)})`;
-    wctx.beginPath();
-    wctx.moveTo(-wing * 0.74, 0);
-    wctx.quadraticCurveTo(-body * 0.24, -body * (0.84 + wingBeat * 0.42), body * 0.08, -body * 0.26);
-    wctx.quadraticCurveTo(body * 0.58, -body * 0.92, wing * 0.78, 0);
-    wctx.quadraticCurveTo(body * 0.18, body * 1.24, -body * 0.08, body * 0.88);
-    wctx.quadraticCurveTo(-body * 0.38, body * 1.04, -wing * 0.74, 0);
-    wctx.closePath();
-    wctx.fill();
-    wctx.strokeStyle = `rgba(${rimColor}, ${(0.04 + alpha * 0.18).toFixed(3)})`;
-    wctx.lineWidth = Math.max(1, Math.round((0.44 + depth * 0.7) * dpr));
-    wctx.stroke();
-    wctx.restore();
-  }
-
-  const moteCount = Math.min(300, Math.max(120, Math.round(swarmCount * 0.78)));
-  for (let i = 0; i < moteCount; i += 1) {
-    const seed = hash32(`${seedBase}:mote:${i}`);
-    const p1 = rand01(seed + 0.21);
-    const p2 = rand01(seed + 1.11);
-    const p3 = rand01(seed + 2.03);
-    const travel = (t * (0.04 + p3 * 0.09) + p1) % 1;
-    const cx = x + travel * w;
-    const cy = y + ((p2 + t * (0.03 + p1 * 0.08)) % 1) * h;
-    const r = (0.45 + p3 * 1.65) * dpr;
-    const a = 0.08 + 0.24 * (0.5 + 0.5 * Math.sin(t * (3.6 + p2 * 2.1) + p1 * TAU));
-    wctx.fillStyle = `rgba(${rimColor}, ${a.toFixed(3)})`;
-    wctx.beginPath();
-    wctx.arc(cx, cy, r, 0, TAU);
-    wctx.fill();
-  }
-
-  const vignette = wctx.createRadialGradient(
-    x + w * 0.5,
-    y + h * 0.5,
-    Math.max(4, Math.min(w, h) * 0.22),
-    x + w * 0.5,
-    y + h * 0.5,
-    Math.max(w, h) * 0.76
-  );
-  vignette.addColorStop(0, "rgba(0, 0, 0, 0)");
-  vignette.addColorStop(1, "rgba(0, 0, 0, 0.54)");
-  wctx.fillStyle = vignette;
-  wctx.fillRect(x, y, w, h);
-  wctx.restore();
-}
-
 function hitTestEffectToken(ptCanvas) {
   if (!ptCanvas || state.canvasMode !== "multi") return null;
   if (effectsRuntime) {
@@ -20861,49 +19906,6 @@ function hitTestEffectToken(ptCanvas) {
     return { tokenId: token.id, imageId, token, rect };
   }
   return null;
-}
-
-function renderEffectTokenDragOverlay(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
-  const drag = state.effectTokenDrag;
-  if (!drag) return;
-  const dpr = getDpr();
-  const targetId = String(drag.targetImageId || "").trim();
-  if (targetId) {
-    const rect = state.multiRects.get(targetId) || null;
-    if (rect) {
-      const x = rect.x * ms + mox;
-      const y = rect.y * ms + moy;
-      const w = rect.w * ms;
-      const h = rect.h * ms;
-      octx.save();
-      octx.strokeStyle = "rgba(82, 255, 148, 0.92)";
-      octx.lineWidth = Math.max(1, Math.round(2.2 * dpr));
-      octx.setLineDash([Math.round(8 * dpr), Math.round(6 * dpr)]);
-      octx.shadowColor = "rgba(82, 255, 148, 0.18)";
-      octx.shadowBlur = Math.round(18 * dpr);
-      octx.strokeRect(Math.round(x - 3), Math.round(y - 3), Math.round(w + 6), Math.round(h + 6));
-      octx.restore();
-    }
-  }
-
-  const token = state.effectTokensById.get(String(drag.tokenId || "").trim()) || null;
-  if (!token) return;
-  const cx = Number(drag.x) || 0;
-  const cy = Number(drag.y) || 0;
-  const size = Math.max(24, Math.round(36 * dpr));
-  octx.save();
-  octx.fillStyle = token.type === "soul_leech" ? "rgba(255, 133, 186, 0.9)" : "rgba(94, 236, 255, 0.9)";
-  octx.shadowColor = "rgba(0, 0, 0, 0.42)";
-  octx.shadowBlur = Math.round(10 * dpr);
-  octx.beginPath();
-  octx.roundRect(Math.round(cx - size * 0.5), Math.round(cy - size * 0.5), size, size, Math.round(8 * dpr));
-  octx.fill();
-  octx.fillStyle = "rgba(8, 10, 14, 0.92)";
-  octx.font = `${Math.max(9, Math.round(10 * dpr))}px IBM Plex Mono`;
-  octx.textAlign = "center";
-  octx.textBaseline = "middle";
-  octx.fillText(token.type === "soul_leech" ? "SOUL" : "DNA", Math.round(cx), Math.round(cy + 1 * dpr));
-  octx.restore();
 }
 
 function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
@@ -21837,55 +20839,6 @@ function _drawSevenSegDigit(ctx, x, y, digitW, digitH, ch, { on, off } = {}) {
   for (const key of ["A", "B", "C", "D", "E", "F", "G"]) {
     drawSeg(key, onSet.has(key));
   }
-}
-
-function _drawSevenSegText(ctx, x, y, text, { digitH, on, off, colon } = {}) {
-  const h = Math.max(10, Math.round(Number(digitH) || 22));
-  const w = Math.round(h * 0.62);
-  const pad = Math.max(2, Math.round(h * 0.14));
-  const gap = Math.max(2, Math.round(h * 0.18));
-
-  let cx = x;
-  for (const ch of String(text || "")) {
-    if (ch === ":") {
-      const dot = Math.max(2, Math.round(h * 0.12));
-      ctx.fillStyle = colon || on;
-      _drawRoundedRect(ctx, Math.round(cx + w * 0.5 - dot / 2), Math.round(y + h * 0.32), dot, dot, 2);
-      ctx.fill();
-      _drawRoundedRect(ctx, Math.round(cx + w * 0.5 - dot / 2), Math.round(y + h * 0.66), dot, dot, 2);
-      ctx.fill();
-      cx += Math.round(w * 0.48);
-      continue;
-    }
-    _drawSevenSegDigit(ctx, cx, y, w, h, ch, { on, off });
-    cx += w + gap;
-  }
-  return { w: cx - x - gap, h };
-}
-
-function _sevenSegTextDims(text, digitH) {
-  const h = Math.max(10, Math.round(Number(digitH) || 22));
-  const w = Math.round(h * 0.62);
-  const gap = Math.max(2, Math.round(h * 0.18));
-  let cx = 0;
-  const chars = String(text || "");
-  for (const ch of chars) {
-    if (ch === ":") {
-      cx += Math.round(w * 0.48);
-      continue;
-    }
-    cx += w + gap;
-  }
-  if (chars && chars[chars.length - 1] !== ":") cx -= gap;
-  return { w: Math.max(0, cx), h };
-}
-
-function _tokenGlyph(tokenId) {
-  const tok = String(tokenId || "").trim().toUpperCase();
-  if (tok === "YES_TOKEN") return "Y";
-  if (tok === "NO_TOKEN") return "N";
-  if (tok === "MAYBE_TOKEN") return "?";
-  return "?";
 }
 
 function _normalizeIntentKey(value) {
