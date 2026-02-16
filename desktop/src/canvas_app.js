@@ -11878,11 +11878,753 @@ function motherV2CollectGenerationImagePaths() {
   };
 }
 
+function motherV2CollectImageInteractionSignals(imageIds = []) {
+  const ids = (Array.isArray(imageIds) ? imageIds : [])
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+  const idSet = new Set(ids);
+  const ensure = (map, imageId) => {
+    if (!idSet.has(imageId)) return null;
+    if (!map.has(imageId)) {
+      map.set(imageId, {
+        move_count: 0,
+        resize_count: 0,
+        selection_hits: 0,
+        action_grid_hits: 0,
+        last_event_at_ms: 0,
+        last_transform_at_ms: 0,
+      });
+    }
+    return map.get(imageId);
+  };
+  const out = new Map();
+  for (const id of ids) {
+    ensure(out, id);
+  }
+  const events = Array.isArray(state.userEvents) ? state.userEvents : [];
+  for (const entry of events) {
+    if (!entry || typeof entry !== "object") continue;
+    const type = String(entry.type || "").trim();
+    const atMs = Number(entry.at_ms) || 0;
+    if (type === "image_move" || type === "image_resize") {
+      const imageId = String(entry.image_id || "").trim();
+      const row = ensure(out, imageId);
+      if (!row) continue;
+      if (type === "image_move") row.move_count += 1;
+      if (type === "image_resize") row.resize_count += 1;
+      if (atMs > row.last_transform_at_ms) row.last_transform_at_ms = atMs;
+      if (atMs > row.last_event_at_ms) row.last_event_at_ms = atMs;
+      continue;
+    }
+    if (type === "selection_change") {
+      const selectedIds = Array.isArray(entry.selected_ids)
+        ? entry.selected_ids.map((v) => String(v || "").trim()).filter(Boolean)
+        : [];
+      for (const imageId of selectedIds) {
+        const row = ensure(out, imageId);
+        if (!row) continue;
+        row.selection_hits += 1;
+        if (atMs > row.last_event_at_ms) row.last_event_at_ms = atMs;
+      }
+      continue;
+    }
+    if (type === "action_grid_press") {
+      const selectedIds = Array.isArray(entry.selected_ids)
+        ? entry.selected_ids.map((v) => String(v || "").trim()).filter(Boolean)
+        : [];
+      const activeId = String(entry.active_id || "").trim();
+      for (const imageId of selectedIds) {
+        const row = ensure(out, imageId);
+        if (!row) continue;
+        row.action_grid_hits += 1;
+        if (atMs > row.last_event_at_ms) row.last_event_at_ms = atMs;
+      }
+      if (activeId) {
+        const row = ensure(out, activeId);
+        if (row) {
+          row.action_grid_hits += 1;
+          if (atMs > row.last_event_at_ms) row.last_event_at_ms = atMs;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sanitizedIntent = null, imagePayload = null } = {}) {
+  const idle = state.motherIdle;
+  const intent = sanitizedIntent && typeof sanitizedIntent === "object" ? sanitizedIntent : {};
+  const sourceImageIds = Array.isArray(imagePayload?.sourceImageIds)
+    ? imagePayload.sourceImageIds.map((v) => String(v || "").trim()).filter(Boolean)
+    : [];
+  if (!sourceImageIds.length) return null;
+
+  const SATURATION_K = Object.freeze({
+    move: 8,
+    resize: 4,
+    selection: 8,
+    action: 4,
+  });
+  const MUST_NOT_DEFAULTS = Object.freeze([
+    "No collage or split-screen.",
+    "No text, captions, or watermarks.",
+    "No ghosted double-exposure overlays.",
+    "No UI residue or icon-overpaint artifacts.",
+    "No duplicated heads or limbs.",
+    "No extra humans or faces unless present in inputs.",
+  ]);
+  const INTERACTION_DECAY_TAU_MS = 90_000;
+  const INTERACTION_STALE_CUTOFF_MS = 10 * 60 * 1000;
+  const EPS = 1e-9;
+  const wrap = els.canvasWrap;
+  const canvasCssW = Math.max(1, Number(wrap?.clientWidth) || 1);
+  const canvasCssH = Math.max(1, Number(wrap?.clientHeight) || 1);
+  const nowMs = Date.now();
+  const clamp01 = (value) => clamp(Number(value) || 0, 0, 1);
+  const round4 = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(n * 10000) / 10000;
+  };
+  const round2 = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(n * 100) / 100;
+  };
+  const sat = (count, k) => {
+    const c = Math.max(0, Number(count) || 0);
+    const cap = Math.max(1, Number(k) || 1);
+    const v = Math.log(1 + c) / Math.log(1 + cap);
+    return clamp01(v);
+  };
+  const uniqueIds = (values = []) => {
+    const out = [];
+    for (const raw of Array.isArray(values) ? values : []) {
+      const id = String(raw || "").trim();
+      if (!id || out.includes(id)) continue;
+      out.push(id);
+    }
+    return out;
+  };
+  const slotLabelForIndex = (index) => {
+    const i = Math.max(0, Math.floor(Number(index) || 0));
+    if (i < 26) return String.fromCharCode(65 + i);
+    return `I${i + 1}`;
+  };
+  const toRectNorm = (rectRaw) => {
+    if (!rectRaw || typeof rectRaw !== "object") return null;
+    const x = (Number(rectRaw.x) || 0) / canvasCssW;
+    const y = (Number(rectRaw.y) || 0) / canvasCssH;
+    const w = Math.max(0, Number(rectRaw.w) || 0) / canvasCssW;
+    const h = Math.max(0, Number(rectRaw.h) || 0) / canvasCssH;
+    return {
+      x: round4(x),
+      y: round4(y),
+      w: round4(w),
+      h: round4(h),
+      cx: round4(x + w / 2),
+      cy: round4(y + h / 2),
+    };
+  };
+  const positionTierFromRect = (rectNorm) => {
+    const cx = Number(rectNorm?.cx);
+    const cy = Number(rectNorm?.cy);
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return "CENTER_MIDDLE";
+    const xTier = cx < 0.34 ? "LEFT" : cx > 0.66 ? "RIGHT" : "CENTER";
+    const yTier = cy < 0.34 ? "TOP" : cy > 0.66 ? "BOTTOM" : "MIDDLE";
+    return `${xTier}_${yTier}`;
+  };
+  const sizeTierFromArea = (areaRatio) => {
+    const n = Math.max(0, Number(areaRatio) || 0);
+    if (n >= 0.07) return "DOMINANT";
+    if (n >= 0.03) return "MEDIUM";
+    return "SMALL";
+  };
+  const relationFromDelta = (dx, dy, overlaps = false) => {
+    if (overlaps) return "OVERLAP";
+    return Math.abs(dx) >= Math.abs(dy)
+      ? (dx >= 0 ? "RIGHT" : "LEFT")
+      : (dy >= 0 ? "BELOW" : "ABOVE");
+  };
+  const overlapRegionForRect = (rectNorm, ix1, iy1, ix2, iy2) => {
+    const rw = Math.max(1e-6, Number(rectNorm?.w) || 0);
+    const rh = Math.max(1e-6, Number(rectNorm?.h) || 0);
+    const rx = Number(rectNorm?.x) || 0;
+    const ry = Number(rectNorm?.y) || 0;
+    const cx = ((Number(ix1) || 0) + (Number(ix2) || 0)) / 2;
+    const cy = ((Number(iy1) || 0) + (Number(iy2) || 0)) / 2;
+    const localCx = clamp((cx - rx) / rw, 0, 1);
+    const localCy = clamp((cy - ry) / rh, 0, 1);
+    const hBucket = localCx < 0.34 ? "left" : localCx > 0.66 ? "right" : "center";
+    const vBucket = localCy < 0.34 ? "top" : localCy > 0.66 ? "bottom" : "middle";
+    return {
+      region: `${vBucket}_${hBucket}`,
+      x_norm: round4(clamp(((Number(ix1) || 0) - rx) / rw, 0, 1)),
+      y_norm: round4(clamp(((Number(iy1) || 0) - ry) / rh, 0, 1)),
+    };
+  };
+  const invertRelation = (value = "") => {
+    const rel = String(value || "").trim().toUpperCase();
+    if (rel === "LEFT") return "RIGHT";
+    if (rel === "RIGHT") return "LEFT";
+    if (rel === "ABOVE") return "BELOW";
+    if (rel === "BELOW") return "ABOVE";
+    return rel || "UNKNOWN";
+  };
+  const normalizeMustNot = (raw) => {
+    const text = String(raw || "")
+      .trim()
+      .replace(/^[-*•]\s*/, "")
+      .replace(/\s+/g, " ");
+    if (!text) return null;
+    return text;
+  };
+  const splitNegativePrompt = (raw) =>
+    String(raw || "")
+      .split(/\n|;|,/g)
+      .map((v) => v.trim())
+      .filter(Boolean);
+  const rolePriorForImage = (imageId, roleTags = [], targetIdSet = new Set(), referenceIdSet = new Set()) => {
+    let prior = 0.3;
+    if (targetIdSet.has(imageId)) prior = 1.0;
+    else if (referenceIdSet.has(imageId)) prior = 0.6;
+    if (roleTags.includes("subject")) prior *= 1.05;
+    if (roleTags.includes("mediator")) prior *= 0.97;
+    return clamp(prior, 0.25, 1.0);
+  };
+
+  const actionVersion = Number(idle?.actionVersion) || 0;
+  const summary = String(intent.summary || motherV2ProposalSentence(intent) || "").trim();
+  const creativeDirective = String(compiled?.creative_directive || intent.creative_directive || MOTHER_CREATIVE_DIRECTIVE || "").trim();
+  const transformationMode = motherV2NormalizeTransformationMode(
+    intent.transformation_mode || compiled?.transformation_mode || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE
+  );
+  const placementPolicy = String(
+    intent.placement_policy ||
+      compiled?.generation_params?.layout_hint ||
+      "adjacent"
+  ).trim() || "adjacent";
+  const selectedIds = getVisibleSelectedIds().map((v) => String(v || "").trim()).filter(Boolean).slice(0, 3);
+  const activeId = String(getVisibleActiveId() || "").trim() || null;
+  const targetIds = uniqueIds(motherV2NormalizeImageIdList(intent.target_ids || [])).slice(0, 3);
+  const referenceIds = uniqueIds(motherV2NormalizeImageIdList(intent.reference_ids || [])).slice(0, 4);
+  const targetIdSet = new Set(targetIds);
+  const referenceIdSet = new Set(referenceIds);
+  const roleMapRaw = intent.roles && typeof intent.roles === "object" ? intent.roles : motherV2RoleMapClone();
+  const roleMap = {
+    subject: uniqueIds(motherV2NormalizeImageIdList(roleMapRaw.subject || [])).slice(0, 3),
+    model: uniqueIds(motherV2NormalizeImageIdList(roleMapRaw.model || [])).slice(0, 3),
+    mediator: uniqueIds(motherV2NormalizeImageIdList(roleMapRaw.mediator || [])).slice(0, 3),
+    object: uniqueIds(motherV2NormalizeImageIdList(roleMapRaw.object || [])).slice(0, 3),
+  };
+  const signalsById = motherV2CollectImageInteractionSignals(sourceImageIds);
+
+  const draft = [];
+  for (const imageId of sourceImageIds) {
+    const item = state.imagesById.get(imageId) || null;
+    const rectNorm = toRectNorm(state.freeformRects.get(imageId) || null);
+    const canvasAreaRatio = rectNorm ? Math.max(0, Number(rectNorm.w) * Number(rectNorm.h)) : 0;
+    const aspectRatioNorm =
+      rectNorm && Number(rectNorm.h) > 1e-6 ? Number(rectNorm.w) / Number(rectNorm.h) : null;
+    const signal = signalsById.get(imageId) || {
+      move_count: 0,
+      resize_count: 0,
+      selection_hits: 0,
+      action_grid_hits: 0,
+      last_event_at_ms: 0,
+      last_transform_at_ms: 0,
+    };
+    const roleTags = MOTHER_V2_ROLE_KEYS.filter((key) => roleMap[key]?.includes(imageId));
+    const isTarget = targetIdSet.has(imageId);
+    const isReference = referenceIdSet.has(imageId);
+    const isSubject = roleTags.includes("subject");
+    const isModel = roleTags.includes("model");
+    const isMediator = roleTags.includes("mediator");
+    const isObject = roleTags.includes("object");
+
+    const preserve = [];
+    if (isTarget || isSubject || isObject || imageId === sourceImageIds[0]) preserve.push("subject identity");
+    if (Number(signal.resize_count) > 0) preserve.push("user framing emphasis");
+    if (Number(signal.selection_hits) > 0 || Number(signal.action_grid_hits) > 0) preserve.push("user focus cues");
+
+    const transform = [];
+    if (isReference || isModel || isMediator) transform.push("material and style cues");
+    if (Number(signal.move_count) > 0) transform.push("composition relationship cues");
+
+    const moveSat = sat(signal.move_count, SATURATION_K.move);
+    const resizeSat = sat(signal.resize_count, SATURATION_K.resize);
+    const selectionSat = sat(signal.selection_hits, SATURATION_K.selection);
+    const actionSat = sat(signal.action_grid_hits, SATURATION_K.action);
+    const interactionBase =
+      0.35 * moveSat + 0.35 * resizeSat + 0.25 * selectionSat + 0.05 * actionSat;
+    const transformRecencyMs = Number(signal.last_transform_at_ms) || 0;
+    const recencyMs = transformRecencyMs || Number(signal.last_event_at_ms) || 0;
+    const ageMs = recencyMs ? Math.max(0, nowMs - recencyMs) : INTERACTION_STALE_CUTOFF_MS + 1;
+    const transformAgeMs = transformRecencyMs
+      ? Math.max(0, nowMs - transformRecencyMs)
+      : INTERACTION_STALE_CUTOFF_MS + 1;
+    const interactionStale = transformAgeMs > INTERACTION_STALE_CUTOFF_MS;
+    let interactionRaw = interactionStale
+      ? 0
+      : interactionBase * Math.exp(-ageMs / INTERACTION_DECAY_TAU_MS);
+    if (
+      Number(signal.move_count) <= 1 &&
+      Number(signal.resize_count) === 0 &&
+      Number(signal.selection_hits) <= 2 &&
+      Number(signal.action_grid_hits) === 0
+    ) {
+      interactionRaw = 0;
+    }
+    const rolePrior = rolePriorForImage(imageId, roleTags, targetIdSet, referenceIdSet);
+
+    draft.push({
+      id: imageId,
+      file: item?.path ? basename(item.path) : null,
+      origin: item && isMotherGeneratedImageItem(item) ? "mother_generated" : "uploaded",
+      role_tags: roleTags,
+      role: isTarget ? "target" : isReference ? "reference" : "context",
+      role_prior: rolePrior,
+      preserve,
+      transform,
+      signal,
+      interaction_base: interactionBase,
+      interaction_raw: Math.max(0, Number(interactionRaw) || 0),
+      interaction_stale: interactionStale,
+      rect_norm: rectNorm,
+      canvas_area_ratio: canvasAreaRatio,
+      aspect_ratio_norm: aspectRatioNorm,
+      focus_score_raw: 0,
+      focus_score: 0,
+      geometry_score_raw: 0,
+      geometry_score: 0,
+      relative_scale_to_largest: 0,
+      centrality: 0,
+      score: 0,
+      weight: 0,
+      position_tier: positionTierFromRect(rectNorm),
+      size_tier: sizeTierFromArea(canvasAreaRatio),
+    });
+  }
+
+  const interactionBaseMax = draft.reduce(
+    (maxVal, entry) => Math.max(maxVal, Math.max(0, Number(entry.interaction_base) || 0)),
+    0
+  );
+  const interactionRawMax = draft.reduce(
+    (maxVal, entry) => Math.max(maxVal, Math.max(0, Number(entry.interaction_raw) || 0)),
+    0
+  );
+  const interactionConfidence = clamp01((interactionBaseMax - 0.15) / 0.35);
+  for (const entry of draft) {
+    const focusRaw = interactionRawMax > 0 ? (Number(entry.interaction_raw) || 0) / (interactionRawMax + EPS) : 0;
+    entry.focus_score_raw = clamp01(focusRaw);
+    entry.focus_score = clamp01(interactionConfidence * entry.focus_score_raw);
+  }
+
+  const areaValues = draft
+    .map((entry) => Math.max(0, Number(entry.canvas_area_ratio) || 0))
+    .filter((value) => value > 0);
+  const areaMax = areaValues.length ? Math.max(...areaValues) : 0;
+  const areaMin = areaValues.length ? Math.min(...areaValues) : 0;
+  const sqrtAreaMax = areaMax > 0 ? Math.sqrt(areaMax) : 0;
+  const geometryConfidence =
+    areaMax > 0 && areaMin > 0
+      ? clamp01(Math.log((areaMax + EPS) / (areaMin + EPS)) / Math.log(2.5))
+      : 0;
+  let geometryRawMax = 0;
+  for (const entry of draft) {
+    const area = Math.max(0, Number(entry.canvas_area_ratio) || 0);
+    const size = sqrtAreaMax > 0 ? Math.sqrt(area) / (sqrtAreaMax + EPS) : 0;
+    entry.relative_scale_to_largest = clamp01(size);
+    const cx = Number(entry.rect_norm?.cx);
+    const cy = Number(entry.rect_norm?.cy);
+    const centerDist = Number.isFinite(cx) && Number.isFinite(cy) ? Math.hypot(cx - 0.5, cy - 0.5) : 0.7071;
+    const centrality = clamp01(1 - centerDist / 0.7071);
+    entry.centrality = centrality;
+    const geometryRaw = 0.8 * size + 0.2 * centrality;
+    entry.geometry_score_raw = clamp01(geometryRaw);
+    geometryRawMax = Math.max(geometryRawMax, entry.geometry_score_raw);
+  }
+  for (const entry of draft) {
+    const normalized = geometryRawMax > 0 ? entry.geometry_score_raw / (geometryRawMax + EPS) : 0;
+    entry.geometry_score = clamp01(geometryConfidence * normalized);
+  }
+
+  for (const entry of draft) {
+    const selectedBonus = selectedIds.includes(entry.id) ? 0.1 : 0;
+    const activeBonus = activeId && entry.id === activeId ? 0.05 : 0;
+    entry.score =
+      entry.role_prior *
+      (1 + 0.6 * entry.focus_score) *
+      (1 + 0.4 * entry.geometry_score) *
+      (1 + selectedBonus + activeBonus);
+  }
+  let scoreTotal = draft.reduce((sum, entry) => sum + Math.max(0, Number(entry.score) || 0), 0);
+  if (!(scoreTotal > 0)) {
+    for (const entry of draft) entry.score = Math.max(0.001, Number(entry.role_prior) || 0.001);
+    scoreTotal = draft.reduce((sum, entry) => sum + Math.max(0, Number(entry.score) || 0), 0);
+  }
+  for (const entry of draft) {
+    entry.weight = scoreTotal > 0 ? (Number(entry.score) || 0) / (scoreTotal + EPS) : 0;
+  }
+
+  // Identity guardrails apply only for the single-target case.
+  const targetIdList = targetIds.filter((id) => draft.some((entry) => entry.id === id));
+  if (targetIdList.length === 1) {
+    const tId = targetIdList[0];
+    const targetEntry = draft.find((entry) => entry.id === tId) || null;
+    if (targetEntry && Number(targetEntry.weight) < 0.55) {
+      const delta = 0.55 - Number(targetEntry.weight || 0);
+      const nonTargetEntries = draft.filter((entry) => entry.id !== tId);
+      const nonTargetTotal = nonTargetEntries.reduce((sum, entry) => sum + Math.max(0, Number(entry.weight) || 0), 0);
+      for (const entry of nonTargetEntries) {
+        const share = nonTargetTotal > 0 ? (Number(entry.weight) || 0) / (nonTargetTotal + EPS) : 0;
+        entry.weight = Math.max(0, (Number(entry.weight) || 0) - delta * share);
+      }
+      targetEntry.weight = 0.55;
+    }
+    for (const refId of referenceIds) {
+      const refEntry = draft.find((entry) => entry.id === refId) || null;
+      if (!refEntry) continue;
+      if (Number(refEntry.weight) <= 0.3) continue;
+      const excess = Number(refEntry.weight) - 0.3;
+      refEntry.weight = 0.3;
+      const targetEntryNow = draft.find((entry) => entry.id === tId) || null;
+      if (targetEntryNow) targetEntryNow.weight = Number(targetEntryNow.weight || 0) + excess;
+    }
+    const renorm = draft.reduce((sum, entry) => sum + Math.max(0, Number(entry.weight) || 0), 0);
+    for (const entry of draft) {
+      entry.weight = renorm > 0 ? (Number(entry.weight) || 0) / (renorm + EPS) : entry.weight;
+    }
+  }
+
+  const zIndexById = new Map();
+  for (let i = 0; i < (state.freeformZOrder?.length || 0); i += 1) {
+    const id = String(state.freeformZOrder[i] || "").trim();
+    if (!id) continue;
+    if (!zIndexById.has(id)) zIndexById.set(id, i);
+  }
+  const slotById = new Map();
+  const orderForSlots = uniqueIds(sourceImageIds.filter((id) => draft.some((entry) => entry.id === id)));
+  for (let i = 0; i < orderForSlots.length; i += 1) {
+    slotById.set(orderForSlots[i], slotLabelForIndex(i));
+  }
+
+  const spatialImageEntries = draft.filter((entry) => entry.rect_norm && typeof entry.rect_norm === "object").slice(0, 8);
+  const pairwise = [];
+  const pairMap = new Map();
+  const pairKey = (aId, bId) => {
+    const a = String(aId || "").trim();
+    const b = String(bId || "").trim();
+    if (!a || !b) return "";
+    return a < b ? `${a}::${b}` : `${b}::${a}`;
+  };
+  const diagonalNorm = Math.sqrt(2);
+  for (let i = 0; i < spatialImageEntries.length; i += 1) {
+    for (let j = i + 1; j < spatialImageEntries.length; j += 1) {
+      const a = spatialImageEntries[i];
+      const b = spatialImageEntries[j];
+      const ar = a.rect_norm || null;
+      const br = b.rect_norm || null;
+      if (!ar || !br) continue;
+      const ax1 = Number(ar.x) || 0;
+      const ay1 = Number(ar.y) || 0;
+      const ax2 = ax1 + Math.max(0, Number(ar.w) || 0);
+      const ay2 = ay1 + Math.max(0, Number(ar.h) || 0);
+      const bx1 = Number(br.x) || 0;
+      const by1 = Number(br.y) || 0;
+      const bx2 = bx1 + Math.max(0, Number(br.w) || 0);
+      const by2 = by1 + Math.max(0, Number(br.h) || 0);
+      const acx = ax1 + (ax2 - ax1) / 2;
+      const acy = ay1 + (ay2 - ay1) / 2;
+      const bcx = bx1 + (bx2 - bx1) / 2;
+      const bcy = by1 + (by2 - by1) / 2;
+      const dx = bcx - acx;
+      const dy = bcy - acy;
+      const centerDistanceNorm = diagonalNorm > 0 ? Math.hypot(dx, dy) / diagonalNorm : 0;
+      const gapX = Math.max(0, Math.max(ax1 - bx2, bx1 - ax2));
+      const gapY = Math.max(0, Math.max(ay1 - by2, by1 - ay2));
+      const edgeGapNorm = Math.hypot(gapX, gapY);
+      const ix1 = Math.max(ax1, bx1);
+      const iy1 = Math.max(ay1, by1);
+      const ix2 = Math.min(ax2, bx2);
+      const iy2 = Math.min(ay2, by2);
+      const iw = Math.max(0, ix2 - ix1);
+      const ih = Math.max(0, iy2 - iy1);
+      const overlapArea = Math.max(0, iw * ih);
+      const overlaps = overlapArea > 1e-8;
+      const areaA = Math.max(0, (ax2 - ax1) * (ay2 - ay1));
+      const areaB = Math.max(0, (bx2 - bx1) * (by2 - by1));
+      const union = Math.max(0, areaA + areaB - overlapArea);
+      const iou = union > 1e-8 ? overlapArea / union : 0;
+      const overlapRatioA = areaA > 1e-8 ? overlapArea / areaA : 0;
+      const overlapRatioB = areaB > 1e-8 ? overlapArea / areaB : 0;
+      const aToB = relationFromDelta(dx, dy, overlaps);
+      const overlapOnA = overlaps
+        ? {
+            ...overlapRegionForRect(ar, ix1, iy1, ix2, iy2),
+            ratio: round4(overlapRatioA),
+          }
+        : null;
+      const overlapOnB = overlaps
+        ? {
+            ...overlapRegionForRect(br, ix1, iy1, ix2, iy2),
+            ratio: round4(overlapRatioB),
+          }
+        : null;
+      const zA = zIndexById.has(a.id) ? Number(zIndexById.get(a.id)) : null;
+      const zB = zIndexById.has(b.id) ? Number(zIndexById.get(b.id)) : null;
+      const topId = zA === null || zB === null ? null : (zA > zB ? a.id : b.id);
+      const pair = {
+        id_a: a.id,
+        id_b: b.id,
+        a_to_b: aToB,
+        b_to_a: invertRelation(aToB),
+        center_distance_norm: round4(centerDistanceNorm),
+        edge_gap_norm: round4(edgeGapNorm),
+        overlaps,
+        overlap: overlaps
+          ? {
+              iou: round4(iou),
+              area_norm: round4(overlapArea),
+              on_a: overlapOnA,
+              on_b: overlapOnB,
+            }
+          : null,
+        z_order: {
+          index_a: zA,
+          index_b: zB,
+          top_id: topId,
+        },
+      };
+      pairwise.push(pair);
+      const k = pairKey(a.id, b.id);
+      if (k) pairMap.set(k, pair);
+    }
+  }
+  pairwise.sort((a, b) => {
+    if (Number(Boolean(b.overlaps)) !== Number(Boolean(a.overlaps))) {
+      return Number(Boolean(b.overlaps)) - Number(Boolean(a.overlaps));
+    }
+    return Number(a.center_distance_norm) - Number(b.center_distance_norm);
+  });
+
+  const sortedByWeight = draft.slice().sort((a, b) => Number(b.weight) - Number(a.weight));
+  const primaryTargetId =
+    targetIdList[0] ||
+    sortedByWeight[0]?.id ||
+    null;
+
+  const relations = [];
+  for (const refId of referenceIds) {
+    if (!primaryTargetId || refId === primaryTargetId) continue;
+    const refEntry = draft.find((entry) => entry.id === refId) || null;
+    if (!refEntry) continue;
+    const key = pairKey(primaryTargetId, refId);
+    const pair = key ? pairMap.get(key) : null;
+    if (!pair) continue;
+    const primaryIsA = String(pair.id_a || "") === String(primaryTargetId || "");
+    const direction = primaryIsA ? pair.a_to_b : pair.b_to_a;
+    if (direction === "OVERLAP") {
+      const overlap = pair.overlap || null;
+      if (!overlap) continue;
+      const overlapOnTarget = primaryIsA ? overlap.on_a : overlap.on_b;
+      const overlapOnRef = primaryIsA ? overlap.on_b : overlap.on_a;
+      const iou = Number(overlap.iou) || 0;
+      const areaNorm = Number(overlap.area_norm) || 0;
+      const coverMax = Math.max(Number(overlapOnTarget?.ratio) || 0, Number(overlapOnRef?.ratio) || 0);
+      const confIou = clamp01((iou - 0.03) / 0.12);
+      const confArea = clamp01((areaNorm - 0.005) / 0.02);
+      const confCov = clamp01((coverMax - 0.25) / 0.5);
+      const confidence = round4(Math.max(confIou, confArea, confCov));
+      if (confidence < 0.55) continue;
+      const strength =
+        iou >= 0.12 || areaNorm >= 0.015 ? "STRONG" : iou >= 0.05 || areaNorm >= 0.008 ? "MEDIUM" : "LIGHT";
+      const topId = String(pair.z_order?.top_id || "").trim();
+      const occlusion =
+        topId && topId === primaryTargetId
+          ? "TARGET_FRONT"
+          : topId && topId === refId
+            ? "REF_FRONT"
+            : "UNKNOWN";
+      let semantic = "NONE";
+      if (occlusion === "TARGET_FRONT" && (Number(overlapOnRef?.ratio) || 0) >= 0.6) {
+        semantic = "STYLE_TUCK";
+      } else if (occlusion === "REF_FRONT" && (strength === "MEDIUM" || strength === "STRONG") && placementPolicy !== "adjacent") {
+        semantic = "FOREGROUND_ACCENT";
+      } else if (strength === "LIGHT" && Number(pair.edge_gap_norm || 0) === 0) {
+        semantic = "TOUCH";
+      }
+      relations.push({
+        ref_id: refId,
+        ref_slot: slotById.get(refId) || null,
+        to_target: "OVERLAP",
+        overlap_strength: strength,
+        occlusion,
+        region_on_target: String(overlapOnTarget?.region || "").toUpperCase() || null,
+        semantic,
+        confidence,
+        iou: round4(iou),
+      });
+      continue;
+    }
+    const confDir =
+      clamp01((0.35 - Number(pair.center_distance_norm || 0)) / 0.35) *
+      clamp01((0.12 - Number(pair.edge_gap_norm || 0)) / 0.12);
+    if (confDir < 0.6) continue;
+    relations.push({
+      ref_id: refId,
+      ref_slot: slotById.get(refId) || null,
+      to_target: "ADJACENT",
+      direction: direction,
+      confidence: round4(confDir),
+      iou: 0,
+    });
+  }
+  relations.sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0));
+  const relationLimit = referenceIds.length <= 4 ? 2 : 4;
+  const compactRelations = relations.slice(0, relationLimit);
+
+  for (const entry of draft) {
+    const key = primaryTargetId && entry.id !== primaryTargetId ? pairKey(primaryTargetId, entry.id) : "";
+    const pair = key ? pairMap.get(key) : null;
+    const iouToPrimary = pair?.overlap ? Number(pair.overlap.iou) || 0 : 0;
+    entry.geometry_trace = {
+      cx: round4(entry.rect_norm?.cx ?? 0),
+      cy: round4(entry.rect_norm?.cy ?? 0),
+      relative_scale: round4(entry.relative_scale_to_largest),
+      iou_to_primary: round4(iouToPrimary),
+    };
+  }
+
+  const imagesCompact = sortedByWeight.map((entry, idx) => {
+    const weight = round2(entry.weight);
+    const tier = idx === 0 || weight >= 0.5 ? "PRIMARY" : weight >= 0.2 ? "SECONDARY" : "ACCENT";
+    return {
+      slot: slotById.get(entry.id) || null,
+      id: entry.id,
+      role: entry.role,
+      weight,
+      tier,
+      size_tier: entry.size_tier,
+      position_tier: entry.position_tier,
+      focus_score: round2(entry.focus_score),
+      geometry_score: round2(entry.geometry_score),
+      role_tags: entry.role_tags.slice(0, 3),
+      preserve: Array.from(new Set(entry.preserve)).slice(0, 3),
+      transform: Array.from(new Set(entry.transform)).slice(0, 3),
+      geometry_trace: entry.geometry_trace,
+    };
+  });
+
+  const imageManifest = sortedByWeight.map((entry, idx) => ({
+    slot: slotById.get(entry.id) || null,
+    id: entry.id,
+    file: entry.file,
+    origin: entry.origin,
+    role: entry.role,
+    role_tags: entry.role_tags,
+    tier: idx === 0 || entry.weight >= 0.5 ? "PRIMARY" : entry.weight >= 0.2 ? "SECONDARY" : "ACCENT",
+    preserve: Array.from(new Set(entry.preserve)).slice(0, 3),
+    transform: Array.from(new Set(entry.transform)).slice(0, 3),
+    weight: round4(entry.weight),
+    focus_score: round4(entry.focus_score),
+    geometry_score: round4(entry.geometry_score),
+    rect_norm: entry.rect_norm,
+    canvas_area_ratio: round4(entry.canvas_area_ratio),
+    relative_scale_to_largest: round4(entry.relative_scale_to_largest),
+    aspect_ratio_norm: entry.aspect_ratio_norm !== null ? round4(entry.aspect_ratio_norm) : null,
+    geometry_trace: entry.geometry_trace,
+  }));
+
+  const spatialRelations = {
+    primary_target_id: primaryTargetId,
+    image_ids_considered: spatialImageEntries.map((entry) => String(entry.id || "")),
+    compact_relations: compactRelations,
+    pairwise: pairwise.slice(0, 12),
+  };
+
+  const mustNot = [];
+  const mustNotSeen = new Set();
+  const pushMustNot = (raw) => {
+    const text = normalizeMustNot(raw);
+    if (!text) return;
+    const key = text.toLowerCase();
+    if (mustNotSeen.has(key)) return;
+    mustNotSeen.add(key);
+    mustNot.push(text);
+  };
+  for (const constraint of Array.isArray(compiled?.compile_constraints) ? compiled.compile_constraints : []) {
+    pushMustNot(constraint);
+  }
+  const negativePrompt = String(compiled?.negative_prompt || "").trim();
+  if (negativePrompt) {
+    for (const line of splitNegativePrompt(negativePrompt)) pushMustNot(line);
+  }
+  for (const fallback of MUST_NOT_DEFAULTS) {
+    if (mustNot.length >= 6) break;
+    pushMustNot(fallback);
+  }
+  const mustNotFinal = mustNot.slice(0, 6);
+  const overallConfidence = round4(clamp01(0.6 * interactionConfidence + 0.4 * geometryConfidence));
+
+  return {
+    schema: "brood.gemini.context_packet.v2",
+    action_version: actionVersion,
+    intent_id: String(intent.intent_id || idle?.intent?.intent_id || "").trim() || null,
+    goal: `Intent summary: ${summary || MOTHER_V2_PROPOSAL_BY_MODE[transformationMode] || "Create one coherent image."}`,
+    creative_directive: creativeDirective || MOTHER_CREATIVE_DIRECTIVE,
+    optimization_target: "stunningly awe-inspiring and joyous + novel",
+    style: {
+      creative_directive: creativeDirective || MOTHER_CREATIVE_DIRECTIVE,
+      optimization_target: "stunningly awe-inspiring and joyous + novel",
+    },
+    prompt_preview: clampText(String(promptLine || ""), 320),
+    proposal_lock: {
+      transformation_mode: transformationMode,
+      placement_policy: placementPolicy,
+      active_id: activeId,
+      selected_ids: selectedIds,
+      target_ids: targetIds,
+      reference_ids: referenceIds,
+    },
+    images: imagesCompact,
+    relations: compactRelations,
+    image_manifest: imageManifest,
+    spatial_relations: spatialRelations,
+    behavior_signals: {
+      focus_rank: imageManifest.map((entry) => entry.id).slice(0, 5),
+      interaction_confidence: round4(interactionConfidence),
+      geometry_confidence: round4(geometryConfidence),
+      overall_confidence: overallConfidence,
+      interaction_stale_cutoff_ms: INTERACTION_STALE_CUTOFF_MS,
+      focus_scores: imageManifest
+        .map((entry) => ({ id: entry.id, focus_score: round4(entry.focus_score) }))
+        .slice(0, 8),
+    },
+    constraints: {
+      must_not: mustNotFinal,
+    },
+    must_not: mustNotFinal,
+    output: {
+      count: 1,
+      layout: placementPolicy,
+      quality: "production-ready",
+    },
+  };
+}
+
 async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "") {
   const idle = state.motherIdle;
   if (!idle) return false;
   const imagePayload = motherV2CollectGenerationImagePaths();
   const sanitizedIntent = motherV2SanitizeIntentImageIds(idle.intent) || idle.intent || null;
+  const geminiContextPacket = motherV2BuildGeminiContextPacket({
+    compiled,
+    promptLine,
+    sanitizedIntent,
+    imagePayload,
+  });
   const compiledGenerationParams =
     compiled?.generation_params && typeof compiled.generation_params === "object" ? compiled.generation_params : {};
   const generationParams = {};
@@ -11918,6 +12660,7 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "") {
     generation_params: generationParams,
     init_image: imagePayload.initImage,
     reference_images: imagePayload.referenceImages,
+    gemini_context_packet: geminiContextPacket,
   };
   const payloadPath = await motherV2WritePayloadFile("mother_generate", payload);
   if (!payloadPath) return false;
