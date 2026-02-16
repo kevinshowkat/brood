@@ -20,14 +20,14 @@ Mother watches your on-canvas edits (move/resize/select), infers what you are em
 </p>
 
 ### Top Panel Telemetry Metrics
-The top panel surfaces live run/model telemetry so you can quickly audit behavior and confidence while you work.
+The top panel shows four live chips users can read at a glance: `TOK` (30m in/out token sparklines + API calls), `COST` (estimated session spend), `QUEUE` (pending/running actions + queue trend), and `AVG` (rolling render time), each heat-coded from cool to hot.
 
 <p align="left">
   <img src="media/features/readme/top_panel_telemetry.gif" alt="Top panel telemetry metrics">
 </p>
 
 ### Proposal Drafting
-Mother enters a drafting phase, assembles proposal context from the canvas state, then renders a candidate you can confirm, reject, or iterate.
+Mother (Brood's realtime proposal copilot) enters a drafting phase, assembles proposal context from the canvas state, then renders a candidate you can confirm, reject, or iterate.
 
 <p align="left">
   <img src="media/features/readme/proposal_drafting.gif" alt="Mother proposal drafting">
