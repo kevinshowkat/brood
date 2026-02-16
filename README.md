@@ -96,26 +96,6 @@ For Gemini wire-level inspection:
 - set `BROOD_DEBUG_GEMINI_WIRE=1` before launching the app
 - inspect `_raw_provider_outputs/gemini-send-message-*.json` and `gemini-receipt-*.json`
 
-## Features
-
-### Remove People
-Remove unwanted people from a photo with a fast, local canvas workflow.
-<p align="left">
-  <img src="media/features/remove_people.gif" alt="Remove people feature demo">
-</p>
-
-### Edit Annotation
-Constrain edits to a selected region so changes stay focused and controllable.
-<p align="left">
-  <img src="media/features/edit_annotation.gif" alt="Edit annotation feature demo">
-</p>
-
-### Intent Build
-Work in progress: Mother runs ambient intent discovery as you build to support Intent Build outputs.
-<p align="left">
-  <img src="media/features/intent_build.gif" alt="Intent build feature demo">
-</p>
-
 ## Hotkeys
 
 - `L` lasso

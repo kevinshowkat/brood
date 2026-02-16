@@ -59,74 +59,131 @@ Regenerate with:
 
 ## Source: `README.md`
 
-# Brood: Promptless, Reference-First AI Image Generation and Editing for Developers
+# Brood: Promptless Canvas for Creative Mutation
 
 <p align="left">
-  <img src="media/brood_demo_intent_build_20260211.gif" alt="Brood demo">
+  <img src="media/features/readme/main_value_prop.gif" alt="Brood main value demo">
 </p>
 
-Brood is a promptless, reference-first AI image generation and editing desktop for developers (multi-provider + reproducible runs).
-It is an image-first canvas for steering image-to-image edits and generations using reference images.
+Brood is a reference-first AI image generation and editing desktop for developers.
+You steer outputs by arranging and combining images on a canvas, then applying abilities.
+
+Reference tagline:
+- **Brood: Reference-First AI Image Editing Desktop for Developers**
 
 ## Status
 
-Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
-
-- 1 image in: `Diagnose` (creative-direction critique), `Recast` (reimagine in a new medium/context)
-- 2 images in: `Combine`, `Swap DNA`, `Bridge`, `Argue`
-- Provider/model switching is a first-class concept (OpenAI, Gemini, Imagen, Flux, SDXL)
+Brood is currently a **macOS-only desktop app** (Tauri).
+There is no web app, and Windows/Linux builds are not supported yet.
 
 ## Download (macOS)
 
-Download the latest universal DMG from GitHub Releases:
+Get the latest universal DMG from GitHub Releases:
 - <https://github.com/kevinshowkat/brood/releases>
 
 Install:
 1. Download `Brood_<version>_universal.dmg`.
 2. Open the DMG and drag `Brood.app` into `/Applications`.
-3. If macOS blocks the app, try right-clicking `Brood.app` -> **Open**, or open it via **System Settings** -> **Privacy & Security**.
+3. If macOS blocks launch, right-click `Brood.app` and choose **Open**.
 
-## Features
+## Current App Surface
 
-### Remove People
-Remove unwanted people from a photo with a fast, local canvas workflow.
+- Canvas-first desktop with `Single view` and `Multi view`, plus pan/zoom/fit controls.
+- Action Grid + bottom HUD workflow for tooling and execution feedback.
+- Built-in local file-browser dock import flow, plus canvas import drag/drop.
+- Multi-provider model support: OpenAI, Gemini, Imagen, Flux, SDXL.
+
+### Abilities by Image Selection
+
+- 1 image: `Diagnose`, `Recast`, `Background: White`, `Background: Sweep`, `Crop: Square`, `Variations`.
+- 2 images: `Combine`, `Swap DNA`, `Bridge`, `Argue`.
+- Multi-view effect-token pipeline: `Extract DNA`, `Soul Leech`, then drag token onto a target image.
+
+### Mother Workflow
+
+- Mother observes your canvas and proposes edits.
+- Proposal loop supports next/propose, confirm/deploy, reject/stop, and reroll-style follow-ups.
+- Proposal intent and generation are fed by structured context packets (see below).
+
+## First 5 Minutes (Desktop)
+
+1. Import one or more images.
+2. Arrange/resize on canvas to communicate intent.
+3. Let Mother propose, then confirm or reject.
+4. Run direct Abilities as needed and inspect HUD output (`DIAG` / `ARG`).
+
+More usage details: `docs/desktop.md`.
+
+## Live Workflow Highlights
+
+### Realtime Canvas Proposals
+Mother watches your on-canvas edits (move/resize/select), infers what you are emphasizing, and proposes the next best transformation without requiring a typed prompt.
+
 <p align="left">
-  <img src="media/features/remove_people.gif" alt="Remove people feature demo">
+  <img src="media/features/readme/realtime_canvas_proposals.gif" alt="Realtime canvas proposals">
 </p>
 
-### Edit Annotation
-Constrain edits to a selected region so changes stay focused and controllable.
+### Top Panel Telemetry Metrics
+The top panel surfaces live run/model telemetry so you can quickly audit behavior and confidence while you work.
+
 <p align="left">
-  <img src="media/features/edit_annotation.gif" alt="Edit annotation feature demo">
+  <img src="media/features/readme/top_panel_telemetry.gif" alt="Top panel telemetry metrics">
 </p>
 
-### Intent Build
-Work in progress: Mother runs ambient intent discovery as you build, with the goal of producing all assets needed for the Intent Build flow.
+### Proposal Drafting
+Mother enters a drafting phase, assembles proposal context from the canvas state, then renders a candidate you can confirm, reject, or iterate.
+
 <p align="left">
-  <img src="media/features/intent_build.gif" alt="Intent build feature demo">
+  <img src="media/features/readme/proposal_drafting.gif" alt="Mother proposal drafting">
 </p>
 
-## Quickstart (desktop)
+## Mother Context Packets
+
+Brood now ships compact context packets for both proposal inference and Gemini generation:
+- `brood.mother.proposal_context.v1` (intent/proposal soft priors)
+- `brood.gemini.context_packet.v2` (generation-time proposal lock + spatial hints)
+
+Details and scoring math:
+- `docs/desktop.md#mother-proposal--gemini-context-v2`
+
+## Run Artifacts and Debugging
+
+Each desktop run writes artifacts under `~/brood_runs/run-*`, including:
+- `events.jsonl` (desktop/engine event stream)
+- `mother_intent_infer-*.json`, `mother_prompt_compile-*.json`, `mother_generate-*.json`
+- `receipt-*.json` (generation/edit receipts)
+
+For Gemini wire-level inspection:
+- set `BROOD_DEBUG_GEMINI_WIRE=1` before launching the app
+- inspect `_raw_provider_outputs/gemini-send-message-*.json` and `gemini-receipt-*.json`
+
+## Hotkeys
+
+- `L` lasso
+- `D` designate
+- `F` fit-to-view
+- `Esc` clear selection
+- `1`-`9` activate HUD tools
+
+## Run From Source (Desktop)
 
 ```bash
 ./scripts/dev_desktop.sh
 ```
 
-This runs the Tauri app in dev mode (`desktop/`) and will spawn the Python engine in the background.
+This runs the Tauri app in dev mode (`desktop/`) and spawns the Python engine in the background.
 
-## Desktop usage
-- Click anywhere on the canvas to import photos at that point (or use **Import Photos**).
-- Mental model for the onboarding flow: starting a StarCraft 2 game as Zerg (choose what to build and where to place it, but using visual media as the "units").
-- Use **Abilities** in the right panel.
-- Use `Multi view` to run 2-photo actions (when exactly 2 photos are loaded). After a 2-photo action completes, Brood switches back to single-image view (output-only).
-- `Diagnose` / `Argue` output appears in the bottom HUD as `DIAG` / `ARG`.
-- Hotkeys: `L` lasso, `D` designate, `F` fit-to-view, `Esc` clears selection, `1`-`9` activate tools in the HUD keybar
+Build desktop app:
 
-More details: `docs/desktop.md`.
+```bash
+cd desktop
+npm install
+npm run tauri build
+```
 
-## Quickstart (engine / CLI)
+## Engine / CLI Quickstart
 
-The engine/CLI is primarily a developer interface that powers the desktop app.
+The engine CLI powers the desktop app and can also run standalone.
 
 ```bash
 python -m venv .venv
@@ -143,15 +200,16 @@ brood run --prompt "hero image for Series A" --out /tmp/brood-run
 brood recreate --reference path/to/image.png --out /tmp/brood-recreate
 ```
 
-## Desktop build
+## API Keys
 
-```bash
-cd desktop
-npm install
-npm run tauri build
-```
+- Copy `.env.example` to `.env` and fill provider keys.
+- Supported key families: OpenAI, Anthropic, Gemini/Google, Imagen/Vertex, Flux/BFL.
+- For OpenAI image models:
+  - set `OPENAI_API_KEY` (or `OPENAI_API_KEY_BACKUP`)
+  - use `/image_model gpt-image-1` in chat or `--image-model gpt-image-1` on CLI
+  - optional: `OPENAI_IMAGE_USE_RESPONSES=1`, `OPENAI_IMAGE_STREAM=1`
 
-## Memory
+## Optional Configuration
 
 Enable local memory:
 
@@ -159,44 +217,38 @@ Enable local memory:
 export BROOD_MEMORY=1
 ```
 
-## Pricing overrides
+Pricing/latency override file:
 
-Edit `~/.brood/pricing_overrides.json` to override pricing or latency values.
-
-## API keys
-- Copy `.env.example` to `.env` and fill in provider keys.
-- Supported keys mirror Param Forge: OpenAI, Anthropic, Gemini/Google, Imagen/Vertex, Flux/BFL.
-- For OpenAI images, set `OPENAI_API_KEY` (or `OPENAI_API_KEY_BACKUP`).
-  Use `/image_model gpt-image-1` in chat or `--image-model gpt-image-1` on the CLI to target OpenAI image models.
-  Optional toggles: `OPENAI_IMAGE_USE_RESPONSES=1` (Responses API) and `OPENAI_IMAGE_STREAM=1` (streaming; falls back to non-streaming with a warning).
+- `~/.brood/pricing_overrides.json`
 
 ## Troubleshooting (Desktop)
+
 - **App failed to initialize: Importing binding name ... not found**  
-  Ensure Tauri v1 APIs are used. This repo expects `@tauri-apps/api` v1 and the v1 CLI.
+  Repo expects Tauri v1 APIs (`@tauri-apps/api` v1 and v1 CLI).
 - **Images not rendering**  
   Tauri must allow file access under `$HOME/**` (see `desktop/src-tauri/tauri.conf.json`).
 - **Import Photos fails or does nothing**  
-  The selected files must be within the allowed FS scope (default: `$HOME/**`). Adjust the scope in `desktop/src-tauri/tauri.conf.json` if needed.
+  Selected files must be inside allowed FS scope (`$HOME/**` by default).
 
-## Project layout
+## Project Layout
 
 - `brood_engine/` core engine and CLI
 - `desktop/` Tauri desktop app
 - `tests/` pytest suite
 - `docs/param_forge_reference.md` Param Forge reference notes
-- `docs/desktop.md` Desktop UI notes (abilities + workflows)
+- `docs/desktop.md` desktop UI notes (abilities + workflows)
 
-## Agent/LLM entrypoints
+## Agent / LLM Entrypoints
 
-- `llms.txt` high-signal entrypoints and task routing for LLM agents.
-- `llms-full.txt` expanded, inlined agent context generated from canonical docs (`python3 scripts/build_llms_full.py`).
-- `agent-intake.json` optional Agent Intake Protocol (AIP) contract (curated entrypoints + optional context packs).
-- `scripts/aip_build_packs.py` builds JSON context packs to host and return via AIP (writes to `outputs/aip_packs/`, gitignored).
-- `scripts/aip_server.py` stdlib-only local stub AIP server for testing the contract + pack downloads.
+- `llms.txt` high-signal entrypoints and task routing
+- `llms-full.txt` expanded inlined context (`python3 scripts/build_llms_full.py`)
+- `agent-intake.json` optional Agent Intake Protocol (AIP) contract
+- `scripts/aip_build_packs.py` build JSON context packs to `outputs/aip_packs/`
+- `scripts/aip_server.py` stdlib-only local AIP stub server
 
 ## License
 
-This project is licensed under the Apache License 2.0. See `LICENSE`.
+Apache License 2.0. See `LICENSE`.
 
 ## Source: `AGENTS.md`
 
@@ -256,6 +308,15 @@ Tests:
 - If changing desktop app version, bump versions in `desktop/package.json`, `desktop/src-tauri/tauri.conf.json`, and `desktop/src-tauri/Cargo.toml` together (CI enforces).
 - PRs should include: summary of changes, test status, and screenshots or screen capture for UI changes.
 
+## Release & CI Notes
+- Release publishing is tag-driven via `.github/workflows/publish.yml` and runs on pushed tags matching `v*`.
+- Publish CI verifies the tag matches desktop app version (`vX.Y.Z`) and that versions match across:
+  - `desktop/package.json`
+  - `desktop/src-tauri/tauri.conf.json`
+  - `desktop/src-tauri/Cargo.toml`
+- `main` is branch-protected and requires the `smoke-install` status check before merge.
+- `.github/workflows/desktop-clean-machine-smoke.yml` always emits `smoke-install` on PRs/pushes; expensive DMG smoke steps are skipped automatically when no desktop-related files changed.
+
 ## Configuration & Tips
 - Memory is opt-in: set `BROOD_MEMORY=1` for the engine.
 - Pricing overrides live at `~/.brood/pricing_overrides.json`.
@@ -308,6 +369,10 @@ Single-image actions (work in `Single view`):
 - `Crop: Square`: local crop (no model call).
 - `Variations`: zero-prompt variations of the active image.
 
+Extraction actions (work from selected source images, typically in `Multi view`):
+- `Extract DNA`: collapse each selected source into a draggable DNA glyph.
+- `Soul Leech`: collapse each selected source into a draggable Soul glyph.
+
 Two-image actions (require `Multi view` and **exactly 2** photos loaded):
 - `Combine`: blend the two images into one (`/blend`).
 - `Swap DNA`: structure from one + surface qualities from the other (`/swap_dna`). Shift-click to invert.
@@ -318,6 +383,27 @@ Notes:
 - Some actions auto-switch the **Image Model** (e.g. 2-photo actions prefer `gemini-3-pro-image-preview`). The agent portraits update to match.
 - After a 2-photo action completes, Brood switches back to `Single view` showing the output-only image. Use `Multi view` to return to the tiled layout.
 
+## Effect Tokens (DNA / Soul)
+- Extraction visuals run on a dedicated Pixi overlay (`#effects-canvas`) and are clipped exactly to the source tile bounds.
+- When extraction completes, the source tile is tokenized: the source image box is removed from normal canvas interaction and replaced by a floating draggable glyph.
+- The token lifecycle is explicit: `extracting -> ready -> dragging -> drop_preview -> applying -> consumed`.
+- Drag/drop rules:
+  - Valid drop target must be a different image than the source.
+  - Valid targets get a strong hover highlight.
+  - Drop plays a sink/absorb animation, then dispatches apply exactly once.
+  - Invalid drop cancels without dispatching apply.
+- On successful apply:
+  - Target is edited in place (DNA/Soul transfer).
+  - The token is consumed.
+  - The extracted source image is removed from the canvas.
+- On failed apply:
+  - Token recovers to a draggable `ready` state (no stuck `applying` lock).
+
+### Canvas Context + Mother Reference Counts
+- Tokenized source images are excluded from visible-canvas counts and selection logic.
+- Effect glyphs are rendered only on the Pixi overlay (not the base work canvas), so realtime/intent snapshots do not include DNA/Soul glyphs.
+- Practical result: after one extraction from `n` images, Mother context and reference counts use `n - 1` visible images until the effect is applied.
+
 ## HUD + Tools
 - The HUD prints `UNIT / DESC / SEL / GEN` for the active image.
 - While `DIAG` / `ARG` text is present, the HUD hides the other lines to stay focused.
@@ -326,6 +412,51 @@ Notes:
   - `D` designate subject/reference/object
   - `F` fit-to-view
   - `Esc` clear selection / close panels
+
+## Mother Proposal + Gemini Context (v2)
+Brood now sends two compact context packets that preserve user-selected proposal flow while making model behavior more aware of what happened on canvas.
+
+- `brood.mother.proposal_context.v1` (during intent/proposal inference):
+  - Added to `mother_intent_infer-*.json` as `proposal_context`.
+  - Encodes soft priors only: interaction focus, geometry hints, and compact spatial relations.
+  - Does not override explicit proposal lock semantics (`active_id`, `selected_ids`, chosen proposal mode).
+- `brood.gemini.context_packet.v2` (during image generation):
+  - Added to `mother_generate-*.json` as `gemini_context_packet`.
+  - Includes `proposal_lock`, ranked image slots, compact relations, and a capped `must_not` list.
+  - Includes a tiny `geometry_trace` per image: `cx`, `cy`, `relative_scale`, `iou_to_primary`.
+
+### Scoring Math (high level)
+Per-image interaction and geometry are normalized and combined into a soft weighting prior.
+
+- Saturating interaction transform:
+  - `sat(c, k) = min(1, ln(1 + c) / ln(1 + k))`
+- Interaction base:
+  - `E = 0.35*sat(move,8) + 0.35*sat(resize,4) + 0.25*sat(selection,8) + 0.05*sat(action_grid,4)`
+- Recency + staleness:
+  - decay `exp(-age_ms / 90000)`
+  - hard stale cutoff on transform activity: `age_transform_ms > 600000` (10 min) => interaction contribution `0`
+- Geometry score:
+  - size term uses `sqrt(area_ratio)` normalization
+  - centrality term uses distance to `(0.5, 0.5)`
+  - combined as `0.8*size + 0.2*centrality`, then normalized
+- Combined score (soft prior):
+  - intent proposal context uses:
+    - `(1 + 0.8*focus_score) * (1 + 0.5*geometry_score) * (1 + selected_bonus + active_bonus)`
+  - Gemini generation context uses role priors and single-target guardrails.
+
+### Guardrails and compactness
+- Single-target clamp logic is applied only when exactly one target exists.
+- `must_not` is deduped and capped to exactly 6 constraints.
+- Relations are compact and confidence-gated (`OVERLAP` / directional `ADJACENT`) to reduce prompt noise.
+
+### Debugging and verification
+- Enable Gemini wire debug:
+  - `BROOD_DEBUG_GEMINI_WIRE=1 npm --prefix desktop run tauri dev`
+- Inspect the latest run:
+  - `~/brood_runs/run-*/mother_intent_infer-*.json` -> `proposal_context`
+  - `~/brood_runs/run-*/_raw_provider_outputs/gemini-send-message-*.json` -> exact Gemini `chat.send_message` payload parts
+  - `~/brood_runs/run-*/_raw_provider_outputs/gemini-receipt-*.json` -> provider receipt copy
+  - `~/brood_runs/run-*/mother_generate-*.json` -> generation payload containing `gemini_context_packet`
 
 ## Files Written To The Run
 - `run_dir/inputs/`: imported photos
