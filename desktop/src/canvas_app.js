@@ -3706,14 +3706,123 @@ async function writeIntentSnapshot(outPath, { maxDimPx = INTENT_SNAPSHOT_MAX_DIM
   return outPath;
 }
 
-function buildIntentContextEnvelope(frameId) {
+function buildMotherRealtimeContextEnvelope({ motherContextPayload = null, imageOriginById = null } = {}) {
+  const idle = state.motherIdle || null;
+  const payload = motherContextPayload && typeof motherContextPayload === "object"
+    ? motherContextPayload
+    : motherV2IntentPayload();
+  const selectedIds = motherV2NormalizeImageIdList(payload?.selected_ids || []).slice(0, 3);
+  const activeIdRaw = String(payload?.active_id || "").trim();
+  const activeId = activeIdRaw && isVisibleCanvasImageId(activeIdRaw) ? activeIdRaw : null;
+  const imageSetSig = motherV2IntentImageSetSignature(idle?.intent || null);
+  const contextSig = motherV2IntentContextSignature(idle?.intent || null);
+  const rejectedModes = [];
+  for (const sig of [contextSig, imageSetSig]) {
+    for (const mode of motherV2RejectedModesForContext(sig)) {
+      if (!mode || rejectedModes.includes(mode)) continue;
+      rejectedModes.push(mode);
+    }
+  }
+  const ambient = payload?.ambient_intent && typeof payload.ambient_intent === "object" ? payload.ambient_intent : null;
+  const ambientBranches = Array.isArray(ambient?.branches)
+    ? ambient.branches
+        .map((entry) => {
+          if (!entry || typeof entry !== "object") return null;
+          const branchId = String(entry.branch_id || "").trim();
+          if (!branchId) return null;
+          return {
+            branch_id: branchId,
+            confidence:
+              typeof entry.confidence === "number" && Number.isFinite(entry.confidence)
+                ? clamp(Number(entry.confidence) || 0, 0, 1)
+                : null,
+            evidence_image_ids: Array.isArray(entry.evidence_image_ids)
+              ? entry.evidence_image_ids.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 3)
+              : [],
+          };
+        })
+        .filter(Boolean)
+        .slice(0, 3)
+    : [];
+  const ambientModes = Array.isArray(ambient?.transformation_mode_candidates)
+    ? ambient.transformation_mode_candidates
+        .map((entry) => {
+          if (!entry || typeof entry !== "object") return null;
+          const mode = motherV2MaybeTransformationMode(entry.mode || entry.transformation_mode);
+          if (!mode) return null;
+          return {
+            mode,
+            confidence:
+              typeof entry.confidence === "number" && Number.isFinite(entry.confidence)
+                ? clamp(Number(entry.confidence) || 0, 0, 1)
+                : null,
+          };
+        })
+        .filter(Boolean)
+        .slice(0, 3)
+    : [];
+  const compactImages = (Array.isArray(payload?.images) ? payload.images : [])
+    .map((image) => {
+      if (!image || typeof image !== "object") return null;
+      const imageId = String(image.id || "").trim();
+      if (!imageId) return null;
+      const item = state.imagesById.get(imageId) || null;
+      const pathText = String(image.path || item?.path || "").trim();
+      const inferredOrigin = item && isMotherGeneratedImageItem(item) ? "mother_generated" : "uploaded";
+      const originFromMap = imageOriginById?.get?.(imageId) || null;
+      const origin = originFromMap || inferredOrigin;
+      const rectNorm = image.rect_norm && typeof image.rect_norm === "object"
+        ? {
+            x: Number(image.rect_norm.x) || 0,
+            y: Number(image.rect_norm.y) || 0,
+            w: Math.max(0, Number(image.rect_norm.w) || 0),
+            h: Math.max(0, Number(image.rect_norm.h) || 0),
+          }
+        : null;
+      return {
+        id: imageId,
+        file: image.file ? String(image.file) : pathText ? basename(pathText) : null,
+        vision_desc: image.vision_desc ? clampText(String(image.vision_desc || ""), 64) : null,
+        origin,
+        rect_norm: rectNorm,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 10);
+  return {
+    schema: "brood.mother.realtime_context.v1",
+    optimization_target: "stunningly awe-inspiring and joyous + novel",
+    optimization_hint: "Optimize proposals for stunningly awe-inspiring and joyous + novel while preserving identity and coherence.",
+    action_version: Number(payload?.action_version) || Number(idle?.actionVersion) || 0,
+    creative_directive: String(payload?.creative_directive || MOTHER_CREATIVE_DIRECTIVE || "").trim(),
+    preferred_transformation_mode: motherV2MaybeTransformationMode(payload?.preferred_transformation_mode) || null,
+    intensity: clamp(Number(payload?.intensity) || Number(idle?.intensity) || 62, 0, 100),
+    active_id: activeId,
+    selected_ids: selectedIds,
+    canvas_context_summary: payload?.canvas_context_summary ? clampText(String(payload.canvas_context_summary || ""), 240) : null,
+    recent_rejected_modes_for_context: rejectedModes,
+    last_accepted_mode: motherV2MaybeTransformationMode(idle?.lastProposalMode || idle?.intent?.transformation_mode),
+    ambient_intent: ambientBranches.length || ambientModes.length
+      ? {
+          preferred_transformation_mode: motherV2MaybeTransformationMode(ambient?.preferred_transformation_mode) || null,
+          branches: ambientBranches,
+          transformation_mode_candidates: ambientModes,
+        }
+      : null,
+    images: compactImages,
+  };
+}
+
+function buildIntentContextEnvelope(frameId, { motherContextPayload = null } = {}) {
   const wrap = els.canvasWrap;
   const intent = state.intent || {};
   const dpr = getDpr();
   const canvasCssW = wrap?.clientWidth || 0;
   const canvasCssH = wrap?.clientHeight || 0;
+  const isMotherFrame = String(frameId || "").trim().toLowerCase().startsWith("mother-intent-");
 
   const images = [];
+  const imageOriginById = new Map();
   const z = Array.isArray(state.freeformZOrder) ? state.freeformZOrder : [];
   for (let idx = 0; idx < z.length; idx += 1) {
     const imageId = String(z[idx] || "").trim();
@@ -3729,9 +3838,12 @@ function buildIntentContextEnvelope(frameId) {
     const h = Math.max(1, Number(rect.h) || 1);
     const cx = x + w / 2;
     const cy = y + h / 2;
+    const origin = isMotherGeneratedImageItem(item) ? "mother_generated" : "uploaded";
+    imageOriginById.set(String(imageId), origin);
     images.push({
       id: String(imageId),
       file: basename(item.path),
+      origin,
       import_index: (state.images || []).findIndex((im) => im?.id === imageId),
       z: idx,
       // Short vision-derived label for this image (best-effort). This is an internal
@@ -3763,7 +3875,7 @@ function buildIntentContextEnvelope(frameId) {
       : INTENT_DEADLINE_MS
     : 0;
 
-  return {
+  const envelope = {
     schema: "brood.intent_envelope",
     schema_version: INTENT_ENVELOPE_VERSION,
     generated_at: new Date().toISOString(),
@@ -3790,13 +3902,20 @@ function buildIntentContextEnvelope(frameId) {
     },
     images,
   };
+  if (isMotherFrame) {
+    envelope.mother_context = buildMotherRealtimeContextEnvelope({
+      motherContextPayload,
+      imageOriginById,
+    });
+  }
+  return envelope;
 }
 
-async function writeIntentContextEnvelope(snapshotPath, frameId) {
+async function writeIntentContextEnvelope(snapshotPath, frameId, { motherContextPayload = null } = {}) {
   if (!state.runDir) return null;
   const ctxPath = _canvasContextSidecarPath(snapshotPath);
   if (!ctxPath) return null;
-  const envelope = buildIntentContextEnvelope(frameId);
+  const envelope = buildIntentContextEnvelope(frameId, { motherContextPayload });
   await writeTextFile(ctxPath, JSON.stringify(envelope));
   return ctxPath;
 }
@@ -11182,9 +11301,6 @@ function motherV2CompilePromptLocal(payload = {}) {
     multiImageRules.push("Keep one coherent camera framing and focal hierarchy.");
   }
   const positiveLines = [
-    "Create one production-ready concept image.",
-    `Creative directive: ${creativeDirective}.`,
-    `Transformation mode: ${transformationMode}.`,
     `Intent summary: ${summary}.`,
     `Role anchors: ${roleText}.`,
   ];
@@ -11194,6 +11310,9 @@ function motherV2CompilePromptLocal(payload = {}) {
   positiveLines.push(`Anti-overlay constraints: ${constraints.join(" ")}`);
   positiveLines.push("Produce coherent composition, emotional resonance, and production-grade lighting.");
   positiveLines.push("No text overlays, words, letters, logos-as-text, or watermarks.");
+  positiveLines.push("Create one production-ready concept image.");
+  positiveLines.push(`Creative directive: ${creativeDirective}.`);
+  positiveLines.push(`Transformation mode: ${transformationMode}.`);
   return {
     action_version: Number(payload.action_version) || 0,
     creative_directive: creativeDirective,
@@ -11558,7 +11677,7 @@ async function motherV2RequestIntentInference() {
       await waitForIntentImagesLoaded({ timeoutMs: 900 });
       render();
       await writeIntentSnapshot(snapshotPath, { maxDimPx: INTENT_SNAPSHOT_MAX_DIM_PX });
-      await writeIntentContextEnvelope(snapshotPath, frameId).catch(() => null);
+      await writeIntentContextEnvelope(snapshotPath, frameId, { motherContextPayload: payload }).catch(() => null);
     } catch {
       snapshotPath = null;
     }
@@ -11764,18 +11883,39 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "") {
   if (!idle) return false;
   const imagePayload = motherV2CollectGenerationImagePaths();
   const sanitizedIntent = motherV2SanitizeIntentImageIds(idle.intent) || idle.intent || null;
+  const compiledGenerationParams =
+    compiled?.generation_params && typeof compiled.generation_params === "object" ? compiled.generation_params : {};
+  const generationParams = {};
+  const seedStrategy = String(compiledGenerationParams.seed_strategy || "").trim().toLowerCase();
+  if (seedStrategy === "random") generationParams.seed_strategy = "random";
+  if (compiledGenerationParams.seed !== undefined && compiledGenerationParams.seed !== null) {
+    const seedValue = Number(compiledGenerationParams.seed);
+    if (Number.isFinite(seedValue)) {
+      generationParams.seed = Math.trunc(seedValue);
+    }
+  }
+  if (typeof compiledGenerationParams.aspect_ratio === "string" && compiledGenerationParams.aspect_ratio.trim()) {
+    generationParams.aspect_ratio = compiledGenerationParams.aspect_ratio.trim();
+  }
+  if (typeof compiledGenerationParams.image_size === "string" && compiledGenerationParams.image_size.trim()) {
+    generationParams.image_size = compiledGenerationParams.image_size.trim();
+  }
+  if (Array.isArray(compiledGenerationParams.safety_settings) && compiledGenerationParams.safety_settings.length) {
+    generationParams.safety_settings = compiledGenerationParams.safety_settings.slice();
+  }
+  if (compiledGenerationParams.add_watermark !== undefined && compiledGenerationParams.add_watermark !== null) {
+    generationParams.add_watermark = Boolean(compiledGenerationParams.add_watermark);
+  }
+  if (compiledGenerationParams.person_generation !== undefined && compiledGenerationParams.person_generation !== null) {
+    generationParams.person_generation = compiledGenerationParams.person_generation;
+  }
   const payload = {
-    schema: "brood.mother.generate.v1",
+    schema: "brood.mother.generate.v2",
     action_version: Number(idle.actionVersion) || 0,
     intent_id: sanitizedIntent?.intent_id || idle.intent?.intent_id || null,
-    intent: sanitizedIntent,
-    transformation_mode: motherV2NormalizeTransformationMode(sanitizedIntent?.transformation_mode),
-    creative_directive: String(sanitizedIntent?.creative_directive || "").trim() || MOTHER_CREATIVE_DIRECTIVE,
     prompt: promptLine,
-    positive_prompt: String(compiled?.positive_prompt || "").trim(),
-    negative_prompt: String(compiled?.negative_prompt || "").trim(),
-    generation_params: compiled?.generation_params && typeof compiled.generation_params === "object" ? compiled.generation_params : {},
-    source_images: imagePayload.sourceImages,
+    n: 1,
+    generation_params: generationParams,
     init_image: imagePayload.initImage,
     reference_images: imagePayload.referenceImages,
   };

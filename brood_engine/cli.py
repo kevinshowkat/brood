@@ -56,6 +56,11 @@ MOTHER_TRANSFORMATION_MODES = (
     "alienate",
 )
 MOTHER_DEFAULT_TRANSFORMATION_MODE = "hybridize"
+MOTHER_GENERATE_SCHEMA_V2 = "brood.mother.generate.v2"
+MOTHER_PROVIDER_OPTIONS_ALLOWLIST: dict[str, set[str]] = {
+    "gemini": {"aspect_ratio", "image_size", "safety_settings"},
+    "imagen": {"aspect_ratio", "image_size", "add_watermark", "person_generation"},
+}
 
 
 def _maybe_warn_missing_flux_key(model: str | None) -> None:
@@ -166,6 +171,53 @@ def _paths_list(value: Any) -> list[str]:
         return [str(item).strip() for item in value if str(item).strip()]
     raw = str(value).strip()
     return [raw] if raw else []
+
+
+def _normalize_provider_name(value: Any) -> str | None:
+    name = str(value or "").strip().lower()
+    return name or None
+
+
+def _mother_apply_provider_generation_params(
+    provider_options: dict[str, Any],
+    generation_params: dict[str, Any],
+    *,
+    target_provider: str | None,
+) -> dict[str, Any]:
+    provider = _normalize_provider_name(target_provider)
+    if provider not in {"gemini", "imagen"}:
+        return dict(provider_options)
+    out = dict(provider_options)
+    aspect_ratio = generation_params.get("aspect_ratio")
+    if isinstance(aspect_ratio, str) and aspect_ratio.strip():
+        out["aspect_ratio"] = aspect_ratio.strip()
+    image_size = generation_params.get("image_size")
+    if isinstance(image_size, str) and image_size.strip():
+        out["image_size"] = image_size.strip()
+    if provider == "gemini":
+        safety_settings = generation_params.get("safety_settings")
+        if isinstance(safety_settings, (list, tuple)):
+            out["safety_settings"] = list(safety_settings)
+    if provider == "imagen":
+        if generation_params.get("add_watermark") is not None:
+            out["add_watermark"] = bool(generation_params.get("add_watermark"))
+        if generation_params.get("person_generation") is not None:
+            out["person_generation"] = generation_params.get("person_generation")
+    return out
+
+
+def _mother_sanitize_provider_options(
+    provider_options: dict[str, Any],
+    *,
+    target_provider: str | None,
+) -> dict[str, Any]:
+    provider = _normalize_provider_name(target_provider)
+    if not provider:
+        return dict(provider_options)
+    allowlist = MOTHER_PROVIDER_OPTIONS_ALLOWLIST.get(provider)
+    if not allowlist:
+        return dict(provider_options)
+    return {str(k): v for k, v in provider_options.items() if str(k) in allowlist}
 
 
 def _intent_realtime_model_name(*, mother: bool = False) -> str:
@@ -561,9 +613,6 @@ def _compile_prompt(payload: dict[str, Any]) -> dict[str, Any]:
         multi_image_rules.append("Keep one coherent camera framing and focal hierarchy.")
 
     positive_lines = [
-        "Create one production-ready concept image.",
-        f"Creative directive: {creative_directive}.",
-        f"Transformation mode: {transformation_mode}.",
         f"Intent summary: {summary}.",
         "Role anchors:",
         f"- SUBJECT: {subject}",
@@ -583,6 +632,13 @@ def _compile_prompt(payload: dict[str, Any]) -> dict[str, Any]:
     )
     positive_lines.extend(f"- {constraint}" for constraint in constraints)
     positive_lines.append("No visible text, logos-as-text, captions, or watermarks.")
+    positive_lines.extend(
+        [
+            "Create one production-ready concept image.",
+            f"Creative directive: {creative_directive}.",
+            f"Transformation mode: {transformation_mode}.",
+        ]
+    )
     positive = "\n".join(positive_lines)
     negative = (
         "No text overlays, no watermarks, no collage split-screen, no icon-overpaint artifacts, "
@@ -605,7 +661,12 @@ def _compile_prompt(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _mother_generate_request(payload: dict[str, Any], state: dict[str, object]) -> tuple[str, dict[str, Any], list[str], dict[str, Any]]:
+def _mother_generate_request(
+    payload: dict[str, Any],
+    state: dict[str, object],
+    *,
+    target_provider: str | None = None,
+) -> tuple[str, dict[str, Any], list[str], dict[str, Any]]:
     prompt = str(payload.get("prompt") or payload.get("positive_prompt") or "").strip()
     negative = str(payload.get("negative_prompt") or "").strip()
     if not prompt:
@@ -627,14 +688,19 @@ def _mother_generate_request(payload: dict[str, Any], state: dict[str, object]) 
             settings["seed"] = int(generation_params.get("seed"))
         except Exception:
             pass
-    if isinstance(generation_params.get("guidance_scale"), (int, float)):
-        provider_options["guidance_scale"] = float(generation_params.get("guidance_scale"))
-    if isinstance(generation_params.get("layout_hint"), str):
-        provider_options["layout_hint"] = str(generation_params.get("layout_hint"))
-    if isinstance(generation_params.get("transformation_mode"), str):
-        provider_options["transformation_mode"] = str(generation_params.get("transformation_mode"))
+    provider_options = _mother_apply_provider_generation_params(
+        provider_options,
+        generation_params,
+        target_provider=target_provider,
+    )
+    provider_options = _mother_sanitize_provider_options(
+        provider_options,
+        target_provider=target_provider,
+    )
     if provider_options:
         settings["provider_options"] = provider_options
+    else:
+        settings.pop("provider_options", None)
 
     init_image = str(payload.get("init_image") or "").strip()
     reference_images = _paths_list(payload.get("reference_images"))
@@ -649,11 +715,19 @@ def _mother_generate_request(payload: dict[str, Any], state: dict[str, object]) 
     source_images = [str(Path(path)) for path in source_images if str(path).strip()]
 
     intent_meta = payload.get("intent") if isinstance(payload.get("intent"), dict) else {}
+    schema = str(payload.get("schema") or "").strip()
+    is_v2_payload = schema == MOTHER_GENERATE_SCHEMA_V2
+    intent_id = payload.get("intent_id") if is_v2_payload else (payload.get("intent_id") or intent_meta.get("intent_id"))
+    transformation_mode = (
+        payload.get("transformation_mode")
+        or intent_meta.get("transformation_mode")
+        or generation_params.get("transformation_mode")
+    )
     action_meta = {
         "action": "mother_generate",
-        "intent_id": payload.get("intent_id") or intent_meta.get("intent_id"),
+        "intent_id": intent_id,
         "mother_action_version": int(payload.get("action_version") or 0),
-        "transformation_mode": payload.get("transformation_mode") or intent_meta.get("transformation_mode"),
+        "transformation_mode": transformation_mode,
         "source_images": source_images,
     }
     return prompt, settings, source_images, action_meta
@@ -895,8 +969,18 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 print(msg)
                 continue
 
+            target_provider = None
             try:
-                prompt, settings, source_images, action_meta = _mother_generate_request(payload, state)
+                selection = engine.model_selector.select(engine.image_model, "image")
+                target_provider = selection.model.provider if selection and selection.model else None
+            except Exception:
+                target_provider = None
+            try:
+                prompt, settings, source_images, action_meta = _mother_generate_request(
+                    payload,
+                    state,
+                    target_provider=target_provider,
+                )
             except ValueError as exc:
                 msg = f"Mother generate failed: {exc}"
                 engine.events.emit(
@@ -1098,6 +1182,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
                         "OPENAI_INTENT_REALTIME_MODEL",
                     ),
                     default_model="gpt-realtime",
+                    instruction_scope="mother",
                 )
             ok, err = mother_intent_rt.start()
             if not ok:
@@ -1157,6 +1242,7 @@ def _handle_chat(args: argparse.Namespace) -> int:
                         "OPENAI_INTENT_REALTIME_MODEL",
                     ),
                     default_model="gpt-realtime",
+                    instruction_scope="mother",
                 )
             ok, err = mother_intent_rt.submit_snapshot(path)
             if not ok:

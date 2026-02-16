@@ -49,6 +49,8 @@ def test_compile_prompt_includes_directive_transformation_mode_and_constraints()
     assert compiled["transformation_mode"] == "hybridize"
     assert DIRECTIVE in str(compiled["positive_prompt"]).lower()
     assert "Transformation mode: hybridize." in str(compiled["positive_prompt"])
+    assert str(compiled["positive_prompt"]).startswith("Intent summary:")
+    assert str(compiled["positive_prompt"]).endswith("Transformation mode: hybridize.")
     assert "Anti-overlay constraints:" in str(compiled["positive_prompt"])
     assert "No unintended ghosted human overlays." in str(compiled["positive_prompt"])
     assert "No accidental double-exposure artifacts." in str(compiled["positive_prompt"])
@@ -200,3 +202,132 @@ def test_mother_generate_request_random_seed_strategy_sets_seed() -> None:
     assert int(settings["seed"]) > 0
     assert source_images == ["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]
     assert action_meta["action"] == "mother_generate"
+
+
+def test_mother_generate_request_v2_minimal_payload_uses_init_and_reference_paths() -> None:
+    prompt, settings, source_images, action_meta = _mother_generate_request(
+        {
+            "schema": "brood.mother.generate.v2",
+            "prompt": "minimal v2 prompt",
+            "action_version": 27,
+            "intent_id": "intent-27",
+            "generation_params": {"seed_strategy": "random"},
+            "init_image": "/tmp/one.png",
+            "reference_images": ["/tmp/two.png"],
+        },
+        {},
+        target_provider="gemini",
+    )
+
+    assert prompt == "minimal v2 prompt"
+    assert source_images == ["/tmp/one.png", "/tmp/two.png"]
+    assert action_meta["intent_id"] == "intent-27"
+    assert action_meta["mother_action_version"] == 27
+    assert "provider_options" not in settings or settings["provider_options"] == {}
+
+
+def test_mother_generate_request_v1_payload_remains_supported() -> None:
+    prompt, settings, source_images, action_meta = _mother_generate_request(
+        {
+            "schema": "brood.mother.generate.v1",
+            "positive_prompt": "v1 positive",
+            "negative_prompt": "v1 negative",
+            "action_version": 4,
+            "intent": {"intent_id": "legacy-intent-4", "transformation_mode": "hybridize"},
+            "generation_params": {"seed": 42},
+            "init_image": "/tmp/a.png",
+            "reference_images": ["/tmp/b.png"],
+        },
+        {},
+    )
+
+    assert prompt == "v1 positive\nAvoid: v1 negative"
+    assert settings["seed"] == 42
+    assert source_images == ["/tmp/a.png", "/tmp/b.png"]
+    assert action_meta["intent_id"] == "legacy-intent-4"
+    assert action_meta["transformation_mode"] == "hybridize"
+
+
+def test_mother_generate_request_drops_non_gemini_params_for_gemini_provider() -> None:
+    prompt, settings, source_images, action_meta = _mother_generate_request(
+        {
+            "schema": "brood.mother.generate.v1",
+            "prompt": "gemini prompt",
+            "generation_params": {
+                "seed_strategy": "random",
+                "guidance_scale": 7,
+                "layout_hint": "adjacent",
+                "transformation_mode": "hybridize",
+                "aspect_ratio": "1:1",
+                "image_size": "1K",
+            },
+            "init_image": "/tmp/a.png",
+            "reference_images": ["/tmp/b.png"],
+        },
+        {
+            "provider_options": {
+                "guidance_scale": 9,
+                "layout_hint": "grid",
+                "transformation_mode": "alienate",
+                "aspect_ratio": "3:4",
+                "image_size": "2K",
+            }
+        },
+        target_provider="gemini",
+    )
+
+    assert prompt == "gemini prompt"
+    assert source_images == ["/tmp/a.png", "/tmp/b.png"]
+    assert action_meta["action"] == "mother_generate"
+    assert settings["provider_options"] == {
+        "aspect_ratio": "1:1",
+        "image_size": "1K",
+    }
+
+
+def test_mother_generate_request_keeps_imagen_only_options_for_imagen_provider() -> None:
+    _, settings, _, _ = _mother_generate_request(
+        {
+            "schema": "brood.mother.generate.v1",
+            "prompt": "imagen prompt",
+            "generation_params": {
+                "guidance_scale": 7,
+                "layout_hint": "adjacent",
+                "add_watermark": False,
+                "person_generation": "allow_adult",
+                "image_size": "2K",
+                "aspect_ratio": "4:5",
+            },
+            "init_image": "/tmp/a.png",
+        },
+        {"provider_options": {"guidance_scale": 9, "add_watermark": True}},
+        target_provider="imagen",
+    )
+
+    assert settings["provider_options"] == {
+        "add_watermark": False,
+        "person_generation": "allow_adult",
+        "image_size": "2K",
+        "aspect_ratio": "4:5",
+    }
+
+
+def test_mother_generate_request_removes_unsupported_state_provider_options_for_gemini() -> None:
+    _, settings, _, _ = _mother_generate_request(
+        {
+            "schema": "brood.mother.generate.v2",
+            "prompt": "gemini prompt",
+            "generation_params": {},
+            "init_image": "/tmp/a.png",
+        },
+        {
+            "provider_options": {
+                "guidance_scale": 7,
+                "layout_hint": "adjacent",
+                "transformation_mode": "hybridize",
+            }
+        },
+        target_provider="gemini",
+    )
+
+    assert "provider_options" not in settings

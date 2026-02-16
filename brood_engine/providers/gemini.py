@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import time
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -23,6 +28,9 @@ from .google_utils import (
     nearest_gemini_ratio,
     resolve_image_size_hint,
 )
+
+GEMINI_DEBUG_DIRNAME = "_raw_provider_outputs"
+GEMINI_DEBUG_ENV_FLAGS = ("BROOD_DEBUG_GEMINI_WIRE", "BROOD_DEBUG_GEMINI_REQUEST_PAYLOAD")
 
 
 class GeminiProvider:
@@ -60,6 +68,13 @@ class GeminiProvider:
             "prompt": request.prompt,
             "config": _to_dict(content_config),
         }
+        debug_manifest_path = _maybe_write_debug_request_manifest(
+            request=request,
+            model=model,
+            content_config=raw_request["config"],
+        )
+        if debug_manifest_path:
+            raw_request["debug_manifest_path"] = debug_manifest_path
         raw_response: dict[str, Any] = {}
 
         results: list[GeneratedArtifact] = []
@@ -190,15 +205,197 @@ def _coerce_input_parts(inputs: Sequence[Any]) -> Sequence[types.Part]:
 def _read_input_bytes(value: str | Path) -> tuple[bytes, str | None]:
     path = Path(value)
     data = path.read_bytes()
-    suffix = path.suffix.lower()
-    mime_type = None
-    if suffix == ".png":
-        mime_type = "image/png"
-    elif suffix in {".jpg", ".jpeg"}:
-        mime_type = "image/jpeg"
-    elif suffix == ".webp":
-        mime_type = "image/webp"
+    mime_type = _mime_type_for_suffix(path.suffix.lower())
     return data, mime_type
+
+
+def _mime_type_for_suffix(suffix: str) -> str | None:
+    lowered = str(suffix or "").strip().lower()
+    if lowered == ".png":
+        return "image/png"
+    if lowered in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if lowered == ".webp":
+        return "image/webp"
+    return None
+
+
+def _env_flag_enabled(name: str) -> bool:
+    value = str(os.getenv(name) or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _gemini_debug_manifest_enabled() -> bool:
+    return any(_env_flag_enabled(name) for name in GEMINI_DEBUG_ENV_FLAGS)
+
+
+def _describe_path_input(
+    *,
+    value: str | Path,
+    role: str,
+    part_index: int,
+    source_index: int,
+) -> dict[str, Any]:
+    path = Path(value).expanduser()
+    payload: dict[str, Any] = {
+        "part_type": "image",
+        "role": role,
+        "part_index": part_index,
+        "source_index": source_index,
+        "source_type": "path",
+        "path": str(path),
+        "mime_type": _mime_type_for_suffix(path.suffix.lower()),
+    }
+    try:
+        resolved_path = str(path.resolve())
+    except Exception:
+        resolved_path = str(path)
+    payload["resolved_path"] = resolved_path
+    if not path.exists():
+        payload["missing"] = True
+        return payload
+    try:
+        data = path.read_bytes()
+    except Exception as exc:
+        payload["read_error"] = str(exc)
+        return payload
+    payload["byte_count"] = len(data)
+    payload["sha256"] = hashlib.sha256(data).hexdigest()
+    return payload
+
+
+def _describe_non_path_input(
+    *,
+    value: Any,
+    role: str,
+    part_index: int,
+    source_index: int,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "part_type": "image",
+        "role": role,
+        "part_index": part_index,
+        "source_index": source_index,
+    }
+    if isinstance(value, (bytes, bytearray)):
+        data = bytes(value)
+        payload.update(
+            {
+                "source_type": "bytes",
+                "byte_count": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+        )
+        return payload
+    payload["source_type"] = type(value).__name__
+    return payload
+
+
+def _describe_input_parts(request: ImageRequest) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    part_index = 0
+    if request.inputs.init_image is not None:
+        init_value = request.inputs.init_image
+        if isinstance(init_value, (str, Path)):
+            entries.append(
+                _describe_path_input(
+                    value=init_value,
+                    role="init_image",
+                    part_index=part_index,
+                    source_index=0,
+                )
+            )
+        else:
+            entries.append(
+                _describe_non_path_input(
+                    value=init_value,
+                    role="init_image",
+                    part_index=part_index,
+                    source_index=0,
+                )
+            )
+        part_index += 1
+    for source_index, ref_value in enumerate(request.inputs.reference_images):
+        if isinstance(ref_value, (str, Path)):
+            entries.append(
+                _describe_path_input(
+                    value=ref_value,
+                    role="reference_image",
+                    part_index=part_index,
+                    source_index=source_index,
+                )
+            )
+        else:
+            entries.append(
+                _describe_non_path_input(
+                    value=ref_value,
+                    role="reference_image",
+                    part_index=part_index,
+                    source_index=source_index,
+                )
+            )
+        part_index += 1
+    entries.append(
+        {
+            "part_type": "text",
+            "role": "prompt",
+            "part_index": part_index,
+            "text_chars": len(str(request.prompt or "")),
+            "text_preview": str(request.prompt or ""),
+        }
+    )
+    return entries
+
+
+def _build_debug_request_manifest(
+    *,
+    request: ImageRequest,
+    model: str,
+    content_config: Mapping[str, Any] | Sequence[Any] | Any,
+) -> dict[str, Any]:
+    out_dir = str(request.out_dir or "").strip()
+    return {
+        "schema": "brood.gemini.send_message.debug.v1",
+        "ts_utc": datetime.now(timezone.utc).isoformat(),
+        "provider": "gemini",
+        "model": model,
+        "out_dir": out_dir or None,
+        "prompt": str(request.prompt or ""),
+        "send_message": {
+            "method": "chat.send_message",
+            "config": _to_dict(content_config),
+            "parts": _describe_input_parts(request),
+        },
+    }
+
+
+def _maybe_write_debug_request_manifest(
+    *,
+    request: ImageRequest,
+    model: str,
+    content_config: Mapping[str, Any] | Sequence[Any] | Any,
+) -> str | None:
+    if not _gemini_debug_manifest_enabled():
+        return None
+    out_dir_raw = str(request.out_dir or "").strip()
+    if not out_dir_raw:
+        return None
+    out_dir = Path(out_dir_raw).expanduser()
+    payload = _build_debug_request_manifest(
+        request=request,
+        model=model,
+        content_config=content_config,
+    )
+    try:
+        raw_dir = out_dir / GEMINI_DEBUG_DIRNAME
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        stamp = int(time.time() * 1000)
+        suffix = uuid.uuid4().hex[:8]
+        output_path = raw_dir / f"gemini-send-message-{stamp}-{suffix}.json"
+        output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception:
+        return None
+    return str(output_path)
 
 
 def _extract_image_bytes(candidates: Sequence[Any]) -> list[dict[str, Any]]:
