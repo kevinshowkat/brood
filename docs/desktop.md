@@ -73,6 +73,51 @@ Notes:
   - `F` fit-to-view
   - `Esc` clear selection / close panels
 
+## Mother Proposal + Gemini Context (v2)
+Brood now sends two compact context packets that preserve user-selected proposal flow while making model behavior more aware of what happened on canvas.
+
+- `brood.mother.proposal_context.v1` (during intent/proposal inference):
+  - Added to `mother_intent_infer-*.json` as `proposal_context`.
+  - Encodes soft priors only: interaction focus, geometry hints, and compact spatial relations.
+  - Does not override explicit proposal lock semantics (`active_id`, `selected_ids`, chosen proposal mode).
+- `brood.gemini.context_packet.v2` (during image generation):
+  - Added to `mother_generate-*.json` as `gemini_context_packet`.
+  - Includes `proposal_lock`, ranked image slots, compact relations, and a capped `must_not` list.
+  - Includes a tiny `geometry_trace` per image: `cx`, `cy`, `relative_scale`, `iou_to_primary`.
+
+### Scoring Math (high level)
+Per-image interaction and geometry are normalized and combined into a soft weighting prior.
+
+- Saturating interaction transform:
+  - `sat(c, k) = min(1, ln(1 + c) / ln(1 + k))`
+- Interaction base:
+  - `E = 0.35*sat(move,8) + 0.35*sat(resize,4) + 0.25*sat(selection,8) + 0.05*sat(action_grid,4)`
+- Recency + staleness:
+  - decay `exp(-age_ms / 90000)`
+  - hard stale cutoff on transform activity: `age_transform_ms > 600000` (10 min) => interaction contribution `0`
+- Geometry score:
+  - size term uses `sqrt(area_ratio)` normalization
+  - centrality term uses distance to `(0.5, 0.5)`
+  - combined as `0.8*size + 0.2*centrality`, then normalized
+- Combined score (soft prior):
+  - intent proposal context uses:
+    - `(1 + 0.8*focus_score) * (1 + 0.5*geometry_score) * (1 + selected_bonus + active_bonus)`
+  - Gemini generation context uses role priors and single-target guardrails.
+
+### Guardrails and compactness
+- Single-target clamp logic is applied only when exactly one target exists.
+- `must_not` is deduped and capped to exactly 6 constraints.
+- Relations are compact and confidence-gated (`OVERLAP` / directional `ADJACENT`) to reduce prompt noise.
+
+### Debugging and verification
+- Enable Gemini wire debug:
+  - `BROOD_DEBUG_GEMINI_WIRE=1 npm --prefix desktop run tauri dev`
+- Inspect the latest run:
+  - `~/brood_runs/run-*/mother_intent_infer-*.json` -> `proposal_context`
+  - `~/brood_runs/run-*/_raw_provider_outputs/gemini-send-message-*.json` -> exact Gemini `chat.send_message` payload parts
+  - `~/brood_runs/run-*/_raw_provider_outputs/gemini-receipt-*.json` -> provider receipt copy
+  - `~/brood_runs/run-*/mother_generate-*.json` -> generation payload containing `gemini_context_packet`
+
 ## Files Written To The Run
 - `run_dir/inputs/`: imported photos
 - `run_dir/receipt-*.json`: generation/edit receipts
