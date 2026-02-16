@@ -10,6 +10,29 @@ You steer outputs by arranging and combining images on a canvas, then applying a
 Reference tagline:
 - **Brood: Reference-First AI Image Editing Desktop for Developers**
 
+## Live Workflow Highlights
+
+### Realtime Canvas Proposals
+Mother watches your on-canvas edits (move/resize/select), infers what you are emphasizing, and proposes the next best transformation without requiring a typed prompt.
+
+<p align="left">
+  <img src="media/features/readme/realtime_canvas_proposals.gif" alt="Realtime canvas proposals">
+</p>
+
+### Top Panel Telemetry Metrics
+The top panel surfaces live run/model telemetry so you can quickly audit behavior and confidence while you work.
+
+<p align="left">
+  <img src="media/features/readme/top_panel_telemetry.gif" alt="Top panel telemetry metrics">
+</p>
+
+### Proposal Drafting
+Mother enters a drafting phase, assembles proposal context from the canvas state, then renders a candidate you can confirm, reject, or iterate.
+
+<p align="left">
+  <img src="media/features/readme/proposal_drafting.gif" alt="Mother proposal drafting">
+</p>
+
 ## Status
 
 Brood is currently a **macOS-only desktop app** (Tauri).
@@ -52,29 +75,6 @@ Install:
 4. Run direct Abilities as needed and inspect HUD output (`DIAG` / `ARG`).
 
 More usage details: `docs/desktop.md`.
-
-## Live Workflow Highlights
-
-### Realtime Canvas Proposals
-Mother watches your on-canvas edits (move/resize/select), infers what you are emphasizing, and proposes the next best transformation without requiring a typed prompt.
-
-<p align="left">
-  <img src="media/features/readme/realtime_canvas_proposals.gif" alt="Realtime canvas proposals">
-</p>
-
-### Top Panel Telemetry Metrics
-The top panel surfaces live run/model telemetry so you can quickly audit behavior and confidence while you work.
-
-<p align="left">
-  <img src="media/features/readme/top_panel_telemetry.gif" alt="Top panel telemetry metrics">
-</p>
-
-### Proposal Drafting
-Mother enters a drafting phase, assembles proposal context from the canvas state, then renders a candidate you can confirm, reject, or iterate.
-
-<p align="left">
-  <img src="media/features/readme/proposal_drafting.gif" alt="Mother proposal drafting">
-</p>
 
 ## Mother Context Packets
 
