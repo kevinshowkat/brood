@@ -26215,11 +26215,6 @@ async function boot() {
 
   // Auto-create a run for speed; users can always "Open Run" later.
   await createRun();
-  if (localStorage.getItem(AESTHETIC_ONBOARDING_COMPLETED_KEY) !== "1") {
-    setTimeout(() => {
-      openAestheticOnboardingModal({ force: false, source: "first_run" });
-    }, 260);
-  }
   await invoke("report_automation_frontend_ready", { ready: true }).catch((err) => {
     console.warn("desktop automation readiness handshake failed", err);
   });
