@@ -62,6 +62,13 @@ MOTHER_PROVIDER_OPTIONS_ALLOWLIST: dict[str, set[str]] = {
     "gemini": {"aspect_ratio", "image_size", "safety_settings"},
     "imagen": {"aspect_ratio", "image_size", "add_watermark", "person_generation"},
 }
+MOTHER_CONTEXT_PROMPT_BUDGET_DEFAULT = 1400
+MOTHER_CONTEXT_PROMPT_BUDGET_BY_PROVIDER: dict[str, int] = {
+    "openai": 1700,
+    "flux": 1200,
+    "imagen": 1500,
+    "replicate": 1200,
+}
 
 
 def _maybe_warn_missing_flux_key(model: str | None) -> None:
@@ -227,6 +234,199 @@ def _mother_extract_gemini_context_packet(payload: dict[str, Any]) -> dict[str, 
         return None
     # Keep provider-facing context immutable downstream and avoid accidental mutation.
     return copy.deepcopy(packet)
+
+
+def _mother_extract_model_context_envelopes(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw = payload.get("model_context_envelopes")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for key, value in raw.items():
+        if not isinstance(value, dict):
+            continue
+        name = str(key or "").strip().lower()
+        if not name:
+            continue
+        out[name] = copy.deepcopy(value)
+    return out
+
+
+def _mother_provider_aliases(provider: str | None) -> tuple[str, ...]:
+    normalized = _normalize_provider_name(provider) or ""
+    if normalized == "replicate":
+        return ("sdxl",)
+    if normalized == "sdxl":
+        return ("replicate",)
+    return ()
+
+
+def _mother_pick_model_context_envelope(
+    envelopes: dict[str, dict[str, Any]],
+    *,
+    target_provider: str | None,
+    target_model: str | None,
+) -> dict[str, Any] | None:
+    if not envelopes:
+        return None
+    provider = _normalize_provider_name(target_provider)
+    model = str(target_model or "").strip().lower()
+    by_model = envelopes.get("by_model")
+    if model and isinstance(by_model, dict):
+        model_entry = by_model.get(model)
+        if isinstance(model_entry, dict):
+            return copy.deepcopy(model_entry)
+    provider_lookup_order = []
+    if provider:
+        provider_lookup_order.append(provider)
+        provider_lookup_order.extend(_mother_provider_aliases(provider))
+    by_provider = envelopes.get("by_provider")
+    if provider_lookup_order and isinstance(by_provider, dict):
+        provider_entry = None
+        for key in provider_lookup_order:
+            if not key:
+                continue
+            maybe = by_provider.get(key)
+            if isinstance(maybe, dict):
+                provider_entry = maybe
+                break
+        if isinstance(provider_entry, dict):
+            return copy.deepcopy(provider_entry)
+    for key in provider_lookup_order:
+        if not key:
+            continue
+        direct = envelopes.get(key)
+        if isinstance(direct, dict):
+            return copy.deepcopy(direct)
+    return None
+
+
+def _mother_safe_text(value: Any, *, max_chars: int = 220) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[: max(0, max_chars - 1)] + "…"
+
+
+def _mother_context_prompt_budget(provider: str | None, envelope: dict[str, Any]) -> int:
+    key = _normalize_provider_name(provider) or ""
+    budget = MOTHER_CONTEXT_PROMPT_BUDGET_BY_PROVIDER.get(key, MOTHER_CONTEXT_PROMPT_BUDGET_DEFAULT)
+    requested = envelope.get("prompt_budget_chars")
+    try:
+        requested_int = int(requested)
+    except Exception:
+        requested_int = 0
+    if requested_int > 0:
+        budget = min(max(700, requested_int), 2800)
+    return max(700, budget)
+
+
+def _mother_trim_prompt_text(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "…"
+
+
+def _mother_format_model_context_text(
+    envelope: dict[str, Any],
+    *,
+    target_provider: str | None,
+    target_model: str | None,
+) -> str:
+    provider = _normalize_provider_name(target_provider) or str(envelope.get("provider") or "").strip().lower() or "unknown"
+    model = str(target_model or envelope.get("model") or "").strip() or "auto"
+    mode = _mother_safe_text(envelope.get("transformation_mode"), max_chars=48) or "hybridize"
+    layout = _mother_safe_text(envelope.get("layout"), max_chars=48) or "adjacent"
+    goal = _mother_safe_text(envelope.get("goal"), max_chars=280)
+    creative = _mother_safe_text(envelope.get("creative_directive"), max_chars=140)
+    must_not = []
+    for raw in envelope.get("must_not") if isinstance(envelope.get("must_not"), list) else []:
+        text = _mother_safe_text(raw, max_chars=96)
+        if text:
+            must_not.append(text)
+    must_not = must_not[:6]
+    image_summaries: list[str] = []
+    images_raw = envelope.get("images") if isinstance(envelope.get("images"), list) else []
+    image_cap = 3 if provider == "flux" else 4
+    for row in images_raw[:image_cap]:
+        if not isinstance(row, dict):
+            continue
+        image_id = _mother_safe_text(row.get("id"), max_chars=40)
+        if not image_id:
+            continue
+        role = _mother_safe_text(row.get("role"), max_chars=20) or "context"
+        tier = _mother_safe_text(row.get("tier"), max_chars=20)
+        preserve_raw = row.get("preserve") if isinstance(row.get("preserve"), list) else []
+        preserve = [str(item).strip() for item in preserve_raw if str(item).strip()][:2]
+        snippet = f"{image_id}:{role}"
+        if tier:
+            snippet += f":{tier}"
+        if preserve:
+            snippet += f" keep({'; '.join(preserve)})"
+        image_summaries.append(snippet)
+    relation_summaries: list[str] = []
+    relations_raw = envelope.get("relations") if isinstance(envelope.get("relations"), list) else []
+    relation_cap = 2 if provider == "flux" else 3
+    for row in relations_raw[:relation_cap]:
+        if not isinstance(row, dict):
+            continue
+        ref_id = _mother_safe_text(row.get("ref_id"), max_chars=36)
+        if not ref_id:
+            continue
+        to_target = _mother_safe_text(row.get("to_target"), max_chars=18)
+        direction = _mother_safe_text(row.get("direction"), max_chars=18)
+        semantic = _mother_safe_text(row.get("semantic"), max_chars=24)
+        snippet = f"{ref_id}:{to_target or 'ADJACENT'}"
+        if direction:
+            snippet += f":{direction}"
+        if semantic and semantic.upper() != "NONE":
+            snippet += f":{semantic}"
+        relation_summaries.append(snippet)
+    lines = [
+        "BROOD_MODEL_CONTEXT_ENVELOPE:",
+        f"provider={provider}",
+        f"model={model}",
+        f"mode={mode}",
+        f"layout={layout}",
+    ]
+    if goal:
+        lines.append(f"goal={goal}")
+    if creative:
+        lines.append(f"creative_directive={creative}")
+    if image_summaries:
+        lines.append("images=" + " | ".join(image_summaries))
+    if relation_summaries:
+        lines.append("relations=" + " | ".join(relation_summaries))
+    if must_not:
+        lines.append("must_not=" + " | ".join(must_not))
+    lines.append("Apply this context as strict constraints while producing one coherent image.")
+    text = "\n".join(lines).strip()
+    return _mother_trim_prompt_text(text, _mother_context_prompt_budget(provider, envelope))
+
+
+def _mother_apply_model_context_envelope_to_prompt(
+    prompt: str,
+    envelope: dict[str, Any] | None,
+    *,
+    target_provider: str | None,
+    target_model: str | None,
+) -> str:
+    provider = _normalize_provider_name(target_provider)
+    if provider == "gemini":
+        return prompt
+    if not isinstance(envelope, dict):
+        return prompt
+    block = _mother_format_model_context_text(
+        envelope,
+        target_provider=target_provider,
+        target_model=target_model,
+    )
+    if not block:
+        return prompt
+    if block in prompt:
+        return prompt
+    return f"{prompt}\n\n{block}".strip()
 
 
 def _intent_realtime_model_name(*, mother: bool = False) -> str:
@@ -675,6 +875,7 @@ def _mother_generate_request(
     state: dict[str, object],
     *,
     target_provider: str | None = None,
+    target_model: str | None = None,
 ) -> tuple[str, dict[str, Any], list[str], dict[str, Any]]:
     prompt = str(payload.get("prompt") or payload.get("positive_prompt") or "").strip()
     negative = str(payload.get("negative_prompt") or "").strip()
@@ -682,6 +883,18 @@ def _mother_generate_request(
         raise ValueError("Mother generate payload missing prompt.")
     if negative and "avoid:" not in prompt.lower():
         prompt = f"{prompt}\nAvoid: {negative}".strip()
+    model_context_envelopes = _mother_extract_model_context_envelopes(payload)
+    selected_model_context = _mother_pick_model_context_envelope(
+        model_context_envelopes,
+        target_provider=target_provider,
+        target_model=target_model,
+    )
+    prompt = _mother_apply_model_context_envelope_to_prompt(
+        prompt,
+        selected_model_context,
+        target_provider=target_provider,
+        target_model=target_model,
+    )
 
     settings = _settings_from_state(state)
     settings["n"] = int(payload.get("n") or 1)
@@ -742,6 +955,8 @@ def _mother_generate_request(
     gemini_context_packet = _mother_extract_gemini_context_packet(payload)
     if gemini_context_packet is not None:
         action_meta["gemini_context_packet"] = gemini_context_packet
+    if isinstance(selected_model_context, dict) and _normalize_provider_name(target_provider) != "gemini":
+        action_meta["model_context_envelope"] = copy.deepcopy(selected_model_context)
     return prompt, settings, source_images, action_meta
 
 def _handle_chat(args: argparse.Namespace) -> int:
@@ -982,16 +1197,20 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 continue
 
             target_provider = None
+            target_model = None
             try:
                 selection = engine.model_selector.select(engine.image_model, "image")
                 target_provider = selection.model.provider if selection and selection.model else None
+                target_model = selection.model.name if selection and selection.model else None
             except Exception:
                 target_provider = None
+                target_model = None
             try:
                 prompt, settings, source_images, action_meta = _mother_generate_request(
                     payload,
                     state,
                     target_provider=target_provider,
+                    target_model=target_model,
                 )
             except ValueError as exc:
                 msg = f"Mother generate failed: {exc}"

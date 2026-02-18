@@ -137,6 +137,13 @@ _DEFAULT_MODELS: dict[str, ModelSpec] = {
         pricing_key="flux-2-pro",
         latency_key="flux-2-pro",
     ),
+    "flux-2-max": ModelSpec(
+        name="flux-2-max",
+        provider="flux",
+        capabilities=("image", "edit"),
+        pricing_key="flux-2-max",
+        latency_key="flux-2-max",
+    ),
     "flux-2": ModelSpec(
         name="flux-2",
         provider="flux",

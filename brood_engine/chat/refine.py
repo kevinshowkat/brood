@@ -11,6 +11,7 @@ from ..models.registry import ModelRegistry
 _MODEL_ALIASES = {
     "flux": "flux-2",
     "flux-pro": "flux-2-pro",
+    "flux-max": "flux-2-max",
     "flux-flex": "flux-2-flex",
     "gpt-image-1.5": "gpt-image-1.5",
     "gpt-image-1-mini": "gpt-image-1-mini",

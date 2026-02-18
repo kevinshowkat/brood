@@ -655,6 +655,9 @@ def _request_metadata_from_intent(intent: dict[str, Any]) -> dict[str, Any]:
     gemini_context_packet = intent.get("gemini_context_packet")
     if isinstance(gemini_context_packet, dict):
         metadata["gemini_context_packet"] = copy.deepcopy(gemini_context_packet)
+    model_context_envelope = intent.get("model_context_envelope")
+    if isinstance(model_context_envelope, dict):
+        metadata["model_context_envelope"] = copy.deepcopy(model_context_envelope)
     return metadata
 
 

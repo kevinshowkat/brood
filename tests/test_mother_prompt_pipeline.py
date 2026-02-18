@@ -254,6 +254,99 @@ def test_mother_generate_request_v2_carries_gemini_context_packet_in_action_meta
     assert action_meta["gemini_context_packet"] is not packet
 
 
+def test_mother_generate_request_applies_model_context_envelope_for_non_gemini_provider() -> None:
+    prompt, settings, _, action_meta = _mother_generate_request(
+        {
+            "schema": "brood.mother.generate.v2",
+            "prompt": "minimal v2 prompt",
+            "negative_prompt": "No text overlays",
+            "action_version": 42,
+            "intent_id": "intent-42",
+            "init_image": "/tmp/one.png",
+            "reference_images": ["/tmp/two.png"],
+            "model_context_envelopes": {
+                "openai": {
+                    "provider": "openai",
+                    "model": "gpt-image-1.5",
+                    "transformation_mode": "hybridize",
+                    "layout": "adjacent",
+                    "goal": "Fuse references into one coherent frame.",
+                    "creative_directive": "stunningly awe-inspiring and joyous",
+                    "images": [
+                        {"id": "img_a", "role": "target", "tier": "PRIMARY", "preserve": ["subject identity"]},
+                        {"id": "img_b", "role": "reference", "tier": "SECONDARY", "preserve": ["material cues"]},
+                    ],
+                    "must_not": ["No text overlays", "No collage"],
+                }
+            },
+        },
+        {},
+        target_provider="openai",
+        target_model="gpt-image-1.5",
+    )
+
+    assert prompt.startswith("minimal v2 prompt\nAvoid: No text overlays")
+    assert "BROOD_MODEL_CONTEXT_ENVELOPE:" in prompt
+    assert "provider=openai" in prompt
+    assert "model=gpt-image-1.5" in prompt
+    assert action_meta["model_context_envelope"]["provider"] == "openai"
+    assert settings["init_image"] == "/tmp/one.png"
+
+
+def test_mother_generate_request_skips_model_context_envelope_for_gemini_provider() -> None:
+    prompt, _, _, action_meta = _mother_generate_request(
+        {
+            "schema": "brood.mother.generate.v2",
+            "prompt": "gemini prompt",
+            "action_version": 43,
+            "intent_id": "intent-43",
+            "init_image": "/tmp/one.png",
+            "reference_images": ["/tmp/two.png"],
+            "model_context_envelopes": {
+                "gemini": {
+                    "provider": "gemini",
+                    "goal": "Gemini should not use this text envelope.",
+                }
+            },
+        },
+        {},
+        target_provider="gemini",
+        target_model="gemini-3-pro-image-preview",
+    )
+
+    assert prompt == "gemini prompt"
+    assert "BROOD_MODEL_CONTEXT_ENVELOPE:" not in prompt
+    assert "model_context_envelope" not in action_meta
+
+
+def test_mother_generate_request_accepts_sdxl_alias_when_target_provider_is_replicate() -> None:
+    prompt, _, _, action_meta = _mother_generate_request(
+        {
+            "schema": "brood.mother.generate.v2",
+            "prompt": "replicate prompt",
+            "action_version": 44,
+            "intent_id": "intent-44",
+            "init_image": "/tmp/one.png",
+            "reference_images": ["/tmp/two.png"],
+            "model_context_envelopes": {
+                "sdxl": {
+                    "provider": "replicate",
+                    "model": "sdxl",
+                    "goal": "Carry SDXL-specific context.",
+                    "must_not": ["No text overlays"],
+                }
+            },
+        },
+        {},
+        target_provider="replicate",
+        target_model="sdxl",
+    )
+
+    assert "BROOD_MODEL_CONTEXT_ENVELOPE:" in prompt
+    assert "provider=replicate" in prompt
+    assert action_meta["model_context_envelope"]["model"] == "sdxl"
+
+
 def test_mother_generate_request_v1_payload_remains_supported() -> None:
     prompt, settings, source_images, action_meta = _mother_generate_request(
         {

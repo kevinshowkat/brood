@@ -411,6 +411,7 @@
               <option value="gemini-2.5-flash-image">gemini-2.5-flash-image</option>
               <option value="imagen-4.0-ultra">imagen-4.0-ultra</option>
               <option value="imagen-4">imagen-4</option>
+              <option value="flux-2-max">flux-2-max</option>
               <option value="flux-2-flex">flux-2-flex</option>
               <option value="flux-2-pro">flux-2-pro</option>
               <option value="flux-2">flux-2</option>
@@ -420,6 +421,14 @@
               <option value="gpt-image-1">gpt-image-1</option>
             </select>
           </label>
+          <div class="key-status-card">
+            <div class="key-status-title">Aesthetic Preference</div>
+            <div id="aesthetic-onboarding-status" class="key-status-list muted">Not set yet</div>
+            <div class="controls">
+              <button id="aesthetic-onboarding-open" type="button">Run quiz</button>
+              <button id="aesthetic-onboarding-clear" class="ghost" type="button">Clear</button>
+            </div>
+          </div>
           <div class="key-status-card">
             <div class="key-status-title">Run Directory</div>
             <div id="run-info" class="run-info-text muted">No run</div>
@@ -456,6 +465,34 @@
           </div>
           <div class="drawer-footnote muted">
             For image-to-image edits and recreate, prefer a model that accepts image inputs (Gemini).
+          </div>
+        </div>
+      </div>
+      <div
+        id="aesthetic-onboarding-modal"
+        class="aesthetic-onboarding-modal hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Aesthetic onboarding"
+      >
+        <div class="aesthetic-onboarding-shell">
+          <div class="aesthetic-onboarding-header">
+            <div>
+              <div class="aesthetic-onboarding-title" id="aesthetic-onboarding-title">Find your visual baseline</div>
+              <div class="aesthetic-onboarding-subtitle" id="aesthetic-onboarding-subtitle">
+                We will set your default image model from your picks.
+              </div>
+            </div>
+            <button id="aesthetic-onboarding-close" class="ghost" type="button">Skip</button>
+          </div>
+          <div id="aesthetic-onboarding-progress" class="aesthetic-onboarding-progress"></div>
+          <div id="aesthetic-onboarding-body" class="aesthetic-onboarding-body"></div>
+          <div class="aesthetic-onboarding-footer">
+            <button id="aesthetic-onboarding-back" class="ghost" type="button">Back</button>
+            <div class="aesthetic-onboarding-footer-actions">
+              <button id="aesthetic-onboarding-skip" class="ghost" type="button">Skip</button>
+              <button id="aesthetic-onboarding-next" type="button">Next</button>
+            </div>
           </div>
         </div>
       </div>

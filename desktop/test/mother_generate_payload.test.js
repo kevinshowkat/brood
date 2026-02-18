@@ -25,3 +25,30 @@ test("Mother generate payload uses minimal brood.mother.generate.v2 envelope", (
   assert.doesNotMatch(payloadText, /\bnegative_prompt\s*:/);
   assert.doesNotMatch(payloadText, /\bsource_images\s*:/);
 });
+
+test("Mother generate payload can carry model context envelopes for non-Gemini providers", () => {
+  const fnMatch = app.match(/async function motherV2DispatchViaImagePayload[\s\S]*?return true;\n}/);
+  assert.ok(fnMatch, "motherV2DispatchViaImagePayload function not found");
+  const fnText = fnMatch[0];
+
+  assert.match(fnText, /motherV2BuildModelContextEnvelopes\(/);
+  assert.match(fnText, /payload\.model_context_envelopes\s*=\s*modelContextEnvelopes/);
+});
+
+test("Mother dispatch uses preferred current image model instead of hard-pinning Gemini", () => {
+  const fnMatch = app.match(/async function motherV2DispatchCompiledPrompt[\s\S]*?return true;\n}/);
+  assert.ok(fnMatch, "motherV2DispatchCompiledPrompt function not found");
+  const fnText = fnMatch[0];
+
+  assert.match(fnText, /const selectedModel = motherPreferredGenerationModel\(\)/);
+  assert.match(fnText, /await maybeOverrideEngineImageModel\(selectedModel\)/);
+});
+
+test("Mother model context envelopes normalize SDXL provider key to replicate", () => {
+  const fnMatch = app.match(/function motherV2BuildModelContextEnvelopes[\s\S]*?\n}\n\nfunction motherV2BuildGeminiContextPacket/);
+  assert.ok(fnMatch, "motherV2BuildModelContextEnvelopes block not found");
+  const fnText = fnMatch[0];
+
+  assert.match(fnText, /const providerKey = provider === \"sdxl\" \? \"replicate\" : provider/);
+  assert.match(fnText, /return \{ \[providerKey\]: envelope \}/);
+});
