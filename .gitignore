@@ -38,6 +38,8 @@ npm-debug.log*
 !desktop/src/assets/mother/mother_working.mp4
 !desktop/src/assets/mother/mother_realtime.mp4
 !desktop/src/assets/mother/mother_working_sora-2_720x1280_12s_20260210_160837_v05.mp4
+# Built-in provider portrait videos (required for fresh-clone local dev UX).
+!desktop/src/assets/portraits/*.mp4
 
 # Generated artifacts
 outputs/first_light/
@@ -65,6 +67,14 @@ yellow.png
 /larvae.png
 /see.png
 /param_forge_llm_review.tar.gz
+/images_gemini_wire_subject_*/
+/outputs/llm_spatial_review_*/
+/outputs/local_root_archive/
+/media/brood_demo_intent_build_*.gif
+/media/brood_demo_v*.gif
+/media/features/edit_annotation.gif
+/media/features/intent_build.gif
+/media/features/remove_people.gif
 
 # Local visibility probe artifacts
 docs/ai_visibility.md
