@@ -88,6 +88,79 @@ const LEGACY_DEFAULT_IMAGE_MODEL = "gemini-2.5-flash-image";
 const IMAGE_MODEL_DEFAULT_MIGRATION_KEY = "brood.imageModel.default.v2";
 const MOTHER_GENERATION_MODEL = DEFAULT_IMAGE_MODEL;
 const MOTHER_GENERATED_SOURCE = "mother_generated";
+const AESTHETIC_ONBOARDING_COMPLETED_KEY = "brood.aestheticOnboarding.completed.v1";
+const AESTHETIC_ONBOARDING_PROFILE_KEY = "brood.aestheticOnboarding.profile.v1";
+const AESTHETIC_ONBOARDING_PROMPT =
+  "Hyper-real modern loft interior with warm sunbeams, layered textures, and a hero seating area staged for a magazine shoot. Style focus: Interior designs.";
+const AESTHETIC_ONBOARDING_MODEL_CHOICES = Object.freeze([
+  {
+    id: "gemini-3-pro-image-preview",
+    modelValue: "gemini-3-pro-image-preview",
+    label: "Gemini 3 Pro Preview",
+    imageUrl: new URL("./assets/onboarding/aesthetic/gemini-3-pro-image-preview.png", import.meta.url).href,
+    note: "Strong multi-image editing and workflow consistency.",
+  },
+  {
+    id: "gpt-image-1.5",
+    modelValue: "gpt-image-1.5",
+    label: "gpt-image-1.5",
+    imageUrl: new URL("./assets/onboarding/aesthetic/gpt-image-1.5.jpg", import.meta.url).href,
+    note: "Balanced realism and art direction.",
+  },
+  {
+    id: "flux-2-max",
+    modelValue: "flux-2-max",
+    label: "flux-2-max",
+    imageUrl: new URL("./assets/onboarding/aesthetic/flux-2-max.jpeg", import.meta.url).href,
+    note: "High-fidelity Flux default for detail-heavy composites.",
+  },
+  {
+    id: "flux-2-flex",
+    modelValue: "flux-2-flex",
+    label: "flux-2-flex",
+    imageUrl: new URL("./assets/onboarding/aesthetic/flux-2-flex.png", import.meta.url).href,
+    note: "Fast, flexible mutation-friendly output.",
+  },
+]);
+const AESTHETIC_FEATURE_OPTIONS = Object.freeze([
+  {
+    id: "reproducible_receipts",
+    title: "Reproducible run receipts",
+    description: "I want tight version tracking and repeatability.",
+  },
+  {
+    id: "image_mutations",
+    title: "Image mutations",
+    description: "I mostly iterate quickly and explore many variants.",
+  },
+  {
+    id: "multi_model_workflows",
+    title: "Multi-model editing workflows",
+    description: "I combine tools and need reliable cross-model edits.",
+  },
+  {
+    id: "something_else",
+    title: "Something else",
+    description: "I am still exploring what my workflow will be.",
+  },
+]);
+const AESTHETIC_DIRECTION_OPTIONS = Object.freeze([
+  {
+    id: "fidelity",
+    title: "Prioritize fidelity",
+    description: "I want the most polished output even if it is slower.",
+  },
+  {
+    id: "balanced",
+    title: "Keep it balanced",
+    description: "I want a middle ground between speed and polish.",
+  },
+  {
+    id: "speed",
+    title: "Prioritize speed",
+    description: "I want fast ideation and quick mutation loops.",
+  },
+]);
 const MOTHER_SUGGESTION_LOG_FILENAME = "mother_suggestions.jsonl";
 const MOTHER_TRACE_FILENAME = "mother_trace.jsonl";
 const MOTHER_V2_WATCH_IDLE_MS = 800;
@@ -232,6 +305,9 @@ const els = {
   canvasContextSuggestBtn: document.getElementById("canvas-context-suggest-btn"),
   textModel: document.getElementById("text-model"),
   imageModel: document.getElementById("image-model"),
+  aestheticOnboardingStatus: document.getElementById("aesthetic-onboarding-status"),
+  aestheticOnboardingOpen: document.getElementById("aesthetic-onboarding-open"),
+  aestheticOnboardingClear: document.getElementById("aesthetic-onboarding-clear"),
   portraitsDir: document.getElementById("portraits-dir"),
   portraitsDirPick: document.getElementById("portraits-dir-pick"),
   portraitsDirClear: document.getElementById("portraits-dir-clear"),
@@ -317,6 +393,15 @@ const els = {
   timelineClose: document.getElementById("timeline-close"),
   timelineStrip: document.getElementById("timeline-strip"),
   timelineDetail: document.getElementById("timeline-detail"),
+  aestheticOnboardingModal: document.getElementById("aesthetic-onboarding-modal"),
+  aestheticOnboardingTitle: document.getElementById("aesthetic-onboarding-title"),
+  aestheticOnboardingSubtitle: document.getElementById("aesthetic-onboarding-subtitle"),
+  aestheticOnboardingProgress: document.getElementById("aesthetic-onboarding-progress"),
+  aestheticOnboardingBody: document.getElementById("aesthetic-onboarding-body"),
+  aestheticOnboardingClose: document.getElementById("aesthetic-onboarding-close"),
+  aestheticOnboardingBack: document.getElementById("aesthetic-onboarding-back"),
+  aestheticOnboardingSkip: document.getElementById("aesthetic-onboarding-skip"),
+  aestheticOnboardingNext: document.getElementById("aesthetic-onboarding-next"),
 };
 
 const settings = {
@@ -344,6 +429,23 @@ const settings = {
     if (!migrated) localStorage.setItem(IMAGE_MODEL_DEFAULT_MIGRATION_KEY, "1");
     return storedRaw;
   })(),
+};
+
+function defaultAestheticAnswers() {
+  return {
+    imageChoiceId: "",
+    featurePriority: "",
+    directionality: "",
+  };
+}
+
+const aestheticOnboardingState = {
+  open: false,
+  stepIndex: 0,
+  answers: defaultAestheticAnswers(),
+  source: "first_run",
+  applying: false,
+  transitionTimer: null,
 };
 
 const state = {
@@ -5464,6 +5566,438 @@ async function initializeFileBrowserDock() {
   }
 }
 
+function parseJsonSafe(raw) {
+  try {
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadAestheticOnboardingProfile() {
+  const raw = localStorage.getItem(AESTHETIC_ONBOARDING_PROFILE_KEY);
+  const parsed = parseJsonSafe(raw);
+  if (!parsed || typeof parsed !== "object") return null;
+  return parsed;
+}
+
+function saveAestheticOnboardingProfile(profile) {
+  try {
+    localStorage.setItem(AESTHETIC_ONBOARDING_PROFILE_KEY, JSON.stringify(profile));
+  } catch {
+    // ignore
+  }
+}
+
+function markAestheticOnboardingCompleted(done = true) {
+  localStorage.setItem(AESTHETIC_ONBOARDING_COMPLETED_KEY, done ? "1" : "0");
+}
+
+function clearAestheticOnboardingProfile() {
+  localStorage.removeItem(AESTHETIC_ONBOARDING_PROFILE_KEY);
+  localStorage.removeItem(AESTHETIC_ONBOARDING_COMPLETED_KEY);
+}
+
+function getAestheticModelChoice(choiceId) {
+  const id = String(choiceId || "").trim();
+  if (!id) return null;
+  return AESTHETIC_ONBOARDING_MODEL_CHOICES.find((choice) => choice.id === id) || null;
+}
+
+function formatAestheticTimestamp(value) {
+  const at = new Date(value || 0);
+  if (!Number.isFinite(at.getTime())) return "unknown time";
+  return at.toLocaleString();
+}
+
+function describeAestheticChoice(choiceId) {
+  const choice = getAestheticModelChoice(choiceId);
+  if (!choice) return "Unknown";
+  if (choice.modelValue && choice.modelValue !== choice.id) return `${choice.label} -> ${choice.modelValue}`;
+  return choice.label;
+}
+
+function scoreAestheticOnboardingAnswers(answers) {
+  const scoreByModel = Object.fromEntries(AESTHETIC_ONBOARDING_MODEL_CHOICES.map((choice) => [choice.id, 0]));
+  const pickedModelId = String(answers?.imageChoiceId || "").trim();
+  if (pickedModelId && scoreByModel[pickedModelId] != null) scoreByModel[pickedModelId] += 3;
+
+  switch (String(answers?.featurePriority || "").trim()) {
+    case "reproducible_receipts":
+      scoreByModel["gpt-image-1.5"] += 2;
+      scoreByModel["gemini-3-pro-image-preview"] += 1;
+      break;
+    case "image_mutations":
+      scoreByModel["flux-2-flex"] += 2;
+      scoreByModel["flux-2-max"] += 1;
+      break;
+    case "multi_model_workflows":
+      scoreByModel["gemini-3-pro-image-preview"] += 2;
+      scoreByModel["gpt-image-1.5"] += 1;
+      break;
+    default:
+      for (const choice of AESTHETIC_ONBOARDING_MODEL_CHOICES) scoreByModel[choice.id] += 1;
+      break;
+  }
+
+  switch (String(answers?.directionality || "").trim()) {
+    case "fidelity":
+      scoreByModel["gemini-3-pro-image-preview"] += 2;
+      scoreByModel["gpt-image-1.5"] += 1;
+      scoreByModel["flux-2-max"] += 1;
+      break;
+    case "speed":
+      scoreByModel["flux-2-flex"] += 2;
+      scoreByModel["flux-2-max"] += 1;
+      break;
+    default:
+      for (const choice of AESTHETIC_ONBOARDING_MODEL_CHOICES) scoreByModel[choice.id] += 1;
+      break;
+  }
+
+  let winnerId = AESTHETIC_ONBOARDING_MODEL_CHOICES[0]?.id || "gemini-3-pro-image-preview";
+  let winnerScore = Number.NEGATIVE_INFINITY;
+  for (const choice of AESTHETIC_ONBOARDING_MODEL_CHOICES) {
+    const current = Number(scoreByModel[choice.id] || 0);
+    if (current > winnerScore) {
+      winnerId = choice.id;
+      winnerScore = current;
+      continue;
+    }
+    if (current === winnerScore && pickedModelId && choice.id === pickedModelId) {
+      winnerId = choice.id;
+      winnerScore = current;
+    }
+  }
+  return { winnerId, scoreByModel };
+}
+
+function renderAestheticOnboardingStatus() {
+  if (!els.aestheticOnboardingStatus) return;
+  const profile = loadAestheticOnboardingProfile();
+  if (!profile) {
+    els.aestheticOnboardingStatus.textContent = "Not set yet";
+    return;
+  }
+  const picked = describeAestheticChoice(profile.preferredModelId);
+  const when = formatAestheticTimestamp(profile.completedAt || profile.updatedAt || Date.now());
+  if (profile.skipped) {
+    els.aestheticOnboardingStatus.textContent = `Skipped on ${when}. Current default: ${settings.imageModel}`;
+    return;
+  }
+  els.aestheticOnboardingStatus.textContent = `Preferred: ${picked}\nSaved ${when}\nDefault model: ${settings.imageModel}`;
+}
+
+function renderAestheticOnboardingProgress(stepIndex) {
+  if (!els.aestheticOnboardingProgress) return;
+  const labels = ["Q1", "Q2", "Q3", "Result"];
+  els.aestheticOnboardingProgress.innerHTML = labels
+    .map((label, idx) => {
+      const active = idx === stepIndex ? " is-active" : "";
+      const complete = idx < stepIndex ? " is-complete" : "";
+      return `<div class="aesthetic-onboarding-progress-dot${active}${complete}">${label}</div>`;
+    })
+    .join("");
+}
+
+function buildAestheticQuestionStepHtml() {
+  const selected = String(aestheticOnboardingState.answers.imageChoiceId || "").trim();
+  const cards = AESTHETIC_ONBOARDING_MODEL_CHOICES.map((choice) => {
+    const chosen = selected === choice.id ? " is-selected" : "";
+    return `
+      <button
+        class="aesthetic-choice-card${chosen}"
+        type="button"
+        data-aesthetic-select="imageChoiceId"
+        data-aesthetic-value="${choice.id}"
+      >
+        <img class="aesthetic-choice-image" src="${choice.imageUrl}" alt="${choice.label}" />
+        <div class="aesthetic-choice-meta">
+          <div class="aesthetic-choice-title">${choice.label}</div>
+          <div class="aesthetic-choice-note">${choice.note}</div>
+        </div>
+      </button>
+    `;
+  }).join("");
+  return `
+    <section class="aesthetic-question">
+      <div class="aesthetic-question-head">
+        <h3>Which image do you like best?</h3>
+        <p>All options use the same prompt and differ only by model.</p>
+      </div>
+      <div class="aesthetic-choice-grid">${cards}</div>
+      <div class="aesthetic-prompt-card">
+        <div class="aesthetic-prompt-label">Prompt</div>
+        <div class="aesthetic-prompt-text">${AESTHETIC_ONBOARDING_PROMPT}</div>
+      </div>
+    </section>
+  `;
+}
+
+function buildAestheticOptionStepHtml(question) {
+  const selected = String(aestheticOnboardingState.answers[question.answerKey] || "").trim();
+  const cards = question.options
+    .map((option) => {
+      const chosen = selected === option.id ? " is-selected" : "";
+      return `
+        <button
+          class="aesthetic-option-card${chosen}"
+          type="button"
+          data-aesthetic-select="${question.answerKey}"
+          data-aesthetic-value="${option.id}"
+        >
+          <div class="aesthetic-option-title">${option.title}</div>
+          <div class="aesthetic-option-description">${option.description}</div>
+        </button>
+      `;
+    })
+    .join("");
+  return `
+    <section class="aesthetic-question">
+      <div class="aesthetic-question-head">
+        <h3>${question.title}</h3>
+        <p>${question.subtitle}</p>
+      </div>
+      <div class="aesthetic-option-grid">${cards}</div>
+    </section>
+  `;
+}
+
+function buildAestheticSummaryStepHtml() {
+  const scored = scoreAestheticOnboardingAnswers(aestheticOnboardingState.answers);
+  const winner = getAestheticModelChoice(scored.winnerId) || AESTHETIC_ONBOARDING_MODEL_CHOICES[0];
+  const topReasons = [];
+  if (aestheticOnboardingState.answers.imageChoiceId) {
+    const picked = getAestheticModelChoice(aestheticOnboardingState.answers.imageChoiceId);
+    if (picked) topReasons.push(`You initially preferred ${picked.label}.`);
+  }
+  if (aestheticOnboardingState.answers.featurePriority === "multi_model_workflows") {
+    topReasons.push("You expect multi-model editing workflows.");
+  } else if (aestheticOnboardingState.answers.featurePriority === "image_mutations") {
+    topReasons.push("You prioritized mutation-heavy exploration.");
+  } else if (aestheticOnboardingState.answers.featurePriority === "reproducible_receipts") {
+    topReasons.push("You prioritized reproducibility and receipts.");
+  }
+  if (aestheticOnboardingState.answers.directionality === "fidelity") {
+    topReasons.push("You favored polished fidelity.");
+  } else if (aestheticOnboardingState.answers.directionality === "speed") {
+    topReasons.push("You favored speed and iteration loops.");
+  } else {
+    topReasons.push("You preferred a balanced speed/quality default.");
+  }
+  const mappedNote =
+    winner.modelValue && winner.modelValue !== winner.id
+      ? `This preference maps to ${winner.modelValue} inside Brood right now.`
+      : `This will become your default Image Model in Settings and Effects.`;
+  return `
+    <section class="aesthetic-question">
+      <div class="aesthetic-question-head">
+        <h3>Your default model recommendation</h3>
+        <p>Confirm to apply it as your Brood image default.</p>
+      </div>
+      <div class="aesthetic-summary-card">
+        <div class="aesthetic-summary-label">Recommended model</div>
+        <div class="aesthetic-summary-model">${winner.label}</div>
+        <div class="aesthetic-summary-note">${mappedNote}</div>
+        <ul class="aesthetic-summary-reasons">
+          ${topReasons.map((reason) => `<li>${reason}</li>`).join("")}
+        </ul>
+      </div>
+    </section>
+  `;
+}
+
+function canAdvanceAestheticStep(stepIndex = aestheticOnboardingState.stepIndex) {
+  if (stepIndex === 0) return Boolean(aestheticOnboardingState.answers.imageChoiceId);
+  if (stepIndex === 1) return Boolean(aestheticOnboardingState.answers.featurePriority);
+  if (stepIndex === 2) return Boolean(aestheticOnboardingState.answers.directionality);
+  return true;
+}
+
+function renderAestheticOnboardingStep({ animate = false } = {}) {
+  if (!els.aestheticOnboardingModal || !els.aestheticOnboardingBody) return;
+  const stepIndex = Math.max(0, Math.min(3, Number(aestheticOnboardingState.stepIndex) || 0));
+  const renderBody = () => {
+    if (stepIndex === 0) {
+      els.aestheticOnboardingBody.innerHTML = buildAestheticQuestionStepHtml();
+    } else if (stepIndex === 1) {
+      els.aestheticOnboardingBody.innerHTML = buildAestheticOptionStepHtml({
+        answerKey: "featurePriority",
+        title: "What Brood feature do you expect to use the most?",
+        subtitle: "This helps us bias toward a better default model for your workflow.",
+        options: AESTHETIC_FEATURE_OPTIONS,
+      });
+    } else if (stepIndex === 2) {
+      els.aestheticOnboardingBody.innerHTML = buildAestheticOptionStepHtml({
+        answerKey: "directionality",
+        title: "How should Brood bias your default?",
+        subtitle: "Choose whether speed or final polish matters more by default.",
+        options: AESTHETIC_DIRECTION_OPTIONS,
+      });
+    } else {
+      els.aestheticOnboardingBody.innerHTML = buildAestheticSummaryStepHtml();
+    }
+  };
+
+  if (animate) {
+    if (aestheticOnboardingState.transitionTimer) {
+      clearTimeout(aestheticOnboardingState.transitionTimer);
+      aestheticOnboardingState.transitionTimer = null;
+    }
+    els.aestheticOnboardingBody.classList.add("is-fading-out");
+    aestheticOnboardingState.transitionTimer = setTimeout(() => {
+      renderBody();
+      els.aestheticOnboardingBody.classList.remove("is-fading-out");
+      els.aestheticOnboardingBody.classList.add("is-fading-in");
+      requestAnimationFrame(() => els.aestheticOnboardingBody?.classList.remove("is-fading-in"));
+    }, 130);
+  } else {
+    els.aestheticOnboardingBody.classList.remove("is-fading-out");
+    renderBody();
+  }
+
+  const currentStep = stepIndex + 1;
+  if (els.aestheticOnboardingTitle) {
+    els.aestheticOnboardingTitle.textContent = currentStep <= 3 ? "Find your visual baseline" : "Aesthetic profile ready";
+  }
+  if (els.aestheticOnboardingSubtitle) {
+    els.aestheticOnboardingSubtitle.textContent =
+      currentStep <= 3
+        ? `Question ${currentStep} of 3`
+        : "Apply this recommendation as your default image model.";
+  }
+  renderAestheticOnboardingProgress(stepIndex);
+  if (els.aestheticOnboardingBack) {
+    els.aestheticOnboardingBack.classList.toggle("hidden", stepIndex <= 0);
+    els.aestheticOnboardingBack.disabled = aestheticOnboardingState.applying;
+  }
+  if (els.aestheticOnboardingSkip) {
+    els.aestheticOnboardingSkip.classList.toggle("hidden", stepIndex >= 3);
+    els.aestheticOnboardingSkip.disabled = aestheticOnboardingState.applying;
+  }
+  if (els.aestheticOnboardingClose) {
+    els.aestheticOnboardingClose.textContent = stepIndex >= 3 ? "Keep current" : "Skip";
+    els.aestheticOnboardingClose.disabled = aestheticOnboardingState.applying;
+  }
+  if (els.aestheticOnboardingNext) {
+    if (stepIndex < 2) els.aestheticOnboardingNext.textContent = "Next";
+    else if (stepIndex === 2) els.aestheticOnboardingNext.textContent = "See result";
+    else {
+      const scored = scoreAestheticOnboardingAnswers(aestheticOnboardingState.answers);
+      const winner = getAestheticModelChoice(scored.winnerId);
+      els.aestheticOnboardingNext.textContent = winner ? `Set ${winner.modelValue}` : "Set default model";
+    }
+    const cannotAdvance = stepIndex < 3 && !canAdvanceAestheticStep(stepIndex);
+    els.aestheticOnboardingNext.disabled = cannotAdvance || aestheticOnboardingState.applying;
+  }
+}
+
+function closeAestheticOnboardingModal() {
+  if (aestheticOnboardingState.transitionTimer) {
+    clearTimeout(aestheticOnboardingState.transitionTimer);
+    aestheticOnboardingState.transitionTimer = null;
+  }
+  aestheticOnboardingState.open = false;
+  aestheticOnboardingState.applying = false;
+  if (els.aestheticOnboardingModal) {
+    els.aestheticOnboardingModal.classList.add("hidden");
+  }
+}
+
+function openAestheticOnboardingModal({ force = false, source = "first_run" } = {}) {
+  if (!els.aestheticOnboardingModal) return false;
+  const completed = localStorage.getItem(AESTHETIC_ONBOARDING_COMPLETED_KEY) === "1";
+  if (!force && completed) return false;
+  aestheticOnboardingState.open = true;
+  aestheticOnboardingState.stepIndex = 0;
+  aestheticOnboardingState.answers = defaultAestheticAnswers();
+  aestheticOnboardingState.source = source;
+  aestheticOnboardingState.applying = false;
+  els.aestheticOnboardingModal.classList.remove("hidden");
+  renderAestheticOnboardingStep({ animate: false });
+  return true;
+}
+
+function saveAestheticOnboardingCompletion({
+  skipped = false,
+  preferredModelId = null,
+  scoreByModel = null,
+  appliedModel = null,
+} = {}) {
+  const profile = {
+    version: 1,
+    source: aestheticOnboardingState.source,
+    skipped: Boolean(skipped),
+    completedAt: new Date().toISOString(),
+    preferredModelId: preferredModelId || null,
+    preferredModelValue: preferredModelId ? getAestheticModelChoice(preferredModelId)?.modelValue || null : null,
+    appliedModel: appliedModel || null,
+    answers: { ...aestheticOnboardingState.answers },
+    scoreByModel: scoreByModel && typeof scoreByModel === "object" ? scoreByModel : null,
+  };
+  saveAestheticOnboardingProfile(profile);
+  markAestheticOnboardingCompleted(true);
+  renderAestheticOnboardingStatus();
+}
+
+async function applyImageModelSetting(nextValue, { announce = false } = {}) {
+  const requested = String(nextValue || "").trim();
+  if (!requested) return false;
+  let resolved = requested;
+  if (els.imageModel) {
+    const optionValues = Array.from(els.imageModel.options || [])
+      .map((opt) => String(opt?.value || "").trim())
+      .filter(Boolean);
+    if (optionValues.length && !optionValues.includes(resolved)) {
+      resolved = optionValues.includes(DEFAULT_IMAGE_MODEL) ? DEFAULT_IMAGE_MODEL : optionValues[0];
+    }
+  }
+  const changed = resolved !== settings.imageModel;
+  settings.imageModel = resolved;
+  localStorage.setItem("brood.imageModel", settings.imageModel);
+  if (els.imageModel) {
+    els.imageModel.value = settings.imageModel;
+  }
+  updatePortraitIdle({ fromSettings: true });
+  if (state.ptySpawned) {
+    await invoke("write_pty", { data: `${PTY_COMMANDS.IMAGE_MODEL} ${settings.imageModel}\n` }).catch(() => {});
+  }
+  if (announce && changed) {
+    showToast(`Default image model set to ${settings.imageModel}.`, "tip", 2600);
+  }
+  renderAestheticOnboardingStatus();
+  return changed;
+}
+
+async function finalizeAestheticOnboarding({ applyRecommendation = true } = {}) {
+  const scored = scoreAestheticOnboardingAnswers(aestheticOnboardingState.answers);
+  const winner = getAestheticModelChoice(scored.winnerId) || AESTHETIC_ONBOARDING_MODEL_CHOICES[0] || null;
+  let appliedModel = null;
+  if (applyRecommendation && winner?.modelValue) {
+    aestheticOnboardingState.applying = true;
+    renderAestheticOnboardingStep({ animate: false });
+    await applyImageModelSetting(winner.modelValue, { announce: true }).catch(() => {});
+    appliedModel = winner.modelValue;
+  }
+  saveAestheticOnboardingCompletion({
+    skipped: !applyRecommendation,
+    preferredModelId: winner?.id || null,
+    scoreByModel: scored.scoreByModel,
+    appliedModel,
+  });
+  closeAestheticOnboardingModal();
+}
+
+function skipAestheticOnboarding() {
+  saveAestheticOnboardingCompletion({
+    skipped: true,
+    preferredModelId: null,
+    scoreByModel: null,
+    appliedModel: null,
+  });
+  closeAestheticOnboardingModal();
+}
+
 function providerFromModel(model) {
   const name = String(model || "").toLowerCase();
   if (!name) return null;
@@ -5736,17 +6270,28 @@ function looksLikePortraitClipName(name) {
 async function scanPortraitDir(dir) {
   const result = { entries: 0, videos: 0, matches: 0, sampleVideos: [] };
   if (!dir) return result;
-  const entries = await readDir(dir, { recursive: false });
-  for (const entry of entries || []) {
-    const path = entry?.path;
-    if (!path) continue;
-    result.entries += 1;
-    const ext = extname(path);
-    if (ext !== ".mp4" && ext !== ".mov" && ext !== ".webm") continue;
-    result.videos += 1;
-    const name = basename(path);
-    if (result.sampleVideos.length < 4 && name) result.sampleVideos.push(name);
-    if (looksLikePortraitClipName(name)) result.matches += 1;
+  const candidateDirs = [dir];
+  try {
+    candidateDirs.push(await join(dir, "etc"));
+  } catch (_) {}
+  for (const candidateDir of candidateDirs) {
+    let entries = [];
+    try {
+      entries = await readDir(candidateDir, { recursive: false });
+    } catch (_) {
+      continue;
+    }
+    for (const entry of entries || []) {
+      const path = entry?.path;
+      if (!path) continue;
+      result.entries += 1;
+      const ext = extname(path);
+      if (ext !== ".mp4" && ext !== ".mov" && ext !== ".webm") continue;
+      result.videos += 1;
+      const name = basename(path);
+      if (result.sampleVideos.length < 4 && name) result.sampleVideos.push(name);
+      if (looksLikePortraitClipName(name)) result.matches += 1;
+    }
   }
   return result;
 }
@@ -5786,10 +6331,12 @@ async function resolvePortraitsDir() {
     const fromDisk = await loadPortraitsDirFromDisk();
     if (fromDisk && (!fromLs || String(fromDisk) !== String(fromLs).trim())) candidates.push(String(fromDisk).trim());
 
-    // Dev convenience: use repo-local outputs if we can locate the repo root.
+    // Dev convenience: use repo-local tracked portraits first, then generated outputs.
     try {
       const repoRoot = await invoke("get_repo_root");
       if (repoRoot) {
+        // Tracked baseline portrait pack for fresh clones.
+        candidates.push(await join(repoRoot, "desktop", "src", "assets", "portraits"));
         candidates.push(await join(repoRoot, "outputs", "sora_portraits"));
 
         // If we're running inside a git worktree checkout, `.git` is a file that points
@@ -5797,6 +6344,7 @@ async function resolvePortraitsDir() {
         // in the main repo's `outputs/` (and are usually untracked), so prefer that if present.
         const mainRoot = await deriveMainRepoRootFromWorktree(repoRoot);
         if (mainRoot && mainRoot !== repoRoot) {
+          candidates.push(await join(mainRoot, "desktop", "src", "assets", "portraits"));
           candidates.push(await join(mainRoot, "outputs", "sora_portraits"));
         }
       }
@@ -5886,6 +6434,8 @@ async function buildPortraitIndex(dir) {
     "stability_working_sora-2_720x1280_12s_20260205_231943.sq.mute.mp4";
   const DEFAULT_STABILITY_IDLE_CLIP =
     "stability_idle_sora-2_720x1280_12s_20260205_231943.sq.mute.mp4";
+  const DEFAULT_FLUX_WORKING_CLIP = "flux_working_sora-2_720x1280_12s_20260209_183745.sq.mute.mp4";
+  const DEFAULT_FLUX_IDLE_CLIP = "flux_idle_sora-2_720x1280_12s_20260209_183745.sq.mute.mp4";
 
   const index = {
     dryrun: { idle: null, working: null },
@@ -5902,6 +6452,13 @@ async function buildPortraitIndex(dir) {
   } catch (_) {
     return index;
   }
+  try {
+    const etcDir = await join(dir, "etc");
+    const etcEntries = await readDir(etcDir, { recursive: false });
+    if (Array.isArray(etcEntries) && etcEntries.length) {
+      entries.push(...etcEntries);
+    }
+  } catch (_) {}
 
   const candidates = entries
     .map((e) => ({ path: e?.path, name: basename(e?.path) || e?.name }))
@@ -5933,6 +6490,12 @@ async function buildPortraitIndex(dir) {
       clipState === "idle" &&
       name === String(DEFAULT_STABILITY_IDLE_CLIP).toLowerCase()
     ) {
+      priority = 3;
+    }
+    if (agent === "flux" && clipState === "working" && name === String(DEFAULT_FLUX_WORKING_CLIP).toLowerCase()) {
+      priority = 3;
+    }
+    if (agent === "flux" && clipState === "idle" && name === String(DEFAULT_FLUX_IDLE_CLIP).toLowerCase()) {
       priority = 3;
     }
     const slot = index[agent]?.[clipState];
@@ -10356,6 +10919,11 @@ function motherV2HasProposalImageSet() {
   return motherIdleBaseImageItems().length >= MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL;
 }
 
+function motherPreferredGenerationModel() {
+  const preferred = String(settings.imageModel || "").trim();
+  return preferred || MOTHER_GENERATION_MODEL;
+}
+
 function motherIdleGenerationModelCandidates() {
   const out = [];
   const seen = new Set();
@@ -12276,6 +12844,204 @@ function motherV2CollectImageInteractionSignals(imageIds = []) {
   return out;
 }
 
+function motherV2EnvelopeBudgetForProvider(provider = "", model = "") {
+  const providerKey = String(provider || "").trim().toLowerCase();
+  const modelKey = String(model || "").trim().toLowerCase();
+  if (providerKey === "openai") {
+    if (modelKey.includes("mini")) return { maxImages: 3, maxRelations: 2, maxMustNot: 5, maxChars: 1300 };
+    return { maxImages: 4, maxRelations: 3, maxMustNot: 6, maxChars: 1700 };
+  }
+  if (providerKey === "flux") {
+    if (modelKey.includes("flex")) return { maxImages: 3, maxRelations: 2, maxMustNot: 4, maxChars: 1100 };
+    return { maxImages: 4, maxRelations: 2, maxMustNot: 5, maxChars: 1300 };
+  }
+  if (providerKey === "imagen") return { maxImages: 4, maxRelations: 3, maxMustNot: 6, maxChars: 1500 };
+  return { maxImages: 3, maxRelations: 2, maxMustNot: 5, maxChars: 1200 };
+}
+
+function motherV2BuildNonGeminiModelContextEnvelope({
+  provider = "",
+  model = "",
+  compiled = {},
+  promptLine = "",
+  sanitizedIntent = null,
+  imagePayload = null,
+  geminiContextPacket = null,
+} = {}) {
+  const providerKey = String(provider || "").trim().toLowerCase();
+  if (!providerKey || providerKey === "gemini") return null;
+  const modelKey = String(model || "").trim();
+  const budget = motherV2EnvelopeBudgetForProvider(providerKey, modelKey);
+  const normalizeIds = (values, limit = 8) =>
+    (Array.isArray(values) ? values : [])
+      .map((v) => String(v || "").trim())
+      .filter(Boolean)
+      .slice(0, Math.max(1, Number(limit) || 1));
+  const intent = sanitizedIntent && typeof sanitizedIntent === "object" ? sanitizedIntent : {};
+  const packet = geminiContextPacket && typeof geminiContextPacket === "object" ? geminiContextPacket : {};
+  const proposalLock = packet?.proposal_lock && typeof packet.proposal_lock === "object" ? packet.proposal_lock : {};
+  const sourceImageIds = normalizeIds(imagePayload?.sourceImageIds, 10);
+  const transformationMode = motherV2NormalizeTransformationMode(
+    proposalLock.transformation_mode || intent.transformation_mode || compiled?.transformation_mode || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE
+  );
+  const layout = String(
+    proposalLock.placement_policy || intent.placement_policy || compiled?.generation_params?.layout_hint || "adjacent"
+  ).trim() || "adjacent";
+  const selectedIds = normalizeIds(proposalLock.selected_ids || getVisibleSelectedIds(), 6);
+  const targetIds = normalizeIds(proposalLock.target_ids || intent.target_ids, 6);
+  const referenceIds = normalizeIds(proposalLock.reference_ids || intent.reference_ids, 8);
+  const packetImages = Array.isArray(packet?.images) ? packet.images : [];
+  let images = packetImages
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const id = String(entry.id || "").trim();
+      if (!id) return null;
+      return {
+        slot: String(entry.slot || "").trim() || null,
+        id,
+        role: String(entry.role || "").trim() || "context",
+        tier: String(entry.tier || "").trim() || null,
+        weight: Number.isFinite(Number(entry.weight)) ? Number(entry.weight) : null,
+        preserve: (Array.isArray(entry.preserve) ? entry.preserve : []).map((v) => String(v || "").trim()).filter(Boolean).slice(0, 2),
+        transform: (Array.isArray(entry.transform) ? entry.transform : []).map((v) => String(v || "").trim()).filter(Boolean).slice(0, 2),
+        position_tier: String(entry.position_tier || "").trim() || null,
+        size_tier: String(entry.size_tier || "").trim() || null,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, budget.maxImages);
+  if (!images.length) {
+    images = sourceImageIds.slice(0, budget.maxImages).map((id, index) => ({
+      slot: null,
+      id,
+      role: index === 0 ? "target" : "reference",
+      tier: index === 0 ? "PRIMARY" : "SECONDARY",
+      weight: null,
+      preserve: [],
+      transform: [],
+      position_tier: null,
+      size_tier: null,
+    }));
+  }
+  const packetRelations = Array.isArray(packet?.relations) ? packet.relations : [];
+  const relations = packetRelations
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const refId = String(entry.ref_id || "").trim();
+      if (!refId) return null;
+      return {
+        ref_id: refId,
+        to_target: String(entry.to_target || "").trim() || "ADJACENT",
+        direction: String(entry.direction || "").trim() || null,
+        overlap_strength: String(entry.overlap_strength || "").trim() || null,
+        region_on_target: String(entry.region_on_target || "").trim() || null,
+        semantic: String(entry.semantic || "").trim() || null,
+        confidence: Number.isFinite(Number(entry.confidence)) ? Number(entry.confidence) : null,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, budget.maxRelations);
+  const mustNotValues = [];
+  const mustNotSeen = new Set();
+  const pushMustNot = (raw) => {
+    const text = String(raw || "")
+      .trim()
+      .replace(/^[-*•]\s*/, "")
+      .replace(/\s+/g, " ");
+    if (!text) return;
+    const key = text.toLowerCase();
+    if (mustNotSeen.has(key)) return;
+    mustNotSeen.add(key);
+    mustNotValues.push(text);
+  };
+  const packetMustNot = Array.isArray(packet?.constraints?.must_not)
+    ? packet.constraints.must_not
+    : Array.isArray(packet?.must_not)
+      ? packet.must_not
+      : [];
+  for (const item of packetMustNot) pushMustNot(item);
+  for (const item of Array.isArray(compiled?.compile_constraints) ? compiled.compile_constraints : []) pushMustNot(item);
+  const negativePrompt = String(compiled?.negative_prompt || "").trim();
+  if (negativePrompt) {
+    for (const item of negativePrompt.split(/\n|;|,/g)) pushMustNot(item);
+  }
+  const mustNot = mustNotValues.slice(0, budget.maxMustNot);
+  const goal = clampText(
+    String(packet?.goal || intent?.summary || "Create one coherent production-ready image."),
+    260
+  );
+  const creativeDirective = clampText(
+    String(compiled?.creative_directive || intent?.creative_directive || MOTHER_CREATIVE_DIRECTIVE),
+    140
+  );
+  const guidance =
+    providerKey === "flux"
+      ? [
+          "Keep directives concise and concrete.",
+          "Prioritize subject continuity and lighting realism.",
+          "Treat must_not constraints as hard requirements.",
+        ]
+      : [
+          "Use explicit composition and subject continuity instructions.",
+          "Treat must_not constraints as hard requirements.",
+        ];
+  const envelope = {
+    schema: `brood.model_context_envelope.${providerKey}.v1`,
+    provider: providerKey,
+    model: modelKey || null,
+    profile: providerKey === "flux" ? "flux-editing-compact" : "openai-image-structured",
+    prompt_budget_chars: budget.maxChars,
+    goal,
+    creative_directive: creativeDirective,
+    transformation_mode: transformationMode,
+    layout,
+    source_image_ids: sourceImageIds.slice(0, 8),
+    target_ids: targetIds.slice(0, 4),
+    reference_ids: referenceIds.slice(0, 6),
+    selected_ids: selectedIds.slice(0, 4),
+    images,
+    relations,
+    must_not: mustNot,
+    guidance,
+    prompt_preview: clampText(promptLine, 280),
+  };
+  const serializedLen = () => JSON.stringify(envelope).length;
+  while (serializedLen() > budget.maxChars && envelope.relations.length > 1) envelope.relations.pop();
+  while (serializedLen() > budget.maxChars && envelope.images.length > 2) envelope.images.pop();
+  while (serializedLen() > budget.maxChars && envelope.must_not.length > 3) envelope.must_not.pop();
+  if (serializedLen() > budget.maxChars) {
+    envelope.goal = clampText(envelope.goal, 180);
+    envelope.prompt_preview = clampText(envelope.prompt_preview, 180);
+  }
+  return envelope;
+}
+
+function motherV2BuildModelContextEnvelopes({
+  selectedModel = "",
+  compiled = {},
+  promptLine = "",
+  sanitizedIntent = null,
+  imagePayload = null,
+  geminiContextPacket = null,
+} = {}) {
+  const model = String(selectedModel || "").trim();
+  if (!model) return null;
+  const provider = providerFromModel(model);
+  if (!provider || provider === "unknown" || provider === "gemini") return null;
+  const providerKey = provider === "sdxl" ? "replicate" : provider;
+  const envelope = motherV2BuildNonGeminiModelContextEnvelope({
+    provider: providerKey,
+    model,
+    compiled,
+    promptLine,
+    sanitizedIntent,
+    imagePayload,
+    geminiContextPacket,
+  });
+  if (!envelope || typeof envelope !== "object") return null;
+  return { [providerKey]: envelope };
+}
+
 function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sanitizedIntent = null, imagePayload = null } = {}) {
   const idle = state.motherIdle;
   const intent = sanitizedIntent && typeof sanitizedIntent === "object" ? sanitizedIntent : {};
@@ -12939,16 +13705,25 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
   };
 }
 
-async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "") {
+async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "", { selectedModel = "" } = {}) {
   const idle = state.motherIdle;
   if (!idle) return false;
   const imagePayload = motherV2CollectGenerationImagePaths();
   const sanitizedIntent = motherV2SanitizeIntentImageIds(idle.intent) || idle.intent || null;
+  const resolvedModel = String(selectedModel || settings.imageModel || MOTHER_GENERATION_MODEL).trim() || MOTHER_GENERATION_MODEL;
   const geminiContextPacket = motherV2BuildGeminiContextPacket({
     compiled,
     promptLine,
     sanitizedIntent,
     imagePayload,
+  });
+  const modelContextEnvelopes = motherV2BuildModelContextEnvelopes({
+    selectedModel: resolvedModel,
+    compiled,
+    promptLine,
+    sanitizedIntent,
+    imagePayload,
+    geminiContextPacket,
   });
   const compiledGenerationParams =
     compiled?.generation_params && typeof compiled.generation_params === "object" ? compiled.generation_params : {};
@@ -12987,6 +13762,9 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "") {
     reference_images: imagePayload.referenceImages,
     gemini_context_packet: geminiContextPacket,
   };
+  if (modelContextEnvelopes && typeof modelContextEnvelopes === "object" && Object.keys(modelContextEnvelopes).length) {
+    payload.model_context_envelopes = modelContextEnvelopes;
+  }
   const payloadPath = await motherV2WritePayloadFile("mother_generate", payload);
   if (!payloadPath) return false;
   appendMotherTraceLog({
@@ -13023,7 +13801,7 @@ async function motherV2DispatchCompiledPrompt(compiled = {}) {
     motherIdleHandleGenerationFailed("Mother prompt compile produced an empty prompt.");
     return false;
   }
-  const selectedModel = MOTHER_GENERATION_MODEL;
+  const selectedModel = motherPreferredGenerationModel();
   motherIdleResetDispatchCorrelation({ rememberPendingVersion: true });
   idle.dispatchTimeoutExtensions = 0;
   idle.cancelArtifactUntil = 0;
@@ -13046,7 +13824,7 @@ async function motherV2DispatchCompiledPrompt(compiled = {}) {
     `Mother draft timed out after ${Math.round((MOTHER_GENERATION_TIMEOUT_MS + MOTHER_GENERATION_TIMEOUT_EXTENSION_MS) / 1000)}s.`,
     { allowExtension: true }
   );
-  const sentViaPayload = await motherV2DispatchViaImagePayload(compiled, promptLine).catch(() => false);
+  const sentViaPayload = await motherV2DispatchViaImagePayload(compiled, promptLine, { selectedModel }).catch(() => false);
   if (!sentViaPayload) {
     // Mother drafts must dispatch via structured payload so source_images always includes
     // the full canvas context (uploaded + Mother-generated images).
@@ -20024,7 +20802,7 @@ async function handleEventLegacy(event) {
       const idle = state.motherIdle;
       const retryModel =
         idle && !idle.retryAttempted
-          ? motherIdlePickRetryModel(idle.lastDispatchModel || idle.pendingSuggestionLog?.model || MOTHER_GENERATION_MODEL)
+          ? motherIdlePickRetryModel(idle.lastDispatchModel || idle.pendingSuggestionLog?.model || motherPreferredGenerationModel())
           : null;
       if (idle && retryModel) {
         const failedVersionId = idle.pendingVersionId || eventVersionId || null;
@@ -24680,6 +25458,7 @@ function installUi() {
       els.settingsDrawer.classList.remove("hidden");
       refreshKeyStatus().catch(() => {});
       refreshPortraitsDirReadout().catch(() => {});
+      renderAestheticOnboardingStatus();
     });
   }
   if (els.settingsClose && els.settingsDrawer) {
@@ -24688,6 +25467,77 @@ function installUi() {
       els.settingsDrawer.classList.add("hidden");
     });
   }
+  if (els.aestheticOnboardingOpen) {
+    els.aestheticOnboardingOpen.addEventListener("click", () => {
+      bumpInteraction();
+      if (els.settingsDrawer) els.settingsDrawer.classList.add("hidden");
+      openAestheticOnboardingModal({ force: true, source: "settings" });
+    });
+  }
+  if (els.aestheticOnboardingClear) {
+    els.aestheticOnboardingClear.addEventListener("click", () => {
+      bumpInteraction();
+      clearAestheticOnboardingProfile();
+      renderAestheticOnboardingStatus();
+      showToast("Aesthetic preference cleared.", "tip", 2200);
+    });
+  }
+  if (els.aestheticOnboardingBody) {
+    els.aestheticOnboardingBody.addEventListener("click", (event) => {
+      const btn = event?.target?.closest ? event.target.closest("[data-aesthetic-select][data-aesthetic-value]") : null;
+      if (!btn || !els.aestheticOnboardingBody.contains(btn)) return;
+      const answerKey = String(btn.dataset?.aestheticSelect || "").trim();
+      const answerValue = String(btn.dataset?.aestheticValue || "").trim();
+      if (!answerKey || !answerValue) return;
+      if (!(answerKey in aestheticOnboardingState.answers)) return;
+      aestheticOnboardingState.answers[answerKey] = answerValue;
+      renderAestheticOnboardingStep({ animate: false });
+    });
+  }
+  if (els.aestheticOnboardingBack) {
+    els.aestheticOnboardingBack.addEventListener("click", () => {
+      bumpInteraction();
+      if (!aestheticOnboardingState.open || aestheticOnboardingState.stepIndex <= 0) return;
+      aestheticOnboardingState.stepIndex -= 1;
+      renderAestheticOnboardingStep({ animate: true });
+    });
+  }
+  if (els.aestheticOnboardingNext) {
+    els.aestheticOnboardingNext.addEventListener("click", () => {
+      bumpInteraction();
+      if (!aestheticOnboardingState.open || aestheticOnboardingState.applying) return;
+      if (aestheticOnboardingState.stepIndex < 3) {
+        if (!canAdvanceAestheticStep(aestheticOnboardingState.stepIndex)) return;
+        aestheticOnboardingState.stepIndex += 1;
+        renderAestheticOnboardingStep({ animate: true });
+        return;
+      }
+      finalizeAestheticOnboarding({ applyRecommendation: true }).catch((err) => {
+        console.error(err);
+        showToast(err?.message || "Could not apply aesthetic model.", "error", 2600);
+      });
+    });
+  }
+  if (els.aestheticOnboardingSkip) {
+    els.aestheticOnboardingSkip.addEventListener("click", () => {
+      bumpInteraction();
+      skipAestheticOnboarding();
+    });
+  }
+  if (els.aestheticOnboardingClose) {
+    els.aestheticOnboardingClose.addEventListener("click", () => {
+      bumpInteraction();
+      skipAestheticOnboarding();
+    });
+  }
+  if (els.aestheticOnboardingModal) {
+    els.aestheticOnboardingModal.addEventListener("pointerdown", (event) => {
+      if (event?.target !== els.aestheticOnboardingModal) return;
+      bumpInteraction();
+      skipAestheticOnboarding();
+    });
+  }
+  renderAestheticOnboardingStatus();
 
   if (els.portraitsDirPick) {
     els.portraitsDirPick.addEventListener("click", () => {
@@ -24828,12 +25678,7 @@ function installUi() {
     els.imageModel.value = settings.imageModel;
     els.imageModel.addEventListener("change", () => {
       bumpInteraction();
-      settings.imageModel = els.imageModel.value;
-      localStorage.setItem("brood.imageModel", settings.imageModel);
-      updatePortraitIdle({ fromSettings: true });
-      if (state.ptySpawned) {
-        invoke("write_pty", { data: `${PTY_COMMANDS.IMAGE_MODEL} ${settings.imageModel}\n` }).catch(() => {});
-      }
+      applyImageModelSetting(els.imageModel.value, { announce: false }).catch(() => {});
     });
   }
 
@@ -24999,6 +25844,10 @@ function installUi() {
     const hasModifier = Boolean(event?.metaKey || event?.ctrlKey || event?.altKey);
 
 		    if (key === "escape") {
+		      if (aestheticOnboardingState.open) {
+		        skipAestheticOnboarding();
+		        return;
+		      }
 		      if (isMotherWheelOpen()) {
 		        closeMotherWheelMenu({ immediate: false });
 		        return;
@@ -25030,11 +25879,13 @@ function installUi() {
 	        requestRender();
 	        return;
       }
-      clearSelection();
-      return;
-    }
+	      clearSelection();
+	      return;
+	    }
 
-	    if (isEditable || hasModifier) return;
+	    if (aestheticOnboardingState.open) return;
+
+		    if (isEditable || hasModifier) return;
 
       if (rawKey === "ArrowLeft" || rawKey === "ArrowRight" || rawKey === "ArrowUp" || rawKey === "ArrowDown") {
         if (!state.images || state.images.length === 0) return;
@@ -25364,6 +26215,11 @@ async function boot() {
 
   // Auto-create a run for speed; users can always "Open Run" later.
   await createRun();
+  if (localStorage.getItem(AESTHETIC_ONBOARDING_COMPLETED_KEY) !== "1") {
+    setTimeout(() => {
+      openAestheticOnboardingModal({ force: false, source: "first_run" });
+    }, 260);
+  }
   await invoke("report_automation_frontend_ready", { ready: true }).catch((err) => {
     console.warn("desktop automation readiness handshake failed", err);
   });
