@@ -91,6 +91,10 @@
     "cost_per_image_usd": 0.06,
     "latency_per_image_s": null
   },
+  "flux-2-max": {
+    "cost_per_image_usd": 0.07,
+    "latency_per_image_s": null
+  },
   "flux-2": {
     "cost_per_image_usd": 0.03,
     "latency_per_image_s": null

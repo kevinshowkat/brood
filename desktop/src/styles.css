@@ -6553,6 +6553,312 @@ button.ghost:hover {
   line-height: 1.4;
 }
 
+.aesthetic-onboarding-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.68);
+  backdrop-filter: blur(6px);
+}
+
+.aesthetic-onboarding-shell {
+  width: min(960px, 96vw);
+  max-height: min(90vh, 920px);
+  border: 1px solid rgba(53, 71, 96, 0.86);
+  border-radius: 16px;
+  padding: 14px;
+  background:
+    radial-gradient(620px 180px at 14% 0%, rgba(100, 210, 255, 0.16), transparent 62%),
+    radial-gradient(620px 180px at 88% 0%, rgba(255, 179, 0, 0.12), transparent 64%),
+    linear-gradient(180deg, rgba(13, 18, 25, 0.98), rgba(7, 10, 14, 0.98));
+  box-shadow: 0 34px 90px rgba(0, 0, 0, 0.72);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.aesthetic-onboarding-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.aesthetic-onboarding-title {
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.aesthetic-onboarding-subtitle {
+  margin-top: 3px;
+  color: rgba(230, 237, 243, 0.74);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+}
+
+.aesthetic-onboarding-progress {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.aesthetic-onboarding-progress-dot {
+  border: 1px solid rgba(53, 71, 96, 0.8);
+  border-radius: 999px;
+  padding: 6px 8px;
+  background: rgba(18, 26, 37, 0.46);
+  color: rgba(230, 237, 243, 0.62);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.aesthetic-onboarding-progress-dot.is-complete {
+  border-color: rgba(82, 255, 148, 0.72);
+  color: rgba(82, 255, 148, 0.9);
+}
+
+.aesthetic-onboarding-progress-dot.is-active {
+  border-color: rgba(255, 212, 0, 0.82);
+  color: rgba(255, 232, 168, 0.96);
+  background: rgba(255, 212, 0, 0.14);
+}
+
+.aesthetic-onboarding-body {
+  min-height: 430px;
+  max-height: min(60vh, 640px);
+  overflow: auto;
+  padding-right: 2px;
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.aesthetic-onboarding-body.is-fading-out {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.aesthetic-onboarding-body.is-fading-in {
+  animation: aestheticOnboardingFadeIn 170ms ease;
+}
+
+@keyframes aestheticOnboardingFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.aesthetic-question {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.aesthetic-question-head h3 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.aesthetic-question-head p {
+  margin: 4px 0 0;
+  color: rgba(230, 237, 243, 0.74);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.aesthetic-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.aesthetic-choice-card {
+  border: 1px solid rgba(53, 71, 96, 0.74);
+  border-radius: 13px;
+  background: rgba(18, 26, 37, 0.56);
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+  padding: 0;
+  transition:
+    border-color 120ms ease,
+    transform 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.aesthetic-choice-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 212, 0, 0.52);
+}
+
+.aesthetic-choice-card.is-selected {
+  border-color: rgba(255, 212, 0, 0.86);
+  box-shadow: 0 0 0 1px rgba(255, 212, 0, 0.22), 0 16px 34px rgba(0, 0, 0, 0.44);
+}
+
+.aesthetic-choice-image {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  display: block;
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.aesthetic-choice-meta {
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.aesthetic-choice-title {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: rgba(230, 237, 243, 0.9);
+}
+
+.aesthetic-choice-note {
+  font-size: 11px;
+  color: rgba(230, 237, 243, 0.66);
+}
+
+.aesthetic-prompt-card {
+  border: 1px solid rgba(53, 71, 96, 0.72);
+  border-radius: 12px;
+  background: rgba(12, 16, 23, 0.68);
+  padding: 10px 12px;
+}
+
+.aesthetic-prompt-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(230, 237, 243, 0.62);
+}
+
+.aesthetic-prompt-text {
+  margin-top: 6px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: rgba(230, 237, 243, 0.88);
+  line-height: 1.45;
+}
+
+.aesthetic-option-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.aesthetic-option-card {
+  border: 1px solid rgba(53, 71, 96, 0.74);
+  border-radius: 13px;
+  background: rgba(18, 26, 37, 0.56);
+  color: rgba(230, 237, 243, 0.9);
+  padding: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    transform 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.aesthetic-option-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(100, 210, 255, 0.56);
+}
+
+.aesthetic-option-card.is-selected {
+  border-color: rgba(100, 210, 255, 0.9);
+  box-shadow: 0 0 0 1px rgba(100, 210, 255, 0.24), 0 16px 34px rgba(0, 0, 0, 0.42);
+}
+
+.aesthetic-option-title {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+}
+
+.aesthetic-option-description {
+  margin-top: 6px;
+  font-size: 12px;
+  color: rgba(230, 237, 243, 0.74);
+  line-height: 1.4;
+}
+
+.aesthetic-summary-card {
+  border: 1px solid rgba(53, 71, 96, 0.82);
+  border-radius: 14px;
+  background: rgba(12, 17, 24, 0.76);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aesthetic-summary-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(230, 237, 243, 0.64);
+}
+
+.aesthetic-summary-model {
+  font-size: 24px;
+  font-weight: 600;
+  color: rgba(255, 232, 168, 0.98);
+}
+
+.aesthetic-summary-note {
+  color: rgba(230, 237, 243, 0.76);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.aesthetic-summary-reasons {
+  margin: 0;
+  padding-left: 18px;
+  color: rgba(230, 237, 243, 0.74);
+  font-size: 12px;
+  line-height: 1.42;
+}
+
+.aesthetic-summary-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.aesthetic-onboarding-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.aesthetic-onboarding-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .timeline-controls {
   display: flex;
   align-items: center;
@@ -6736,6 +7042,23 @@ button.ghost:hover {
     top: 8px;
     font-size: 10px;
     padding: 6px 8px;
+  }
+
+  .aesthetic-onboarding-shell {
+    width: min(720px, 96vw);
+  }
+
+  .aesthetic-choice-grid,
+  .aesthetic-option-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .aesthetic-onboarding-progress {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .aesthetic-onboarding-body {
+    min-height: 360px;
   }
 }
 

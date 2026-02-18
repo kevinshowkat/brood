@@ -32,6 +32,11 @@ from .google_utils import (
 )
 
 
+_IMAGEN_ALLOWED_ASPECT_RATIOS = {"1:1", "3:4", "4:3", "9:16", "16:9"}
+_IMAGEN_ALLOWED_IMAGE_SIZES = {"1K", "2K"}
+_IMAGEN_ALLOWED_PERSON_GENERATION = {"dont_allow", "allow_adult", "allow_all"}
+
+
 class ImagenProvider:
     name = "imagen"
 
@@ -42,13 +47,12 @@ class ImagenProvider:
         warnings: list[str] = []
         provider_options = request.provider_options or {}
         model = request.model or "imagen-4.0-ultra"
-        output_format = normalize_output_format(request.output_format, "png") or "png"
-
-        ratio = provider_options.get("aspect_ratio") or nearest_gemini_ratio(request.size, warnings)
-        if ratio == "4:5":
-            warnings.append("Imagen does not support 4:5; using 3:4 instead.")
-            ratio = "3:4"
-        image_size = provider_options.get("image_size") or resolve_image_size_hint(request.size)
+        output_format = _normalize_imagen_output_format(request.output_format, warnings=warnings)
+        ratio_input = provider_options.get("aspect_ratio") or nearest_gemini_ratio(request.size, warnings)
+        ratio = _normalize_imagen_aspect_ratio(ratio_input, warnings=warnings)
+        image_size_raw = provider_options.get("image_size") or resolve_image_size_hint(request.size)
+        image_size = _normalize_imagen_image_size(image_size_raw, model=model, warnings=warnings)
+        number_of_images = _normalize_imagen_number_of_images(request.n, warnings=warnings)
 
         add_watermark = True
         if provider_options.get("add_watermark") is not None:
@@ -56,24 +60,26 @@ class ImagenProvider:
 
         seed = request.seed
         if seed is not None and add_watermark:
-            warnings.append("Imagen seed ignored because add_watermark=true.")
+            _append_warning(warnings, "Imagen seed ignored because add_watermark=true.")
             seed = None
 
-        config_kwargs: dict[str, Any] = {
-            "number_of_images": max(1, int(request.n)),
-            "image_size": image_size,
-        }
+        config_kwargs: dict[str, Any] = {"number_of_images": number_of_images}
+        if image_size:
+            config_kwargs["image_size"] = image_size
         if ratio:
             config_kwargs["aspect_ratio"] = ratio
         if request.output_format:
-            output_mime = "image/jpeg" if output_format == "jpeg" else f"image/{output_format}"
+            output_mime = "image/jpeg" if output_format == "jpeg" else "image/png"
             config_kwargs["output_mime_type"] = output_mime
         if seed is not None:
             config_kwargs["seed"] = seed
         if provider_options.get("add_watermark") is not None:
             config_kwargs["add_watermark"] = add_watermark
-        if provider_options.get("person_generation") is not None:
-            config_kwargs["person_generation"] = provider_options.get("person_generation")
+        person_generation = _normalize_imagen_person_generation(
+            provider_options.get("person_generation"), warnings=warnings
+        )
+        if person_generation is not None:
+            config_kwargs["person_generation"] = person_generation
 
         config = types.GenerateImagesConfig(**config_kwargs)
         raw_request = {
@@ -261,6 +267,101 @@ def _normalize_vertex_name(model: str | None) -> str | None:
     if normalized in {"imagen-4.0-ultra", "imagen-4-ultra"}:
         return "imagen-4.0-ultra-generate-001"
     return normalized
+
+
+def _normalize_imagen_output_format(
+    output_format: str | None, *, warnings: list[str]
+) -> str:
+    normalized = normalize_output_format(output_format, "png") or "png"
+    if normalized in {"png", "jpeg"}:
+        return normalized
+    _append_warning(warnings, f"Imagen output format '{output_format}' unsupported; using png.")
+    return "png"
+
+
+def _normalize_imagen_aspect_ratio(value: Any, *, warnings: list[str]) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    normalized = raw.replace("/", ":")
+    if normalized in _IMAGEN_ALLOWED_ASPECT_RATIOS:
+        return normalized
+    try:
+        left_raw, right_raw = normalized.split(":", 1)
+        left = int(left_raw.strip())
+        right = int(right_raw.strip())
+    except Exception:
+        _append_warning(warnings, f"Imagen aspect_ratio '{value}' unsupported; using provider default.")
+        return None
+    if left <= 0 or right <= 0:
+        _append_warning(warnings, f"Imagen aspect_ratio '{value}' unsupported; using provider default.")
+        return None
+    target = left / right
+    best_ratio = "1:1"
+    best_delta = float("inf")
+    for candidate in _IMAGEN_ALLOWED_ASPECT_RATIOS:
+        a_raw, b_raw = candidate.split(":", 1)
+        candidate_ratio = int(a_raw) / int(b_raw)
+        delta = abs(candidate_ratio - target)
+        if delta < best_delta:
+            best_ratio = candidate
+            best_delta = delta
+    _append_warning(warnings, f"Imagen aspect_ratio snapped to {best_ratio}.")
+    return best_ratio
+
+
+def _normalize_imagen_image_size(
+    value: Any, *, model: str, warnings: list[str]
+) -> str | None:
+    model_name = str(model or "").strip().lower()
+    if model_name.startswith("imagen-3"):
+        return None
+    raw = str(value or "").strip()
+    if not raw:
+        return "2K"
+    normalized = raw.upper()
+    if normalized in _IMAGEN_ALLOWED_IMAGE_SIZES:
+        return normalized
+    if normalized == "4K":
+        _append_warning(warnings, "Imagen image_size 4K unsupported; using 2K.")
+        return "2K"
+    inferred = resolve_image_size_hint(raw)
+    if inferred == "4K":
+        _append_warning(warnings, "Imagen image_size 4K unsupported; using 2K.")
+        return "2K"
+    if inferred in _IMAGEN_ALLOWED_IMAGE_SIZES:
+        return inferred
+    _append_warning(warnings, f"Imagen image_size '{value}' unsupported; using 2K.")
+    return "2K"
+
+
+def _normalize_imagen_number_of_images(value: Any, *, warnings: list[str]) -> int:
+    try:
+        number = int(value)
+    except Exception:
+        return 1
+    clamped = max(1, min(4, number))
+    if clamped != number:
+        _append_warning(warnings, f"Imagen number_of_images clamped to {clamped}.")
+    return clamped
+
+
+def _normalize_imagen_person_generation(value: Any, *, warnings: list[str]) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    if normalized in _IMAGEN_ALLOWED_PERSON_GENERATION:
+        return normalized
+    _append_warning(warnings, f"Imagen person_generation '{value}' unsupported; ignoring.")
+    return None
+
+
+def _append_warning(warnings: list[str], message: str) -> None:
+    if message in warnings:
+        return
+    warnings.append(message)
 
 
 def _to_dict(value: Any) -> Any:

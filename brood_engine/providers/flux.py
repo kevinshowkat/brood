@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import time
@@ -21,7 +22,7 @@ class FluxProvider:
         api_key = _resolve_api_key()
         options = dict(request.provider_options or {})
         endpoint_url, endpoint_label = _resolve_endpoint(options, request.model)
-        width, height, size_warning = _resolve_flux_dims(request.size)
+        width, height, size_warnings = _resolve_flux_dims(request.size)
 
         poll_interval = float(options.get("poll_interval", 0.5))
         poll_timeout = float(options.get("poll_timeout", 120.0))
@@ -29,10 +30,12 @@ class FluxProvider:
         download_timeout = float(options.get("download_timeout", 60.0))
 
         warnings: list[str] = []
-        if size_warning:
-            warnings.append(size_warning)
+        for warning in size_warnings:
+            _append_warning(warnings, warning)
         if endpoint_label == "flux-2":
-            warnings.append("Flux model flux-2 is deprecated; using flux-2-flex.")
+            _append_warning(warnings, "Flux model flux-2 is deprecated; using flux-2-flex.")
+        if request.inputs.mask is not None:
+            _append_warning(warnings, "FLUX mask inputs are not supported; ignoring mask.")
 
         headers = {
             "accept": "application/json",
@@ -46,9 +49,23 @@ class FluxProvider:
             "prompt": request.prompt,
         }
         provider_response: dict[str, Any] = {}
+        payload_manifests: list[dict[str, Any]] = []
 
         results: list[GeneratedArtifact] = []
-        output_format = (request.output_format or "jpg").strip().lower()
+        output_format = _normalize_flux_output_format(request.output_format)
+        if output_format is None:
+            if request.output_format:
+                _append_warning(warnings, f"FLUX output_format '{request.output_format}' unsupported; using jpeg.")
+            output_format = "jpeg"
+        generation_options = _sanitize_flux_options(options, endpoint_label=endpoint_label, warnings=warnings)
+        option_output_format = generation_options.pop("output_format", None)
+        if isinstance(option_output_format, str) and option_output_format:
+            output_format = option_output_format
+        input_images, input_image_manifest = _resolve_flux_input_images(
+            request,
+            endpoint_label=endpoint_label,
+            warnings=warnings,
+        )
         for idx in range(max(1, int(request.n))):
             payload: dict[str, Any] = {
                 "prompt": request.prompt,
@@ -59,10 +76,11 @@ class FluxProvider:
                 payload["seed"] = request.seed
             if output_format:
                 payload["output_format"] = output_format
-            for key, value in options.items():
-                if key in _CONTROL_KEYS:
-                    continue
+            for key, value in generation_options.items():
                 payload[key] = value
+            for key, value in input_images.items():
+                payload[key] = value
+            payload_manifests.append(_flux_payload_manifest(payload, input_image_manifest))
 
             result = _generate_one(
                 endpoint_url=endpoint_url,
@@ -88,6 +106,10 @@ class FluxProvider:
 
         if not results:
             raise RuntimeError("Flux returned no images.")
+        if len(payload_manifests) == 1:
+            provider_request["payload"] = payload_manifests[0]
+        elif payload_manifests:
+            provider_request["payloads"] = payload_manifests
 
         return ProviderResponse(
             results=results,
@@ -110,6 +132,17 @@ _CONTROL_KEYS = {
     "request_timeout",
     "download_timeout",
 }
+_FLUX_ALLOWED_OPTION_KEYS = {
+    "output_format",
+    "safety_tolerance",
+    "steps",
+    "guidance",
+    "prompt_upsampling",
+}
+_FLUX_MAX_AREA = 4_000_000
+_FLUX_MIN_SIDE = 64
+_FLUX_MAX_INPUT_IMAGES_DEFAULT = 8
+_FLUX_MAX_INPUT_IMAGES_KLEIN = 4
 
 
 def _resolve_api_key() -> str:
@@ -130,7 +163,8 @@ def _resolve_endpoint(options: Mapping[str, Any], model: str | None) -> tuple[st
     return f"{API_BASE_URL}/{suffix}", suffix
 
 
-def _resolve_flux_dims(size: str | None) -> tuple[int, int, str | None]:
+def _resolve_flux_dims(size: str | None) -> tuple[int, int, list[str]]:
+    warnings: list[str] = []
     normalized = (size or "1024x1024").strip().lower()
     width, height = 1024, 1024
     if normalized in {"portrait", "tall"}:
@@ -146,16 +180,272 @@ def _resolve_flux_dims(size: str | None) -> tuple[int, int, str | None]:
             height = int(parts[1])
         except Exception:
             width, height = 1024, 1024
+    width = max(_FLUX_MIN_SIDE, width)
+    height = max(_FLUX_MIN_SIDE, height)
+
     snapped_w = _snap_multiple(width, 16)
     snapped_h = _snap_multiple(height, 16)
-    warning = None
     if (snapped_w, snapped_h) != (width, height):
-        warning = f"FLUX size snapped to {snapped_w}x{snapped_h} (multiples of 16)."
-    return snapped_w, snapped_h, warning
+        warnings.append(f"FLUX size snapped to {snapped_w}x{snapped_h} (multiples of 16).")
+
+    scaled_w, scaled_h = _clamp_flux_area(snapped_w, snapped_h)
+    if (scaled_w, scaled_h) != (snapped_w, snapped_h):
+        warnings.append(f"FLUX size scaled down to {scaled_w}x{scaled_h} (max {_FLUX_MAX_AREA} pixels).")
+    return scaled_w, scaled_h, warnings
 
 
 def _snap_multiple(value: int, multiple: int) -> int:
-    return int(round(value / multiple) * multiple)
+    if value <= 0:
+        return multiple
+    return max(multiple, int(round(value / multiple) * multiple))
+
+
+def _clamp_flux_area(width: int, height: int) -> tuple[int, int]:
+    w = max(_FLUX_MIN_SIDE, int(width))
+    h = max(_FLUX_MIN_SIDE, int(height))
+    if w * h <= _FLUX_MAX_AREA:
+        return w, h
+    scale = (_FLUX_MAX_AREA / float(w * h)) ** 0.5
+    w = _snap_multiple(max(_FLUX_MIN_SIDE, int(w * scale)), 16)
+    h = _snap_multiple(max(_FLUX_MIN_SIDE, int(h * scale)), 16)
+    while w * h > _FLUX_MAX_AREA:
+        if w >= h and w > _FLUX_MIN_SIDE:
+            w -= 16
+        elif h > _FLUX_MIN_SIDE:
+            h -= 16
+        else:
+            break
+    return max(_FLUX_MIN_SIDE, w), max(_FLUX_MIN_SIDE, h)
+
+
+def _is_flux_flex_endpoint(endpoint_label: str) -> bool:
+    return "flex" in str(endpoint_label or "").strip().lower()
+
+
+def _normalize_flux_output_format(value: Any) -> str | None:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    if text.startswith("image/"):
+        text = text.split("/", 1)[1]
+    if text in {"jpg", "jpeg"}:
+        return "jpeg"
+    if text == "png":
+        return "png"
+    return None
+
+
+def _normalize_flux_safety_tolerance(value: Any, warnings: list[str]) -> int | None:
+    try:
+        number = int(round(float(value)))
+    except Exception:
+        _append_warning(warnings, f"FLUX safety_tolerance '{value}' unsupported; ignoring.")
+        return None
+    clamped = max(0, min(5, number))
+    if clamped != number:
+        _append_warning(warnings, f"FLUX safety_tolerance clamped to {clamped}.")
+    return clamped
+
+
+def _normalize_flux_steps(value: Any, warnings: list[str]) -> int | None:
+    try:
+        number = int(round(float(value)))
+    except Exception:
+        _append_warning(warnings, f"FLUX steps '{value}' unsupported; ignoring.")
+        return None
+    clamped = max(1, min(50, number))
+    if clamped != number:
+        _append_warning(warnings, f"FLUX steps clamped to {clamped}.")
+    return clamped
+
+
+def _normalize_flux_guidance(value: Any, warnings: list[str]) -> float | None:
+    try:
+        number = float(value)
+    except Exception:
+        _append_warning(warnings, f"FLUX guidance '{value}' unsupported; ignoring.")
+        return None
+    clamped = max(1.5, min(10.0, number))
+    if abs(clamped - number) > 1e-9:
+        _append_warning(warnings, f"FLUX guidance clamped to {clamped:g}.")
+    return clamped
+
+
+def _normalize_flux_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+def _sanitize_flux_options(
+    options: Mapping[str, Any], *, endpoint_label: str, warnings: list[str]
+) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    flex_endpoint = _is_flux_flex_endpoint(endpoint_label)
+    for raw_key, value in options.items():
+        key = str(raw_key or "").strip().lower()
+        if not key:
+            continue
+        if key in _CONTROL_KEYS:
+            continue
+        if key not in _FLUX_ALLOWED_OPTION_KEYS:
+            _append_warning(warnings, f"FLUX ignored unsupported provider option '{key}'.")
+            continue
+        if key == "output_format":
+            normalized = _normalize_flux_output_format(value)
+            if normalized is None:
+                _append_warning(warnings, f"FLUX output_format '{value}' unsupported; ignoring.")
+                continue
+            sanitized[key] = normalized
+            continue
+        if key == "safety_tolerance":
+            normalized = _normalize_flux_safety_tolerance(value, warnings)
+            if normalized is not None:
+                sanitized[key] = normalized
+            continue
+        if key == "steps":
+            if not flex_endpoint:
+                _append_warning(warnings, "FLUX ignored steps for non-flex endpoint.")
+                continue
+            normalized = _normalize_flux_steps(value, warnings)
+            if normalized is not None:
+                sanitized[key] = normalized
+            continue
+        if key == "guidance":
+            if not flex_endpoint:
+                _append_warning(warnings, "FLUX ignored guidance for non-flex endpoint.")
+                continue
+            normalized = _normalize_flux_guidance(value, warnings)
+            if normalized is not None:
+                sanitized[key] = normalized
+            continue
+        if key == "prompt_upsampling":
+            normalized = _normalize_flux_bool(value)
+            if normalized is None:
+                _append_warning(warnings, f"FLUX prompt_upsampling '{value}' unsupported; ignoring.")
+                continue
+            sanitized[key] = normalized
+            continue
+    return sanitized
+
+
+def _append_warning(warnings: list[str], message: str) -> None:
+    if message in warnings:
+        return
+    warnings.append(message)
+
+
+def _resolve_flux_input_images(
+    request: ImageRequest,
+    *,
+    endpoint_label: str,
+    warnings: list[str],
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    raw_inputs: list[tuple[str, Any]] = []
+    if request.inputs.init_image is not None:
+        raw_inputs.append(("init_image", request.inputs.init_image))
+    for index, value in enumerate(request.inputs.reference_images):
+        raw_inputs.append((f"reference_images[{index}]", value))
+    if not raw_inputs:
+        return {}, []
+
+    max_images = _flux_input_image_limit(endpoint_label)
+    if len(raw_inputs) > max_images:
+        _append_warning(
+            warnings,
+            f"FLUX accepted first {max_images} input images; dropped {len(raw_inputs) - max_images} extra references.",
+        )
+        raw_inputs = raw_inputs[:max_images]
+
+    payload_fields: dict[str, str] = {}
+    manifest: list[dict[str, Any]] = []
+    for index, (role, value) in enumerate(raw_inputs):
+        key = "input_image" if index == 0 else f"input_image_{index + 1}"
+        payload_fields[key] = _coerce_flux_input_image(value)
+        manifest.append(_describe_flux_input_image(role=role, key=key, value=value))
+    return payload_fields, manifest
+
+
+def _flux_input_image_limit(endpoint_label: str) -> int:
+    normalized = str(endpoint_label or "").strip().lower()
+    if "klein" in normalized:
+        return _FLUX_MAX_INPUT_IMAGES_KLEIN
+    return _FLUX_MAX_INPUT_IMAGES_DEFAULT
+
+
+def _coerce_flux_input_image(value: Any) -> str:
+    if isinstance(value, (bytes, bytearray)):
+        return base64.b64encode(bytes(value)).decode("ascii")
+    if isinstance(value, Path):
+        return base64.b64encode(value.expanduser().read_bytes()).decode("ascii")
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            raise RuntimeError("FLUX input image value is empty.")
+        lowered = text.lower()
+        if lowered.startswith("http://") or lowered.startswith("https://") or lowered.startswith("data:image/"):
+            return text
+        path = Path(text).expanduser()
+        if path.exists() and path.is_file():
+            return base64.b64encode(path.read_bytes()).decode("ascii")
+        return text
+    raise RuntimeError(f"Unsupported FLUX input image type: {type(value)}")
+
+
+def _describe_flux_input_image(*, role: str, key: str, value: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {"key": key, "role": role}
+    if isinstance(value, Path):
+        path = value.expanduser()
+        payload["source"] = "path"
+        payload["path"] = str(path)
+        payload["name"] = path.name
+        return payload
+    if isinstance(value, str):
+        text = value.strip()
+        lowered = text.lower()
+        if lowered.startswith("http://") or lowered.startswith("https://"):
+            payload["source"] = "url"
+            payload["url"] = text
+            return payload
+        if lowered.startswith("data:image/"):
+            payload["source"] = "data_url"
+            return payload
+        path = Path(text).expanduser()
+        if path.exists() and path.is_file():
+            payload["source"] = "path"
+            payload["path"] = str(path)
+            payload["name"] = path.name
+            return payload
+        payload["source"] = "base64"
+        payload["length"] = len(text)
+        return payload
+    if isinstance(value, (bytes, bytearray)):
+        payload["source"] = "bytes"
+        payload["length"] = len(value)
+        return payload
+    payload["source"] = type(value).__name__
+    return payload
+
+
+def _flux_payload_manifest(
+    payload: Mapping[str, Any],
+    input_images: list[dict[str, Any]],
+) -> dict[str, Any]:
+    manifest = dict(payload)
+    redacted_keys = [key for key in manifest if str(key).startswith("input_image")]
+    for key in redacted_keys:
+        manifest.pop(key, None)
+    if input_images:
+        manifest["input_images"] = input_images
+    return manifest
 
 
 def _generate_one(
