@@ -21,7 +21,7 @@ Image edits are routed to Gemini models because the engine's edit path relies on
 - Combine / Swap DNA / Bridge: `gemini-3-pro-image-preview` (multi-image coherence)
 - Recast: `gemini-3-pro-image-preview` (quality-first creative leap)
 
-Costs in `brood_engine/pricing/default_pricing.json` suggest `gemini-3-pro-image-preview` is materially more expensive than `gemini-2.5-flash-image`, so we reserve it for the actions that benefit most.
+Costs in `rust_engine/crates/brood-engine/resources/default_pricing.json` suggest `gemini-3-pro-image-preview` is materially more expensive than `gemini-2.5-flash-image`, so we reserve it for the actions that benefit most.
 
 ## Implementation
 - Added an `ACTION_IMAGE_MODEL` mapping in `desktop/src/canvas_app.js`.
@@ -37,4 +37,3 @@ Files:
 - Manual:
   - Set global image model to a non-Gemini option (e.g. `flux-2`).
   - Run `Background: White` and `Combine` and verify the engine switches to Gemini for the action and produces an edit.
-
