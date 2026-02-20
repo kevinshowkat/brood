@@ -31,8 +31,7 @@ Desktop:
 
 Desktop usage:
 - Import photos (button or drag-drop onto the canvas), then run **Abilities** from the right panel.
-- Use `Multi view` for 2-photo actions (Combine / Swap DNA / Bridge / Argue).
-- `Diagnose` / `Argue` output prints in the bottom HUD as `DIAG` / `ARG`.
+- Use `Multi view` for 2-photo actions (Combine / Swap DNA / Bridge).
 
 Tests:
 - `cd rust_engine && cargo test` — run Rust engine tests.

@@ -23,8 +23,8 @@ The desktop app is image-first: import images, run Abilities, and inspect result
 ## Abilities
 
 Single-image actions (work in `Single view`):
-- `Diagnose`: creative-director critique. Output appears in the HUD as `DIAG`.
 - `Recast`: reimagine the image in a different medium/context (image output).
+- `Create Layers`: split one image into compositional layers as separate artifacts.
 - `Background: White` / `Background: Sweep`: background replacement edits.
 - `Crop: Square`: local crop (no model call).
 - `Variations`: zero-prompt variations of the active image.
@@ -37,7 +37,6 @@ Two-image actions (require `Multi view` and **exactly 2** photos loaded):
 - `Combine`: blend the two images into one (`/blend`).
 - `Swap DNA`: structure from one + surface qualities from the other (`/swap_dna`). Shift-click to invert.
 - `Bridge`: synthesize the aesthetic midpoint between two references (`/bridge`).
-- `Argue`: debate which direction is stronger. Output appears in the HUD as `ARG`.
 
 Notes:
 - Some actions auto-switch the **Image Model** (e.g. 2-photo actions prefer `gemini-3-pro-image-preview`). The agent portraits update to match.
@@ -66,10 +65,8 @@ Notes:
 
 ## HUD + Tools
 - The HUD prints `UNIT / DESC / SEL / GEN` for the active image.
-- While `DIAG` / `ARG` text is present, the HUD hides the other lines to stay focused.
 - The HUD keybar (buttons `1`-`9`) activates canvas tools/actions. Common hotkeys:
   - `L` lasso
-  - `D` designate subject/reference/object
   - `F` fit-to-view
   - `Esc` clear selection / close panels
 

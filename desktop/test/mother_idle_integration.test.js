@@ -18,7 +18,7 @@ const app = readFileSync(appPath, "utf8");
 test("Mother wheel markup exposes the required actions", () => {
   assert.match(html, /id=\"mother-wheel-menu\"/);
   assert.match(html, /data-action=\"add_photo\"/);
-  assert.match(html, /data-action=\"add_role\"/);
+  assert.doesNotMatch(html, /data-action=\"add_role\"/);
 });
 
 test("Canvas app keeps modular event/canvas handler wiring", () => {
@@ -68,6 +68,6 @@ test("Desktop event handler map routes grouped event types", () => {
   assert.equal(map.get(DESKTOP_EVENT_TYPES.MOTHER_PROMPT_COMPILED), handlers.onMother);
   assert.equal(map.get(DESKTOP_EVENT_TYPES.GENERATION_FAILED), handlers.onArtifact);
   assert.equal(map.get(DESKTOP_EVENT_TYPES.INTENT_ICONS), handlers.onIntent);
-  assert.equal(map.get(DESKTOP_EVENT_TYPES.IMAGE_DIAGNOSIS), handlers.onDiagnostics);
+  assert.equal(map.get(DESKTOP_EVENT_TYPES.IMAGE_DESCRIPTION), handlers.onDiagnostics);
   assert.equal(map.get(DESKTOP_EVENT_TYPES.RECREATE_DONE), handlers.onRecreate);
 });
