@@ -18,8 +18,6 @@ This doc proposes a minimal "visual grammar v0" and the first thin-slice impleme
   - Interpretation: distinct groups are separate tasks unless a mark/label explicitly links them.
 
 ### 2) Annotation Primitives (explicit semantics)
-- **Point** (existing): designate `Subject` / `Reference` / `Object`
-  - Purpose: attach a role to a specific pixel location.
 - **Box** (existing): bounded edit region
   - Default semantic: "edit only inside" (green box).
 - **Circle** (new): attention / "fix this"
@@ -32,7 +30,6 @@ This doc proposes a minimal "visual grammar v0" and the first thin-slice impleme
 ### 3) Color Semantics (v0)
 - **Red circle**: "fix this"
 - **Green box**: "edit only inside"
-- **Cyan point**: designation role marker
 - **Yellow lasso**: subject mask candidate / selection
 
 ### 4) Examples (mental model)
@@ -58,7 +55,7 @@ Top-level fields:
 
 Mark shape:
 - `id`
-- `type`: `lasso_polygon` | `designate_point` | `box` | `circle`
+- `type`: `lasso_polygon` | `box` | `circle`
 - `color`: CSS RGBA string
 - `label`: optional string (literal instruction/label)
 - `target_image_id`

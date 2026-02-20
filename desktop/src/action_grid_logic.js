@@ -1,7 +1,6 @@
 export function computeActionGridSlots({
   selectionCount = 0,
   hasImage = false,
-  alwaysOnVisionEnabled = false,
 } = {}) {
   const n = Math.max(0, Math.min(99, Number(selectionCount) || 0));
   const slots = new Array(9).fill(null);
@@ -10,7 +9,6 @@ export function computeActionGridSlots({
     { key: "annotate", label: "Annotate", kind: "tool", hotkey: "1" },
     { key: "pan", label: "Pan", kind: "tool", hotkey: "2" },
     { key: "lasso", label: "Lasso", kind: "tool", hotkey: "3" },
-    { key: "designate", label: "Designate", kind: "tool", hotkey: "4" },
   ];
   for (let i = 0; i < baseTools.length; i += 1) {
     slots[i] = baseTools[i];
@@ -26,9 +24,7 @@ export function computeActionGridSlots({
       { key: "soul_leech", label: "Soul", kind: "ability", hotkey: "6" },
       { key: "bg", label: "BG", kind: "ability", hotkey: "7" },
       { key: "create_layers", label: "Layers", kind: "ability", hotkey: "8" },
-      alwaysOnVisionEnabled
-        ? { key: "crop_square", label: "Square", kind: "ability", hotkey: "9" }
-        : { key: "diagnose", label: "DIAG", kind: "ability", hotkey: "9" },
+      { key: "crop_square", label: "Square", kind: "ability", hotkey: "9" },
     ];
     for (let i = 0; i < abilities.length; i += 1) {
       slots[4 + i] = abilities[i];
@@ -41,7 +37,6 @@ export function computeActionGridSlots({
       { key: "combine", label: "Combine", kind: "ability_multi", hotkey: "5" },
       { key: "bridge", label: "Bridge", kind: "ability_multi", hotkey: "6" },
       { key: "swap_dna", label: "Swap", kind: "ability_multi", hotkey: "7" },
-      { key: "argue", label: "Argue", kind: "ability_multi", hotkey: "8" },
     ];
     for (let i = 0; i < abilities.length; i += 1) {
       slots[4 + i] = abilities[i];

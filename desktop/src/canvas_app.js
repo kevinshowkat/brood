@@ -400,7 +400,6 @@ const els = {
   motherConfirm: document.getElementById("mother-confirm"),
   motherStop: document.getElementById("mother-stop"),
   actionGrid: document.getElementById("action-grid"),
-  designateMenu: document.getElementById("designate-menu"),
   imageMenu: document.getElementById("image-menu"),
   motherWheelMenu: document.getElementById("mother-wheel-menu"),
   quickActions: document.getElementById("quick-actions"),
@@ -870,8 +869,6 @@ const state = {
   timelineNodes: [], // [{ nodeId, imageId, path, receiptPath, label, action, parents, createdAt }]
   timelineNodesById: new Map(), // nodeId -> node
   timelineOpen: false,
-  designationsByImageId: new Map(), // imageId -> [{ id, kind, x, y, at }]
-  pendingDesignation: null, // { imageId, x, y, at } | null
   imageMenuTargetId: null,
   // Canvas rendering modes:
   // - "multi": freeform spatial canvas (primary mode; multiple images can be arranged on the canvas)
@@ -888,19 +885,12 @@ const state = {
   pendingBridge: null, // { sourceIds: [string, string], startedAt: number }
   pendingExtractDna: null, // { sourceIds: string[], startedAt: number }
   pendingSoulLeech: null, // { sourceIds: string[], startedAt: number }
-  pendingArgue: null, // { sourceIds: [string, string], startedAt: number }
   pendingExtractRule: null, // { sourceIds: [string, string, string], startedAt: number }
   pendingOddOneOut: null, // { sourceIds: [string, string, string], startedAt: number }
   pendingTriforce: null, // { sourceIds: [string, string, string], startedAt: number }
   pendingCreateLayers: null, // { sourceId, sourcePath, layerSpecs, nextIndex, createdIds, startedAt }
   pendingMotherDraft: null, // { sourceIds: string[], startedAt: number }
   pendingRecast: null, // { sourceId: string, startedAt: number }
-  pendingDiagnose: null, // { sourceId: string, startedAt: number }
-  pendingCanvasDiagnose: null, // { signature: string, startedAt: number, imagePath: string } | null
-  autoCanvasDiagnoseSig: null,
-  autoCanvasDiagnoseCompletedAt: 0,
-  autoCanvasDiagnoseTimer: null,
-  autoCanvasDiagnosePath: null,
   pendingGeneration: null, // { remaining: number, provider: string|null, model: string|null }
   pendingRecreate: null, // { startedAt: number } | null
   actionQueue: [],
@@ -2021,8 +2011,6 @@ function renderHudReadout() {
 
   if (els.hudDirectorKey) {
     let key = "DIR";
-    if (directorKind === "diagnose") key = "DIAG";
-    if (directorKind === "argue") key = "ARG";
     if (directorKind === "extract_rule") key = "RULE";
     if (directorKind === "odd_one_out") key = "ODD";
     els.hudDirectorKey.textContent = key;
@@ -2847,11 +2835,9 @@ const CANVAS_CONTEXT_ALLOWED_ACTIONS = [
   "Combine",
   "Bridge",
   "Swap DNA",
-  "Argue",
   "Extract the Rule",
   "Odd One Out",
   "Triforce",
-  "Diagnose",
   "Recast",
   "Variations",
   "Background: White",
@@ -2884,11 +2870,6 @@ const CANVAS_CONTEXT_ACTION_GLOSSARY = [
     requires: "Exactly 2 photos loaded (multi-image action).",
   },
   {
-    action: "Argue",
-    what: "Debate the two directions (why each is stronger, with visual evidence).",
-    requires: "Exactly 2 photos loaded (multi-image action).",
-  },
-  {
     action: "Extract the Rule",
     what: "Extract the shared invisible rule/pattern across three images.",
     requires: "Exactly 3 photos loaded (multi-image action).",
@@ -2902,11 +2883,6 @@ const CANVAS_CONTEXT_ACTION_GLOSSARY = [
     action: "Triforce",
     what: "Generate the centroid: one image equidistant from all three references.",
     requires: "Exactly 3 photos loaded (multi-image action).",
-  },
-  {
-    action: "Diagnose",
-    what: "Creative-director diagnosis: what's working, what's not, and what to fix next.",
-    requires: "An active image.",
   },
   {
     action: "Recast",
@@ -3000,7 +2976,6 @@ function buildCanvasContextEnvelope() {
     });
   }
 
-  const realtimeEnabled = Boolean(state.alwaysOnVision?.enabled);
   const quickActions = (computeQuickActions() || [])
     .filter((action) => action && action.id && action.label)
     .map((action) => ({
@@ -3010,13 +2985,8 @@ function buildCanvasContextEnvelope() {
       title: action.title ? String(action.title) : null,
     }));
 
-  // Always-on realtime canvas context acts as a continual Diagnose; avoid recommending it when enabled.
-  const allowedAbilities = realtimeEnabled
-    ? CANVAS_CONTEXT_ALLOWED_ACTIONS.filter((name) => name !== "Diagnose")
-    : CANVAS_CONTEXT_ALLOWED_ACTIONS;
-  const glossary = realtimeEnabled
-    ? CANVAS_CONTEXT_ACTION_GLOSSARY.filter((entry) => entry?.action !== "Diagnose")
-    : CANVAS_CONTEXT_ACTION_GLOSSARY;
+  const allowedAbilities = CANVAS_CONTEXT_ALLOWED_ACTIONS;
+  const glossary = CANVAS_CONTEXT_ACTION_GLOSSARY;
 
   const nodes = Array.from(state.timelineNodes || []).sort((a, b) => (a?.createdAt || 0) - (b?.createdAt || 0));
   const timelineRecent = nodes.slice(-12).map((node) => ({
@@ -3277,12 +3247,6 @@ async function triggerCanvasContextSuggestedAction(actionName) {
     await runSwapDnaPair({ invert: false });
     return;
   }
-  if (action === "Argue") {
-    if (nSelected !== 2) throw new Error(`Argue requires exactly 2 selected images (you have ${nSelected}).`);
-    if (state.canvasMode !== "multi") setCanvasMode("multi");
-    await runArguePair();
-    return;
-  }
   if (action === "Extract the Rule") {
     if (nSelected !== 3)
       throw new Error(`Extract the Rule requires exactly 3 selected images (you have ${nSelected}).`);
@@ -3300,11 +3264,6 @@ async function triggerCanvasContextSuggestedAction(actionName) {
     if (nSelected !== 3) throw new Error(`Triforce requires exactly 3 selected images (you have ${nSelected}).`);
     if (state.canvasMode !== "multi") setCanvasMode("multi");
     await runTriforceTriplet();
-    return;
-  }
-  if (action === "Diagnose") {
-    if (!active) throw new Error("Diagnose requires an active image.");
-    await runDiagnose();
     return;
   }
   if (action === "Recast") {
@@ -3367,13 +3326,10 @@ function isForegroundActionRunning() {
       state.pendingBridge ||
       state.pendingExtractDna ||
       state.pendingSoulLeech ||
-      state.pendingArgue ||
       state.pendingExtractRule ||
       state.pendingOddOneOut ||
       state.pendingTriforce ||
       state.pendingRecast ||
-      state.pendingCanvasDiagnose ||
-      state.pendingDiagnose ||
       state.pendingCreateLayers ||
       state.expectingArtifacts ||
       state.pendingReplace
@@ -11131,7 +11087,7 @@ async function _runActionGridAutomation(action = {}) {
     return { ok: false, detail: "missing action_grid key/hotkey" };
   }
 
-  if (["annotate", "pan", "lasso", "designate"].includes(targetKey)) {
+  if (["annotate", "pan", "lasso"].includes(targetKey)) {
     setTool(targetKey);
     return { ok: true, detail: `tool=${targetKey}` };
   }
@@ -11164,10 +11120,6 @@ async function _runActionGridAutomation(action = {}) {
     runRecast().catch(() => {});
     return { ok: true, detail: "recast started" };
   }
-  if (targetKey === "diagnose") {
-    runDiagnose().catch(() => {});
-    return { ok: true, detail: "diagnose started" };
-  }
   if (targetKey === "crop_square") {
     cropSquare().catch(() => {});
     return { ok: true, detail: "crop_square started" };
@@ -11183,10 +11135,6 @@ async function _runActionGridAutomation(action = {}) {
   if (targetKey === "swap_dna") {
     runSwapDnaPair({ invert: shift }).catch(() => {});
     return { ok: true, detail: "swap_dna started" };
-  }
-  if (targetKey === "argue") {
-    runArguePair().catch(() => {});
-    return { ok: true, detail: "argue started" };
   }
   if (targetKey === "extract_rule") {
     runExtractRuleTriplet().catch(() => {});
@@ -12112,69 +12060,6 @@ function openMotherWheelMenuAt(ptCss) {
   return true;
 }
 
-function motherIdlePickNearestRoleTarget(worldPt) {
-  const world = worldPt && typeof worldPt === "object" ? worldPt : null;
-  const candidates = motherIdleBaseImageItems();
-  if (!candidates.length) return null;
-  if (!world) return candidates[candidates.length - 1] || null;
-
-  let best = null;
-  let bestDist2 = Infinity;
-  for (const item of candidates) {
-    const rect = state.freeformRects.get(item.id) || null;
-    if (!rect) continue;
-    const cx = (Number(rect.x) || 0) + (Number(rect.w) || 0) * 0.5;
-    const cy = (Number(rect.y) || 0) + (Number(rect.h) || 0) * 0.5;
-    const dx = (Number(world.x) || 0) - cx;
-    const dy = (Number(world.y) || 0) - cy;
-    const dist2 = dx * dx + dy * dy;
-    if (dist2 < bestDist2) {
-      best = item;
-      bestDist2 = dist2;
-    }
-  }
-  return best || candidates[candidates.length - 1] || null;
-}
-
-async function seedRoleDesignationFromWheelAnchor() {
-  const world = state.wheelMenu?.anchorWorld || canvasScreenCssToWorldCss(_defaultImportPointCss());
-  const ptCss = state.wheelMenu?.anchorCss || _defaultImportPointCss();
-  const target = motherIdlePickNearestRoleTarget(world);
-  if (!target?.id) {
-    showToast("Add role needs at least one photo.", "tip", 1800);
-    return;
-  }
-
-  if (state.activeId !== target.id) {
-    await setActiveImage(target.id, { preserveSelection: true }).catch(() => {});
-  }
-  setTool("designate");
-
-  const item = state.imagesById.get(target.id) || target;
-  const rect = state.freeformRects.get(target.id) || null;
-  let px = Number(item?.img?.naturalWidth || item?.width) * 0.5 || 0;
-  let py = Number(item?.img?.naturalHeight || item?.height) * 0.5 || 0;
-
-  if (rect && world) {
-    const iw = Math.max(1, Number(item?.img?.naturalWidth || item?.width) || Number(rect.w) || 1);
-    const ih = Math.max(1, Number(item?.img?.naturalHeight || item?.height) || Number(rect.h) || 1);
-    const nx = clamp(((Number(world.x) || 0) - (Number(rect.x) || 0)) / Math.max(1, Number(rect.w) || 1), 0, 1);
-    const ny = clamp(((Number(world.y) || 0) - (Number(rect.y) || 0)) / Math.max(1, Number(rect.h) || 1), 0, 1);
-    px = nx * iw;
-    py = ny * ih;
-  }
-
-  state.pendingDesignation = {
-    imageId: target.id,
-    x: px,
-    y: py,
-    at: Date.now(),
-  };
-  showDesignateMenuAt(ptCss);
-  showToast("Role seeded. Pick Subject, Reference, or Object.", "tip", 2200);
-  requestRender();
-}
-
 async function dispatchMotherWheelAction(action) {
   const raw = String(action || "").trim();
   closeMotherWheelMenu({ immediate: false });
@@ -12182,10 +12067,6 @@ async function dispatchMotherWheelAction(action) {
   if (raw === "add_photo") {
     const world = state.wheelMenu?.anchorWorld || canvasScreenCssToWorldCss(_defaultImportPointCss());
     await importPhotosAtCanvasPoint(world);
-    return;
-  }
-  if (raw === "add_role") {
-    await seedRoleDesignationFromWheelAnchor();
     return;
   }
 }
@@ -15428,33 +15309,6 @@ function canvasScreenCssToWorldCss(ptCss) {
   };
 }
 
-function showDesignateMenuAt(ptCss) {
-  const menu = els.designateMenu;
-  const wrap = els.canvasWrap;
-  if (!menu || !wrap || !ptCss) return;
-  menu.classList.remove("dismissing");
-  menu.classList.remove("hidden");
-
-  const dx = 12;
-  const dy = 12;
-  const x0 = (Number(ptCss.x) || 0) + dx;
-  const y0 = (Number(ptCss.y) || 0) + dy;
-
-  menu.style.left = `${x0}px`;
-  menu.style.top = `${y0}px`;
-
-  requestAnimationFrame(() => {
-    const mw = menu.offsetWidth || 0;
-    const mh = menu.offsetHeight || 0;
-    const maxX = Math.max(8, wrap.clientWidth - mw - 8);
-    const maxY = Math.max(8, wrap.clientHeight - mh - 8);
-    const x = clamp(x0, 8, maxX);
-    const y = clamp(y0, 8, maxY);
-    menu.style.left = `${x}px`;
-    menu.style.top = `${y}px`;
-  });
-}
-
 function canvasToImage(pt) {
   const img = getActiveImage();
   if (!img) return { x: 0, y: 0 };
@@ -16552,8 +16406,6 @@ function setCanvasMode(_mode) {
   hideAnnotatePanel();
   state.circleDraft = null;
   hideMarkPanel();
-  state.pendingDesignation = null;
-  hideDesignateMenu();
   chooseSpawnNodes();
   renderFilmstrip();
   scheduleVisionDescribeAll();
@@ -16831,112 +16683,6 @@ function resizeFreeformRectFromCorner(startRectCss, corner, pointerCss, canvasCs
   );
 }
 
-function computeAutoCanvasDiagnoseSignature() {
-  const paths = (state.images || [])
-    .map((item) => (item?.path ? String(item.path) : ""))
-    .filter(Boolean)
-    .sort();
-  return paths.join("|");
-}
-
-function scheduleAutoCanvasDiagnose({ debounceMs = 1200 } = {}) {
-  if (!state.runDir) return;
-  if ((state.images?.length || 0) < 2) return;
-  const signature = computeAutoCanvasDiagnoseSignature();
-  if (!signature) return;
-  const now = Date.now();
-  // Avoid re-running constantly for the same canvas.
-  if (signature === state.autoCanvasDiagnoseSig && now - (state.autoCanvasDiagnoseCompletedAt || 0) < 60_000) return;
-
-  clearTimeout(state.autoCanvasDiagnoseTimer);
-  state.autoCanvasDiagnoseTimer = setTimeout(() => {
-    state.autoCanvasDiagnoseTimer = null;
-    runAutoCanvasDiagnose(signature).catch((err) => console.error(err));
-  }, Math.max(250, Number(debounceMs) || 1200));
-}
-
-async function runAutoCanvasDiagnose(signature) {
-  if (!state.runDir) return;
-  if ((state.images?.length || 0) < 2) return;
-  if (!signature || signature !== computeAutoCanvasDiagnoseSignature()) return;
-  if (state.pendingCanvasDiagnose) return;
-
-  // Don't contend with foreground actions or queued user work.
-  if (
-    state.ptySpawning ||
-    state.actionQueueActive ||
-    state.actionQueue.length ||
-    state.pendingBlend ||
-    state.pendingSwapDna ||
-    state.pendingBridge ||
-    state.pendingExtractDna ||
-    state.pendingSoulLeech ||
-    state.pendingArgue ||
-    state.pendingExtractRule ||
-    state.pendingOddOneOut ||
-    state.pendingTriforce ||
-    state.pendingRecast ||
-    state.pendingDiagnose ||
-    state.pendingRecreate ||
-    state.pendingCreateLayers ||
-    state.expectingArtifacts ||
-    state.pendingReplace
-  ) {
-    scheduleAutoCanvasDiagnose({ debounceMs: 1800 });
-    return;
-  }
-
-  const ok = await ensureEngineSpawned({ reason: "canvas diagnose" });
-  if (!ok) return;
-
-  const snapshotCanvas = await renderCanvasSnapshotForDiagnose().catch((err) => {
-    console.error(err);
-    return null;
-  });
-  if (!snapshotCanvas) return;
-
-  const outPath = `${state.runDir}/tmp-canvas-diagnose-${Date.now()}.png`;
-  await writeCanvasPngToPath(snapshotCanvas, outPath);
-  state.pendingCanvasDiagnose = { signature, startedAt: Date.now(), imagePath: outPath };
-  state.autoCanvasDiagnosePath = outPath;
-  setStatus("Director: canvas diagnose…");
-  try {
-    await invoke("write_pty", { data: `${PTY_COMMANDS.DIAGNOSE} ${quoteForPtyArg(outPath)}\n` });
-    bumpSessionApiCalls();
-  } catch (_) {
-    // Best-effort; if the engine drops, we'll retry on the next debounce.
-  }
-}
-
-async function renderCanvasSnapshotForDiagnose({ maxDimPx = 1200 } = {}) {
-  const baseCanvas = els.workCanvas;
-  if (!baseCanvas) return null;
-  const dpr = getDpr();
-  const baseW = baseCanvas?.width || Math.round(900 * dpr);
-  const baseH = baseCanvas?.height || Math.round(700 * dpr);
-  const maxDim = Math.max(420 * dpr, Math.round(Number(maxDimPx) * dpr));
-  const scale = Math.min(1, maxDim / Math.max(1, Math.max(baseW, baseH)));
-  const w = Math.max(1, Math.round(baseW * scale));
-  const h = Math.max(1, Math.round(baseH * scale));
-
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-
-  const bg = ctx.createLinearGradient(0, 0, 0, h);
-  bg.addColorStop(0, "rgba(18, 26, 37, 0.92)");
-  bg.addColorStop(1, "rgba(6, 8, 12, 0.96)");
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, w, h);
-
-  // Snapshot the actual canvas pixels so freeform spatial layout is preserved.
-  ctx.drawImage(baseCanvas, 0, 0, w, h);
-  return canvas;
-}
-
 function hitTestMulti(pt, { includeTokenized = false } = {}) {
   if (!pt) return null;
   const ms = state.multiView?.scale || 1;
@@ -17202,12 +16948,10 @@ function clearRunningAction(key = null) {
 function clearSelection() {
   state.selection = null;
   state.lassoDraft = [];
-  state.pendingDesignation = null;
   state.annotateDraft = null;
   state.annotateBox = null;
   state.circleDraft = null;
   hideMarkPanel();
-  hideDesignateMenu();
   hideAnnotatePanel();
   setTip(DEFAULT_TIP);
   scheduleVisualPromptWrite();
@@ -17217,7 +16961,7 @@ function clearSelection() {
 }
 
 function setTool(tool) {
-  const allowed = new Set(["annotate", "pan", "lasso", "designate"]);
+  const allowed = new Set(["annotate", "pan", "lasso"]);
   if (!allowed.has(tool)) return;
   const prevTool = state.tool;
   if (tool !== "annotate") {
@@ -17227,8 +16971,6 @@ function setTool(tool) {
     state.circleDraft = null;
     hideMarkPanel();
   }
-  if (tool !== "designate") state.pendingDesignation = null;
-  hideDesignateMenu();
   state.tool = tool;
   if (prevTool !== tool) {
     recordUserEvent("tool_set", { tool });
@@ -17240,8 +16982,6 @@ function setTool(tool) {
     setTip("Lasso your product, then click Studio White. Or skip lasso and let the model infer the subject.");
   } else if (tool === "annotate") {
     setTip("Annotate: drag a box to edit. Hold Shift to draw a red circle label.");
-  } else if (tool === "designate") {
-    setTip("Designate: click the image to place a point, then pick Subject/Reference/Object.");
   } else {
     setTip(DEFAULT_TIP);
   }
@@ -17258,52 +16998,12 @@ function renderSelectionMeta() {
   if (!img) {
     if (els.selectionMeta) els.selectionMeta.textContent = "No image selected.";
     renderHudReadout();
-    state.pendingDesignation = null;
-    hideDesignateMenu();
     return;
   }
   const name = basename(img.path);
   const sel = state.selection ? `${state.selection.points.length} pts` : "none";
   if (els.selectionMeta) els.selectionMeta.textContent = `${name}\nSelection: ${sel}`;
   renderHudReadout();
-}
-
-function _getDesignations(imageId) {
-  const key = String(imageId || "");
-  if (!key) return [];
-  const existing = state.designationsByImageId.get(key);
-  return Array.isArray(existing) ? existing : [];
-}
-
-function hideDesignateMenu() {
-  hideDesignateMenuAnimated({ animate: false });
-}
-
-let designateMenuHideTimer = null;
-function hideDesignateMenuAnimated({ animate = true } = {}) {
-  const menu = els.designateMenu;
-  if (!menu) return;
-  clearTimeout(designateMenuHideTimer);
-  designateMenuHideTimer = null;
-  menu.classList.remove("dismissing");
-
-  if (!animate) {
-    for (const btn of menu.querySelectorAll("button.confirm")) {
-      btn.classList.remove("confirm");
-    }
-    menu.classList.add("hidden");
-    return;
-  }
-  if (menu.classList.contains("hidden")) return;
-  menu.classList.add("dismissing");
-  designateMenuHideTimer = setTimeout(() => {
-    if (!els.designateMenu) return;
-    els.designateMenu.classList.add("hidden");
-    els.designateMenu.classList.remove("dismissing");
-    for (const btn of els.designateMenu.querySelectorAll("button.confirm")) {
-      btn.classList.remove("confirm");
-    }
-  }, 240);
 }
 
 function hideImageMenu() {
@@ -17548,35 +17248,6 @@ function deleteActiveCircle() {
   scheduleVisualPromptWrite();
   requestRender();
   return true;
-}
-
-function _commitDesignation(kind) {
-  const pending = state.pendingDesignation;
-  const img = getActiveImage();
-  if (!img || !pending || pending.imageId !== img.id) return false;
-  const entry = {
-    id: `d-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    kind: String(kind || "mark"),
-    x: Number(pending.x) || 0,
-    y: Number(pending.y) || 0,
-    at: Date.now(),
-  };
-  const list = _getDesignations(img.id).slice();
-  list.push(entry);
-  state.designationsByImageId.set(img.id, list);
-  state.pendingDesignation = null;
-  scheduleVisualPromptWrite();
-  requestRender();
-  return true;
-}
-
-function _clearDesignations() {
-  const img = getActiveImage();
-  if (!img) return;
-  state.designationsByImageId.delete(img.id);
-  if (state.pendingDesignation?.imageId === img.id) state.pendingDesignation = null;
-  scheduleVisualPromptWrite();
-  requestRender();
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -18125,7 +17796,6 @@ function isMultiActionRunning() {
       state.pendingBridge ||
       state.pendingExtractDna ||
       state.pendingSoulLeech ||
-      state.pendingArgue ||
       state.pendingExtractRule ||
       state.pendingOddOneOut ||
       state.pendingTriforce
@@ -18147,13 +17817,10 @@ function isEngineBusy() {
       state.pendingBridge ||
       state.pendingExtractDna ||
       state.pendingSoulLeech ||
-      state.pendingArgue ||
       state.pendingExtractRule ||
       state.pendingOddOneOut ||
       state.pendingTriforce ||
       state.pendingRecast ||
-      state.pendingCanvasDiagnose ||
-      state.pendingDiagnose ||
       state.pendingCreateLayers ||
       state.pendingReplace ||
       state.pendingRecreate ||
@@ -18424,13 +18091,6 @@ function computeQuickActions() {
       onClick: (ev) =>
         runSwapDnaPair({ invert: Boolean(ev?.shiftKey) }).catch((err) => console.error(err)),
     });
-    actions.push({
-      id: "argue",
-      label: state.pendingArgue ? "Argue (running…)" : "Argue",
-      title: "Debate the two directions (why each is stronger, with visual evidence)",
-      disabled: false,
-      onClick: () => runArguePair().catch((err) => console.error(err)),
-    });
     return actions;
   }
   if (nSelected === 3) {
@@ -18471,17 +18131,6 @@ function computeQuickActions() {
   const ih = active?.img?.naturalHeight || active?.height || null;
   const canCropSquare = Boolean(iw && ih && Math.abs(iw - ih) > 8);
 
-  // Realtime canvas context effectively performs continuous diagnosis; hide the explicit Diagnose action
-  // when Always-On Vision is enabled so the system recommends other next steps.
-  if (!state.alwaysOnVision?.enabled) {
-    actions.push({
-      id: "diagnose",
-      label: state.pendingDiagnose ? "Diagnose (running…)" : "Diagnose",
-      title: "Creative-director diagnosis: what's working, what isn't, and what to fix next",
-      disabled: false,
-      onClick: () => runDiagnose().catch((err) => console.error(err)),
-    });
-  }
   actions.push({
     id: "create_layers",
     label: state.runningActionKey === "create_layers" ? "Create Layers (running…)" : "Create Layers",
@@ -18548,12 +18197,10 @@ function currentRunningActionKey() {
   if (state.pendingSwapDna) return "swap_dna";
   if (state.pendingExtractDna) return "extract_dna";
   if (state.pendingSoulLeech) return "soul_leech";
-  if (state.pendingArgue) return "argue";
   if (state.pendingExtractRule) return "extract_rule";
   if (state.pendingOddOneOut) return "odd_one_out";
   if (state.pendingTriforce) return "triforce";
   if (state.pendingRecast) return "recast";
-  if (state.pendingDiagnose) return "diagnose";
   if (state.pendingCreateLayers) return "create_layers";
   if (state.pendingRecreate) return "variations";
   if (state.pendingReplace) return _runningKeyFromPendingReplace(state.pendingReplace);
@@ -18566,20 +18213,17 @@ function actionGridTitleFor(key) {
   if (k === "annotate") return "Annotate (box + instruction)";
   if (k === "pan") return "Pan / Zoom";
   if (k === "lasso") return "Lasso selection";
-  if (k === "designate") return "Designate subject/reference/object";
   if (k === "bg") return "Background replace (Shift: Sweep)";
   if (k === "extract_dna") return "Extract DNA: collapse selected image(s) into transferable material/color helix";
   if (k === "soul_leech") return "Soul Leech: collapse selected image(s) into transferable emotional mask";
   if (k === "create_layers") return "Create Layers: semantic background/subject/props layer extraction";
   if (k === "remove_people") return "Remove people from the active image";
   if (k === "variations") return "Zero-prompt variations";
-  if (k === "diagnose") return "Creative-director diagnosis";
   if (k === "recast") return "Reimagine the image in a different medium/context";
   if (k === "crop_square") return "Crop the active image to a centered square";
   if (k === "combine") return "Combine: blend the 2 selected photos";
   if (k === "bridge") return "Bridge: find the aesthetic midpoint between the 2 selected photos";
   if (k === "swap_dna") return "Swap DNA (Shift: invert)";
-  if (k === "argue") return "Argue: debate the 2 directions with visual evidence";
   if (k === "extract_rule") return "Extract the Rule (3 selected photos)";
   if (k === "odd_one_out") return "Odd One Out (3 selected photos)";
   if (k === "triforce") return "Triforce (3 selected photos)";
@@ -18608,12 +18252,6 @@ function actionGridIconFor(key) {
       <ellipse cx="12" cy="9.5" rx="6.5" ry="4.5" fill="none" stroke="currentColor" stroke-width="2" />
       <path d="M15 13.5c0.9 1.2 1.9 2.6 3.5 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
       <path d="M19.5 18l1.8 1.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-    </svg>`;
-  }
-  if (k === "designate") {
-    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2" />
-      <path d="M12 4v3M12 17v3M4 12h3M17 12h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
     </svg>`;
   }
   if (k === "bg") {
@@ -18661,12 +18299,6 @@ function actionGridIconFor(key) {
       <path d="M20 7l-2 2 2 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
     </svg>`;
   }
-  if (k === "diagnose") {
-    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15z" fill="none" stroke="currentColor" stroke-width="2" />
-      <path d="M16.6 16.6L21 21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-    </svg>`;
-  }
   if (k === "recast") {
     return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
       <path d="M21 12a9 9 0 1 1-2.7-6.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
@@ -18699,12 +18331,6 @@ function actionGridIconFor(key) {
       <path d="M7 17h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
       <path d="M9 9l-2-2 2-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
       <path d="M15 15l2 2-2 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-    </svg>`;
-  }
-  if (k === "argue") {
-    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4 6h10v7H7l-3 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
-      <path d="M10 13h10v5l-3-2h-7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
     </svg>`;
   }
   if (k === "extract_rule") {
@@ -18760,7 +18386,6 @@ function renderActionGrid() {
     { key: "annotate", label: "Annotate", kind: "tool", hotkey: "1" },
     { key: "pan", label: "Pan", kind: "tool", hotkey: "2" },
     { key: "lasso", label: "Lasso", kind: "tool", hotkey: "3" },
-    { key: "designate", label: "Designate", kind: "tool", hotkey: "4" },
     { key: "bg", label: "BG", kind: "ability", hotkey: "5" },
     { key: "variations", label: "Vars", kind: "ability", hotkey: "6" },
   ];
@@ -18782,13 +18407,11 @@ function renderActionGrid() {
     "create_layers",
     "remove_people",
     "variations",
-    "diagnose",
     "recast",
     "crop_square",
     "combine",
     "bridge",
     "swap_dna",
-    "argue",
     "extract_rule",
     "odd_one_out",
     "triforce",
@@ -18852,7 +18475,7 @@ function renderActionGrid() {
         selected_ids: getSelectedIds().slice(0, 3),
       });
 
-      if (key === "annotate" || key === "pan" || key === "lasso" || key === "designate") {
+      if (key === "annotate" || key === "pan" || key === "lasso") {
         setTool(key);
         return;
       }
@@ -18902,13 +18525,6 @@ function renderActionGrid() {
         });
         return;
       }
-      if (key === "diagnose") {
-        runWithUserError("Diagnose", () => runDiagnose(), {
-          statusScope: "Director",
-          retryHint: "Select an image and retry.",
-        });
-        return;
-      }
       if (key === "crop_square") {
         runWithUserError("Square crop", () => cropSquare(), {
           retryHint: "Select an image and retry.",
@@ -18929,13 +18545,6 @@ function renderActionGrid() {
       }
       if (key === "swap_dna") {
         runWithUserError("Swap DNA", () => runSwapDnaPair({ invert: Boolean(ev?.shiftKey) }), {
-          retryHint: "Select exactly 2 images and retry.",
-        });
-        return;
-      }
-      if (key === "argue") {
-        runWithUserError("Argue", () => runArguePair(), {
-          statusScope: "Director",
           retryHint: "Select exactly 2 images and retry.",
         });
         return;
@@ -19373,7 +18982,6 @@ async function removeImageFromCanvas(imageId) {
   });
 
   hideImageMenu();
-  hideDesignateMenu();
 
   if (item?.path) {
     invalidateImageCache(item.path);
@@ -19381,7 +18989,6 @@ async function removeImageFromCanvas(imageId) {
   }
 
   // Drop per-image marks.
-  state.designationsByImageId.delete(id);
   state.circlesByImageId.delete(id);
   clearEffectTokenForImageId(id);
   if (state.effectTokenDrag) {
@@ -19436,9 +19043,7 @@ async function removeImageFromCanvas(imageId) {
     state.pendingBridge = null;
     state.pendingExtractDna = null;
     state.pendingSoulLeech = null;
-    state.pendingArgue = null;
     state.pendingRecast = null;
-    state.pendingDiagnose = null;
     clearAllEffectTokens();
     clearSelection();
     if (state.intent && !state.intent.locked) {
@@ -19737,24 +19342,6 @@ function buildVisualPrompt() {
       },
       created_at: isoFromMs(atMs),
     });
-  }
-
-  // Designate points.
-  for (const [imageId, list] of Array.from(state.designationsByImageId.entries())) {
-    const imageKey = String(imageId || "");
-    if (!imageKey || !Array.isArray(list)) continue;
-    for (const mark of list) {
-      const atMs = Number(mark?.at) || Date.now();
-      marks.push({
-        id: String(mark?.id || `d-${atMs}`),
-        type: "designate_point",
-        color: "rgba(100, 210, 255, 0.82)",
-        label: mark?.kind ? String(mark.kind) : null,
-        target_image_id: imageKey,
-        image_space: { x: Number(mark?.x) || 0, y: Number(mark?.y) || 0 },
-        created_at: isoFromMs(atMs),
-      });
-    }
   }
 
   // Annotate box (draft/final, active image only).
@@ -20828,61 +20415,6 @@ async function runBridgePair({ fromQueue = false } = {}) {
   }
 }
 
-async function runArguePair({ fromQueue = false } = {}) {
-  if (!requireIntentUnlocked()) return;
-  bumpInteraction();
-  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
-    enqueueAction({
-      label: "Argue",
-      key: "argue",
-      priority: ACTION_QUEUE_PRIORITY.user,
-      run: () => runArguePair({ fromQueue: true }),
-    });
-    return;
-  }
-  if (!state.runDir) {
-    await ensureRun();
-  }
-  const pair = getSelectedImagesActiveFirst({ requireCount: 2 });
-  if (pair.length !== 2) {
-    showToast("Argue needs exactly 2 selected photos.", "error", 3200);
-    return;
-  }
-
-  const [first, second] = pair;
-  if (!first?.path || !second?.path) {
-    showToast("Argue failed: missing image paths.", "error", 3200);
-    return;
-  }
-
-  const okEngine = await ensureEngineSpawned({ reason: "argue" });
-  if (!okEngine) return;
-  state.pendingArgue = { sourceIds: [first.id, second.id], startedAt: Date.now() };
-  state.lastAction = "Argue";
-  setStatus("Director: argue…");
-  setDirectorText("Arguing…", { kind: "argue", at: Date.now(), paths: [first.path, second.path] });
-  portraitWorking("Argue", { providerOverride: "gemini", clearDirector: false });
-  const aLabel = first.label || basename(first.path) || "Image A";
-  const bLabel = second.label || basename(second.path) || "Image B";
-  showToast(`Arguing: ${aLabel} vs ${bLabel}`, "info", 3200);
-  renderQuickActions();
-  requestRender();
-
-  try {
-    await invoke("write_pty", {
-      data: `${PTY_COMMANDS.ARGUE} ${quoteForPtyArg(first.path)} ${quoteForPtyArg(second.path)}\n`,
-    });
-    bumpSessionApiCalls();
-  } catch (err) {
-    console.error(err);
-    state.pendingArgue = null;
-    setStatus(`Director: argue failed (${err?.message || err})`, true);
-    showToast("Argue failed to start.", "error", 3200);
-    updatePortraitIdle();
-    renderQuickActions();
-  }
-}
-
 async function runExtractRuleTriplet({ fromQueue = false } = {}) {
   if (!requireIntentUnlocked()) return;
   bumpInteraction();
@@ -21055,47 +20587,6 @@ async function runTriforceTriplet({ fromQueue = false } = {}) {
   }
 }
 
-async function runDiagnose({ fromQueue = false } = {}) {
-  if (!requireIntentUnlocked()) return;
-  bumpInteraction();
-  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
-    enqueueAction({
-      label: "Diagnose",
-      key: "diagnose",
-      priority: ACTION_QUEUE_PRIORITY.user,
-      run: () => runDiagnose({ fromQueue: true }),
-    });
-    return;
-  }
-  const imgItem = getActiveImage();
-  if (!imgItem?.path) {
-    showToast("No image selected.", "error", 2400);
-    return;
-  }
-  await ensureRun();
-  const okEngine = await ensureEngineSpawned({ reason: "diagnose" });
-  if (!okEngine) return;
-  state.pendingDiagnose = { sourceId: imgItem.id, startedAt: Date.now() };
-  state.lastAction = "Diagnose";
-  setStatus("Director: diagnose…");
-  setDirectorText("Diagnosing…", { kind: "diagnose", at: Date.now(), paths: [imgItem.path] });
-  portraitWorking("Diagnose", { providerOverride: "openai", clearDirector: false });
-  showToast("Diagnosing…", "info", 2200);
-  renderQuickActions();
-
-  try {
-    await invoke("write_pty", { data: `${PTY_COMMANDS.DIAGNOSE} ${quoteForPtyArg(imgItem.path)}\n` });
-    bumpSessionApiCalls();
-  } catch (err) {
-    console.error(err);
-    state.pendingDiagnose = null;
-    setStatus(`Director: diagnose failed (${err?.message || err})`, true);
-    showToast("Diagnose failed to start.", "error", 3200);
-    updatePortraitIdle();
-    renderQuickActions();
-  }
-}
-
 async function runRecast({ fromQueue = false } = {}) {
   if (!requireIntentUnlocked()) return;
   bumpInteraction();
@@ -21197,8 +20688,6 @@ async function createRun() {
   state.timelineNodes = [];
   state.timelineNodesById.clear();
   closeTimeline();
-  state.designationsByImageId.clear();
-  state.pendingDesignation = null;
   state.canvasMode = "multi";
   state.freeformRects.clear();
   state.freeformZOrder = [];
@@ -21208,12 +20697,10 @@ async function createRun() {
   state.pendingBridge = null;
   state.pendingExtractDna = null;
   state.pendingSoulLeech = null;
-  state.pendingArgue = null;
   state.pendingExtractRule = null;
   state.pendingOddOneOut = null;
   state.pendingTriforce = null;
   state.pendingRecast = null;
-  state.pendingDiagnose = null;
   state.pendingCreateLayers = null;
   state.pendingRecreate = null;
   resetActionQueue();
@@ -21317,8 +20804,6 @@ async function openExistingRun() {
   state.timelineNodes = [];
   state.timelineNodesById.clear();
   closeTimeline();
-  state.designationsByImageId.clear();
-  state.pendingDesignation = null;
   state.canvasMode = "multi";
   state.freeformRects.clear();
   state.freeformZOrder = [];
@@ -21328,12 +20813,10 @@ async function openExistingRun() {
   state.pendingBridge = null;
   state.pendingExtractDna = null;
   state.pendingSoulLeech = null;
-  state.pendingArgue = null;
   state.pendingExtractRule = null;
   state.pendingOddOneOut = null;
   state.pendingTriforce = null;
   state.pendingRecast = null;
-  state.pendingDiagnose = null;
   state.pendingCreateLayers = null;
   state.pendingRecreate = null;
   resetActionQueue();
@@ -21777,12 +21260,10 @@ async function handleEventLegacy(event) {
       !state.pendingCreateLayers &&
       !state.pendingExtractDna &&
       !state.pendingSoulLeech &&
-      !state.pendingArgue &&
       !state.pendingExtractRule &&
       !state.pendingOddOneOut &&
       !state.pendingTriforce &&
       !state.pendingRecast &&
-      !state.pendingDiagnose &&
       !state.pendingRecreate;
     if (
       idleForCancel &&
@@ -21816,12 +21297,10 @@ async function handleEventLegacy(event) {
       !state.pendingCreateLayers &&
       !state.pendingExtractDna &&
       !state.pendingSoulLeech &&
-      !state.pendingArgue &&
       !state.pendingExtractRule &&
       !state.pendingOddOneOut &&
       !state.pendingTriforce &&
       !state.pendingRecast &&
-      !state.pendingDiagnose &&
       !state.pendingRecreate;
     if (motherDispatchInFlight && !motherIdleDispatchVersionMatches(eventVersionId)) {
       if (eventVersionId) motherIdleRememberIgnoredVersion(eventVersionId);
@@ -21890,12 +21369,10 @@ async function handleEventLegacy(event) {
       !state.pendingCreateLayers &&
       !state.pendingExtractDna &&
       !state.pendingSoulLeech &&
-      !state.pendingArgue &&
       !state.pendingExtractRule &&
       !state.pendingOddOneOut &&
       !state.pendingTriforce &&
       !state.pendingRecast &&
-      !state.pendingDiagnose &&
       !state.pendingRecreate;
     const motherSingleSuggestionGuard =
       !motherDispatchInFlight &&
@@ -22242,8 +21719,6 @@ async function handleEventLegacy(event) {
       Boolean(state.pendingSoulLeech) ||
       Boolean(state.pendingTriforce) ||
       Boolean(state.pendingRecast) ||
-      Boolean(state.pendingDiagnose) ||
-      Boolean(state.pendingArgue) ||
       Boolean(state.pendingExtractRule) ||
       Boolean(state.pendingOddOneOut) ||
       Boolean(state.pendingRecreate) ||
@@ -22291,9 +21766,7 @@ async function handleEventLegacy(event) {
     state.pendingSoulLeech = null;
     state.pendingTriforce = null;
     state.pendingRecast = null;
-    state.pendingDiagnose = null;
     state.pendingCreateLayers = null;
-    state.pendingArgue = null;
     state.pendingExtractRule = null;
     state.pendingOddOneOut = null;
     state.tripletRuleAnnotations.clear();
@@ -22988,81 +22461,7 @@ async function handleEventLegacy(event) {
 	      }
 	      if (getActiveImage()?.path === path) renderHudReadout();
 	    }
-	  } else if (event.type === DESKTOP_EVENT_TYPES.IMAGE_DIAGNOSIS) {
-    const text = event.text;
-    if (typeof text === "string" && text.trim()) {
-      const diagPath = typeof event.image_path === "string" ? event.image_path : "";
-      const pendingCanvas = state.pendingCanvasDiagnose;
-      const isCanvasDiagnose = Boolean(pendingCanvas && pendingCanvas.imagePath === diagPath);
-      if (isCanvasDiagnose) {
-        state.pendingCanvasDiagnose = null;
-        state.autoCanvasDiagnoseSig = pendingCanvas.signature;
-        state.autoCanvasDiagnoseCompletedAt = Date.now();
-        state.autoCanvasDiagnosePath = null;
-      } else {
-        state.pendingDiagnose = null;
-      }
-
-      setDirectorText(text.trim(), {
-        kind: "diagnose",
-        source: event.source || null,
-        model: event.model || null,
-        at: Date.now(),
-        paths: diagPath ? [diagPath] : [],
-        canvas: isCanvasDiagnose ? true : null,
-      });
-      setStatus(isCanvasDiagnose ? "Director: canvas diagnose ready" : "Director: diagnose ready");
-      if (!isCanvasDiagnose) {
-        showToast("Diagnose ready.", "tip", 2400);
-      }
-      updatePortraitIdle();
-      renderQuickActions();
-      processActionQueue().catch(() => {});
-    }
-  } else if (event.type === DESKTOP_EVENT_TYPES.IMAGE_DIAGNOSIS_FAILED) {
-    const diagPath = typeof event.image_path === "string" ? event.image_path : "";
-    const pendingCanvas = state.pendingCanvasDiagnose;
-    const isCanvasDiagnose = Boolean(pendingCanvas && pendingCanvas.imagePath === diagPath);
-    if (isCanvasDiagnose) {
-      state.pendingCanvasDiagnose = null;
-      state.autoCanvasDiagnosePath = null;
-    } else {
-      state.pendingDiagnose = null;
-    }
-    const msg = event.error ? `Diagnose failed: ${event.error}` : "Diagnose failed.";
-    setStatus(`Director: ${msg}`, true);
-    if (!isCanvasDiagnose) {
-      showToast(msg, "error", 3200);
-    }
-    updatePortraitIdle();
-    renderQuickActions();
-    processActionQueue().catch(() => {});
-  } else if (event.type === DESKTOP_EVENT_TYPES.IMAGE_ARGUMENT) {
-    const text = event.text;
-    if (typeof text === "string" && text.trim()) {
-      state.pendingArgue = null;
-      setDirectorText(text.trim(), {
-        kind: "argue",
-        source: event.source || null,
-        model: event.model || null,
-        at: Date.now(),
-        paths: Array.isArray(event.image_paths) ? event.image_paths : [],
-      });
-      setStatus("Director: argue ready");
-      showToast("Argue ready.", "tip", 2400);
-      updatePortraitIdle();
-      renderQuickActions();
-      processActionQueue().catch(() => {});
-    }
-  } else if (event.type === DESKTOP_EVENT_TYPES.IMAGE_ARGUMENT_FAILED) {
-    state.pendingArgue = null;
-    const msg = event.error ? `Argue failed: ${event.error}` : "Argue failed.";
-    setStatus(`Director: ${msg}`, true);
-    showToast(msg, "error", 3200);
-    updatePortraitIdle();
-    renderQuickActions();
-    processActionQueue().catch(() => {});
-  } else if (event.type === DESKTOP_EVENT_TYPES.IMAGE_DNA_EXTRACTED) {
+	  } else if (event.type === DESKTOP_EVENT_TYPES.IMAGE_DNA_EXTRACTED) {
     const path = typeof event.image_path === "string" ? event.image_path : "";
     const matchedImageId = consumePendingEffectExtraction("dna", path);
     const resolvedImageId = matchedImageId || resolveExtractionEventImageIdByPath(path);
@@ -25110,44 +24509,6 @@ function render() {
     }
   }
 
-  if (item?.id) {
-    const dpr = getDpr();
-    const marks = _getDesignations(item.id);
-    const pending = state.pendingDesignation?.imageId === item.id ? state.pendingDesignation : null;
-    if ((marks && marks.length) || pending) {
-      octx.save();
-      octx.lineWidth = Math.max(1, Math.round(1.6 * dpr));
-      octx.font = `${Math.max(10, Math.round(11 * dpr))}px IBM Plex Mono`;
-      octx.textBaseline = "middle";
-
-      const drawMark = (pt, color, label) => {
-        if (!pt) return;
-        const c = imageToCanvas(pt);
-        const r = Math.max(4, Math.round(5.5 * dpr));
-        octx.strokeStyle = color;
-        octx.fillStyle = color;
-        octx.beginPath();
-        octx.arc(c.x, c.y, r, 0, Math.PI * 2);
-        octx.stroke();
-        if (label) {
-          octx.globalAlpha = 0.95;
-          octx.fillText(label, c.x + r + Math.round(6 * dpr), c.y);
-          octx.globalAlpha = 1;
-        }
-      };
-
-      for (const mark of marks.slice(-16)) {
-        const kind = String(mark?.kind || "");
-        const label = kind ? kind.slice(0, 1).toUpperCase() : "";
-        drawMark({ x: Number(mark?.x) || 0, y: Number(mark?.y) || 0 }, "rgba(100, 210, 255, 0.82)", label);
-      }
-      if (pending) {
-        drawMark({ x: Number(pending.x) || 0, y: Number(pending.y) || 0 }, "rgba(255, 212, 0, 0.92)", "?");
-      }
-      octx.restore();
-    }
-  }
-
   renderIntentOverlay(octx, work.width, work.height);
   renderAmbientIntentNudges(octx, work.width, work.height);
   renderReelTouchIndicator(octx, work.width, work.height);
@@ -25238,7 +24599,6 @@ function installCanvasHandlers() {
     closeMotherWheelMenu({ immediate: false });
     if (!getActiveImage()) return;
     event.preventDefault();
-    hideDesignateMenu();
 
     let hit = null;
     if (state.canvasMode === "multi") {
@@ -25254,8 +24614,7 @@ function installCanvasHandlers() {
   };
 
   const handlePointerDown = (event) => {
-			    closeMotherWheelMenu({ immediate: false });
-		    hideDesignateMenu();
+				    closeMotherWheelMenu({ immediate: false });
         state.pointer.wheelOnTap = false;
 		    if (state.canvasMode === "multi") {
 		      const canvas = els.workCanvas;
@@ -25494,17 +24853,7 @@ function installCanvasHandlers() {
 	        return;
 	      }
 
-		      if (state.tool === "designate") {
-		        const imgPt = canvasToImage(p);
-		        state.pendingDesignation = { imageId: img.id, x: imgPt.x, y: imgPt.y, at: Date.now() };
-		        showDesignateMenuAt(canvasCssPointFromEvent(event));
-            // Prevent the global "click outside" handler from immediately closing the menu.
-            event.stopPropagation();
-		        requestRender();
-		        return;
-		      }
-
-		      if (state.tool === "annotate") {
+			      if (state.tool === "annotate") {
 		        const imgPt = canvasToImage(p);
 		        if (event.shiftKey) {
 		          hideAnnotatePanel();
@@ -25605,16 +24954,6 @@ function installCanvasHandlers() {
           requestRender();
           return;
         }
-		    if (state.tool === "designate") {
-		      const imgPt = canvasToImage(p);
-		      state.pendingDesignation = { imageId: img.id, x: imgPt.x, y: imgPt.y, at: Date.now() };
-		      showDesignateMenuAt(canvasCssPointFromEvent(event));
-          // Prevent the global "click outside" handler from immediately closing the menu.
-          event.stopPropagation();
-		      requestRender();
-		      return;
-		    }
-
         if (state.tool === "annotate" && !event.shiftKey) {
           const circles = _getCircles(img.id);
           const hitCircle = hitTestCircleMarks(p, circles);
@@ -27229,34 +26568,6 @@ function installUi() {
     });
   }
 
-  if (els.designateMenu) {
-    els.designateMenu.addEventListener("click", (event) => {
-      const btn = event?.target?.closest ? event.target.closest("button[data-kind]") : null;
-      if (!btn || !els.designateMenu.contains(btn)) return;
-      bumpInteraction();
-      const kind = btn.dataset?.kind;
-      if (!kind) return;
-      if (kind === "clear") {
-        _clearDesignations();
-        btn.classList.add("confirm");
-        setTimeout(() => hideDesignateMenuAnimated({ animate: true }), 360);
-        setTip("Designate: cleared.");
-        requestRender();
-        return;
-      }
-
-      const committed = _commitDesignation(kind);
-      btn.classList.add("confirm");
-      setTimeout(() => hideDesignateMenuAnimated({ animate: true }), 360);
-      if (!committed) {
-        showToast(`Designate: ${kind}. Click the image to place a point.`, "tip", 2200);
-      } else {
-        showToast(`Designated: ${kind}`, "tip", 1400);
-      }
-      renderHudReadout();
-    });
-  }
-
   if (els.imageMenu) {
     els.imageMenu.addEventListener("click", (event) => {
       const btn = event?.target?.closest ? event.target.closest("button[data-action]") : null;
@@ -27277,13 +26588,6 @@ function installUi() {
       }
     });
   }
-
-  document.addEventListener("pointerdown", (event) => {
-    if (!els.designateMenu || els.designateMenu.classList.contains("hidden")) return;
-    const hit = event?.target?.closest ? event.target.closest("#designate-menu") : null;
-    if (hit) return;
-    hideDesignateMenu();
-  });
 
   document.addEventListener("pointerdown", (event) => {
     if (!els.imageMenu || els.imageMenu.classList.contains("hidden")) return;
@@ -27347,15 +26651,9 @@ function installUi() {
 		        requestRender();
 		        return;
 		      }
-	      if (state.pendingDesignation || (els.designateMenu && !els.designateMenu.classList.contains("hidden"))) {
-	        state.pendingDesignation = null;
-	        hideDesignateMenuAnimated({ animate: false });
-	        requestRender();
-	        return;
-      }
-	      clearSelection();
-	      return;
-	    }
+		      clearSelection();
+		      return;
+		    }
 
 	    if (aestheticOnboardingState.open) return;
 
@@ -27392,7 +26690,6 @@ function installUi() {
           key === "delete" ||
           key === "l" ||
           key === "v" ||
-          key === "d" ||
           key === "b" ||
           key === "r" ||
           key === "m" ||
@@ -27506,11 +26803,6 @@ function installUi() {
     }
     if (key === "v") {
       setTool("pan");
-      return;
-    }
-    if (key === "d") {
-      if (intentModeActive()) return;
-      setTool("designate");
       return;
     }
     if (key === "b") {
@@ -27670,9 +26962,7 @@ async function boot() {
     state.pendingExtractDna = null;
     state.pendingSoulLeech = null;
     state.pendingRecast = null;
-    state.pendingDiagnose = null;
     state.pendingCreateLayers = null;
-    state.pendingArgue = null;
     for (const [tokenId] of state.effectTokenApplyLocks.entries()) {
       const token = state.effectTokensById.get(tokenId) || null;
       if (token) recoverEffectTokenApply(token);

@@ -20,7 +20,6 @@ test("Action Grid: currentRunningActionKey maps pending actions to a single depr
     "pendingBlend",
     "pendingBridge",
     "pendingSwapDna",
-    "pendingArgue",
     "pendingExtractRule",
     "pendingOddOneOut",
     "pendingTriforce",

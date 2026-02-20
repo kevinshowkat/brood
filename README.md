@@ -68,8 +68,8 @@ Install:
 
 ### Abilities by Image Selection
 
-- 1 image: `Diagnose`, `Recast`, `Background: White`, `Background: Sweep`, `Crop: Square`, `Variations`.
-- 2 images: `Combine`, `Swap DNA`, `Bridge`, `Argue`.
+- 1 image: `Recast`, `Create Layers`, `Background: White`, `Background: Sweep`, `Crop: Square`, `Variations`.
+- 2 images: `Combine`, `Swap DNA`, `Bridge`.
 - Multi-view effect-token pipeline: `Extract DNA`, `Soul Leech`, then drag token onto a target image.
 
 ### Mother Workflow
@@ -83,7 +83,7 @@ Install:
 1. Import one or more images.
 2. Arrange/resize on canvas to communicate intent.
 3. Let Mother propose, then confirm or reject.
-4. Run direct Abilities as needed and inspect HUD output (`DIAG` / `ARG`).
+4. Run direct Abilities as needed and inspect HUD output.
 
 More usage details: `docs/desktop.md`.
 
@@ -110,7 +110,6 @@ For Gemini wire-level inspection:
 ## Hotkeys
 
 - `L` lasso
-- `D` designate
 - `F` fit-to-view
 - `Esc` clear selection
 - `1`-`9` activate HUD tools
