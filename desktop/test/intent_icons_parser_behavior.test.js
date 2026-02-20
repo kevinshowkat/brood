@@ -108,3 +108,18 @@ test("intent routing: stale path mismatch is classified separately from parse fa
   assert.equal(routing.matchMother, false);
   assert.equal(routing.ignoreReason, "snapshot_path_mismatch");
 });
+
+test("intent routing: ambient-scoped events do not churn mother snapshot mismatch logs", () => {
+  const routing = classifyIntentIconsRouting({
+    path: "/tmp/intent-ambient-9.png",
+    intentPendingPath: "",
+    ambientPendingPath: "",
+    motherCanAcceptRealtime: true,
+    motherRealtimePath: "/tmp/mother-intent-9.png",
+    motherActionVersion: 9,
+    eventActionVersion: null,
+    eventIntentScope: "ambient",
+  });
+  assert.equal(routing.matchMother, false);
+  assert.equal(routing.ignoreReason, "scope_mismatch");
+});

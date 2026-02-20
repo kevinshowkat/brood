@@ -23,6 +23,9 @@ use reqwest::header::AUTHORIZATION;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
+const DEFAULT_PRICING_TABLES_JSON: &str =
+    include_str!("../../../../brood_engine/pricing/default_pricing.json");
+
 #[derive(Debug, Clone)]
 pub struct PlanPreview {
     pub images: u64,
@@ -48,6 +51,12 @@ pub struct CostLatencyMetrics {
     pub cost_total_usd: f64,
     pub cost_per_1k_images_usd: f64,
     pub latency_per_image_s: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ImageCostEstimate {
+    cost_per_image_usd: Option<f64>,
+    cost_per_1k_images_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -1490,6 +1499,76 @@ impl GeminiProvider {
         .collect()
     }
 
+    fn request_timeout_seconds(request: &ProviderGenerateRequest) -> f64 {
+        value_as_f64(
+            request.provider_options.get("request_timeout"),
+            90.0,
+            15.0,
+            300.0,
+        )
+    }
+
+    fn transport_retry_count(request: &ProviderGenerateRequest) -> usize {
+        let retries_value = request
+            .provider_options
+            .get("transport_retries")
+            .or_else(|| request.provider_options.get("request_retries"));
+        value_as_f64(retries_value, 2.0, 0.0, 4.0).round() as usize
+    }
+
+    fn retry_backoff_seconds(request: &ProviderGenerateRequest) -> f64 {
+        value_as_f64(
+            request.provider_options.get("retry_backoff"),
+            1.2,
+            0.1,
+            10.0,
+        )
+    }
+
+    fn post_with_transport_retries(
+        &self,
+        endpoint: &str,
+        api_key: &str,
+        payload: &Value,
+        timeout_s: f64,
+        max_retries: usize,
+        retry_backoff_s: f64,
+        warnings: &mut Vec<String>,
+    ) -> Result<HttpResponse> {
+        for attempt in 0..=max_retries {
+            let response = self
+                .http
+                .post(endpoint)
+                .query(&[("key", api_key)])
+                .timeout(Duration::from_secs_f64(timeout_s))
+                .json(payload)
+                .send();
+
+            match response {
+                Ok(ok) => return Ok(ok),
+                Err(raw) => {
+                    let err = anyhow::Error::new(raw)
+                        .context(format!("Gemini request failed ({endpoint})"));
+                    if !is_retryable_transport_error(&err) || attempt >= max_retries {
+                        return Err(err);
+                    }
+                    push_unique_warning(
+                        warnings,
+                        format!(
+                            "Gemini transport retry {}/{} after transient request failure.",
+                            attempt + 1,
+                            max_retries
+                        ),
+                    );
+                    let delay_s = retry_backoff_s * (attempt as f64 + 1.0);
+                    thread::sleep(Duration::from_secs_f64(delay_s));
+                }
+            }
+        }
+
+        unreachable!("Gemini transport retry loop should always return a response or error")
+    }
+
     fn extract_image_items(response_payload: &Value) -> Result<Vec<ImageBytes>> {
         let candidates = response_payload
             .get("candidates")
@@ -1606,13 +1685,20 @@ impl ImageProvider for GeminiProvider {
             );
         }
 
-        let response = self
-            .http
-            .post(&endpoint)
-            .query(&[("key", api_key)])
-            .json(&Value::Object(payload.clone()))
-            .send()
-            .with_context(|| format!("Gemini request failed ({endpoint})"))?;
+        let request_timeout_s = Self::request_timeout_seconds(request);
+        let transport_retries = Self::transport_retry_count(request);
+        let retry_backoff_s = Self::retry_backoff_seconds(request);
+        let payload_value = Value::Object(payload.clone());
+
+        let response = self.post_with_transport_retries(
+            &endpoint,
+            &api_key,
+            &payload_value,
+            request_timeout_s,
+            transport_retries,
+            retry_backoff_s,
+            &mut warnings,
+        )?;
         let response_payload = response_json_or_error("Gemini", response)?;
         let image_items = Self::extract_image_items(&response_payload)?;
         let (width, height) = parse_dims(&request.size);
@@ -2660,6 +2746,7 @@ pub struct NativeEngine {
     text_model: Option<String>,
     image_model: Option<String>,
     providers: ImageProviderRegistry,
+    pricing_tables: BTreeMap<String, Map<String, Value>>,
     last_fallback_reason: Option<String>,
     last_cost_latency: Option<CostLatencyMetrics>,
 }
@@ -2715,6 +2802,7 @@ impl NativeEngine {
             text_model,
             image_model,
             providers: default_provider_registry(),
+            pricing_tables: load_pricing_tables(),
             last_fallback_reason: None,
             last_cost_latency: None,
         })
@@ -2926,6 +3014,14 @@ impl NativeEngine {
         )?;
 
         if let Some(cached_value) = cached {
+            let cached_cost_metrics = self.build_cost_latency_metrics(
+                &model_spec,
+                n,
+                0.0,
+                true,
+                &size,
+                &provider_options,
+            );
             let mut artifacts: Vec<Map<String, Value>> = Vec::new();
             if let Some(rows) = cached_value.get("artifacts").and_then(Value::as_array) {
                 for row in rows {
@@ -2948,7 +3044,7 @@ impl NativeEngine {
                 }
             }
             self.thread.save()?;
-            self.emit_cost_latency_event(&model_spec.provider, &model_spec.name, 0.0)?;
+            self.emit_cost_latency_event(&cached_cost_metrics)?;
             return Ok(artifacts);
         }
 
@@ -2960,7 +3056,15 @@ impl NativeEngine {
                 "native provider '{}' not registered (available: [{}])",
                 model_spec.provider, available
             );
-            self.emit_cost_latency_event(&model_spec.provider, &model_spec.name, 0.0)?;
+            let missing_provider_metrics = self.build_cost_latency_metrics(
+                &model_spec,
+                n,
+                0.0,
+                false,
+                &size,
+                &provider_options,
+            );
+            self.emit_cost_latency_event(&missing_provider_metrics)?;
             self.events.emit(
                 "generation_failed",
                 map_object(json!({
@@ -2992,14 +3096,23 @@ impl NativeEngine {
             Ok(response) => response,
             Err(err) => {
                 let latency_s = (started.elapsed().as_secs_f64() / n as f64).max(0.0);
-                self.emit_cost_latency_event(&model_spec.provider, &model_spec.name, latency_s)?;
+                let error_text = error_chain_text(&err, 2048);
+                let failed_cost_metrics = self.build_cost_latency_metrics(
+                    &model_spec,
+                    n,
+                    latency_s,
+                    false,
+                    &size,
+                    &provider_options,
+                );
+                self.emit_cost_latency_event(&failed_cost_metrics)?;
                 self.events.emit(
                     "generation_failed",
                     map_object(json!({
                         "version_id": version.version_id,
                         "provider": model_spec.provider,
                         "model": model_spec.name,
-                        "error": err.to_string(),
+                        "error": error_text,
                     })),
                 )?;
                 return Err(err).context("native provider generation failed");
@@ -3007,6 +3120,14 @@ impl NativeEngine {
         };
 
         let latency_s = (started.elapsed().as_secs_f64() / n as f64).max(0.0);
+        let success_cost_metrics = self.build_cost_latency_metrics(
+            &model_spec,
+            n,
+            latency_s,
+            false,
+            &size,
+            &provider_options,
+        );
 
         let mut artifacts: Vec<Map<String, Value>> = Vec::new();
         for (idx, result) in response.results.iter().enumerate() {
@@ -3055,9 +3176,9 @@ impl NativeEngine {
                 warnings: response.warnings.clone(),
             };
             let result_metadata = map_object(json!({
-                "cost_total_usd": 0.0,
-                "cost_per_1k_images_usd": 0.0,
-                "latency_per_image_s": latency_s,
+                "cost_total_usd": success_cost_metrics.cost_total_usd,
+                "cost_per_1k_images_usd": success_cost_metrics.cost_per_1k_images_usd,
+                "latency_per_image_s": success_cost_metrics.latency_per_image_s,
             }));
             let receipt = build_receipt(
                 &request,
@@ -3097,7 +3218,7 @@ impl NativeEngine {
             &cache_key,
             map_object(json!({ "artifacts": artifacts.clone() })),
         )?;
-        self.emit_cost_latency_event(&model_spec.provider, &model_spec.name, latency_s)?;
+        self.emit_cost_latency_event(&success_cost_metrics)?;
 
         Ok(artifacts)
     }
@@ -3133,27 +3254,50 @@ impl NativeEngine {
         Ok(())
     }
 
-    fn emit_cost_latency_event(
-        &mut self,
-        provider: &str,
-        model: &str,
-        latency_per_image_s: f64,
-    ) -> Result<()> {
-        self.last_cost_latency = Some(CostLatencyMetrics {
-            provider: provider.to_string(),
-            model: model.to_string(),
-            cost_total_usd: 0.0,
-            cost_per_1k_images_usd: 0.0,
+    fn build_cost_latency_metrics(
+        &self,
+        model_spec: &ModelSpec,
+        n: u64,
+        measured_latency: f64,
+        cached: bool,
+        size: &str,
+        provider_options: &Map<String, Value>,
+    ) -> CostLatencyMetrics {
+        let estimate = estimate_image_cost_with_params(
+            &self.pricing_tables,
+            model_spec.pricing_key.as_deref(),
+            size,
+            provider_options,
+        );
+        let latency_per_image_s = estimate_image_latency_per_image(
+            &self.pricing_tables,
+            model_spec.latency_key.as_deref(),
+            measured_latency,
+        );
+        let cost_total_usd = estimate
+            .cost_per_image_usd
+            .map(|value| if cached { 0.0 } else { value * n as f64 })
+            .unwrap_or(0.0);
+        let cost_per_1k_images_usd = estimate.cost_per_1k_images_usd.unwrap_or(0.0);
+        CostLatencyMetrics {
+            provider: model_spec.provider.clone(),
+            model: model_spec.name.clone(),
+            cost_total_usd,
+            cost_per_1k_images_usd,
             latency_per_image_s,
-        });
+        }
+    }
+
+    fn emit_cost_latency_event(&mut self, metrics: &CostLatencyMetrics) -> Result<()> {
+        self.last_cost_latency = Some(metrics.clone());
         self.events.emit(
             "cost_latency_update",
             map_object(json!({
-                "provider": provider,
-                "model": model,
-                "cost_total_usd": 0.0,
-                "cost_per_1k_images_usd": 0.0,
-                "latency_per_image_s": latency_per_image_s,
+                "provider": metrics.provider,
+                "model": metrics.model,
+                "cost_total_usd": metrics.cost_total_usd,
+                "cost_per_1k_images_usd": metrics.cost_per_1k_images_usd,
+                "latency_per_image_s": metrics.latency_per_image_s,
             })),
         )?;
         Ok(())
@@ -3298,6 +3442,158 @@ fn parse_dims(size: &str) -> (u32, u32) {
         return (width.max(1), height.max(1));
     }
     (1024, 1024)
+}
+
+fn load_pricing_tables() -> BTreeMap<String, Map<String, Value>> {
+    let mut merged = parse_pricing_table_rows(DEFAULT_PRICING_TABLES_JSON);
+    if let Some(path) = pricing_override_path() {
+        if let Ok(raw) = fs::read_to_string(path) {
+            merge_pricing_table_rows(&mut merged, &raw);
+        }
+    }
+    merged
+}
+
+fn pricing_override_path() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".brood").join("pricing_overrides.json"))
+}
+
+fn parse_pricing_table_rows(raw: &str) -> BTreeMap<String, Map<String, Value>> {
+    let mut rows = BTreeMap::new();
+    merge_pricing_table_rows(&mut rows, raw);
+    rows
+}
+
+fn merge_pricing_table_rows(rows: &mut BTreeMap<String, Map<String, Value>>, raw: &str) {
+    let Ok(payload) = serde_json::from_str::<Value>(raw) else {
+        return;
+    };
+    let Some(table) = payload.as_object() else {
+        return;
+    };
+    for (pricing_key, row_value) in table {
+        let Some(row) = row_value.as_object() else {
+            continue;
+        };
+        let entry = rows.entry(pricing_key.to_string()).or_default();
+        for (field, field_value) in row {
+            entry.insert(field.to_string(), field_value.clone());
+        }
+    }
+}
+
+fn estimate_image_cost_with_params(
+    pricing_tables: &BTreeMap<String, Map<String, Value>>,
+    pricing_key: Option<&str>,
+    size: &str,
+    provider_options: &Map<String, Value>,
+) -> ImageCostEstimate {
+    let Some(pricing_key) = pricing_key.map(str::trim).filter(|value| !value.is_empty()) else {
+        return ImageCostEstimate {
+            cost_per_image_usd: None,
+            cost_per_1k_images_usd: None,
+        };
+    };
+    let Some(row) = pricing_tables.get(pricing_key) else {
+        return ImageCostEstimate {
+            cost_per_image_usd: None,
+            cost_per_1k_images_usd: None,
+        };
+    };
+    let Some(base_cost) = row.get("cost_per_image_usd").and_then(parse_value_to_f64) else {
+        return ImageCostEstimate {
+            cost_per_image_usd: None,
+            cost_per_1k_images_usd: None,
+        };
+    };
+
+    let mut resolved = ImageCostEstimate {
+        cost_per_image_usd: Some(base_cost),
+        cost_per_1k_images_usd: Some(base_cost * 1000.0),
+    };
+
+    let Some(tier) = resolve_image_size_tier(size, provider_options) else {
+        return resolved;
+    };
+
+    if let Some(abs_map) = row
+        .get("cost_per_image_usd_by_image_size")
+        .and_then(Value::as_object)
+    {
+        if let Some(cost) = abs_map.get(&tier).and_then(parse_value_to_f64) {
+            resolved.cost_per_image_usd = Some(cost);
+            resolved.cost_per_1k_images_usd = Some(cost * 1000.0);
+            return resolved;
+        }
+    }
+
+    if let Some(mult_map) = row
+        .get("cost_multipliers_by_image_size")
+        .and_then(Value::as_object)
+    {
+        if let Some(multiplier) = mult_map.get(&tier).and_then(parse_value_to_f64) {
+            let cost = base_cost * multiplier;
+            resolved.cost_per_image_usd = Some(cost);
+            resolved.cost_per_1k_images_usd = Some(cost * 1000.0);
+        }
+    }
+
+    resolved
+}
+
+fn estimate_image_latency_per_image(
+    pricing_tables: &BTreeMap<String, Map<String, Value>>,
+    latency_key: Option<&str>,
+    measured_latency: f64,
+) -> f64 {
+    let Some(latency_key) = latency_key.map(str::trim).filter(|value| !value.is_empty()) else {
+        return measured_latency;
+    };
+    let Some(row) = pricing_tables.get(latency_key) else {
+        return measured_latency;
+    };
+    row.get("latency_per_image_s")
+        .and_then(parse_value_to_f64)
+        .unwrap_or(measured_latency)
+}
+
+fn resolve_image_size_tier(size: &str, provider_options: &Map<String, Value>) -> Option<String> {
+    if let Some(raw) = provider_options.get("image_size").and_then(Value::as_str) {
+        let normalized = raw.trim().to_ascii_uppercase();
+        if matches!(normalized.as_str(), "1K" | "2K" | "4K") {
+            return Some(normalized);
+        }
+    }
+
+    let normalized = size.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+    if matches!(normalized.as_str(), "1k" | "2k" | "4k") {
+        return Some(normalized.to_ascii_uppercase());
+    }
+
+    let (width, height) = parse_size_dims_for_pricing_tier(&normalized)?;
+    let longest = width.max(height);
+    if longest >= 3600 {
+        return Some("4K".to_string());
+    }
+    if longest >= 1800 {
+        return Some("2K".to_string());
+    }
+    None
+}
+
+fn parse_size_dims_for_pricing_tier(raw: &str) -> Option<(u32, u32)> {
+    let (left, right) = raw.split_once('x')?;
+    let width = left.trim().parse::<u32>().ok()?;
+    let height = right.trim().parse::<u32>().ok()?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some((width, height))
 }
 
 fn snap_multiple(value: u32, multiple: u32) -> u32 {
@@ -3862,6 +4158,40 @@ fn response_json_or_error(provider: &str, response: HttpResponse) -> Result<Valu
     Ok(parsed)
 }
 
+fn is_retryable_transport_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .map(|reqwest_err| {
+                reqwest_err.is_timeout() || reqwest_err.is_connect() || reqwest_err.is_request()
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn error_chain_text(err: &anyhow::Error, max_chars: usize) -> String {
+    let mut parts = Vec::new();
+    for cause in err.chain() {
+        let text = cause.to_string();
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if parts
+            .last()
+            .map(|existing| existing == trimmed)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        parts.push(trimmed.to_string());
+    }
+    if parts.is_empty() {
+        return truncate_text(&err.to_string(), max_chars);
+    }
+    truncate_text(&parts.join(" | caused by: "), max_chars)
+}
+
 fn truncate_text(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.to_string();
@@ -3962,9 +4292,10 @@ mod tests {
     use brood_contracts::models::ModelSpec;
 
     use super::{
-        apply_quality_preset, default_provider_registry, image_inputs_from_settings,
-        merge_openai_options_for_form, merge_openai_provider_options,
-        normalize_openai_output_format, normalize_openai_size, request_metadata_from_intent,
+        apply_quality_preset, default_provider_registry, error_chain_text,
+        estimate_image_cost_with_params, image_inputs_from_settings, merge_openai_options_for_form,
+        merge_openai_provider_options, normalize_openai_output_format, normalize_openai_size,
+        parse_pricing_table_rows, request_metadata_from_intent, resolve_image_size_tier,
         FluxProvider, GeminiProvider, ImagenProvider, NativeEngine, OpenAiProvider,
         ProviderGenerateRequest,
     };
@@ -4155,6 +4486,122 @@ mod tests {
 
         let mapped = apply_quality_preset(&settings, &model);
         assert!(mapped.get("provider_options").is_none());
+    }
+
+    #[test]
+    fn pricing_size_tier_matches_python_contract() {
+        let provider_options = Map::new();
+        assert_eq!(
+            resolve_image_size_tier("1536x1024", &provider_options),
+            None
+        );
+        assert_eq!(
+            resolve_image_size_tier("2048x1024", &provider_options),
+            Some("2K".to_string())
+        );
+        assert_eq!(
+            resolve_image_size_tier("4096x2048", &provider_options),
+            Some("4K".to_string())
+        );
+
+        let mut explicit = Map::new();
+        explicit.insert("image_size".to_string(), json!("1K"));
+        assert_eq!(
+            resolve_image_size_tier("4096x2048", &explicit),
+            Some("1K".to_string())
+        );
+    }
+
+    #[test]
+    fn pricing_estimator_applies_size_tier_multiplier() {
+        let tables = parse_pricing_table_rows(
+            r#"{
+                "google-gemini-3-pro-image-preview": {
+                    "cost_per_image_usd": 0.134,
+                    "cost_multipliers_by_image_size": { "1K": 0.75, "2K": 1.0, "4K": 2.0 }
+                }
+            }"#,
+        );
+        let mut provider_options = Map::new();
+        provider_options.insert("image_size".to_string(), json!("4K"));
+        let estimate = estimate_image_cost_with_params(
+            &tables,
+            Some("google-gemini-3-pro-image-preview"),
+            "1024x1024",
+            &provider_options,
+        );
+        assert!(estimate
+            .cost_per_image_usd
+            .map(|value| (value - 0.268).abs() < 1e-9)
+            .unwrap_or(false));
+        assert!(estimate
+            .cost_per_1k_images_usd
+            .map(|value| (value - 268.0).abs() < 1e-9)
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn native_engine_emits_estimated_cost_for_receipts_and_events() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let run_dir = temp.path().join("run");
+        let events_path = run_dir.join("events.jsonl");
+        let mut engine = NativeEngine::new(
+            &run_dir,
+            &events_path,
+            Some("dryrun-text-1".to_string()),
+            Some("dryrun-image-1".to_string()),
+        )?;
+        engine.pricing_tables = parse_pricing_table_rows(
+            r#"{
+                "dryrun-image": {
+                    "cost_per_image_usd": 0.25,
+                    "latency_per_image_s": 1.5
+                }
+            }"#,
+        );
+
+        let mut settings = Map::new();
+        settings.insert("size".to_string(), json!("1024x1024"));
+        settings.insert("n".to_string(), json!(2));
+        let mut intent = Map::new();
+        intent.insert("action".to_string(), json!("generate"));
+
+        let artifacts = engine.generate("priced dryrun", settings.clone(), intent.clone())?;
+        assert_eq!(artifacts.len(), 2);
+        let metrics = engine.last_cost_latency().expect("missing cost metrics");
+        assert!((metrics.cost_total_usd - 0.5).abs() < 1e-9);
+        assert!((metrics.cost_per_1k_images_usd - 250.0).abs() < 1e-9);
+        assert!((metrics.latency_per_image_s - 1.5).abs() < 1e-9);
+
+        let receipt_path = artifacts[0]
+            .get("receipt_path")
+            .and_then(Value::as_str)
+            .map(Path::new)
+            .expect("missing receipt path");
+        let receipt: Value = serde_json::from_str(&fs::read_to_string(receipt_path)?)?;
+        assert_eq!(receipt["result_metadata"]["cost_total_usd"], json!(0.5));
+        assert_eq!(
+            receipt["result_metadata"]["cost_per_1k_images_usd"],
+            json!(250.0)
+        );
+
+        let raw = fs::read_to_string(events_path)?;
+        let cost_event = raw
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|row| row.get("type").and_then(Value::as_str) == Some("cost_latency_update"))
+            .expect("missing cost_latency_update event");
+        assert_eq!(cost_event.get("cost_total_usd"), Some(&json!(0.5)));
+        assert_eq!(
+            cost_event.get("cost_per_1k_images_usd"),
+            Some(&json!(250.0))
+        );
+
+        let _ = engine.generate("priced dryrun", settings, intent)?;
+        let cached_metrics = engine.last_cost_latency().expect("missing cached metrics");
+        assert!((cached_metrics.cost_total_usd - 0.0).abs() < 1e-9);
+        assert!((cached_metrics.cost_per_1k_images_usd - 250.0).abs() < 1e-9);
+        Ok(())
     }
 
     #[test]
@@ -4483,6 +4930,43 @@ mod tests {
         assert!(providers.iter().any(|name| name == "replicate"));
         assert!(providers.iter().any(|name| name == "stability"));
         assert!(providers.iter().any(|name| name == "fal"));
+    }
+
+    #[test]
+    fn gemini_transport_settings_have_safe_defaults_and_clamps() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let run_dir = temp.path().join("run");
+        let mut request = provider_request_for_test(&run_dir);
+        request.model = "gemini-3-pro-image-preview".to_string();
+
+        assert_eq!(GeminiProvider::request_timeout_seconds(&request), 90.0);
+        assert_eq!(GeminiProvider::transport_retry_count(&request), 2);
+        assert_eq!(GeminiProvider::retry_backoff_seconds(&request), 1.2);
+
+        request
+            .provider_options
+            .insert("request_timeout".to_string(), json!("120"));
+        request
+            .provider_options
+            .insert("transport_retries".to_string(), json!(8));
+        request
+            .provider_options
+            .insert("retry_backoff".to_string(), json!("0.05"));
+
+        assert_eq!(GeminiProvider::request_timeout_seconds(&request), 120.0);
+        assert_eq!(GeminiProvider::transport_retry_count(&request), 4);
+        assert_eq!(GeminiProvider::retry_backoff_seconds(&request), 0.1);
+    }
+
+    #[test]
+    fn error_chain_text_preserves_nested_contexts() {
+        let err = anyhow::anyhow!("socket closed")
+            .context("Gemini request failed (https://example.test)")
+            .context("native provider generation failed");
+        let rendered = error_chain_text(&err, 400);
+        assert!(rendered.contains("native provider generation failed"));
+        assert!(rendered.contains("Gemini request failed"));
+        assert!(rendered.contains("socket closed"));
     }
 
     fn map_object_for_test(value: Value) -> Map<String, Value> {

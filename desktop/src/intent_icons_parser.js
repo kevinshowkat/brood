@@ -429,21 +429,44 @@ export function classifyIntentIconsRouting({
   motherRealtimePath = "",
   motherActionVersion = 0,
   eventActionVersion = null,
+  eventIntentScope = "",
 } = {}) {
   const normalizedPath = String(path || "");
   const normalizedIntentPath = String(intentPendingPath || "");
   const normalizedAmbientPath = String(ambientPendingPath || "");
   const normalizedMotherPath = String(motherRealtimePath || "");
+  const normalizedScope = String(eventIntentScope || "").trim().toLowerCase();
+  const scopeIsAmbient = normalizedScope === "ambient";
+  const scopeIsMother = normalizedScope === "mother";
+  const scopeAllowsAmbient = !normalizedScope || scopeIsAmbient;
+  const scopeAllowsMother = !normalizedScope || scopeIsMother;
   const actionVersion = Number(motherActionVersion) || 0;
   const eventVersion = Number(eventActionVersion);
 
-  const matchIntent = Boolean(normalizedIntentPath && normalizedIntentPath === normalizedPath);
-  const matchAmbient = Boolean(normalizedAmbientPath && normalizedAmbientPath === normalizedPath);
-  const matchMother = Boolean(motherCanAcceptRealtime && normalizedMotherPath && normalizedMotherPath === normalizedPath);
+  const matchIntent = Boolean(
+    scopeAllowsAmbient &&
+    normalizedIntentPath &&
+    normalizedIntentPath === normalizedPath
+  );
+  const matchAmbient = Boolean(
+    scopeAllowsAmbient &&
+    normalizedAmbientPath &&
+    normalizedAmbientPath === normalizedPath
+  );
+  const matchMother = Boolean(
+    scopeAllowsMother &&
+    motherCanAcceptRealtime &&
+    normalizedMotherPath &&
+    normalizedMotherPath === normalizedPath
+  );
 
   let ignoreReason = null;
   if (!matchIntent && !matchAmbient && !matchMother) {
-    ignoreReason = motherCanAcceptRealtime && normalizedMotherPath ? "snapshot_path_mismatch" : "path_mismatch";
+    if (motherCanAcceptRealtime && normalizedMotherPath && scopeIsAmbient) {
+      ignoreReason = "scope_mismatch";
+    } else {
+      ignoreReason = motherCanAcceptRealtime && normalizedMotherPath ? "snapshot_path_mismatch" : "path_mismatch";
+    }
   } else if (
     matchMother &&
     Number.isFinite(eventVersion) &&
@@ -454,4 +477,3 @@ export function classifyIntentIconsRouting({
   }
   return { matchIntent, matchAmbient, matchMother, ignoreReason };
 }
-

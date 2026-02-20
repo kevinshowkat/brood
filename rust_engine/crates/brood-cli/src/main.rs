@@ -2782,6 +2782,10 @@ const REALTIME_SOURCE: &str = "openai_realtime";
 const REALTIME_BETA_HEADER_VALUE: &str = "realtime=v1";
 const REALTIME_TIMEOUT_SECONDS: f64 = 42.0;
 const REALTIME_MAX_PARTIAL_HZ_MS: u64 = 250;
+const REALTIME_TRANSPORT_RETRY_MAX_DEFAULT: usize = 2;
+const REALTIME_TRANSPORT_RETRY_BACKOFF_MS_DEFAULT: u64 = 350;
+const REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_DEFAULT: usize = 4;
+const REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX: usize = 8;
 
 fn unix_epoch_millis() -> i64 {
     let now = SystemTime::now()
@@ -3128,6 +3132,62 @@ impl IntentIconsRealtimeSession {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RealtimeJobErrorKind {
+    Transport,
+    Terminal,
+}
+
+#[derive(Debug)]
+struct RealtimeJobError {
+    kind: RealtimeJobErrorKind,
+    message: String,
+}
+
+impl RealtimeJobError {
+    fn transport(message: impl Into<String>) -> Self {
+        Self {
+            kind: RealtimeJobErrorKind::Transport,
+            message: message.into(),
+        }
+    }
+
+    fn terminal(message: impl Into<String>) -> Self {
+        Self {
+            kind: RealtimeJobErrorKind::Terminal,
+            message: message.into(),
+        }
+    }
+
+    fn from_anyhow(err: anyhow::Error) -> Self {
+        let message = error_chain_message(&err);
+        if is_anyhow_realtime_transport_error(&err) {
+            Self::transport(message)
+        } else {
+            Self::terminal(message)
+        }
+    }
+
+    fn from_tungstenite(prefix: &str, err: tungstenite::Error) -> Self {
+        let message = format!("{prefix}: {err}");
+        if is_tungstenite_transport_error(&err) {
+            Self::transport(message)
+        } else {
+            Self::terminal(message)
+        }
+    }
+
+    fn is_transport(&self) -> bool {
+        self.kind == RealtimeJobErrorKind::Transport
+    }
+}
+
+impl std::fmt::Display for RealtimeJobError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
 struct RealtimeWorker {
     events: EventWriter,
     model: String,
@@ -3144,7 +3204,7 @@ impl RealtimeWorker {
         }
     }
 
-    fn run_inner(&self, rx: mpsc::Receiver<RealtimeCommand>) -> Result<()> {
+    fn open_session(&self) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
         let mut ws = open_realtime_websocket(&self.model, &self.api_key)?;
         let session_update = json!({
             "type": "session.update",
@@ -3156,6 +3216,12 @@ impl RealtimeWorker {
             },
         });
         websocket_send_json(&mut ws, &session_update)?;
+        Ok(ws)
+    }
+
+    fn run_inner(&self, rx: mpsc::Receiver<RealtimeCommand>) -> Result<()> {
+        let max_retries = realtime_transport_retry_limit();
+        let mut ws = self.open_session()?;
 
         while !self.stop_flag.load(Ordering::SeqCst) {
             let command = match rx.recv_timeout(Duration::from_millis(200)) {
@@ -3186,9 +3252,43 @@ impl RealtimeWorker {
             let Some(job) = self.kind.select_job(&jobs) else {
                 continue;
             };
-            if let Err(err) = self.run_job(&mut ws, &job) {
-                self.fail_fatal(Some(&job.image_path), err.to_string());
-                break;
+            let mut attempt: usize = 0;
+            loop {
+                match self.run_job(&mut ws, &job) {
+                    Ok(()) => break,
+                    Err(err) => {
+                        if !err.is_transport()
+                            || attempt >= max_retries
+                            || self.stop_flag.load(Ordering::SeqCst)
+                        {
+                            self.fail_fatal(Some(&job.image_path), err.to_string());
+                            return Ok(());
+                        }
+                        attempt += 1;
+                        let _ = ws.close(None);
+                        let backoff = realtime_transport_retry_backoff(attempt);
+                        if !backoff.is_zero() {
+                            thread::sleep(backoff);
+                        }
+                        let reconnect = self.open_session().with_context(|| {
+                            format!(
+                                "failed to reconnect realtime session after transient transport error (attempt {attempt}/{max_retries})"
+                            )
+                        });
+                        match reconnect {
+                            Ok(new_ws) => ws = new_ws,
+                            Err(reconnect_err) => {
+                                if attempt < max_retries
+                                    && is_anyhow_realtime_transport_error(&reconnect_err)
+                                {
+                                    continue;
+                                }
+                                self.fail_fatal(Some(&job.image_path), reconnect_err.to_string());
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -3200,11 +3300,12 @@ impl RealtimeWorker {
         &self,
         ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
         job: &RealtimeSnapshotJob,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), RealtimeJobError> {
         let _submitted_at_ms = job.submitted_at_ms;
         let image_path = PathBuf::from(&job.image_path);
-        let data_url = read_image_as_data_url(&image_path)
-            .ok_or_else(|| anyhow::anyhow!("failed to read image for realtime request"))?;
+        let data_url = read_image_as_data_url(&image_path).ok_or_else(|| {
+            RealtimeJobError::terminal("failed to read image for realtime request")
+        })?;
         let mut content: Vec<Value> = Vec::new();
         if let Some(inline_instruction) = self.kind.per_request_input_text() {
             content.push(json!({"type": "input_text", "text": inline_instruction}));
@@ -3228,7 +3329,11 @@ impl RealtimeWorker {
                 "text": "For image_descriptions, emit exactly one row per IMAGE_ID_ORDER id, preserve that order, and never swap labels across ids.",
             }));
         }
-        for image_ref in context_refs.iter().take(2) {
+        let reference_limit = match self.kind {
+            RealtimeSessionKind::IntentIcons { .. } => intent_realtime_reference_image_limit(),
+            RealtimeSessionKind::CanvasContext => 2,
+        };
+        for image_ref in context_refs.iter().take(reference_limit) {
             if let Some(reference_data_url) = prepare_vision_image_data_url(&image_ref.path, 1024) {
                 content.push(json!({
                     "type": "input_text",
@@ -3254,7 +3359,7 @@ impl RealtimeWorker {
                 "max_output_tokens": self.kind.max_output_tokens(),
             },
         });
-        websocket_send_json(ws, &request)?;
+        websocket_send_json(ws, &request).map_err(RealtimeJobError::from_anyhow)?;
 
         let mut buffer = String::new();
         let mut response_id: Option<String> = None;
@@ -3263,7 +3368,7 @@ impl RealtimeWorker {
 
         while !self.stop_flag.load(Ordering::SeqCst) {
             if started.elapsed().as_secs_f64() > REALTIME_TIMEOUT_SECONDS {
-                bail!("{}", self.kind.timeout_message());
+                return Err(RealtimeJobError::terminal(self.kind.timeout_message()));
             }
 
             let message = match ws.read() {
@@ -3273,14 +3378,21 @@ impl RealtimeWorker {
                 {
                     continue;
                 }
-                Err(err) => return Err(anyhow::anyhow!("realtime read failed: {err}")),
+                Err(err) => {
+                    return Err(RealtimeJobError::from_tungstenite(
+                        "realtime read failed",
+                        err,
+                    ))
+                }
             };
 
             let raw = match message {
                 WsMessage::Text(text) => text.to_string(),
                 WsMessage::Binary(bytes) => String::from_utf8_lossy(&bytes).to_string(),
                 WsMessage::Ping(_) | WsMessage::Pong(_) => continue,
-                WsMessage::Close(_) => return Err(anyhow::anyhow!("realtime socket closed")),
+                WsMessage::Close(_) => {
+                    return Err(RealtimeJobError::transport("realtime socket closed"))
+                }
                 _ => continue,
             };
 
@@ -3295,7 +3407,7 @@ impl RealtimeWorker {
                 .to_string();
 
             if event_type == "error" {
-                bail!("{}", format_realtime_error(&parsed));
+                return Err(RealtimeJobError::terminal(format_realtime_error(&parsed)));
             }
 
             if event_type == "response.created" {
@@ -3354,7 +3466,9 @@ impl RealtimeWorker {
                 }
                 let (cleaned, response_meta) = resolve_streamed_response_text(&buffer, &response);
                 if cleaned.trim().is_empty() {
-                    bail!("{}", self.kind.empty_response_message(&response));
+                    return Err(RealtimeJobError::terminal(
+                        self.kind.empty_response_message(&response),
+                    ));
                 }
                 self.emit_stream_payload(&job.image_path, &cleaned, false, Some(response_meta));
                 return Ok(());
@@ -3372,7 +3486,7 @@ impl RealtimeWorker {
                 message.clone()
             });
         }
-        self.emit_failed_payload(image_path, &message, true);
+        self.emit_failed_payload(image_path, &message, true, None);
     }
 
     fn emit_stream_payload(
@@ -3409,7 +3523,13 @@ impl RealtimeWorker {
         let _ = self.events.emit(self.kind.event_type(), payload);
     }
 
-    fn emit_failed_payload(&self, image_path: Option<&str>, error: &str, fatal: bool) {
+    fn emit_failed_payload(
+        &self,
+        image_path: Option<&str>,
+        error: &str,
+        fatal: bool,
+        extra: Option<Map<String, Value>>,
+    ) {
         let mut payload = Map::new();
         payload.insert(
             "image_path".to_string(),
@@ -3433,6 +3553,11 @@ impl RealtimeWorker {
         if fatal {
             payload.insert("fatal".to_string(), Value::Bool(true));
         }
+        if let Some(extra_meta) = extra {
+            for (key, value) in extra_meta {
+                payload.insert(key, value);
+            }
+        }
         let _ = self.events.emit(self.kind.failed_event_type(), payload);
     }
 }
@@ -3445,6 +3570,75 @@ fn open_realtime_websocket(
     let (mut ws, _) = websocket_connect(request).context("failed to connect realtime websocket")?;
     set_realtime_socket_read_timeout(&mut ws, Some(Duration::from_millis(500)));
     Ok(ws)
+}
+
+fn realtime_transport_retry_limit() -> usize {
+    env::var("BROOD_REALTIME_TRANSPORT_RETRIES")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .map(|value| value.min(6))
+        .unwrap_or(REALTIME_TRANSPORT_RETRY_MAX_DEFAULT)
+}
+
+fn realtime_transport_retry_backoff(attempt: usize) -> Duration {
+    let base_ms = env::var("BROOD_REALTIME_TRANSPORT_RETRY_BACKOFF_MS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .map(|value| value.clamp(50, 5000))
+        .unwrap_or(REALTIME_TRANSPORT_RETRY_BACKOFF_MS_DEFAULT);
+    let multiplier = u64::try_from(attempt.max(1)).unwrap_or(u64::MAX);
+    Duration::from_millis(base_ms.saturating_mul(multiplier))
+}
+
+fn intent_realtime_reference_image_limit() -> usize {
+    env::var("BROOD_INTENT_REALTIME_REFERENCE_LIMIT")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .map(|value| value.clamp(1, REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX))
+        .unwrap_or(REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_DEFAULT)
+}
+
+fn is_anyhow_realtime_transport_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<tungstenite::Error>()
+            .map(is_tungstenite_transport_error)
+            .unwrap_or(false)
+            || cause
+                .downcast_ref::<io::Error>()
+                .map(|io_err| is_transport_io_error_kind(io_err.kind()))
+                .unwrap_or(false)
+    })
+}
+
+fn is_tungstenite_transport_error(err: &tungstenite::Error) -> bool {
+    match err {
+        tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => true,
+        tungstenite::Error::Io(io_err) => is_transport_io_error_kind(io_err.kind()),
+        tungstenite::Error::Tls(_) => true,
+        _ => false,
+    }
+}
+
+fn is_transport_io_error_kind(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::WouldBlock
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::UnexpectedEof
+            | io::ErrorKind::NotConnected
+    )
+}
+
+fn error_chain_message(err: &anyhow::Error) -> String {
+    err.chain()
+        .map(|entry| entry.to_string())
+        .filter(|entry| !entry.trim().is_empty())
+        .collect::<Vec<String>>()
+        .join(": ")
 }
 
 fn build_realtime_websocket_request(model: &str, api_key: &str) -> Result<Request<()>> {
@@ -8053,8 +8247,11 @@ impl ExportArgs {
 mod tests {
     use super::{
         build_realtime_websocket_request, clean_description, description_realtime_instruction,
-        intent_icons_instruction, RealtimeSessionKind, REALTIME_BETA_HEADER_VALUE,
+        intent_icons_instruction, intent_realtime_reference_image_limit,
+        is_anyhow_realtime_transport_error, RealtimeJobError, RealtimeJobErrorKind,
+        RealtimeSessionKind, REALTIME_BETA_HEADER_VALUE, REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX,
     };
+    use std::io;
 
     #[test]
     fn realtime_ws_request_includes_upgrade_headers() {
@@ -8142,5 +8339,28 @@ mod tests {
         assert!(instruction.contains("short caption fragment"));
         assert!(instruction.contains("not a full sentence"));
         assert!(instruction.contains("Do not use auxiliary verbs"));
+    }
+
+    #[test]
+    fn realtime_transport_error_uses_typed_chain_classification() {
+        let broken_pipe = anyhow::Error::new(tungstenite::Error::Io(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "broken pipe",
+        )));
+        assert!(is_anyhow_realtime_transport_error(&broken_pipe));
+        let typed = RealtimeJobError::from_anyhow(broken_pipe);
+        assert_eq!(typed.kind, RealtimeJobErrorKind::Transport);
+
+        let timeout_message = anyhow::anyhow!("Realtime intent inference timed out.");
+        assert!(!is_anyhow_realtime_transport_error(&timeout_message));
+        let typed_timeout = RealtimeJobError::from_anyhow(timeout_message);
+        assert_eq!(typed_timeout.kind, RealtimeJobErrorKind::Terminal);
+    }
+
+    #[test]
+    fn intent_realtime_reference_limit_has_default_and_bounds() {
+        let value = intent_realtime_reference_image_limit();
+        assert!(value >= 1);
+        assert!(value <= REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX);
     }
 }
