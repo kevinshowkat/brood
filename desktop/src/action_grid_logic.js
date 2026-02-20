@@ -10,7 +10,7 @@ export function computeActionGridSlots({
     { key: "lasso", label: "Lasso", kind: "tool" },
   ];
 
-  const noImageFallback = [
+  const stableSingleStack = [
     { key: "bg", label: "BG", kind: "ability" },
     { key: "prompt_generate", label: "Prompt", kind: "ability" },
     { key: "variations", label: "Vars", kind: "ability" },
@@ -20,15 +20,8 @@ export function computeActionGridSlots({
     { key: "recast", label: "Recast", kind: "ability" },
   ];
 
-  const singleImage = [
-    { key: "extract_dna", label: "DNA", kind: "ability" },
-    { key: "soul_leech", label: "Soul", kind: "ability" },
-    { key: "create_layers", label: "Layers", kind: "ability" },
-    { key: "bg", label: "BG", kind: "ability" },
-    { key: "prompt_generate", label: "Prompt", kind: "ability" },
-    { key: "variations", label: "Vars", kind: "ability" },
-    { key: "recast", label: "Recast", kind: "ability" },
-  ];
+  const noImageFallback = stableSingleStack;
+  const singleImage = stableSingleStack;
 
   const twoImage = [
     { key: "combine", label: "Combine", kind: "ability_multi" },
