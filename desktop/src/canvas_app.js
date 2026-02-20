@@ -18674,8 +18674,8 @@ function renderActionGrid() {
   const reelNoImageSlots = [
     { key: "annotate", label: "Annotate", kind: "tool", hotkey: "1" },
     { key: "lasso", label: "Lasso", kind: "tool", hotkey: "2" },
-    { key: "prompt_generate", label: "Prompt", kind: "ability", hotkey: "3" },
-    { key: "bg", label: "BG", kind: "ability", hotkey: "4" },
+    { key: "bg", label: "BG", kind: "ability", hotkey: "3" },
+    { key: "prompt_generate", label: "Prompt", kind: "ability", hotkey: "4" },
     { key: "variations", label: "Vars", kind: "ability", hotkey: "5" },
     { key: "extract_dna", label: "DNA", kind: "ability", hotkey: "6" },
   ];

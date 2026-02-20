@@ -33,12 +33,12 @@ test("computeActionGridSlots: 1 selected -> single-image abilities", () => {
   assert.deepEqual(slotKeys(slots), [
     "annotate",
     "lasso",
-    "extract_dna",
-    "soul_leech",
-    "create_layers",
     "bg",
     "prompt_generate",
     "variations",
+    "extract_dna",
+    "soul_leech",
+    "create_layers",
     "recast",
   ]);
 });
