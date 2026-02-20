@@ -9280,6 +9280,7 @@ function motherV2IntentSourceKind(source = "") {
 function motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml }) {
   const normalizedPhase = String(phase || "").trim();
   const isDraftingPhase = normalizedPhase === MOTHER_IDLE_STATES.DRAFTING;
+  const isOfferingPhase = normalizedPhase === MOTHER_IDLE_STATES.OFFERING;
   const isCooldownPhase = normalizedPhase === MOTHER_IDLE_STATES.COOLDOWN;
   const visibleImageCount = motherIdleBaseImageItems().length;
   if (visibleImageCount < MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL) return "";
@@ -9320,20 +9321,13 @@ function motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml }) {
   const modeAria = hasConfirmedIntentSource ? `Proposal mode ${modeLabel}` : "";
   const proposalVisualHtml = motherV2ProposalIconsHtml(intent, { phase: normalizedPhase });
   const visualHtml = readoutHtml || proposalVisualHtml;
-  const phaseLabel = normalizedPhase === MOTHER_IDLE_STATES.DRAFTING
-    ? "Drafting..."
-    : normalizedPhase === MOTHER_IDLE_STATES.OFFERING
-      ? "Proposal ready"
-      : "";
-  const phaseLine = phaseLabel ? `<div class="mother-proposal-phase">${escapeHtml(phaseLabel)}</div>` : "";
   const visualLine = visualHtml ? `<div class="mother-proposal-visual">${visualHtml}</div>` : "";
   const flowLine = `<div class="mother-proposal-flow">${visualLine}</div>`;
-  const modeLine = !isDraftingPhase && !isCooldownPhase && modeLabel
+  const modeLine = !isDraftingPhase && !isOfferingPhase && !isCooldownPhase && modeLabel
     ? `<div class="mother-proposal-mode" style="--proposal-mode-accent:${escapeHtml(modeAccent)}" aria-label="${escapeHtml(modeAria)}">${escapeHtml(modeLabel)}</div>`
     : "";
   return `
     <div class="mother-proposal-card" aria-label="Mother proposal" data-compact="1">
-      ${phaseLine}
       ${flowLine}
       ${modeLine}
     </div>
@@ -9343,6 +9337,7 @@ function motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml }) {
 function motherV2PhaseCardKind(phase = null) {
   const statePhase = phase || state.motherIdle?.phase || motherIdleInitialState();
   if (statePhase === MOTHER_IDLE_STATES.COOLDOWN) return "cooldown";
+  if (statePhase === MOTHER_IDLE_STATES.OFFERING) return "ready";
   if (statePhase !== MOTHER_IDLE_STATES.DRAFTING) return "";
   return state.motherIdle?.pendingPromptCompile ? "braiding" : "drafting";
 }
@@ -9351,7 +9346,10 @@ function renderMotherReadout() {
   renderMotherControls();
   syncMotherIntentSourceIndicator();
   const phase = state.motherIdle?.phase || motherIdleInitialState();
-  const isPhaseCardState = phase === MOTHER_IDLE_STATES.DRAFTING || phase === MOTHER_IDLE_STATES.COOLDOWN;
+  const isPhaseCardState =
+    phase === MOTHER_IDLE_STATES.DRAFTING ||
+    phase === MOTHER_IDLE_STATES.OFFERING ||
+    phase === MOTHER_IDLE_STATES.COOLDOWN;
   if (els.motherPanel) {
     els.motherPanel.classList.toggle(
       "mother-drafting-view",
@@ -9372,7 +9370,7 @@ function renderMotherReadout() {
   const proposalIconsHtml = motherV2ProposalIconsHtml(state.motherIdle?.intent || null, { phase });
   const draftStatusHtml = motherV2DraftStatusHtml({ phase });
   const statusText = motherV2StatusText();
-  const readoutHtml = phase === MOTHER_IDLE_STATES.DRAFTING || phase === MOTHER_IDLE_STATES.COOLDOWN
+  const readoutHtml = phase === MOTHER_IDLE_STATES.DRAFTING || phase === MOTHER_IDLE_STATES.OFFERING || phase === MOTHER_IDLE_STATES.COOLDOWN
     ? draftStatusHtml
     : proposalIconsHtml || draftStatusHtml;
   const proposalCardHtml = motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml });
@@ -10458,6 +10456,8 @@ function motherV2DraftStatusIconSvg(kind = "drafting") {
   let inner = "";
   if (iconKind === "braiding") {
     inner = '<path d="M4.8 8c2.9 0 3.3 7.8 7.2 7.8s4.3-7.8 7.2-7.8"/><path d="M4.8 16c2.9 0 3.3-7.8 7.2-7.8s4.3 7.8 7.2 7.8"/><circle cx="4.8" cy="8" r="1.2"/><circle cx="4.8" cy="16" r="1.2"/><circle cx="19.2" cy="8" r="1.2"/><circle cx="19.2" cy="16" r="1.2"/>';
+  } else if (iconKind === "ready") {
+    inner = '<path d="M5 12.7 9.3 17l9.7-9.7"/><path d="M12 4.2v2.1"/><path d="M6.8 6.1 8.2 7.5"/><path d="M17.2 6.1 15.8 7.5"/>';
   } else if (iconKind === "cooldown") {
     inner = '<circle cx="12" cy="12" r="7.4"/><path d="M12 8.4v4.4l2.9 2"/><path d="M9.6 3.8h4.8"/><path d="M6.2 6.2 4.6 4.6"/><path d="M17.8 6.2 19.4 4.6"/>';
   } else {
@@ -10468,13 +10468,26 @@ function motherV2DraftStatusIconSvg(kind = "drafting") {
 
 function motherV2DraftStatusHtml({ phase = null } = {}) {
   const statePhase = phase || state.motherIdle?.phase || motherIdleInitialState();
-  if (statePhase !== MOTHER_IDLE_STATES.DRAFTING && statePhase !== MOTHER_IDLE_STATES.COOLDOWN) return "";
+  if (
+    statePhase !== MOTHER_IDLE_STATES.DRAFTING &&
+    statePhase !== MOTHER_IDLE_STATES.OFFERING &&
+    statePhase !== MOTHER_IDLE_STATES.COOLDOWN
+  ) {
+    return "";
+  }
   if (statePhase === MOTHER_IDLE_STATES.COOLDOWN) {
     const accent = "rgba(143, 222, 255, 0.95)";
     const tooltip = "Mother is cooling down before the next intent cycle.";
     const label = "COOLDOWN";
     const icon = motherV2DraftStatusIconSvg("cooldown");
     return `<div class="mother-phase-icons is-draft-card" aria-label="${escapeHtml(tooltip)}"><span class="mother-phase-icon is-cooldown is-draft-card" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}" style="--phase-accent:${escapeHtml(accent)}">${icon}</span><span class="mother-phase-label is-draft-card" style="--phase-accent:${escapeHtml(accent)}">${escapeHtml(label)}</span></div>`;
+  }
+  if (statePhase === MOTHER_IDLE_STATES.OFFERING) {
+    const accent = "rgba(122, 238, 178, 0.96)";
+    const tooltip = "Mother proposal is ready. Deploy, dismiss, or reroll.";
+    const label = "PROPOSAL READY";
+    const icon = motherV2DraftStatusIconSvg("ready");
+    return `<div class="mother-phase-icons is-draft-card" aria-label="${escapeHtml(tooltip)}"><span class="mother-phase-icon is-ready is-draft-card" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}" style="--phase-accent:${escapeHtml(accent)}">${icon}</span><span class="mother-phase-label is-draft-card" style="--phase-accent:${escapeHtml(accent)}">${escapeHtml(label)}</span></div>`;
   }
   const idle = state.motherIdle || null;
   const isBraiding = Boolean(idle?.pendingPromptCompile);
