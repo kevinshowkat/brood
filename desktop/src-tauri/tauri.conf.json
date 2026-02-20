@@ -1,6 +1,6 @@
 {
   "build": {
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && ../scripts/stage_rust_engine_binary.sh",
     "beforeDevCommand": "npm run dev",
     "devPath": "http://localhost:5173",
     "distDir": "../dist"
@@ -33,6 +33,7 @@
       "identifier": "com.brood.app",
       "active": true,
       "targets": ["dmg"],
+      "resources": ["resources/brood-rs"],
       "icon": ["icons/icon.icns", "icons/icon.png"]
     }
   }
