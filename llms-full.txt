@@ -100,6 +100,28 @@ Mother (Brood's realtime proposal copilot) enters a drafting phase, assembles pr
 Brood is currently a **macOS-only desktop app** (Tauri).
 There is no web app, and Windows/Linux builds are not supported yet.
 
+## Rust Migration Roadmap
+
+### Current State (v0.1.6)
+
+- Desktop runtime defaults to native Rust (`brood-rs`).
+- macOS release packaging/signing/notarization includes the staged Rust engine binary.
+- Legacy Python engine remains available only for explicit compatibility/parity workflows.
+
+### Near-Term (Next Milestones)
+
+- Expand Rust provider parity coverage for desktop-critical image/edit/reference flows.
+- Keep event/artifact compatibility stable (`events.jsonl`, receipt/thread/summary payload shapes).
+- Complete broader live-probe validation and eliminate remaining migration edge cases.
+
+### Legacy Python Removal Plan (Brief)
+
+1. Lock parity: require Rust to pass provider/event/export parity matrix without compat fallback in normal runtime.
+2. Remove compat runtime path from desktop defaults (keep emergency switch only during short soak period).
+3. Delete Python-dependent runtime plumbing in desktop/Tauri after soak confidence is met.
+4. Remove legacy Python CLI/engine modules (`brood_engine/`) and migrate remaining references/tests to Rust equivalents.
+5. Remove Python release/runtime assumptions from docs/scripts/CI and cut a Rust-only release.
+
 ## Download (macOS)
 
 Get the latest universal DMG from GitHub Releases:
