@@ -896,7 +896,7 @@ const state = {
   pendingOddOneOut: null, // { sourceIds: [string, string, string], startedAt: number }
   pendingTriforce: null, // { sourceIds: [string, string, string], startedAt: number }
   pendingCreateLayers: null, // { sourceId, sourcePath, layerSpecs, nextIndex, createdIds, startedAt }
-  pendingPromptGenerate: null, // { prompt: string, model: string, startedAt: number }
+  pendingPromptGenerate: null, // { prompt: string, model: string, startedAt: number, anchorCss?: {x,y}, anchorWorldCss?: {x,y} }
   pendingMotherDraft: null, // { sourceIds: string[], startedAt: number }
   pendingRecast: null, // { sourceId: string, startedAt: number }
   pendingGeneration: null, // { remaining: number, provider: string|null, model: string|null }
@@ -940,6 +940,7 @@ const state = {
     wheelOnTap: false,
     moved: false,
   },
+  promptGenerateHoverCss: null, // last known canvas hover point in CSS px
   reelTouch: {
     x: 0,
     y: 0,
@@ -1260,6 +1261,7 @@ const INTENT_IMPORT_CURSOR = "default";
 const REEL_TOUCH_MOVE_VISIBLE_MS = 120;
 const REEL_TOUCH_TAP_VISIBLE_MS = 280;
 const REEL_TOUCH_RELEASE_VISIBLE_MS = 150;
+const PROMPT_GENERATE_SHIMMER_LOOP_MS = 1700;
 
 // Intent onboarding overlay icon assets.
 // Keep a procedural fallback so the app still renders if assets fail to load.
@@ -15327,6 +15329,33 @@ function canvasCssPointFromEvent(event) {
   return { x, y };
 }
 
+function clampCanvasCssPoint(ptCss) {
+  const x0 = Number(ptCss?.x);
+  const y0 = Number(ptCss?.y);
+  const wrap = els.canvasWrap;
+  const w = Number(wrap?.clientWidth) || 0;
+  const h = Number(wrap?.clientHeight) || 0;
+  if (!(w > 0 && h > 0)) {
+    return {
+      x: Number.isFinite(x0) ? x0 : 0,
+      y: Number.isFinite(y0) ? y0 : 0,
+    };
+  }
+  const x = Number.isFinite(x0) ? clamp(x0, 0, w) : Math.round(w * 0.5);
+  const y = Number.isFinite(y0) ? clamp(y0, 0, h) : Math.round(h * 0.5);
+  return { x, y };
+}
+
+function rememberPromptGenerateHoverCss(ptCss) {
+  if (!ptCss) return;
+  state.promptGenerateHoverCss = clampCanvasCssPoint(ptCss);
+}
+
+function currentPromptGenerateAnchorCss(preferred = null) {
+  const base = preferred || state.promptGenerateHoverCss || _defaultImportPointCss();
+  return clampCanvasCssPoint(base);
+}
+
 function canvasScreenCssToWorldCss(ptCss) {
   const p = ptCss || {};
   const x0 = Number(p.x) || 0;
@@ -15339,6 +15368,21 @@ function canvasScreenCssToWorldCss(ptCss) {
   return {
     x: (x0 - mxCss) / Math.max(ms, 0.0001),
     y: (y0 - myCss) / Math.max(ms, 0.0001),
+  };
+}
+
+function canvasWorldCssToScreenCss(ptWorldCss) {
+  const p = ptWorldCss || {};
+  const x0 = Number(p.x) || 0;
+  const y0 = Number(p.y) || 0;
+  if (state.canvasMode !== "multi") return { x: x0, y: y0 };
+  const ms = Number(state.multiView?.scale) || 1;
+  const dpr = getDpr();
+  const mxCss = (Number(state.multiView?.offsetX) || 0) / Math.max(dpr, 0.0001);
+  const myCss = (Number(state.multiView?.offsetY) || 0) / Math.max(dpr, 0.0001);
+  return {
+    x: mxCss + x0 * ms,
+    y: myCss + y0 * ms,
   };
 }
 
@@ -17182,7 +17226,7 @@ function normalizePromptGeneratePrompt(promptText = "") {
   return trimmed;
 }
 
-async function runPromptGenerate({ prompt = "", model = "", fromQueue = false } = {}) {
+async function runPromptGenerate({ prompt = "", model = "", fromQueue = false, anchorCss = null, anchorWorldCss = null } = {}) {
   if (!requireIntentUnlocked()) return;
   bumpInteraction();
 
@@ -17193,13 +17237,28 @@ async function runPromptGenerate({ prompt = "", model = "", fromQueue = false } 
   }
   const normalizedPrompt = normalizePromptGeneratePrompt(rawPrompt);
   const selectedModel = resolvePromptGenerateModel(model || settings.imageModel || DEFAULT_IMAGE_MODEL);
+  const resolvedAnchorCss = currentPromptGenerateAnchorCss(anchorCss);
+  const resolvedAnchorWorldCss =
+    anchorWorldCss && Number.isFinite(Number(anchorWorldCss.x)) && Number.isFinite(Number(anchorWorldCss.y))
+      ? {
+          x: Number(anchorWorldCss.x) || 0,
+          y: Number(anchorWorldCss.y) || 0,
+        }
+      : canvasScreenCssToWorldCss(resolvedAnchorCss);
 
   if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
     enqueueAction({
       label: "Prompt Generate",
       key: "prompt_generate",
       priority: ACTION_QUEUE_PRIORITY.user,
-      run: () => runPromptGenerate({ prompt: rawPrompt, model: selectedModel, fromQueue: true }),
+      run: () =>
+        runPromptGenerate({
+          prompt: rawPrompt,
+          model: selectedModel,
+          fromQueue: true,
+          anchorCss: resolvedAnchorCss,
+          anchorWorldCss: resolvedAnchorWorldCss,
+        }),
     });
     return;
   }
@@ -17221,6 +17280,8 @@ async function runPromptGenerate({ prompt = "", model = "", fromQueue = false } 
       prompt: normalizedPrompt,
       model: selectedModel,
       startedAt: Date.now(),
+      anchorCss: resolvedAnchorCss,
+      anchorWorldCss: resolvedAnchorWorldCss,
     };
     state.lastAction = "Prompt Generate";
     setStatus("Engine: prompt generate…");
@@ -19698,6 +19759,38 @@ function _computeImportPlacementsCss(n, center, tile, gap, canvasCssW, canvasCss
   return out;
 }
 
+function seedPromptGeneratePlacementRectCss(artifactId, pendingPromptGenerate = null) {
+  const id = String(artifactId || "").trim();
+  if (!id || state.freeformRects.has(id)) return;
+
+  const wrap = els.canvasWrap;
+  const canvasCssW = Number(wrap?.clientWidth) || 0;
+  const canvasCssH = Number(wrap?.clientHeight) || 0;
+  if (!(canvasCssW > 0 && canvasCssH > 0)) return;
+
+  const totalAfter = (state.images?.length || 0) + 1;
+  const tile = freeformDefaultTileCss(canvasCssW, canvasCssH, { count: Math.max(1, totalAfter) });
+  const anchorWorldCss = pendingPromptGenerate?.anchorWorldCss
+    ? {
+        x: Number(pendingPromptGenerate.anchorWorldCss.x) || 0,
+        y: Number(pendingPromptGenerate.anchorWorldCss.y) || 0,
+      }
+    : canvasScreenCssToWorldCss(currentPromptGenerateAnchorCss(pendingPromptGenerate?.anchorCss || null));
+  const rect = clampFreeformRectCss(
+    {
+      x: Math.round((Number(anchorWorldCss.x) || 0) - tile / 2),
+      y: Math.round((Number(anchorWorldCss.y) || 0) - tile / 2),
+      w: tile,
+      h: tile,
+      autoAspect: true,
+    },
+    canvasCssW,
+    canvasCssH,
+    freeformWorkspaceClampOptions(canvasCssW, canvasCssH, { minSize: 44 })
+  );
+  state.freeformRects.set(id, rect);
+}
+
 async function importLocalPathsAtCanvasPoint(
   paths,
   pointCss,
@@ -21800,6 +21893,9 @@ async function handleEventLegacy(event) {
         }
       }
     } else {
+      if (wasPromptGenerate) {
+        seedPromptGeneratePlacementRectCss(id, promptGenerate);
+      }
       addImage(
         {
           id,
@@ -24548,6 +24644,117 @@ function clearReelTouchPulse() {
   touch.down = false;
 }
 
+function resolvePendingPromptGenerateAnchorCss(pendingPromptGenerate = null) {
+  const pending = pendingPromptGenerate || state.pendingPromptGenerate;
+  if (!pending) return currentPromptGenerateAnchorCss();
+  const rawWorld = pending.anchorWorldCss;
+  const rawScreen = pending.anchorCss;
+
+  if (
+    state.canvasMode === "multi" &&
+    rawWorld &&
+    Number.isFinite(Number(rawWorld.x)) &&
+    Number.isFinite(Number(rawWorld.y))
+  ) {
+    return clampCanvasCssPoint(canvasWorldCssToScreenCss(rawWorld));
+  }
+  if (rawScreen && Number.isFinite(Number(rawScreen.x)) && Number.isFinite(Number(rawScreen.y))) {
+    return clampCanvasCssPoint(rawScreen);
+  }
+  if (rawWorld && Number.isFinite(Number(rawWorld.x)) && Number.isFinite(Number(rawWorld.y))) {
+    return clampCanvasCssPoint(rawWorld);
+  }
+  return currentPromptGenerateAnchorCss();
+}
+
+function renderPromptGeneratePlaceholder(octx, canvasW, canvasH) {
+  const pending = state.pendingPromptGenerate;
+  if (!pending || !octx) return;
+
+  const dpr = getDpr();
+  const canvasCssW = (Number(canvasW) || 0) / Math.max(dpr, 0.0001);
+  const canvasCssH = (Number(canvasH) || 0) / Math.max(dpr, 0.0001);
+  if (!(canvasCssW > 0 && canvasCssH > 0)) return;
+
+  const centerCss = resolvePendingPromptGenerateAnchorCss(pending);
+  const tileCss = freeformDefaultTileCss(canvasCssW, canvasCssH, {
+    count: Math.max(1, (state.images?.length || 0) + 1),
+  });
+  const canvasScale = state.canvasMode === "multi" ? Math.max(0.2, Number(state.multiView?.scale) || 1) : 1;
+  const drawCss = clamp(
+    Math.round(tileCss * canvasScale),
+    Math.max(44, Math.round(52 / Math.max(canvasScale, 0.001))),
+    Math.max(44, Math.round(Math.min(canvasCssW, canvasCssH) * 0.86))
+  );
+
+  const xCss = (Number(centerCss.x) || 0) - drawCss * 0.5;
+  const yCss = (Number(centerCss.y) || 0) - drawCss * 0.5;
+  const x = Math.round(xCss * dpr);
+  const y = Math.round(yCss * dpr);
+  const w = Math.max(1, Math.round(drawCss * dpr));
+  const h = Math.max(1, Math.round(drawCss * dpr));
+
+  const now = Date.now();
+  const startedAt = Number(pending.startedAt) || now;
+  const elapsedMs = Math.max(0, now - startedAt);
+  const shimmerProgress = (elapsedMs % PROMPT_GENERATE_SHIMMER_LOOP_MS) / PROMPT_GENERATE_SHIMMER_LOOP_MS;
+  const pulse = 0.5 + 0.5 * Math.sin((elapsedMs / 1000) * Math.PI * 2 * 0.78);
+  const sweepCenter = x + (w + h * 1.4) * shimmerProgress - h * 0.7;
+
+  octx.save();
+  octx.globalCompositeOperation = "source-over";
+  octx.fillStyle = `rgba(18, 32, 52, ${(0.28 + pulse * 0.1).toFixed(3)})`;
+  octx.fillRect(x, y, w, h);
+  octx.lineWidth = Math.max(1, Math.round(2 * dpr));
+  octx.strokeStyle = `rgba(116, 222, 255, ${(0.66 + pulse * 0.2).toFixed(3)})`;
+  octx.strokeRect(x, y, w, h);
+  octx.restore();
+
+  octx.save();
+  octx.beginPath();
+  octx.rect(x, y, w, h);
+  octx.clip();
+  const shimmer = octx.createLinearGradient(sweepCenter - h * 0.8, y, sweepCenter + h * 0.8, y + h);
+  shimmer.addColorStop(0, "rgba(110, 214, 255, 0)");
+  shimmer.addColorStop(0.45, "rgba(170, 240, 255, 0.12)");
+  shimmer.addColorStop(0.5, "rgba(232, 252, 255, 0.56)");
+  shimmer.addColorStop(0.55, "rgba(170, 240, 255, 0.12)");
+  shimmer.addColorStop(1, "rgba(110, 214, 255, 0)");
+  octx.fillStyle = shimmer;
+  octx.fillRect(x - h, y, w + h * 2, h);
+  octx.restore();
+
+  octx.save();
+  octx.strokeStyle = `rgba(166, 236, 255, ${(0.42 + pulse * 0.18).toFixed(3)})`;
+  octx.lineWidth = Math.max(1, Math.round(1.25 * dpr));
+  octx.setLineDash([Math.max(2, Math.round(8 * dpr)), Math.max(2, Math.round(6 * dpr))]);
+  octx.lineDashOffset = -Math.round(shimmerProgress * Math.max(10, 40 * dpr));
+  octx.strokeRect(
+    x - Math.max(1, Math.round(2 * dpr)),
+    y - Math.max(1, Math.round(2 * dpr)),
+    w + Math.max(2, Math.round(4 * dpr)),
+    h + Math.max(2, Math.round(4 * dpr))
+  );
+  octx.setLineDash([]);
+  octx.restore();
+
+  octx.save();
+  const cx = x + w * 0.5;
+  const cy = y + h * 0.5;
+  const mark = Math.max(8, Math.round(14 * dpr));
+  octx.lineWidth = Math.max(1, Math.round(1.6 * dpr));
+  octx.strokeStyle = "rgba(226, 252, 255, 0.9)";
+  octx.beginPath();
+  octx.moveTo(Math.round(cx - mark * 0.6), Math.round(cy));
+  octx.lineTo(Math.round(cx + mark * 0.6), Math.round(cy));
+  octx.moveTo(Math.round(cx), Math.round(cy - mark * 0.6));
+  octx.lineTo(Math.round(cx), Math.round(cy + mark * 0.6));
+  octx.stroke();
+  octx.restore();
+
+  requestRender();
+}
+
 function renderReelTouchIndicator(octx, canvasW, canvasH) {
   if (!isReelSizeLocked()) return;
   const touch = state.reelTouch;
@@ -24769,6 +24976,7 @@ function render() {
 
   renderIntentOverlay(octx, work.width, work.height);
   renderAmbientIntentNudges(octx, work.width, work.height);
+  renderPromptGeneratePlaceholder(octx, work.width, work.height);
   renderReelTouchIndicator(octx, work.width, work.height);
   renderMotherRolePreview();
   if (!effectsRuntime && !document.hidden && shouldAnimateEffectVisuals()) {
@@ -24808,6 +25016,7 @@ function installCanvasHandlers() {
   resetCanvasCursor();
   const handlePointerEnter = (event) => {
     resetCanvasCursor();
+    rememberPromptGenerateHoverCss(canvasCssPointFromEvent(event));
     if (!isReelSizeLocked()) return;
     reelTouchPulseFromCanvasPoint(canvasPointFromEvent(event), { down: false, lingerMs: REEL_TOUCH_MOVE_VISIBLE_MS });
     requestRender();
@@ -24886,6 +25095,7 @@ function installCanvasHandlers() {
             requestRender();
           }
 	      const pCss = canvasCssPointFromEvent(event);
+          rememberPromptGenerateHoverCss(pCss);
           const intentActive = intentModeActive();
           const wheelModifier = Boolean(event.metaKey || event.ctrlKey);
           const motherRoleHit = motherV2InInteractivePhase() && motherV2IsAdvancedVisible() ? hitTestMotherRoleGlyph(p) : null;
@@ -25187,6 +25397,7 @@ function installCanvasHandlers() {
 		    if (!img) return;
         const p = canvasPointFromEvent(event);
         const pCss = canvasCssPointFromEvent(event);
+        rememberPromptGenerateHoverCss(pCss);
         const wheelModifier = Boolean(event.metaKey || event.ctrlKey);
         if (isReelSizeLocked()) {
           reelTouchPulseFromCanvasPoint(p, { down: event.button === 0, lingerMs: REEL_TOUCH_TAP_VISIBLE_MS });
@@ -25282,6 +25493,7 @@ function installCanvasHandlers() {
   const handlePointerMove = (event) => {
     const p = canvasPointFromEvent(event);
     const pCss = canvasCssPointFromEvent(event);
+    rememberPromptGenerateHoverCss(pCss);
     if (isReelSizeLocked()) {
       const down = Boolean(state.pointer?.active && (Number(event?.buttons) & 1));
       reelTouchPulseFromCanvasPoint(p, {

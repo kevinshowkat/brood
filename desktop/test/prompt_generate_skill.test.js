@@ -22,6 +22,11 @@ test("Prompt Generate skill is wired into action grid and dispatch path", () => 
   assert.match(app, /showPromptGeneratePanel\(\)/);
   assert.match(app, /async function runPromptGenerate\(/);
   assert.match(app, /state\.pendingPromptGenerate/);
+  assert.match(app, /function currentPromptGenerateAnchorCss\(/);
+  assert.match(app, /function renderPromptGeneratePlaceholder\(/);
+  assert.match(app, /seedPromptGeneratePlacementRectCss\(id, promptGenerate\)/);
+  assert.match(app, /anchorCss:\s*resolvedAnchorCss/);
+  assert.match(app, /anchorWorldCss:\s*resolvedAnchorWorldCss/);
   assert.match(app, /if \(targetKey === "prompt_generate"\)/);
 });
 
