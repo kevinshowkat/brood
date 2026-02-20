@@ -5,6 +5,7 @@ This repo ships via GitHub Releases.
 When you push a tag like `v0.1.0`, GitHub Actions will:
 - run a remote macOS **clean-machine smoke install** (build DMG, install, launch)
 - build a universal macOS app bundle
+- stage the native Rust engine binary at `desktop/src-tauri/resources/brood-rs`
 - code sign it (Developer ID Application)
 - notarize it
 - attach the signed/notarized `.dmg` to a draft GitHub Release for that tag
@@ -28,6 +29,7 @@ Set these secrets in your GitHub repository:
 
 Notes:
 - The workflow imports the certificate into a temporary build keychain and auto-detects the `Developer ID Application` identity to use.
+- Release staging signs `resources/brood-rs` with hardened runtime + secure timestamp before notarization.
 - The workflow enforces `tag == v${tauri.conf.json package.version}` to avoid accidental mismatches.
 
 ## Cut A Release
@@ -57,3 +59,10 @@ scripts/macos_clean_machine_smoke.sh
 ```
 
 Then discard/revert the snapshot. This gives repeatable install confidence without using multiple physical Macs.
+
+## Notarization Troubleshooting
+
+If notarization fails with messages referencing `Contents/Resources/resources/brood-rs` (unsigned, missing timestamp, or no hardened runtime), confirm:
+- `APPLE_SIGNING_IDENTITY` is detected in the workflow.
+- `scripts/stage_rust_engine_binary.sh` ran during `beforeBuildCommand`.
+- The release is built from a commit that includes the signing step for staged `brood-rs`.

@@ -23,27 +23,31 @@
 
 ## High-Signal Code Entrypoints
 
-- Engine CLI routing: [`brood_engine/cli.py`](brood_engine/cli.py)
-- Engine orchestration: [`brood_engine/engine.py`](brood_engine/engine.py)
-- Providers/models: [`brood_engine/providers/`](brood_engine/providers/), [`brood_engine/models/`](brood_engine/models/)
+- Rust engine CLI routing: [`rust_engine/crates/brood-cli/src/main.rs`](rust_engine/crates/brood-cli/src/main.rs)
+- Rust engine orchestration: [`rust_engine/crates/brood-engine/src/lib.rs`](rust_engine/crates/brood-engine/src/lib.rs)
+- Rust contracts/events: [`rust_engine/crates/brood-contracts/src/events.rs`](rust_engine/crates/brood-contracts/src/events.rs)
+- Python parity reference: [`brood_engine/cli.py`](brood_engine/cli.py), [`brood_engine/engine.py`](brood_engine/engine.py), [`brood_engine/providers/`](brood_engine/providers/)
 - Desktop UI (canvas + Abilities): [`desktop/src/canvas_app.js`](desktop/src/canvas_app.js), [`desktop/src/main.js`](desktop/src/main.js)
 - Tauri backend + FS scope: [`desktop/src-tauri/src/main.rs`](desktop/src-tauri/src/main.rs), [`desktop/src-tauri/tauri.conf.json`](desktop/src-tauri/tauri.conf.json)
 - Desktop dev runner: [`scripts/dev_desktop.sh`](scripts/dev_desktop.sh)
 
 ## Task Routing
 
-- Add or modify an Ability: [`desktop/src/canvas_app.js`](desktop/src/canvas_app.js) + [`brood_engine/cli.py`](brood_engine/cli.py) / [`brood_engine/engine.py`](brood_engine/engine.py)
-- Run artifacts and `events.jsonl`: [`brood_engine/runs/`](brood_engine/runs/) + [`docs/desktop.md`](docs/desktop.md)
-- Provider/model changes: [`brood_engine/providers/`](brood_engine/providers/) + [`brood_engine/models/`](brood_engine/models/)
+- Add or modify an Ability: [`desktop/src/canvas_app.js`](desktop/src/canvas_app.js) + [`rust_engine/crates/brood-cli/src/main.rs`](rust_engine/crates/brood-cli/src/main.rs)
+- Run artifacts and `events.jsonl`: [`rust_engine/crates/brood-contracts/src/events.rs`](rust_engine/crates/brood-contracts/src/events.rs) + [`docs/desktop.md`](docs/desktop.md)
+- Provider/model changes: [`rust_engine/crates/brood-engine/src/lib.rs`](rust_engine/crates/brood-engine/src/lib.rs) + Python parity refs in [`brood_engine/providers/`](brood_engine/providers/)
 - Desktop import/export and FS scope: [`desktop/src-tauri/tauri.conf.json`](desktop/src-tauri/tauri.conf.json) + [`desktop/src-tauri/src/main.rs`](desktop/src-tauri/src/main.rs)
 
 ## Safe Commands
 
 - `./scripts/dev_desktop.sh`
-- `python -m venv .venv && source .venv/bin/activate && pip install -e .[dev]`
-- `python -m pytest`
+- `cd rust_engine && cargo fmt && cargo test`
+- `cd desktop && npm test`
+- `cd desktop/src-tauri && cargo fmt --check && cargo check`
+- `python -m pytest` (legacy parity checks)
 
 ## Notes
 
 - Desktop expects Tauri v1 APIs (`@tauri-apps/api` v1 + v1 CLI).
+- Desktop runtime is native Rust by default; use `BROOD_RS_MODE=compat` only for explicit compatibility testing.
 - Do not commit secrets; use `.env` (gitignored) based on `.env.example`.
