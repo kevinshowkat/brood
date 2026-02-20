@@ -41,21 +41,13 @@ There is no web app, and Windows/Linux builds are not supported yet.
 
 - Desktop runtime defaults to native Rust (`brood-rs`).
 - macOS release packaging/signing/notarization includes the staged Rust engine binary.
-- Legacy Python engine remains available only for explicit compatibility/parity workflows.
+- Legacy Python runtime paths have been retired from the repository.
 
 ### Near-Term (Next Milestones)
 
 - Expand Rust provider parity coverage for desktop-critical image/edit/reference flows.
 - Keep event/artifact compatibility stable (`events.jsonl`, receipt/thread/summary payload shapes).
 - Complete broader live-probe validation and eliminate remaining migration edge cases.
-
-### Legacy Python Removal Plan (Brief)
-
-1. Lock parity: require Rust to pass provider/event/export parity matrix without compat fallback in normal runtime.
-2. Retire compat runtime path from desktop runtime and fail explicitly when native launch/export fails.
-3. Delete Python-dependent runtime plumbing in desktop/Tauri after soak confidence is met.
-4. Remove legacy Python CLI/engine modules (`brood_engine/`) and migrate remaining references/tests to Rust equivalents.
-5. Remove Python release/runtime assumptions from docs/scripts/CI and cut a Rust-only release.
 
 ## Download (macOS)
 
@@ -159,23 +151,6 @@ cargo run -p brood-cli -- run --prompt "hero image for Series A" --out /tmp/broo
 cargo run -p brood-cli -- recreate --reference path/to/image.png --out /tmp/brood-recreate
 ```
 
-### Python CLI (legacy/parity only; not used by desktop runtime)
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev]
-
-# Chat loop (legacy)
-brood chat --out /tmp/brood-run --events /tmp/brood-run/events.jsonl
-
-# Single run (legacy)
-brood run --prompt "hero image for Series A" --out /tmp/brood-run
-
-# Recreate flow (legacy)
-brood recreate --reference path/to/image.png --out /tmp/brood-recreate
-```
-
 ## API Keys
 
 - Copy `.env.example` to `.env` and fill provider keys.
@@ -209,9 +184,8 @@ Pricing/latency override file:
 ## Project Layout
 
 - `rust_engine/` native engine and CLI (default desktop runtime)
-- `brood_engine/` legacy Python engine and CLI (compat/parity reference)
 - `desktop/` Tauri desktop app
-- `tests/` pytest suite
+- `desktop/test/` desktop JS tests
 - `docs/param_forge_reference.md` Param Forge reference notes
 - `docs/desktop.md` desktop UI notes (abilities + workflows)
 

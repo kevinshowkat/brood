@@ -22,10 +22,7 @@ use tauri::{Manager, State};
 fn find_repo_root(start: &Path) -> Option<PathBuf> {
     let mut current = Some(start);
     while let Some(dir) = current {
-        if (dir.join("rust_engine").is_dir() && dir.join("desktop").is_dir())
-            || dir.join("brood_engine").is_dir()
-            || dir.join("pyproject.toml").exists()
-        {
+        if dir.join("rust_engine").is_dir() && dir.join("desktop").is_dir() {
             return Some(dir.to_path_buf());
         }
         current = dir.parent();

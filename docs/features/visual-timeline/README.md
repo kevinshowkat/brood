@@ -46,7 +46,7 @@ Each node records:
 
 ## Testing
 Standard regression set:
-- `python -m pytest`
+- `cd rust_engine && cargo test`
 - `cd desktop && npm run build`
 
 ## Notes / Follow-Ups

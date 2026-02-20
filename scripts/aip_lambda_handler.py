@@ -350,7 +350,9 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             if isinstance(tag, str) and tag.startswith("desktop"):
                 commands.append("./scripts/dev_desktop.sh")
             if isinstance(tag, str) and (tag.startswith("engine") or tag == "tests"):
-                commands.append("python -m pytest")
+                commands.append("cd rust_engine && cargo test")
+            if isinstance(tag, str) and tag == "tests":
+                commands.append("cd desktop && npm test")
 
     # Fallback entrypoints.
     if isinstance(fallback, list):

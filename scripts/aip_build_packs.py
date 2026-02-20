@@ -157,53 +157,6 @@ def _snippets_windows(lines: list[str], regexes: list[str], before: int, after: 
     return snippets
 
 
-def _snippets_py_def_blocks(lines: list[str], fn_names: list[str], max_lines_per_block: int = 260) -> list[dict[str, Any]]:
-    # Extract top-level def blocks by name (simple indentation-based slicing).
-    idx_by_name: dict[str, int] = {}
-    for i, line in enumerate(lines):
-        if not line.startswith("def "):
-            continue
-        m = re.match(r"^def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", line)
-        if not m:
-            continue
-        name = m.group(1)
-        if name in fn_names and name not in idx_by_name:
-            idx_by_name[name] = i
-
-    starts = sorted(idx_by_name.values())
-    if not starts:
-        return []
-
-    # Determine block end by next top-level def/class.
-    boundaries: list[int] = []
-    for i, line in enumerate(lines):
-        if line.startswith("def ") or line.startswith("class "):
-            boundaries.append(i)
-    boundaries.append(len(lines))
-
-    def next_boundary(start: int) -> int:
-        for b in boundaries:
-            if b > start:
-                return b
-        return len(lines)
-
-    snippets: list[dict[str, Any]] = []
-    for name in fn_names:
-        if name not in idx_by_name:
-            continue
-        start = idx_by_name[name]
-        end = next_boundary(start)
-        end = min(end, start + max_lines_per_block)
-        snippets.append(
-            {
-                "start_line": start + 1,
-                "end_line": end,
-                "content": "".join(lines[start:end]),
-            }
-        )
-    return snippets
-
-
 def _build_file_entry(
     rel_path: str,
     *,
@@ -273,14 +226,20 @@ def _build_file_entry(
         )
         for s in snippets:
             s["purpose"] = "Quick Actions styles (window)"
-    elif rel_path == "brood_engine/cli.py":
-        snippets = _snippets_py_def_blocks(
+    elif rel_path == "rust_engine/crates/brood-cli/src/main.rs":
+        snippets = _snippets_windows(
             lines,
-            fn_names=["_build_parser", "_handle_chat", "_handle_run", "_handle_recreate", "_handle_export"],
-            max_lines_per_block=300,
+            regexes=[
+                r"^fn\s+run_chat_native\s*\(",
+                r"^fn\s+run_run_native\s*\(",
+                r"^fn\s+run_recreate_native\s*\(",
+                r"^fn\s+run_export_native\s*\(",
+            ],
+            before=0,
+            after=260,
         )
         for s in snippets:
-            s["purpose"] = "CLI entrypoints (def block)"
+            s["purpose"] = "CLI entrypoints (window)"
     else:
         # Generic fallback: include a head slice.
         head_lines = min(len(lines), 260)

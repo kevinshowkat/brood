@@ -49,7 +49,7 @@ To fix this, the engine now emits a dedicated completion event:
 - `recreate_done` (always emitted via `finally`)
 
 Changes:
-- `brood_engine/recreate/loop.py`: emits `recreate_done` with `success` and `error`.
+- `rust_engine/crates/brood-cli/src/main.rs`: emits `recreate_done` with `success` and `error`.
 - `desktop/src/canvas_app.js`: clears `state.pendingRecreate` on `recreate_done`.
 
 ### Preventing Background Describe From Competing
@@ -58,11 +58,10 @@ Vision describe is treated as background work:
 
 ## Testing
 Standard regression set:
-- `python -m pytest`
+- `cd rust_engine && cargo test`
 - `cd desktop && npm run build`
 
 ## Follow-Ups / Next Steps
 - Add an optional queue UI (count + current item) in the HUD.
 - Add user controls: cancel queued items, reprioritize, or "clear queue".
 - Unify other background tasks (e.g. background canvas diagnose / always-on vision) to enqueue at lower priority instead of direct PTY writes.
-

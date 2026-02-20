@@ -44,9 +44,8 @@ Primary file: `desktop/src/canvas_app.js`
 
 ### Engine
 Primary files:
-- `brood_engine/chat/intent_parser.py` (new slash intents)
-- `brood_engine/cli.py` (handlers)
-- `brood_engine/realtime/openai_realtime.py` (background realtime websocket worker)
+- `rust_engine/crates/brood-contracts/src/chat/intent_parser.rs` (new slash intents)
+- `rust_engine/crates/brood-cli/src/main.rs` (handlers + background realtime session worker)
 
 Slash commands:
 - `/canvas_context_rt_start`
@@ -64,7 +63,7 @@ Events:
 
 Threading:
 - The realtime websocket client runs off the synchronous chat loop in a dedicated background thread.
-- `brood_engine/runs/events.py` uses a lock to keep `events.jsonl` append operations safe across threads.
+- `rust_engine/crates/brood-contracts/src/events.rs` uses a lock to keep `events.jsonl` append operations safe across threads.
 
 ## Config
 - `OPENAI_API_KEY` (or `OPENAI_API_KEY_BACKUP`) is required.
