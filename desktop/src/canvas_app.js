@@ -404,6 +404,12 @@ const els = {
   aestheticOnboardingNext: document.getElementById("aesthetic-onboarding-next"),
 };
 
+function parseRustNativePreference(raw) {
+  const normalized = String(raw == null ? "" : raw).trim().toLowerCase();
+  if (!normalized) return true;
+  return !["0", "false", "off", "no"].includes(normalized);
+}
+
 const storedRustNative = localStorage.getItem("brood.rsNative");
 const rustNativeDefaultMigrated = localStorage.getItem("brood.rsNative.default.v2") === "1";
 if (!rustNativeDefaultMigrated) {
@@ -414,11 +420,12 @@ if (!rustNativeDefaultMigrated) {
 } else if (storedRustNative == null) {
   localStorage.setItem("brood.rsNative", "1");
 }
-const effectiveRustNative = localStorage.getItem("brood.rsNative");
+const effectiveRustNative = parseRustNativePreference(localStorage.getItem("brood.rsNative"));
+localStorage.setItem("brood.rsNative", effectiveRustNative ? "1" : "0");
 
 const settings = {
   memory: localStorage.getItem("brood.memory") === "1",
-  rustNative: effectiveRustNative == null ? true : effectiveRustNative === "1",
+  rustNative: effectiveRustNative,
   alwaysOnVision: (() => {
     const raw = localStorage.getItem("brood.alwaysOnVision");
     // Default ON: Mother suggestions depend on realtime canvas context.
@@ -1893,7 +1900,7 @@ function scheduleVisionDescribeBurst(paths, { priority = true, maxConcurrent = U
   }
   if (!unique.length) return;
   for (let i = 0; i < unique.length; i += 1) {
-    scheduleVisionDescribe(unique[i], { priority: Boolean(priority) && i < burstLimit });
+    scheduleVisionDescribe(unique[i], { priority: Boolean(priority) && i < burstLimit, fallback: true });
   }
 }
 
@@ -1991,11 +1998,11 @@ function scheduleVisionDescribeAll() {
   if (!allowVisionDescribe()) return;
   if (!allowVisionDescribeInCurrentMode()) return;
   const active = getActiveImage();
-  if (active?.path) scheduleVisionDescribe(active.path, { priority: true });
+  if (active?.path) scheduleVisionDescribe(active.path, { priority: true, fallback: true });
   for (const item of state.images) {
     if (!item?.path) continue;
     if (active?.path && item.path === active.path) continue;
-    scheduleVisionDescribe(item.path);
+    scheduleVisionDescribe(item.path, { fallback: true });
   }
 }
 
@@ -3961,7 +3968,7 @@ function buildMotherRealtimeContextEnvelope({ motherContextPayload = null, image
       return {
         id: imageId,
         file: image.file ? String(image.file) : pathText ? basename(pathText) : null,
-        vision_desc: image.vision_desc ? clampText(String(image.vision_desc || ""), 64) : null,
+        vision_desc: normalizeVisionHintForIntent(image.vision_desc, { maxChars: 64 }),
         origin,
         rect_norm: rectNorm,
       };
@@ -4009,7 +4016,7 @@ function buildIntentContextEnvelope(frameId, { motherContextPayload = null } = {
     const item = imageId ? state.imagesById.get(imageId) : null;
     const rect = imageId ? state.freeformRects.get(imageId) : null;
     if (!item?.path || !rect) continue;
-    const visionDesc = item?.visionDesc ? clampText(String(item.visionDesc), 64) : null;
+    const visionDesc = normalizeVisionHintForIntent(item?.visionDesc, { maxChars: 64 });
     const vmeta = item?.visionDescMeta || null;
     const x = Number(rect.x) || 0;
     const y = Number(rect.y) || 0;
@@ -4021,6 +4028,7 @@ function buildIntentContextEnvelope(frameId, { motherContextPayload = null } = {
     imageOriginById.set(String(imageId), origin);
     images.push({
       id: String(imageId),
+      path: String(item.path),
       file: basename(item.path),
       origin,
       import_index: (state.images || []).findIndex((im) => im?.id === imageId),
@@ -4327,11 +4335,105 @@ const VISION_LABEL_DETAIL_TOKENS = new Set([
   "three",
 ]);
 
-function _normalizeVisionLabel(raw, { maxChars = 32 } = {}) {
-  const s = String(raw || "")
+const VISION_LABEL_ARTICLE_TOKENS = new Set(["a", "an", "the"]);
+const VISION_LABEL_AUX_TOKENS = new Set(["is", "are", "was", "were"]);
+
+function _visionTokenCore(raw) {
+  return String(raw || "")
+    .replace(/^[^A-Za-z0-9]+/g, "")
+    .replace(/[^A-Za-z0-9]+$/g, "");
+}
+
+function _visionTokenStartsUpper(raw) {
+  const core = _visionTokenCore(raw);
+  if (!core) return false;
+  const first = core.charAt(0);
+  return first >= "A" && first <= "Z";
+}
+
+function _compactVisionCaptionFragment(raw) {
+  let text = String(raw || "")
     .replace(/[\r\n\t]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  if (!text) return "";
+
+  text = text
+    .replace(/^["']+|["']+$/g, "")
+    .replace(/[.,;:!?]+$/g, "")
+    .replace(/[,:;]+/g, " ")
+    .trim();
+  if (!text) return "";
+
+  text = text.replace(/^(?:an?\s+)?(?:photo|image|picture)\s+of\s+/i, "").trim();
+  if (!text) return "";
+
+  let tokens = text
+    .split(/\s+/g)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  if (!tokens.length) return "";
+
+  while (
+    tokens.length > 1 &&
+    VISION_LABEL_ARTICLE_TOKENS.has(_visionTokenCore(tokens[0]).toLowerCase())
+  ) {
+    tokens.shift();
+  }
+
+  if (tokens.length >= 3) {
+    const second = _visionTokenCore(tokens[1]).toLowerCase();
+    if (VISION_LABEL_AUX_TOKENS.has(second)) {
+      tokens.splice(1, 1);
+    } else if (tokens.length >= 4) {
+      const third = _visionTokenCore(tokens[2]).toLowerCase();
+      if (
+        VISION_LABEL_AUX_TOKENS.has(third) &&
+        _visionTokenStartsUpper(tokens[0]) &&
+        _visionTokenStartsUpper(tokens[1])
+      ) {
+        tokens.splice(2, 1);
+      }
+    }
+  }
+
+  if (tokens.length >= 3) {
+    for (let i = 1; i < tokens.length - 1; i += 1) {
+      const current = _visionTokenCore(tokens[i]).toLowerCase();
+      if (!VISION_LABEL_AUX_TOKENS.has(current)) continue;
+      const next = _visionTokenCore(tokens[i + 1]).toLowerCase();
+      if (next.endsWith("ing")) {
+        tokens.splice(i, 1);
+        break;
+      }
+    }
+  }
+
+  if (tokens.length > 2) {
+    const lastIdx = tokens.length - 1;
+    tokens = tokens.filter((token, idx) => {
+      if (idx <= 0 || idx >= lastIdx) return true;
+      return !VISION_LABEL_AUX_TOKENS.has(_visionTokenCore(token).toLowerCase());
+    });
+  }
+
+  if (tokens.length > 2) {
+    tokens = tokens.filter((token, idx) => {
+      if (idx === 0) return true;
+      return !VISION_LABEL_ARTICLE_TOKENS.has(_visionTokenCore(token).toLowerCase());
+    });
+  }
+
+  return tokens
+    .map((token) => _visionTokenCore(token))
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function _normalizeVisionLabel(raw, { maxChars = 32 } = {}) {
+  const s = _compactVisionCaptionFragment(raw);
   if (!s) return "";
   // Keep it short and HUD-friendly. (Even though it may not be shown in intent mode,
   // we reuse the same field for later HUD rendering.)
@@ -4340,9 +4442,34 @@ function _normalizeVisionLabel(raw, { maxChars = 32 } = {}) {
   return clipped.replace(/[|]/g, "/").trim();
 }
 
+function normalizeVisionHintForIntent(raw, { maxChars = 64 } = {}) {
+  const label = _normalizeVisionLabel(raw, { maxChars });
+  if (!label) return null;
+  if (shouldBackfillVisionLabel(label)) return null;
+  return label;
+}
+
 function _visionLabelTokens(raw) {
   const s = String(raw || "").toLowerCase();
   return s.match(/[a-z0-9]+/g) || [];
+}
+
+function _visionLabelNameTokenCount(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return 0;
+  const tokens = text.split(/\s+/g);
+  let count = 0;
+  for (const tokenRaw of tokens) {
+    const token = String(tokenRaw || "").replace(/[^A-Za-z0-9'-]/g, "");
+    if (!token || token.length < 3) continue;
+    if (!/^[A-Z]/.test(token)) continue;
+    const lower = token.toLowerCase();
+    if (VISION_LABEL_GENERIC_TOKENS.has(lower)) continue;
+    if (VISION_LABEL_DETAIL_TOKENS.has(lower)) continue;
+    count += 1;
+  }
+  if (/\b[A-Z][a-z]+[A-Z][a-z]+\b/.test(text)) count += 1;
+  return count;
 }
 
 function _isGenericVisionLabel(raw) {
@@ -4384,8 +4511,14 @@ function shouldPreferIncomingVisionLabel(existingRaw, incomingRaw) {
   if (existingGeneric && !incomingGeneric) return true;
   if (!existingGeneric && incomingGeneric) return false;
 
+  const existingNameTokens = _visionLabelNameTokenCount(existingRaw);
+  const incomingNameTokens = _visionLabelNameTokenCount(incomingRaw);
+  if (incomingNameTokens >= 2 && existingNameTokens < 2) return true;
+  if (existingNameTokens >= 2 && incomingNameTokens < 2) return false;
+
   const existingScore = _visionLabelSpecificityScore(existing);
   const incomingScore = _visionLabelSpecificityScore(incoming);
+  if (incomingNameTokens > existingNameTokens && incomingScore >= existingScore) return true;
   if (incomingScore > existingScore) return true;
   if (incomingScore < existingScore) return false;
   // Same score: prefer a slightly longer label only if it adds more lexical signal.
@@ -4394,9 +4527,8 @@ function shouldPreferIncomingVisionLabel(existingRaw, incomingRaw) {
 
 function shouldBackfillVisionLabel(raw) {
   const label = _normalizeVisionLabel(raw, { maxChars: 32 });
-  if (!label) return true;
-  if (_isGenericVisionLabel(label)) return true;
-  return _visionLabelSpecificityScore(label) < 3;
+  // Keep fallback non-heuristic: only backfill when realtime provided no label.
+  return !label;
 }
 
 function maybeScheduleVisionDescribeFallback(item, label) {
@@ -4451,7 +4583,7 @@ function extractIntentImageDescriptions(parsed) {
     if (!item || typeof item !== "object") continue;
     const imageId = item.image_id ? String(item.image_id) : item.id ? String(item.id) : "";
     const labelRaw = item.label ?? item.description ?? item.text ?? "";
-    const label = _normalizeVisionLabel(labelRaw, { maxChars: 32 });
+    const label = _normalizeVisionLabel(labelRaw, { maxChars: 64 });
     const confidence = typeof item.confidence === "number" ? item.confidence : null;
     if (!imageId || !label) continue;
     out.push({ image_id: imageId, label, confidence });
@@ -10086,7 +10218,7 @@ function motherV2VisionReadyForIntent({ schedule = true } = {}) {
     const desc = typeof item.visionDesc === "string" ? item.visionDesc.trim() : "";
     if (desc) continue;
     missingIds.push(String(imageId));
-    if (schedule) scheduleVisionDescribe(item.path, { priority: true });
+    if (schedule) scheduleVisionDescribe(item.path, { priority: true, fallback: true });
   }
   return {
     requiredIds,
@@ -12643,11 +12775,12 @@ function motherV2IntentPayload() {
   const canvasSummary = motherV2CanvasContextSummaryHint();
   const images = motherIdleBaseImageItems().map((item) => {
     const rect = state.freeformRects.get(item.id) || null;
+    const visionDesc = normalizeVisionHintForIntent(item?.visionDesc, { maxChars: 64 }) || "";
     return {
       id: String(item.id || ""),
       path: String(item.path || ""),
       file: basename(item.path || ""),
-      vision_desc: typeof item?.visionDesc === "string" ? item.visionDesc.trim() : "",
+      vision_desc: visionDesc,
       rect: rect
         ? {
             x: Number(rect.x) || 0,
@@ -12963,7 +13096,7 @@ async function motherV2RequestPromptCompile() {
     images: motherIdleBaseImageItems().map((item) => ({
       id: String(item.id || ""),
       file: basename(item.path || ""),
-      vision_desc: typeof item?.visionDesc === "string" ? item.visionDesc.trim() : "",
+      vision_desc: normalizeVisionHintForIntent(item?.visionDesc, { maxChars: 64 }) || "",
     })),
   };
   const payloadPath = await motherV2WritePayloadFile("mother_prompt_compile", payload);
@@ -18275,7 +18408,7 @@ async function setActiveImage(id, { preserveSelection = false } = {}) {
   chooseSpawnNodes();
   await setEngineActiveImage(item.path);
   if (!item.visionDesc) {
-    scheduleVisionDescribe(item.path, { priority: true });
+    scheduleVisionDescribe(item.path, { priority: true, fallback: true });
   }
   try {
     item.img = await loadImage(item.path);
@@ -18317,7 +18450,7 @@ function addImage(item, { select = false } = {}) {
   appendFilmstripThumb(item);
   if (state.canvasMode === "multi") {
     // Multi-canvas is the "working set"; keep HUD descriptions available for all tiles.
-    scheduleVisionDescribe(item.path);
+    scheduleVisionDescribe(item.path, { fallback: true });
   }
   if (item.receiptPath && !item.receiptMetaChecked) {
     ensureReceiptMeta(item).catch(() => {});
@@ -18549,31 +18682,31 @@ async function replaceImageInPlace(
 
   updateFilmstripThumb(item);
   if (item.receiptPath) ensureReceiptMeta(item).catch(() => {});
-	  if (state.activeId === targetId) {
-	    try {
-	      item.img = await loadImage(item.path);
+  if (state.activeId === targetId) {
+    try {
+      item.img = await loadImage(item.path);
       item.width = item.img?.naturalWidth || null;
       item.height = item.img?.naturalHeight || null;
     } catch (err) {
       console.error(err);
     }
     await setEngineActiveImage(item.path);
-    if (!item.visionDesc) scheduleVisionDescribe(item.path, { priority: true });
+    if (!item.visionDesc) scheduleVisionDescribe(item.path, { priority: true, fallback: true });
     renderSelectionMeta();
     chooseSpawnNodes();
     renderHudReadout();
-	    resetViewToFit();
-	    requestRender();
-	  }
-	    scheduleVisualPromptWrite();
-	    markAlwaysOnVisionDirty("image_replace");
-	    scheduleAlwaysOnVision();
-    motherIdleSyncFromInteraction({ userInteraction: false });
-    if (intentAmbientActive()) {
-      scheduleAmbientIntentInference({ immediate: true, reason: "replace", imageIds: [targetId] });
-    }
-			  return true;
-			}
+    resetViewToFit();
+    requestRender();
+  }
+  scheduleVisualPromptWrite();
+  markAlwaysOnVisionDirty("image_replace");
+  scheduleAlwaysOnVision();
+  motherIdleSyncFromInteraction({ userInteraction: false });
+  if (intentAmbientActive()) {
+    scheduleAmbientIntentInference({ immediate: true, reason: "replace", imageIds: [targetId] });
+  }
+  return true;
+}
 
 async function setEngineActiveImage(path) {
   if (!path) return;
@@ -20551,7 +20684,7 @@ async function spawnEngine({ forceCompat = false } = {}) {
     const active = getActiveImage();
     if (active?.path) {
       await invoke("write_pty", { data: `${PTY_COMMANDS.USE} ${active.path}\n` }).catch(() => {});
-      if (!active.visionDesc) scheduleVisionDescribe(active.path, { priority: true });
+      if (!active.visionDesc) scheduleVisionDescribe(active.path, { priority: true, fallback: true });
     }
     processDescribeQueue();
     setStatus(`Engine: started (${state.engineLaunchMode})`);
@@ -21573,10 +21706,15 @@ async function handleEventLegacy(event) {
             if (!imageId || !label) continue;
             const imgItem = state.imagesById.get(imageId) || null;
             if (!imgItem) continue;
-            const prevLabel = _normalizeVisionLabel(imgItem.visionDesc, { maxChars: 32 });
-            // Keep labels stable, but allow upgrades from bland early labels when realtime
-            // later produces a more specific descriptor.
-            if (prevLabel && !shouldPreferIncomingVisionLabel(prevLabel, label)) {
+            const prevLabel = _normalizeVisionLabel(imgItem.visionDesc, { maxChars: 64 });
+            const prevSource = String(imgItem?.visionDescMeta?.source || "").trim();
+            const keepExplicitDescribe =
+              Boolean(prevLabel) &&
+              (prevSource === "openai_realtime_describe" || prevSource === "openai_vision");
+            if (keepExplicitDescribe) {
+              continue;
+            }
+            if (prevLabel && prevLabel === label) {
               maybeScheduleVisionDescribeFallback(imgItem, prevLabel);
               continue;
             }
@@ -21719,6 +21857,7 @@ async function handleEventLegacy(event) {
         }
         if (matchAmbient && ambient) {
           applyAmbientIntentFallback("parse_failed", { message: intentParseMessage });
+          maybeScheduleVisionDescribeFallbackForAmbientRealtime(ambient, []);
         }
         if (matchMother && motherIdle) {
           const fallbackMessage = parseReason === "truncated_json"
@@ -21850,6 +21989,7 @@ async function handleEventLegacy(event) {
     }
     if (matchAmbient && ambient) {
       applyAmbientIntentFallback("failed", { message: msg, hardDisable });
+      maybeScheduleVisionDescribeFallbackForAmbientRealtime(ambient, []);
     }
     if (matchMother && motherIdle) {
       appendMotherTraceLog({
@@ -21892,7 +22032,7 @@ async function handleEventLegacy(event) {
 	    const path = event.image_path;
 	    const desc = event.description;
 	    if (typeof path === "string" && typeof desc === "string" && desc.trim()) {
-	      const cleaned = desc.trim();
+	      const cleaned = _normalizeVisionLabel(desc, { maxChars: 64 }) || desc.trim();
 	      for (const item of state.images) {
 	        if (item?.path === path) {
 	          item.visionDesc = cleaned;

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -238,7 +238,7 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                     continue;
                 }
 
-                let max_chars = 32usize;
+                let max_chars = 64usize;
                 if let Some(inference) = vision_infer_description(&path, max_chars) {
                     engine.emit_event(
                         "image_description",
@@ -2818,6 +2818,22 @@ impl RealtimeSessionKind {
         }
     }
 
+    fn per_request_input_text(self) -> Option<&'static str> {
+        match self {
+            Self::CanvasContext => None,
+            Self::IntentIcons { .. } => Some(
+                "For image_descriptions labels, use concise computer-vision caption style. Prefer the most specific identifiable subject. If a person/character is confidently recognizable, use the proper name. Avoid generic role labels like 'basketball player' when identity is recognizable. If SOURCE_IMAGE_REFERENCE inputs are present, prioritize them for identity/detail over low-res canvas cues. Do not infer sports team/franchise from jersey colors alone; only mention a team when text/logo is clearly readable. Do not mirror generic vision_desc hints from CONTEXT_ENVELOPE_JSON. Return strict JSON only.",
+            ),
+        }
+    }
+
+    fn temperature(self) -> f64 {
+        match self {
+            Self::CanvasContext => 0.6,
+            Self::IntentIcons { .. } => 0.6,
+        }
+    }
+
     fn max_output_tokens(self) -> u64 {
         match self {
             Self::CanvasContext => 520,
@@ -3135,7 +3151,7 @@ impl RealtimeWorker {
             "session": {
                 "instructions": self.kind.instruction(),
                 "modalities": ["text"],
-                "temperature": 0.6,
+                "temperature": self.kind.temperature(),
                 "max_response_output_tokens": self.kind.max_output_tokens(),
             },
         });
@@ -3190,8 +3206,39 @@ impl RealtimeWorker {
         let data_url = read_image_as_data_url(&image_path)
             .ok_or_else(|| anyhow::anyhow!("failed to read image for realtime request"))?;
         let mut content: Vec<Value> = Vec::new();
+        if let Some(inline_instruction) = self.kind.per_request_input_text() {
+            content.push(json!({"type": "input_text", "text": inline_instruction}));
+        }
         if let Some(context_text) = read_canvas_context_envelope(&image_path) {
             content.push(json!({"type": "input_text", "text": context_text}));
+        }
+        let context_refs = read_canvas_context_image_references(&image_path, 12);
+        if !context_refs.is_empty() {
+            let image_id_order = context_refs
+                .iter()
+                .map(|row| row.id.clone())
+                .collect::<Vec<String>>()
+                .join(", ");
+            content.push(json!({
+                "type": "input_text",
+                "text": format!("IMAGE_ID_ORDER: {image_id_order}"),
+            }));
+            content.push(json!({
+                "type": "input_text",
+                "text": "For image_descriptions, emit exactly one row per IMAGE_ID_ORDER id, preserve that order, and never swap labels across ids.",
+            }));
+        }
+        for image_ref in context_refs.iter().take(2) {
+            if let Some(reference_data_url) = prepare_vision_image_data_url(&image_ref.path, 1024) {
+                content.push(json!({
+                    "type": "input_text",
+                    "text": format!("SOURCE_IMAGE_REFERENCE {} (high-res):", image_ref.id),
+                }));
+                content.push(json!({
+                    "type": "input_image",
+                    "image_url": reference_data_url,
+                }));
+            }
         }
         content.push(json!({"type": "input_image", "image_url": data_url}));
         let request = json!({
@@ -3485,6 +3532,94 @@ fn read_canvas_context_envelope(image_path: &Path) -> Option<String> {
     }
     let truncated = truncate_chars(trimmed, 12_000, 11_800);
     Some(format!("CONTEXT_ENVELOPE_JSON:\n{truncated}"))
+}
+
+#[derive(Debug, Clone)]
+struct ContextImageReference {
+    id: String,
+    path: PathBuf,
+}
+
+fn read_canvas_context_image_references(
+    snapshot_path: &Path,
+    limit: usize,
+) -> Vec<ContextImageReference> {
+    let max_refs = limit.max(1);
+    let sidecar = snapshot_path.with_extension("ctx.json");
+    if !sidecar.exists() {
+        return Vec::new();
+    }
+
+    let raw = match fs::read_to_string(&sidecar) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    let parsed = match serde_json::from_str::<Value>(&raw) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    let rows = parsed
+        .as_object()
+        .and_then(|obj| obj.get("images"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let snapshot_abs =
+        fs::canonicalize(snapshot_path).unwrap_or_else(|_| snapshot_path.to_path_buf());
+    let mut out: Vec<ContextImageReference> = Vec::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    for row in rows {
+        let Some(obj) = row.as_object() else {
+            continue;
+        };
+        let id = obj
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                obj.get("file")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "image".to_string());
+        let path_text = obj
+            .get("path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_default();
+        if path_text.is_empty() {
+            continue;
+        }
+
+        let mut path = PathBuf::from(path_text);
+        if path.is_relative() {
+            if let Some(parent) = sidecar.parent() {
+                path = parent.join(path);
+            }
+        }
+        if !path.exists() {
+            continue;
+        }
+        let path_abs = fs::canonicalize(&path).unwrap_or(path.clone());
+        if path_abs == snapshot_abs {
+            continue;
+        }
+        if !seen.insert(path_abs.clone()) {
+            continue;
+        }
+        out.push(ContextImageReference { id, path: path_abs });
+    }
+    if out.len() > max_refs {
+        out.truncate(max_refs);
+    }
+    out
 }
 
 fn truncate_chars(text: &str, max_len: usize, keep_len: usize) -> String {
@@ -3985,9 +4120,9 @@ fn build_intent_icons_payload(snapshot_path: &Path, mother: bool) -> Value {
                 .to_ascii_lowercase()
         };
         let label = if !hint.vision_desc.trim().is_empty() {
-            clamp_text(hint.vision_desc.trim(), 32)
+            clamp_text(hint.vision_desc.trim(), 64)
         } else {
-            clamp_text(&humanize_file_name(&hint.file), 32)
+            clamp_text(&humanize_file_name(&hint.file), 64)
         };
         if image_id.is_empty() || label.is_empty() {
             continue;
@@ -5914,28 +6049,123 @@ fn clean_text_inference(text: &str, max_chars: Option<usize>) -> String {
     cleaned
 }
 
-fn strip_generic_description_words(text: &str) -> String {
-    let mut out = Vec::new();
-    let stop = [
-        "image",
-        "photo",
-        "screenshot",
-        "label",
-        "subject",
-        "hud",
-        "brood",
-    ];
-    for word in text.split_whitespace() {
-        if stop.iter().any(|token| word.eq_ignore_ascii_case(token)) {
-            continue;
-        }
-        out.push(word);
+fn is_aux_verb_token(token: &str) -> bool {
+    matches!(token, "is" | "are" | "was" | "were")
+}
+
+fn is_article_token(token: &str) -> bool {
+    matches!(token, "a" | "an" | "the")
+}
+
+fn token_starts_uppercase(token: &str) -> bool {
+    token
+        .chars()
+        .next()
+        .map(|ch| ch.is_uppercase())
+        .unwrap_or(false)
+}
+
+fn compact_caption_phrase(text: &str) -> String {
+    let mut tokens: Vec<String> = text
+        .split_whitespace()
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+        .collect();
+    if tokens.is_empty() {
+        return String::new();
     }
-    out.join(" ").trim().to_string()
+
+    while tokens
+        .first()
+        .map(|token| is_article_token(token.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+        && tokens.len() > 1
+    {
+        tokens.remove(0);
+    }
+
+    // Prefer fragment-style labels over full sentences (e.g. "X is holding Y" -> "X holding Y").
+    if tokens.len() >= 3 {
+        let second = tokens[1].to_ascii_lowercase();
+        if is_aux_verb_token(second.as_str()) {
+            tokens.remove(1);
+        } else if tokens.len() >= 4 {
+            let third = tokens[2].to_ascii_lowercase();
+            if is_aux_verb_token(third.as_str())
+                && token_starts_uppercase(tokens[0].as_str())
+                && token_starts_uppercase(tokens[1].as_str())
+            {
+                tokens.remove(2);
+            }
+        }
+    }
+
+    if tokens.len() >= 3 {
+        let mut aux_idx: Option<usize> = None;
+        for idx in 1..(tokens.len() - 1) {
+            let current = tokens[idx].to_ascii_lowercase();
+            if !is_aux_verb_token(current.as_str()) {
+                continue;
+            }
+            let next = tokens[idx + 1].to_ascii_lowercase();
+            if next.ends_with("ing")
+                || matches!(
+                    next.as_str(),
+                    "holding"
+                        | "dribbling"
+                        | "wearing"
+                        | "standing"
+                        | "sitting"
+                        | "running"
+                        | "jumping"
+                        | "walking"
+                        | "looking"
+                        | "smiling"
+                )
+            {
+                aux_idx = Some(idx);
+                break;
+            }
+        }
+        if let Some(idx) = aux_idx {
+            tokens.remove(idx);
+        }
+    }
+
+    if tokens.len() > 2 {
+        let last_idx = tokens.len().saturating_sub(1);
+        tokens = tokens
+            .into_iter()
+            .enumerate()
+            .filter_map(|(idx, token)| {
+                let lower = token.to_ascii_lowercase();
+                if idx > 0 && idx < last_idx && is_aux_verb_token(lower.as_str()) {
+                    None
+                } else if idx > 0 && is_article_token(lower.as_str()) {
+                    None
+                } else {
+                    Some(token)
+                }
+            })
+            .collect();
+    }
+
+    if let Some(last) = tokens.last() {
+        let lower = last.to_ascii_lowercase();
+        if matches!(lower.as_str(), "looks" | "look" | "appears" | "seems") {
+            let _ = tokens.pop();
+        }
+    }
+
+    tokens.join(" ").trim().to_string()
 }
 
 fn clean_description(text: &str, max_chars: usize) -> String {
     let mut cleaned = text.trim().to_string();
+    if cleaned.is_empty() {
+        return String::new();
+    }
+
     let lower = cleaned.to_ascii_lowercase();
     for prefix in ["description:", "label:", "caption:"] {
         if lower.starts_with(prefix) {
@@ -5943,15 +6173,44 @@ fn clean_description(text: &str, max_chars: usize) -> String {
             break;
         }
     }
+
     cleaned = cleaned
         .trim_matches('"')
         .trim_matches('\'')
-        .replace(['.', ',', ':', ';'], " ");
+        .replace(['\r', '\n', '\t'], " ");
     cleaned = cleaned.split_whitespace().collect::<Vec<&str>>().join(" ");
-    let stripped = strip_generic_description_words(&cleaned);
-    if !stripped.is_empty() {
-        cleaned = stripped;
+    cleaned = cleaned
+        .trim()
+        .trim_matches(|ch: char| matches!(ch, '"' | '\''))
+        .trim_end_matches(|ch: char| matches!(ch, '.' | ',' | ':' | ';'))
+        .trim()
+        .to_string();
+    if cleaned.is_empty() {
+        return String::new();
     }
+
+    let lowered = cleaned.to_ascii_lowercase();
+    for prefix in [
+        "a photo of ",
+        "photo of ",
+        "an image of ",
+        "image of ",
+        "a picture of ",
+        "picture of ",
+    ] {
+        if let Some(rest) = lowered.strip_prefix(prefix) {
+            let split_at = cleaned.len().saturating_sub(rest.len());
+            cleaned = cleaned[split_at..].trim().to_string();
+            break;
+        }
+    }
+
+    cleaned = compact_caption_phrase(&cleaned);
+    if cleaned.is_empty() {
+        return String::new();
+    }
+
+    cleaned = cleaned.split_whitespace().collect::<Vec<&str>>().join(" ");
     if cleaned.chars().count() > max_chars {
         cleaned = cleaned.chars().take(max_chars + 1).collect::<String>();
         if let Some((head, _)) = cleaned.rsplit_once(' ') {
@@ -6165,9 +6424,13 @@ fn build_labeled_image_content(
     Some(content)
 }
 
+fn description_realtime_instruction() -> &'static str {
+    "Describe the image as a short caption fragment, not a full sentence. Use noun-phrase style like 'LeBron James holding basketball'. Do not use auxiliary verbs like is/are/was/were. Return only the caption."
+}
+
 fn description_instruction(max_chars: usize) -> String {
     format!(
-        "Write a short label for the attached image in 3-6 words (<= {max_chars} characters). Name the main thing and one key attribute (material, color, category, or action). No punctuation. No quotes. No branding. Do not copy text that appears in the image. Avoid generic filler words like image, photo, screenshot, label, subject. Output ONLY the label."
+        "Write one concise computer-vision caption fragment for the attached image (<= {max_chars} characters). Use noun-phrase style, not a full sentence. Avoid auxiliary verbs (is/are/was/were) and avoid leading articles when possible. If a person or character is confidently recognizable, use the proper name (example: 'Michael Jordan holding basketball'). Otherwise use a concrete visual subject plus one discriminator (action, garment, color, material, viewpoint, or composition cue). Do not infer sports team/franchise from jersey colors alone; only mention a team when text/logo is clearly readable. No hedging. No questions. No extra commentary. Output ONLY the caption."
     )
 }
 
@@ -6223,10 +6486,12 @@ You receive:
   - per-image vision_desc labels (optional): short, noisy phrases derived from the images (not user text)
   - intent round index and remaining time (timer_enabled/rounds_enabled may be false)
   - prior user selections (YES/NO/MAYBE) by branch
+- Optional SOURCE_IMAGE_REFERENCE inputs (high-res) for one or more canvas images.
 
 INTERPRETATION RULES
 - Treat images as signals of intent, not meaning.
 - If vision_desc labels are present in CONTEXT_ENVELOPE_JSON.images[], treat them as weak hints only.
+- If SOURCE_IMAGE_REFERENCE inputs are present, prioritize them for identity/detail disambiguation.
 - Placement implies structure:
   - Left-to-right = flow
   - Top-to-bottom = hierarchy
@@ -6330,7 +6595,7 @@ OUTPUT FORMAT (STRICT JSON)
   "image_descriptions": [
     {
       "image_id": "<from CONTEXT_ENVELOPE_JSON.images[].id>",
-      "label": "<3-6 words, <=32 chars, include a concrete discriminator>",
+      "label": "<CV caption fragment, <=64 chars, concrete and specific>",
       "confidence": 0.0
     }
   ],
@@ -6366,18 +6631,23 @@ OUTPUT FORMAT (STRICT JSON)
 BEHAVIOR RULES
 - Always maintain one primary intent cluster and 1-3 alternative clusters.
 - Always try to fill image_descriptions for each image in CONTEXT_ENVELOPE_JSON.images[].
+- Emit exactly one image_descriptions row per CONTEXT_ENVELOPE_JSON.images[].id when available.
+- Preserve CONTEXT_ENVELOPE_JSON.images[] id order in image_descriptions.
+- Never swap labels across image_id values.
 - transformation_mode must be one of the 10 enum values above.
 - transformation_mode_candidates should include the primary mode and be sorted by confidence DESC.
 - Include branches[].confidence in [0.0, 1.0] and sort branches by confidence DESC.
 - checkpoint.applies_to should match the highest-confidence branch_id.
 - evidence_image_ids should reference CONTEXT_ENVELOPE_JSON.images[].id (0-3 ids).
-- image_descriptions labels must be specific, not generic placeholders.
-- Each label should include the core entity + one concrete discriminator (material, color, action, viewpoint, composition, or medium cue).
-- Avoid generic labels like "portrait photo", "object image", "person picture".
-- Do not emit labels that are only `<subject> portrait` or `<category> photo`.
-- If a human appears, include one grounded qualifier (garment/color/action/viewpoint), not just "person" or "player".
-- If a product/object appears, include material/finish/context (for example: "matte black sneaker side view").
-- Prefer concise distinctive labels like "red leather sofa closeup", "two products side by side", "night city skyline".
+- image_descriptions labels must use neutral computer-vision caption style.
+- Keep labels short and concrete. `A photo of ...` is acceptable but not required.
+- If a person or character is confidently recognizable, use the proper name (for example: "Michael Jordan holding a basketball").
+- Prefer identifiable names over generic role nouns; avoid labels like "basketball player holding ball" when a confident identity is available.
+- Do not infer team/franchise identity from jersey color alone; only mention a team when text/logo evidence is clearly visible.
+- If not identifiable by name, use a concrete visual subject + one discriminator (action, garment, color, material, viewpoint, or composition cue).
+- Avoid generic placeholders like "portrait photo", "object image", "person picture".
+- Do not hedge ("appears to", "looks like"), ask questions, or add commentary.
+- Keep labels concise and distinctive; omit minor details if needed to stay within the char budget.
 - Do not copy visible text; avoid brand names.
 - Do not collapse ambiguity too early.
 - Start broad with use-case lanes; add Asset Types and Signatures as evidence accumulates.
@@ -6400,12 +6670,179 @@ Return JSON only."#;
     base.to_string()
 }
 
+fn vision_description_realtime_model() -> String {
+    let value = first_non_empty_env(&[
+        "BROOD_DESCRIBE_REALTIME_MODEL",
+        "OPENAI_DESCRIBE_REALTIME_MODEL",
+    ])
+    .unwrap_or_else(|| "gpt-realtime-mini".to_string());
+    normalize_realtime_model_name(&value, "gpt-realtime-mini")
+}
+
+fn vision_infer_description_realtime(
+    path: &Path,
+    max_chars: usize,
+) -> Option<DescriptionVisionInference> {
+    let api_key = openai_api_key()?;
+    let model = vision_description_realtime_model();
+    if model.trim().is_empty() {
+        return None;
+    }
+    let data_url = read_image_as_data_url(path)?;
+    let mut ws = open_realtime_websocket(&model, &api_key).ok()?;
+    let _ = websocket_send_json(
+        &mut ws,
+        &json!({
+            "type": "session.update",
+            "session": {
+                "modalities": ["text"],
+            },
+        }),
+    );
+    let request = json!({
+        "type": "response.create",
+        "response": {
+            "conversation": "none",
+            "modalities": ["text"],
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": description_realtime_instruction()},
+                    {"type": "input_image", "image_url": data_url},
+                ],
+            }],
+            "max_output_tokens": 120,
+        },
+    });
+    if websocket_send_json(&mut ws, &request).is_err() {
+        let _ = ws.close(None);
+        return None;
+    }
+
+    let mut buffer = String::new();
+    let mut response_id: Option<String> = None;
+    let started = Instant::now();
+    while started.elapsed().as_secs_f64() <= 60.0 {
+        let message = match ws.read() {
+            Ok(message) => message,
+            Err(tungstenite::Error::Io(err))
+                if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+            {
+                continue;
+            }
+            Err(_) => {
+                let _ = ws.close(None);
+                return None;
+            }
+        };
+        let raw = match message {
+            WsMessage::Text(text) => text.to_string(),
+            WsMessage::Binary(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+            WsMessage::Ping(_) | WsMessage::Pong(_) => continue,
+            WsMessage::Close(_) => {
+                let _ = ws.close(None);
+                return None;
+            }
+            _ => continue,
+        };
+        let parsed: Value = match serde_json::from_str(&raw) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let event_type = parsed
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if event_type == "error" {
+            let _ = ws.close(None);
+            return None;
+        }
+        if event_type == "response.created" {
+            if let Some(id) = parsed
+                .get("response")
+                .and_then(Value::as_object)
+                .and_then(|row| row.get("id"))
+                .and_then(Value::as_str)
+            {
+                response_id = Some(id.to_string());
+            }
+            continue;
+        }
+        if event_type == "response.output_text.delta" {
+            let delta = parsed
+                .get("delta")
+                .and_then(Value::as_str)
+                .or_else(|| parsed.get("text").and_then(Value::as_str))
+                .unwrap_or_default();
+            if !delta.is_empty() {
+                buffer = append_stream_delta(&buffer, delta);
+            }
+            continue;
+        }
+        if event_type == "response.output_text.done" {
+            if let Some(text) = parsed
+                .get("text")
+                .and_then(Value::as_str)
+                .or_else(|| parsed.get("output_text").and_then(Value::as_str))
+            {
+                if !text.is_empty() {
+                    buffer = merge_stream_text(&buffer, text);
+                }
+            }
+            continue;
+        }
+        if event_type == "response.done" {
+            let response = parsed.get("response").cloned().unwrap_or(Value::Null);
+            if let Some(expected) = response_id.as_ref() {
+                let actual = response
+                    .as_object()
+                    .and_then(|row| row.get("id"))
+                    .and_then(Value::as_str);
+                if actual.is_some() && actual != Some(expected.as_str()) {
+                    continue;
+                }
+            }
+            let (text, _) = resolve_streamed_response_text(&buffer, &response);
+            let cleaned = clean_description(&text, max_chars);
+            if cleaned.trim().is_empty() {
+                let _ = ws.close(None);
+                return None;
+            }
+            let (input_tokens, output_tokens) = extract_token_usage_pair(&response);
+            let model_name = response
+                .as_object()
+                .and_then(|row| row.get("model"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or_else(|| Some(model.clone()));
+            let _ = ws.close(None);
+            return Some(DescriptionVisionInference {
+                description: cleaned,
+                source: "openai_realtime_describe".to_string(),
+                model: model_name,
+                input_tokens,
+                output_tokens,
+            });
+        }
+    }
+    let _ = ws.close(None);
+    None
+}
+
 fn vision_infer_description(path: &Path, max_chars: usize) -> Option<DescriptionVisionInference> {
+    if let Some(inference) = vision_infer_description_realtime(path, max_chars) {
+        return Some(inference);
+    }
     let requested = first_non_empty_env(&["BROOD_DESCRIBE_MODEL", "OPENAI_DESCRIBE_MODEL"])
-        .unwrap_or_else(|| "gpt-5-nano".to_string());
+        .unwrap_or_else(|| "gpt-4o-mini".to_string());
     let mut models = vec![requested.clone()];
-    if requested != "gpt-4o-mini" {
-        models.push("gpt-4o-mini".to_string());
+    if requested != "gpt-5-nano" {
+        models.push("gpt-5-nano".to_string());
     }
     let data_url = prepare_vision_image_data_url(path, 1024)?;
     for model in models {
@@ -7614,7 +8051,10 @@ impl ExportArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_realtime_websocket_request, REALTIME_BETA_HEADER_VALUE};
+    use super::{
+        build_realtime_websocket_request, clean_description, description_realtime_instruction,
+        intent_icons_instruction, RealtimeSessionKind, REALTIME_BETA_HEADER_VALUE,
+    };
 
     #[test]
     fn realtime_ws_request_includes_upgrade_headers() {
@@ -7645,5 +8085,62 @@ mod tests {
             headers.get("openai-beta").and_then(|v| v.to_str().ok()),
             Some(REALTIME_BETA_HEADER_VALUE)
         );
+    }
+
+    #[test]
+    fn intent_icons_instruction_enforces_cv_caption_style_labels() {
+        let instruction = intent_icons_instruction(false);
+        assert!(instruction.contains("computer-vision caption style"));
+        assert!(instruction.contains("<=64 chars"));
+        assert!(instruction.contains("A photo of ...` is acceptable but not required"));
+        assert!(instruction.contains("use the proper name"));
+        assert!(instruction.contains("Do not hedge (\"appears to\", \"looks like\")"));
+    }
+
+    #[test]
+    fn intent_icons_per_request_hint_enforces_cv_caption_style() {
+        let hint = RealtimeSessionKind::IntentIcons { mother: false }
+            .per_request_input_text()
+            .unwrap_or_default();
+        assert!(hint.contains("computer-vision caption style"));
+        assert!(hint.contains("use the proper name"));
+        assert!(hint.contains("Avoid generic role labels like 'basketball player'"));
+        assert!(hint.contains("Do not mirror generic vision_desc hints"));
+        assert!(hint.contains("Return strict JSON only"));
+    }
+
+    #[test]
+    fn clean_description_does_not_force_photo_prefix() {
+        assert_eq!(
+            clean_description("Basketball player portrait.", 64),
+            "Basketball player portrait"
+        );
+        assert_eq!(
+            clean_description("image of Michael Jordan holding a basketball", 64),
+            "Michael Jordan holding basketball"
+        );
+        assert_eq!(
+            clean_description("LeBron James is holding a basketball.", 64),
+            "LeBron James holding basketball"
+        );
+        assert_eq!(
+            clean_description(
+                "A basketball player in a yellow Lakers jersey is holding a ball.",
+                64
+            ),
+            "basketball player in yellow Lakers jersey holding ball"
+        );
+        assert_eq!(
+            clean_description("Basketball player is in a yellow jersey.", 64),
+            "Basketball player in yellow jersey"
+        );
+    }
+
+    #[test]
+    fn description_realtime_instruction_matches_probe_style() {
+        let instruction = description_realtime_instruction();
+        assert!(instruction.contains("short caption fragment"));
+        assert!(instruction.contains("not a full sentence"));
+        assert!(instruction.contains("Do not use auxiliary verbs"));
     }
 }
