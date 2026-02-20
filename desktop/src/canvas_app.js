@@ -9814,6 +9814,7 @@ async function motherV2CommitSelectedDraft() {
   const targetIds = Array.isArray(intent.target_ids) ? intent.target_ids.map((v) => String(v || "").trim()).filter(Boolean) : [];
   const targetId = targetIds[0] || getVisibleActiveId();
   const policy = String(intent.placement_policy || "adjacent").trim() || "adjacent";
+  const seedIds = motherV2CollectCommitSeedIds(intent);
   const beforeTarget = targetId && state.imagesById.has(targetId)
     ? (() => {
         const t = state.imagesById.get(targetId);
@@ -9832,6 +9833,7 @@ async function motherV2CommitSelectedDraft() {
   idle.commitMutationInFlight = true;
   try {
     let commitUndo = null;
+    let committedImageId = null;
     if (policy === "replace" && targetId && state.imagesById.has(targetId)) {
       const ok = await replaceImageInPlace(targetId, {
         path: draft.path,
@@ -9842,6 +9844,7 @@ async function motherV2CommitSelectedDraft() {
       if (!ok) throw new Error("Mother commit failed to replace target.");
       const targetItem = state.imagesById.get(targetId) || null;
       if (targetItem) targetItem.source = MOTHER_GENERATED_SOURCE;
+      committedImageId = String(targetId);
       commitUndo = {
         mode: "replace",
         targetId: String(targetId),
@@ -9877,12 +9880,16 @@ async function motherV2CommitSelectedDraft() {
         },
         { select: false }
       );
+      committedImageId = String(draft.id);
       commitUndo = {
         mode: "insert",
         insertedId: String(draft.id),
       };
     }
-    const removedSeeds = [];
+    const removedSeeds = await motherV2DiscardCommitSeedImages({
+      seedIds,
+      keepIds: committedImageId ? [committedImageId] : [],
+    });
     idle.commitUndo = {
       ...(commitUndo || {}),
       removedSeeds,
