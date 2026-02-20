@@ -37,6 +37,7 @@
     "desktop-quick-actions",
     "desktop-canvas",
     "desktop-tauri",
+    "engine-rust",
     "engine-cli",
     "engine-providers",
     "engine-recreate",
@@ -65,15 +66,27 @@
       "priority": 2
     },
     {
+      "path": "rust_engine/crates/brood-cli/src/main.rs",
+      "kind": "source",
+      "why": "Primary native CLI entry: chat/run/recreate/export handlers and command plumbing.",
+      "priority": 2
+    },
+    {
+      "path": "rust_engine/crates/brood-engine/src/lib.rs",
+      "kind": "source",
+      "why": "Native engine orchestration and provider-backed execution loop.",
+      "priority": 2
+    },
+    {
       "path": "brood_engine/cli.py",
       "kind": "source",
-      "why": "Primary CLI entry: chat/run/recreate/export handlers and argument plumbing.",
-      "priority": 2
+      "why": "Legacy Python CLI reference used for compat and parity checks.",
+      "priority": 3
     },
     {
       "path": "brood_engine/engine.py",
       "kind": "source",
-      "why": "Engine orchestration and core execution loop.",
+      "why": "Legacy Python orchestration reference used for parity checks.",
       "priority": 3
     },
     {
@@ -97,7 +110,7 @@
     {
       "path": "scripts/dev_desktop.sh",
       "kind": "script",
-      "why": "Dev runner that starts the Tauri app and spawns the Python engine.",
+      "why": "Dev runner that starts the Tauri app with native Rust runtime defaults.",
       "priority": 2
     }
   ],
@@ -109,7 +122,9 @@
         "scripts/dev_desktop.sh",
         "desktop/package.json",
         "desktop/src-tauri/Cargo.toml",
-        "desktop/src-tauri/src/main.rs"
+        "desktop/src-tauri/src/main.rs",
+        "rust_engine/crates/brood-cli/src/main.rs",
+        "scripts/stage_rust_engine_binary.sh"
       ]
     },
     "desktop-quick-actions": {
@@ -119,6 +134,8 @@
         "desktop/src/canvas_app.js",
         "desktop/src/index.html",
         "desktop/src/styles.css",
+        "rust_engine/crates/brood-cli/src/main.rs",
+        "rust_engine/crates/brood-engine/src/lib.rs",
         "brood_engine/cli.py",
         "brood_engine/engine.py"
       ]
@@ -136,20 +153,35 @@
       "entrypoints": [
         "desktop/src-tauri/src/main.rs",
         "desktop/src-tauri/tauri.conf.json",
+        "scripts/stage_rust_engine_binary.sh",
+        "README.md"
+      ]
+    },
+    "engine-rust": {
+      "description": "Native Rust engine commands, orchestration, contracts, and compatibility safeguards.",
+      "entrypoints": [
+        "rust_engine/crates/brood-cli/src/main.rs",
+        "rust_engine/crates/brood-engine/src/lib.rs",
+        "rust_engine/crates/brood-contracts/src/events.rs",
+        "desktop/src-tauri/src/main.rs",
         "README.md"
       ]
     },
     "engine-cli": {
-      "description": "Brood CLI commands and flags (chat/run/recreate/export).",
+      "description": "Brood CLI commands and flags (chat/run/recreate/export), Rust-first with legacy parity refs.",
       "entrypoints": [
+        "rust_engine/crates/brood-cli/src/main.rs",
+        "rust_engine/crates/brood-engine/src/lib.rs",
         "brood_engine/cli.py",
         "brood_engine/engine.py",
         "README.md"
       ]
     },
     "engine-providers": {
-      "description": "Provider integrations (OpenAI/Gemini/etc), model routing, API key handling.",
+      "description": "Provider integrations (OpenAI/Gemini/etc), model routing, API key handling across Rust runtime and Python parity refs.",
       "entrypoints": [
+        "rust_engine/crates/brood-engine/src/lib.rs",
+        "rust_engine/crates/brood-contracts/src/chat/intent_parser.rs",
         "brood_engine/providers/",
         "brood_engine/models/",
         "README.md",
@@ -173,6 +205,7 @@
     "engine-events": {
       "description": "Run artifacts + events.jsonl format; stability of event stream consumed by desktop.",
       "entrypoints": [
+        "rust_engine/crates/brood-contracts/src/events.rs",
         "brood_engine/runs/",
         "docs/desktop.md"
       ]
