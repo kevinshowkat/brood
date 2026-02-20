@@ -19,7 +19,7 @@ Files:
 - `desktop/src/canvas_app.js`
 
 ## Test Plan
-- `python -m pytest`
+- `cd rust_engine && cargo test`
 - `cd desktop && npm run build`
 - Manual:
   - Import 2 images and wait ~1-2 seconds.

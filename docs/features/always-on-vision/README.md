@@ -13,10 +13,8 @@ Brood can feel reactive: the user edits the canvas, then decides what to do next
 Primary files:
 - `desktop/src/canvas_app.js`
 - `desktop/src/index.html`
-- `brood_engine/chat/intent_parser.py`
-- `brood_engine/cli.py`
-- `brood_engine/recreate/caption.py`
-- `brood_engine/realtime/openai_realtime.py` (realtime backend)
+- `rust_engine/crates/brood-contracts/src/chat/intent_parser.rs`
+- `rust_engine/crates/brood-cli/src/main.rs` (batch + realtime slash handlers)
 
 ### Desktop (Scheduler + Snapshot)
 - Toggle state is persisted via `localStorage` key `brood.alwaysOnVision`.
@@ -35,7 +33,7 @@ Primary files:
 ### Engine (Batch + Realtime)
 Batch (Responses API):
 - Slash command: `/canvas_context <path>`
-- Inference: `brood_engine/recreate/caption.py::infer_canvas_context(...)`
+- Inference: `rust_engine/crates/brood-cli/src/main.rs` (`/canvas_context` native handler)
   - Defaults to `gpt-4o-mini` via the OpenAI Responses API.
   - Explicitly avoids `*realtime*` models on this path.
   - Optional Gemini fallback if keys + dependency are present.
@@ -45,7 +43,7 @@ Realtime (OpenAI Realtime API):
   - `/canvas_context_rt_start`
   - `/canvas_context_rt_stop`
   - `/canvas_context_rt <path>`
-- Implementation: `brood_engine/realtime/openai_realtime.py`
+- Implementation: `rust_engine/crates/brood-cli/src/main.rs` (native realtime session wiring)
   - Spawns a background websocket worker and streams `canvas_context` events as text deltas arrive.
 
 ### Notes On Realtime Models
@@ -54,7 +52,7 @@ See `docs/features/always-on-vision-realtime/README.md` for the persistent-sessi
 
 ## Testing
 Standard regression set:
-- `python -m pytest`
+- `cd rust_engine && cargo test`
 - `cd desktop && npm run build`
 
 ## Follow-Ups / Next Steps

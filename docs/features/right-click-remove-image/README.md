@@ -25,7 +25,7 @@ Files:
 - `desktop/src/canvas_app.js`
 
 ## Test Plan
-- `python -m pytest`
+- `cd rust_engine && cargo test`
 - `cd desktop && npm run build`
 - Manual:
   - Load 2 images, right click one tile, remove it: verify only one image remains and view returns to single.

@@ -22,7 +22,7 @@ use tauri::{Manager, State};
 fn find_repo_root(start: &Path) -> Option<PathBuf> {
     let mut current = Some(start);
     while let Some(dir) = current {
-        if dir.join("brood_engine").is_dir() || dir.join("pyproject.toml").exists() {
+        if dir.join("rust_engine").is_dir() && dir.join("desktop").is_dir() {
             return Some(dir.to_path_buf());
         }
         current = dir.parent();
@@ -637,22 +637,6 @@ fn run_export_attempt(
     Err(format!("{program}: {detail}"))
 }
 
-fn compat_fallback_enabled(env: &HashMap<String, String>) -> bool {
-    for key in [
-        "BROOD_EMERGENCY_COMPAT_FALLBACK",
-        "BROOD_ENABLE_COMPAT_FALLBACK",
-    ] {
-        let Some(raw) = env.get(key) else {
-            continue;
-        };
-        let lowered = raw.trim().to_ascii_lowercase();
-        if matches!(lowered.as_str(), "1" | "true" | "yes" | "on") {
-            return true;
-        }
-    }
-    false
-}
-
 #[tauri::command]
 fn export_run(app: tauri::AppHandle, run_dir: String, out_path: String) -> Result<(), String> {
     let run_dir_path = PathBuf::from(&run_dir);
@@ -666,17 +650,6 @@ fn export_run(app: tauri::AppHandle, run_dir: String, out_path: String) -> Resul
     }
 
     let env = collect_brood_env_snapshot();
-    let mut env_native = env.clone();
-    env_native.insert("BROOD_RS_MODE".to_string(), "native".to_string());
-    let py_args = vec![
-        "-m".to_string(),
-        "brood_engine.cli".to_string(),
-        "export".to_string(),
-        "--run".to_string(),
-        run_dir.clone(),
-        "--out".to_string(),
-        out_path.clone(),
-    ];
     let brood_args = vec![
         "export".to_string(),
         "--run".to_string(),
@@ -688,12 +661,7 @@ fn export_run(app: tauri::AppHandle, run_dir: String, out_path: String) -> Resul
     let mut errors: Vec<String> = Vec::new();
 
     for candidate in native_engine_program_candidates(Some(&app)) {
-        match run_export_attempt(
-            &candidate.program,
-            &brood_args,
-            Some(&run_dir_path),
-            &env_native,
-        ) {
+        match run_export_attempt(&candidate.program, &brood_args, Some(&run_dir_path), &env) {
             Ok(()) => return Ok(()),
             Err(err) => errors.push(format!("{}: {err}", candidate.label)),
         }
@@ -713,33 +681,22 @@ fn export_run(app: tauri::AppHandle, run_dir: String, out_path: String) -> Resul
             out_path.clone(),
         ];
         let cargo_cwd = repo_root.join("rust_engine");
-        match run_export_attempt("cargo", &cargo_args, Some(&cargo_cwd), &env_native) {
+        match run_export_attempt("cargo", &cargo_args, Some(&cargo_cwd), &env) {
             Ok(()) => return Ok(()),
             Err(err) => errors.push(err),
         }
     }
 
-    if compat_fallback_enabled(&env) {
-        if let Some(repo_root) = find_repo_root_best_effort() {
-            for py in ["python", "python3"] {
-                match run_export_attempt(py, &py_args, Some(&repo_root), &env) {
-                    Ok(()) => return Ok(()),
-                    Err(err) => errors.push(err),
-                }
-            }
-        }
-
-        match run_export_attempt("brood", &brood_args, Some(&run_dir_path), &env) {
-            Ok(()) => return Ok(()),
-            Err(err) => errors.push(err),
-        }
-    } else {
-        errors.push(
-            "compat fallback disabled (set BROOD_EMERGENCY_COMPAT_FALLBACK=1 to enable)"
-                .to_string(),
+    if errors.is_empty() {
+        return Err(
+            "export failed: no native engine candidate found for desktop runtime".to_string(),
         );
     }
-    Err(format!("export failed: {}", errors.join(" | ")))
+
+    Err(format!(
+        "export failed (native runtime only): {}",
+        errors.join(" | ")
+    ))
 }
 
 #[tauri::command]
@@ -1176,13 +1133,12 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        compat_fallback_enabled, is_native_engine_placeholder, push_native_path_candidate,
-        resolve_existing_env_binary_path, EngineProgramCandidate,
+        is_native_engine_placeholder, push_native_path_candidate, resolve_existing_env_binary_path,
+        EngineProgramCandidate,
     };
 
     fn temp_file_path(name: &str) -> PathBuf {
@@ -1239,31 +1195,5 @@ mod tests {
         assert_eq!(resolved, expected);
 
         let _ = std::fs::remove_file(full);
-    }
-
-    #[test]
-    fn compat_fallback_flag_uses_env_snapshot_values() {
-        let mut env = HashMap::new();
-        env.insert(
-            "BROOD_EMERGENCY_COMPAT_FALLBACK".to_string(),
-            "1".to_string(),
-        );
-        assert!(compat_fallback_enabled(&env));
-
-        env.insert(
-            "BROOD_EMERGENCY_COMPAT_FALLBACK".to_string(),
-            "0".to_string(),
-        );
-        env.insert(
-            "BROOD_ENABLE_COMPAT_FALLBACK".to_string(),
-            "true".to_string(),
-        );
-        assert!(compat_fallback_enabled(&env));
-
-        env.insert(
-            "BROOD_ENABLE_COMPAT_FALLBACK".to_string(),
-            "off".to_string(),
-        );
-        assert!(!compat_fallback_enabled(&env));
     }
 }
