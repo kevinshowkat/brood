@@ -19201,7 +19201,7 @@ async function setEngineActiveImage(path) {
     // Active image tracking is best-effort; don't block UI if engine isn't ready yet.
     return;
   }
-  await invoke("write_pty", { data: `${PTY_COMMANDS.USE} ${path}\n` }).catch(() => {
+  await invoke("write_pty", { data: `${PTY_COMMANDS.USE} ${quoteForPtyArg(path)}\n` }).catch(() => {
     state.ptySpawned = false;
   });
 }

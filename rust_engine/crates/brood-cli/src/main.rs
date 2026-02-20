@@ -1856,11 +1856,20 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                     println!("Context usage: {pct}%");
                 }
 
-                let settings = chat_settings(&quality_preset);
+                let mut settings = chat_settings(&quality_preset);
                 let mut generation_intent = Map::new();
                 generation_intent
                     .insert("action".to_string(), Value::String("generate".to_string()));
                 generation_intent.insert("profile".to_string(), Value::String(profile.clone()));
+                if let Some(init_image) =
+                    active_image_for_edit_prompt(&prompt, last_artifact_path.as_deref())
+                {
+                    settings.insert("init_image".to_string(), Value::String(init_image.clone()));
+                    generation_intent.insert(
+                        "source_images".to_string(),
+                        Value::Array(vec![Value::String(init_image)]),
+                    );
+                }
 
                 let plan = engine.preview_plan(&prompt, &settings, &generation_intent)?;
                 println!(
@@ -2040,6 +2049,27 @@ fn update_last_artifact_path(
     {
         *last_artifact_path = Some(path);
     }
+}
+
+fn active_image_for_edit_prompt(prompt: &str, active_image_path: Option<&str>) -> Option<String> {
+    if !is_edit_style_prompt(prompt) {
+        return None;
+    }
+    let path = active_image_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let candidate = PathBuf::from(path);
+    if candidate.exists() && candidate.is_file() {
+        Some(path.to_string())
+    } else {
+        None
+    }
+}
+
+fn is_edit_style_prompt(prompt: &str) -> bool {
+    let mut tokens = prompt.split_whitespace();
+    let head = tokens.next().unwrap_or("").trim().to_ascii_lowercase();
+    matches!(head.as_str(), "edit" | "replace")
 }
 
 fn value_as_string_list(value: Option<&Value>) -> Vec<String> {
@@ -7891,12 +7921,15 @@ fn json_object(value: Value) -> Map<String, Value> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_realtime_websocket_request, clean_description, description_realtime_instruction,
-        intent_icons_instruction, intent_realtime_reference_image_limit,
-        is_anyhow_realtime_transport_error, RealtimeJobError, RealtimeJobErrorKind,
-        RealtimeSessionKind, REALTIME_BETA_HEADER_VALUE, REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX,
+        active_image_for_edit_prompt, build_realtime_websocket_request, clean_description,
+        description_realtime_instruction, intent_icons_instruction,
+        intent_realtime_reference_image_limit, is_anyhow_realtime_transport_error,
+        is_edit_style_prompt, RealtimeJobError, RealtimeJobErrorKind, RealtimeSessionKind,
+        REALTIME_BETA_HEADER_VALUE, REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX,
     };
     use std::io;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{env, fs};
 
     #[test]
     fn realtime_ws_request_includes_upgrade_headers() {
@@ -8009,5 +8042,47 @@ mod tests {
         let value = intent_realtime_reference_image_limit();
         assert!(value >= 1);
         assert!(value <= REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX);
+    }
+
+    #[test]
+    fn edit_style_prompt_detection_only_matches_edit_and_replace_heads() {
+        assert!(is_edit_style_prompt(
+            "edit the image: isolate subject and keep dimensions"
+        ));
+        assert!(is_edit_style_prompt(
+            "  REPLACE the background with pure white and preserve logos"
+        ));
+        assert!(!is_edit_style_prompt("editors choice cinematic portrait"));
+        assert!(!is_edit_style_prompt("generate a brand new scene"));
+    }
+
+    #[test]
+    fn active_image_for_edit_prompt_requires_existing_file() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|value| value.as_nanos())
+            .unwrap_or(0);
+        let test_path = env::temp_dir().join(format!("brood-cli-edit-path-{stamp}.png"));
+        fs::write(&test_path, b"test").unwrap();
+        let test_path_text = test_path.to_string_lossy().to_string();
+
+        let matched = active_image_for_edit_prompt(
+            "replace the background with seamless white",
+            Some(&test_path_text),
+        );
+        assert_eq!(matched, Some(test_path_text.clone()));
+        assert_eq!(
+            active_image_for_edit_prompt("generate a city skyline at dusk", Some(&test_path_text)),
+            None
+        );
+        assert_eq!(
+            active_image_for_edit_prompt(
+                "edit the image: remove people",
+                Some("/tmp/does-not-exist-brood-cli.png")
+            ),
+            None
+        );
+
+        let _ = fs::remove_file(test_path);
     }
 }
