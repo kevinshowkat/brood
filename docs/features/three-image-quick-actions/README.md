@@ -47,10 +47,9 @@ Notes:
 
 ### Engine
 Files:
-- `brood_engine/chat/intent_parser.py` (adds slash commands)
-- `brood_engine/cli.py` (desktop uses this chat loop via PTY)
-- `brood_engine/chat/loop.py` (parity)
-- `brood_engine/recreate/triplet.py` (new module)
+- `rust_engine/crates/brood-contracts/src/chat/intent_parser.rs` (slash command parsing)
+- `rust_engine/crates/brood-cli/src/main.rs` (desktop PTY chat loop + handlers)
+- `rust_engine/crates/brood-engine/src/lib.rs` (native generation orchestration)
 
 New slash commands:
 - `/extract_rule <a> <b> <c>`
@@ -73,11 +72,10 @@ Model routing:
 
 ## Testing
 Standard regression set for this feature branch:
-- `python -m pytest`
+- `cd rust_engine && cargo test`
 - `cd desktop && npm run build`
 
 ## Future Work
 - Ask the model for a richer annotation schema (boxes + multiple labels per image).
 - Allow “Odd One Out” to return both a strict pick and a “closest alternative” when confidence is low.
 - Consider rendering a dedicated “analysis card” in the UI instead of only the HUD Director readout.
-

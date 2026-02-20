@@ -257,7 +257,9 @@ class _Handler(BaseHTTPRequestHandler):
             if tag.startswith("desktop"):
                 commands.append("./scripts/dev_desktop.sh")
             if tag.startswith("engine") or tag == "tests":
-                commands.append("python -m pytest")
+                commands.append("cd rust_engine && cargo test")
+            if tag == "tests":
+                commands.append("cd desktop && npm test")
 
         # Fall back to repo-provided entrypoints (lower priority).
         for ep in intake.get("fallback_entrypoints", []):

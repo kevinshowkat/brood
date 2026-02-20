@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog (https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
-- TBD
+- Retire desktop Python compatibility fallback paths; startup/export now fail explicitly when native engine launch fails.
+- Remove the legacy `brood_engine/` package, Python parity `tests/`, and Python runtime packaging metadata.
+- Move default pricing table ownership to `rust_engine/crates/brood-engine/resources/default_pricing.json`.
 
 ## [0.1.7] - 2026-02-20
 - Fix Mother realtime intent recovery races by revalidating pending request state after async retry decisions.

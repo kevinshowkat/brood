@@ -32,7 +32,7 @@ Files:
 - `desktop/src/canvas_app.js`
 
 ## Test Plan
-- `python -m pytest`
+- `cd rust_engine && cargo test`
 - `cd desktop && npm run build`
 - Manual:
   - Set global image model to a non-Gemini option (e.g. `flux-2`).

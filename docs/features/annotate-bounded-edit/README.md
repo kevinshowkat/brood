@@ -23,10 +23,10 @@ Gemini can return multiple image parts per candidate. We cap the number of blobs
 
 Files:
 - `desktop/src/canvas_app.js`
-- `brood_engine/providers/gemini.py`
+- `rust_engine/crates/brood-engine/src/lib.rs`
 
 ## Test Plan
-- `python -m pytest`
+- `cd rust_engine && cargo test`
 - `cd desktop && npm run build`
 - Manual:
   - Load an image, draw an annotate box on a small sub-region, prompt: "Make this black".
@@ -35,4 +35,3 @@ Files:
 
 ## Notes / Follow-ups
 - The engine still writes an intermediate receipt/artifact for the edited crop; the UI does not surface it. A future lineage/timeline feature can decide whether to keep or hide these intermediates.
-

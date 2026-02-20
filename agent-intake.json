@@ -78,18 +78,6 @@
       "priority": 2
     },
     {
-      "path": "brood_engine/cli.py",
-      "kind": "source",
-      "why": "Legacy Python CLI reference used for compat and parity checks.",
-      "priority": 3
-    },
-    {
-      "path": "brood_engine/engine.py",
-      "kind": "source",
-      "why": "Legacy Python orchestration reference used for parity checks.",
-      "priority": 3
-    },
-    {
       "path": "desktop/src/canvas_app.js",
       "kind": "source",
       "why": "Desktop UI: canvas behaviors and Quick Actions rendering/dispatch.",
@@ -135,9 +123,7 @@
         "desktop/src/index.html",
         "desktop/src/styles.css",
         "rust_engine/crates/brood-cli/src/main.rs",
-        "rust_engine/crates/brood-engine/src/lib.rs",
-        "brood_engine/cli.py",
-        "brood_engine/engine.py"
+        "rust_engine/crates/brood-engine/src/lib.rs"
       ]
     },
     "desktop-canvas": {
@@ -168,22 +154,18 @@
       ]
     },
     "engine-cli": {
-      "description": "Brood CLI commands and flags (chat/run/recreate/export), Rust-first with legacy parity refs.",
+      "description": "Brood CLI commands and flags (chat/run/recreate/export), native Rust runtime.",
       "entrypoints": [
         "rust_engine/crates/brood-cli/src/main.rs",
         "rust_engine/crates/brood-engine/src/lib.rs",
-        "brood_engine/cli.py",
-        "brood_engine/engine.py",
         "README.md"
       ]
     },
     "engine-providers": {
-      "description": "Provider integrations (OpenAI/Gemini/etc), model routing, API key handling across Rust runtime and Python parity refs.",
+      "description": "Provider integrations (OpenAI/Gemini/etc), model routing, and API key handling in native Rust runtime.",
       "entrypoints": [
         "rust_engine/crates/brood-engine/src/lib.rs",
         "rust_engine/crates/brood-contracts/src/chat/intent_parser.rs",
-        "brood_engine/providers/",
-        "brood_engine/models/",
         "README.md",
         ".env.example"
       ]
@@ -191,14 +173,15 @@
     "engine-recreate": {
       "description": "Recreate flow (reference image in, similarities/edits out).",
       "entrypoints": [
-        "brood_engine/recreate/",
-        "brood_engine/cli.py"
+        "rust_engine/crates/brood-cli/src/main.rs",
+        "rust_engine/crates/brood-engine/src/lib.rs",
+        "docs/desktop.md"
       ]
     },
     "engine-memory": {
       "description": "Opt-in memory system, storage, and retrieval logic.",
       "entrypoints": [
-        "brood_engine/memory/",
+        "rust_engine/crates/brood-engine/src/lib.rs",
         "README.md"
       ]
     },
@@ -206,15 +189,16 @@
       "description": "Run artifacts + events.jsonl format; stability of event stream consumed by desktop.",
       "entrypoints": [
         "rust_engine/crates/brood-contracts/src/events.rs",
-        "brood_engine/runs/",
+        "rust_engine/crates/brood-engine/src/lib.rs",
         "docs/desktop.md"
       ]
     },
     "tests": {
-      "description": "Pytest coverage for engine components.",
+      "description": "Rust + desktop test coverage and validation commands.",
       "entrypoints": [
-        "tests/",
-        "pyproject.toml"
+        "rust_engine/crates/brood-engine/src/lib.rs",
+        "rust_engine/crates/brood-contracts/src/events.rs",
+        "desktop/test/"
       ]
     },
     "docs": {

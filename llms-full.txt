@@ -35,7 +35,6 @@ Regenerate with:
 - Rust engine CLI routing: [`rust_engine/crates/brood-cli/src/main.rs`](rust_engine/crates/brood-cli/src/main.rs)
 - Rust engine orchestration: [`rust_engine/crates/brood-engine/src/lib.rs`](rust_engine/crates/brood-engine/src/lib.rs)
 - Rust contracts/events: [`rust_engine/crates/brood-contracts/src/events.rs`](rust_engine/crates/brood-contracts/src/events.rs)
-- Python parity reference: [`brood_engine/cli.py`](brood_engine/cli.py), [`brood_engine/engine.py`](brood_engine/engine.py), [`brood_engine/providers/`](brood_engine/providers/)
 - Desktop UI (canvas + Abilities): [`desktop/src/canvas_app.js`](desktop/src/canvas_app.js)
 - Tauri backend + FS scope: [`desktop/src-tauri/src/main.rs`](desktop/src-tauri/src/main.rs), [`desktop/src-tauri/tauri.conf.json`](desktop/src-tauri/tauri.conf.json)
 - Desktop dev runner: [`scripts/dev_desktop.sh`](scripts/dev_desktop.sh)
@@ -44,7 +43,7 @@ Regenerate with:
 
 - Add or modify an Ability: [`desktop/src/canvas_app.js`](desktop/src/canvas_app.js) + [`rust_engine/crates/brood-cli/src/main.rs`](rust_engine/crates/brood-cli/src/main.rs)
 - Run artifacts and `events.jsonl`: [`rust_engine/crates/brood-contracts/src/events.rs`](rust_engine/crates/brood-contracts/src/events.rs) + [`docs/desktop.md`](docs/desktop.md)
-- Provider/model changes: [`rust_engine/crates/brood-engine/src/lib.rs`](rust_engine/crates/brood-engine/src/lib.rs) + Python parity refs in [`brood_engine/providers/`](brood_engine/providers/)
+- Provider/model changes: [`rust_engine/crates/brood-engine/src/lib.rs`](rust_engine/crates/brood-engine/src/lib.rs)
 - Desktop import/export and FS scope: [`desktop/src-tauri/tauri.conf.json`](desktop/src-tauri/tauri.conf.json) + [`desktop/src-tauri/src/main.rs`](desktop/src-tauri/src/main.rs)
 
 ## Safe Commands
@@ -53,7 +52,6 @@ Regenerate with:
 - `cd rust_engine && cargo fmt && cargo test`
 - `cd desktop && npm test`
 - `cd desktop/src-tauri && cargo fmt --check && cargo check`
-- `python -m pytest` (legacy parity checks)
 
 ## Notes
 
@@ -106,21 +104,13 @@ There is no web app, and Windows/Linux builds are not supported yet.
 
 - Desktop runtime defaults to native Rust (`brood-rs`).
 - macOS release packaging/signing/notarization includes the staged Rust engine binary.
-- Legacy Python engine remains available only for explicit compatibility/parity workflows.
+- Legacy Python runtime paths have been retired from the repository.
 
 ### Near-Term (Next Milestones)
 
 - Expand Rust provider parity coverage for desktop-critical image/edit/reference flows.
 - Keep event/artifact compatibility stable (`events.jsonl`, receipt/thread/summary payload shapes).
 - Complete broader live-probe validation and eliminate remaining migration edge cases.
-
-### Legacy Python Removal Plan (Brief)
-
-1. Lock parity: require Rust to pass provider/event/export parity matrix without compat fallback in normal runtime.
-2. Retire compat runtime path from desktop runtime and fail explicitly when native launch/export fails.
-3. Delete Python-dependent runtime plumbing in desktop/Tauri after soak confidence is met.
-4. Remove legacy Python CLI/engine modules (`brood_engine/`) and migrate remaining references/tests to Rust equivalents.
-5. Remove Python release/runtime assumptions from docs/scripts/CI and cut a Rust-only release.
 
 ## Download (macOS)
 
@@ -224,23 +214,6 @@ cargo run -p brood-cli -- run --prompt "hero image for Series A" --out /tmp/broo
 cargo run -p brood-cli -- recreate --reference path/to/image.png --out /tmp/brood-recreate
 ```
 
-### Python CLI (legacy/parity only; not used by desktop runtime)
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev]
-
-# Chat loop (legacy)
-brood chat --out /tmp/brood-run --events /tmp/brood-run/events.jsonl
-
-# Single run (legacy)
-brood run --prompt "hero image for Series A" --out /tmp/brood-run
-
-# Recreate flow (legacy)
-brood recreate --reference path/to/image.png --out /tmp/brood-recreate
-```
-
 ## API Keys
 
 - Copy `.env.example` to `.env` and fill provider keys.
@@ -274,9 +247,8 @@ Pricing/latency override file:
 ## Project Layout
 
 - `rust_engine/` native engine and CLI (default desktop runtime)
-- `brood_engine/` legacy Python engine and CLI (compat/parity reference)
 - `desktop/` Tauri desktop app
-- `tests/` pytest suite
+- `desktop/test/` desktop JS tests
 - `docs/param_forge_reference.md` Param Forge reference notes
 - `docs/desktop.md` desktop UI notes (abilities + workflows)
 
@@ -308,9 +280,8 @@ Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, an
 
 ## Project Structure & Module Organization
 - `rust_engine/`: native Rust engine and CLI (`brood-rs`), default runtime for desktop.
-- `brood_engine/`: legacy Python engine/CLI retained for compatibility and parity reference.
 - `desktop/`: Tauri desktop app (canvas + Abilities UI). Frontend lives in `desktop/src/`, Rust backend in `desktop/src-tauri/`.
-- `tests/`: pytest suite for engine components.
+- `desktop/test/`: desktop JS test suite.
 - `docs/`: project docs and Param Forge reference notes.
 - `scripts/`: helper scripts for packaging (`build_desktop.sh`, `dev_desktop.sh`).
 - `param_forge_ref/`: reference codebase (read-only; keep as input/compatibility reference).
@@ -320,12 +291,6 @@ Engine (Rust, default):
 - `cd rust_engine && cargo fmt`
 - `cd rust_engine && cargo test`
 - `cd rust_engine && cargo run -p brood-cli -- chat --out /tmp/brood-run --events /tmp/brood-run/events.jsonl`
-
-Engine (Python legacy/parity only; not desktop runtime):
-- `python -m venv .venv && source .venv/bin/activate`
-- `pip install -e .` — install the engine locally.
-- `brood chat --out /tmp/brood-run --events /tmp/brood-run/events.jsonl` — interactive CLI.
-- `brood recreate --reference <image> --out /tmp/brood-recreate` — recreate flow.
 
 Desktop:
 - `cd desktop && npm install`
@@ -341,16 +306,14 @@ Tests:
 - `cd rust_engine && cargo test` — run Rust engine tests.
 - `cd desktop && npm test` — run desktop tests.
 - `cd desktop/src-tauri && cargo fmt --check && cargo check` — run Tauri checks.
-- `python -m pytest` — run legacy Python parity tests.
 
 ## Coding Style & Naming Conventions
-- Python: 4 spaces; prefer type hints; line length ~100 (see `pyproject.toml`).
+- Python scripts in `scripts/`: 4 spaces and type hints where practical.
 - JS/CSS: follow existing formatting in `desktop/src/` (2-space indent).
-- Naming: snake_case for Python functions/files, lower/kebab for frontend assets.
+- Naming: snake_case for Python script functions/files, lower/kebab for frontend assets.
 
 ## Testing Guidelines
-- Frameworks: Rust (`cargo test` in `rust_engine/`), desktop (`npm test` in `desktop/`), Python parity (`pytest` in `tests/`).
-- Test naming: `tests/test_*.py` with descriptive function names (e.g., `test_context_tracker_alerts`).
+- Frameworks: Rust (`cargo test` in `rust_engine/`), desktop (`npm test` in `desktop/`).
 - Add tests for new run artifacts, events, or loops when changing engine behavior.
 
 ## Commit & Pull Request Guidelines
@@ -598,18 +561,6 @@ Per-image interaction and geometry are normalized and combined into a soft weigh
       "priority": 2
     },
     {
-      "path": "brood_engine/cli.py",
-      "kind": "source",
-      "why": "Legacy Python CLI reference used for compat and parity checks.",
-      "priority": 3
-    },
-    {
-      "path": "brood_engine/engine.py",
-      "kind": "source",
-      "why": "Legacy Python orchestration reference used for parity checks.",
-      "priority": 3
-    },
-    {
       "path": "desktop/src/canvas_app.js",
       "kind": "source",
       "why": "Desktop UI: canvas behaviors and Quick Actions rendering/dispatch.",
@@ -655,9 +606,7 @@ Per-image interaction and geometry are normalized and combined into a soft weigh
         "desktop/src/index.html",
         "desktop/src/styles.css",
         "rust_engine/crates/brood-cli/src/main.rs",
-        "rust_engine/crates/brood-engine/src/lib.rs",
-        "brood_engine/cli.py",
-        "brood_engine/engine.py"
+        "rust_engine/crates/brood-engine/src/lib.rs"
       ]
     },
     "desktop-canvas": {
@@ -688,22 +637,18 @@ Per-image interaction and geometry are normalized and combined into a soft weigh
       ]
     },
     "engine-cli": {
-      "description": "Brood CLI commands and flags (chat/run/recreate/export), Rust-first with legacy parity refs.",
+      "description": "Brood CLI commands and flags (chat/run/recreate/export), native Rust runtime.",
       "entrypoints": [
         "rust_engine/crates/brood-cli/src/main.rs",
         "rust_engine/crates/brood-engine/src/lib.rs",
-        "brood_engine/cli.py",
-        "brood_engine/engine.py",
         "README.md"
       ]
     },
     "engine-providers": {
-      "description": "Provider integrations (OpenAI/Gemini/etc), model routing, API key handling across Rust runtime and Python parity refs.",
+      "description": "Provider integrations (OpenAI/Gemini/etc), model routing, and API key handling in native Rust runtime.",
       "entrypoints": [
         "rust_engine/crates/brood-engine/src/lib.rs",
         "rust_engine/crates/brood-contracts/src/chat/intent_parser.rs",
-        "brood_engine/providers/",
-        "brood_engine/models/",
         "README.md",
         ".env.example"
       ]
@@ -711,14 +656,15 @@ Per-image interaction and geometry are normalized and combined into a soft weigh
     "engine-recreate": {
       "description": "Recreate flow (reference image in, similarities/edits out).",
       "entrypoints": [
-        "brood_engine/recreate/",
-        "brood_engine/cli.py"
+        "rust_engine/crates/brood-cli/src/main.rs",
+        "rust_engine/crates/brood-engine/src/lib.rs",
+        "docs/desktop.md"
       ]
     },
     "engine-memory": {
       "description": "Opt-in memory system, storage, and retrieval logic.",
       "entrypoints": [
-        "brood_engine/memory/",
+        "rust_engine/crates/brood-engine/src/lib.rs",
         "README.md"
       ]
     },
@@ -726,15 +672,16 @@ Per-image interaction and geometry are normalized and combined into a soft weigh
       "description": "Run artifacts + events.jsonl format; stability of event stream consumed by desktop.",
       "entrypoints": [
         "rust_engine/crates/brood-contracts/src/events.rs",
-        "brood_engine/runs/",
+        "rust_engine/crates/brood-engine/src/lib.rs",
         "docs/desktop.md"
       ]
     },
     "tests": {
-      "description": "Pytest coverage for engine components.",
+      "description": "Rust + desktop test coverage and validation commands.",
       "entrypoints": [
-        "tests/",
-        "pyproject.toml"
+        "rust_engine/crates/brood-engine/src/lib.rs",
+        "rust_engine/crates/brood-contracts/src/events.rs",
+        "desktop/test/"
       ]
     },
     "docs": {
@@ -1056,15 +1003,15 @@ Per-image interaction and geometry are normalized and combined into a soft weigh
               "priority": 1
             },
             {
-              "path": "brood_engine/cli.py",
+              "path": "rust_engine/crates/brood-cli/src/main.rs",
               "kind": "source",
-              "why": "Engine command wiring used by Abilities.",
+              "why": "Native engine command wiring used by Abilities.",
               "priority": 2
             }
           ],
           "commands": [
             "./scripts/dev_desktop.sh",
-            "python -m pytest"
+            "cd rust_engine && cargo test"
           ],
           "suggested_tags": [
             "desktop-quick-actions",

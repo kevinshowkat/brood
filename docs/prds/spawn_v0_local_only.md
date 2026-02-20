@@ -160,7 +160,7 @@ Add a "Fingerprint" entry in the AGENTS area:
 - Desktop build:
   - `cd desktop && npm run build`
 - Engine tests:
-  - `python -m pytest`
+  - `cd rust_engine && cargo test`
 
 ## Open Risks
 - macOS-only embedding requires native Vision plumbing via Tauri (Rust <-> Apple frameworks).

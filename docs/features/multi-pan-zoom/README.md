@@ -19,7 +19,7 @@ Files:
 
 ## Test Plan
 - `cd desktop && npm run build`
-- `python -m pytest`
+- `cd rust_engine && cargo test`
 - Manual:
   - Load 2 images, enter `Multi view`, select `Pan`.
   - Scroll wheel to zoom out: tiles should shrink and stay under the cursor.

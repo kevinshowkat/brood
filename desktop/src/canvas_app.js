@@ -869,7 +869,7 @@ const REEL_TOUCH_MOVE_VISIBLE_MS = 120;
 const REEL_TOUCH_TAP_VISIBLE_MS = 280;
 const REEL_TOUCH_RELEASE_VISIBLE_MS = 150;
 
-// Intent onboarding overlay icon assets (generated via scripts/gemini_generate_intent_icons.py).
+// Intent onboarding overlay icon assets.
 // Keep a procedural fallback so the app still renders if assets fail to load.
 const INTENT_UI_START_ICON_SCALE = 1.12; // modestly bigger than the original procedural glyphs
 const INTENT_UI_CHOICE_ICON_SCALE = 3.0; // YES/NO + suggested use-case glyph (requested: 300% larger)
