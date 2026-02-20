@@ -9128,7 +9128,6 @@ function renderMotherRolePreview() {
 function buildMotherText() {
   const idle = state.motherIdle || null;
   const phase = idle?.phase || motherIdleInitialState();
-  const drafts = Array.isArray(idle?.drafts) ? idle.drafts : [];
   const cooldownMs = Math.max(0, (Number(idle?.cooldownUntil) || 0) - Date.now());
   const undoAvailable = motherV2CommitUndoAvailable();
   const canPropose = motherIdleHasArmedCanvas();
@@ -9145,11 +9144,10 @@ function buildMotherText() {
     return "";
   }
   if (phase === MOTHER_IDLE_STATES.OFFERING) {
-    const draftCount = drafts.length;
     if (isReelSizeLocked()) {
-      return `Draft ready (${draftCount}). ✓ deploy, R reroll.`;
+      return "Proposal ready. ✓ deploy, R reroll.";
     }
-    return `Draft ready (${draftCount}). ✓ deploy, ✕ reject, R reroll.`;
+    return "Proposal ready. ✓ deploy, ✕ dismiss, R reroll.";
   }
   if (phase === MOTHER_IDLE_STATES.COMMITTING) {
     return "Committing draft to canvas…";
@@ -9197,7 +9195,6 @@ function buildMotherText() {
 function motherV2StatusText() {
   const idle = state.motherIdle || null;
   const phase = idle?.phase || motherIdleInitialState();
-  const drafts = Array.isArray(idle?.drafts) ? idle.drafts : [];
   const canPropose = motherIdleHasArmedCanvas();
   if (!canPropose && (phase === MOTHER_IDLE_STATES.WATCHING || phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING)) {
     return "Observing";
@@ -9210,8 +9207,8 @@ function motherV2StatusText() {
     if (idle?.intent && typeof idle.intent === "object") return "Proposed";
     return "Proposing";
   }
-  if (phase === MOTHER_IDLE_STATES.DRAFTING) return "Drafting 1/1";
-  if (phase === MOTHER_IDLE_STATES.OFFERING) return `Offer ${Math.max(1, drafts.length || 0)}`;
+  if (phase === MOTHER_IDLE_STATES.DRAFTING) return "Drafting";
+  if (phase === MOTHER_IDLE_STATES.OFFERING) return "Proposal ready";
   if (phase === MOTHER_IDLE_STATES.COMMITTING) return "Deploying";
   if (phase === MOTHER_IDLE_STATES.COOLDOWN) {
     const cooldownMs = Math.max(0, (Number(idle?.cooldownUntil) || 0) - Date.now());
@@ -9323,6 +9320,12 @@ function motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml }) {
   const modeAria = hasConfirmedIntentSource ? `Proposal mode ${modeLabel}` : "";
   const proposalVisualHtml = motherV2ProposalIconsHtml(intent, { phase: normalizedPhase });
   const visualHtml = readoutHtml || proposalVisualHtml;
+  const phaseLabel = normalizedPhase === MOTHER_IDLE_STATES.DRAFTING
+    ? "Drafting..."
+    : normalizedPhase === MOTHER_IDLE_STATES.OFFERING
+      ? "Proposal ready"
+      : "";
+  const phaseLine = phaseLabel ? `<div class="mother-proposal-phase">${escapeHtml(phaseLabel)}</div>` : "";
   const visualLine = visualHtml ? `<div class="mother-proposal-visual">${visualHtml}</div>` : "";
   const flowLine = `<div class="mother-proposal-flow">${visualLine}</div>`;
   const modeLine = !isDraftingPhase && !isCooldownPhase && modeLabel
@@ -9330,6 +9333,7 @@ function motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml }) {
     : "";
   return `
     <div class="mother-proposal-card" aria-label="Mother proposal" data-compact="1">
+      ${phaseLine}
       ${flowLine}
       ${modeLine}
     </div>
@@ -9642,6 +9646,12 @@ function motherV2CollectCommitSeedIds(intent = null) {
 }
 
 function motherV2OfferingHiddenSeedIds() {
+  // Keep parent inputs visible while Mother is drafting/offering.
+  // We intentionally no-op this legacy hide path and dim instead.
+  return new Set();
+}
+
+function motherV2OfferingDimSeedIds() {
   const idle = state.motherIdle;
   if (!idle) return new Set();
   if (idle.phase !== MOTHER_IDLE_STATES.OFFERING) return new Set();
@@ -9806,7 +9816,6 @@ async function motherV2CommitSelectedDraft() {
   const targetIds = Array.isArray(intent.target_ids) ? intent.target_ids.map((v) => String(v || "").trim()).filter(Boolean) : [];
   const targetId = targetIds[0] || getVisibleActiveId();
   const policy = String(intent.placement_policy || "adjacent").trim() || "adjacent";
-  const seedIds = motherV2CollectCommitSeedIds(intent);
   const beforeTarget = targetId && state.imagesById.has(targetId)
     ? (() => {
         const t = state.imagesById.get(targetId);
@@ -9825,7 +9834,6 @@ async function motherV2CommitSelectedDraft() {
   idle.commitMutationInFlight = true;
   try {
     let commitUndo = null;
-    let committedImageId = null;
     if (policy === "replace" && targetId && state.imagesById.has(targetId)) {
       const ok = await replaceImageInPlace(targetId, {
         path: draft.path,
@@ -9836,7 +9844,6 @@ async function motherV2CommitSelectedDraft() {
       if (!ok) throw new Error("Mother commit failed to replace target.");
       const targetItem = state.imagesById.get(targetId) || null;
       if (targetItem) targetItem.source = MOTHER_GENERATED_SOURCE;
-      committedImageId = String(targetId);
       commitUndo = {
         mode: "replace",
         targetId: String(targetId),
@@ -9872,16 +9879,12 @@ async function motherV2CommitSelectedDraft() {
         },
         { select: false }
       );
-      committedImageId = String(draft.id);
       commitUndo = {
         mode: "insert",
         insertedId: String(draft.id),
       };
     }
-    const removedSeeds = await motherV2DiscardCommitSeedImages({
-      seedIds,
-      keepIds: committedImageId ? [committedImageId] : [],
-    });
+    const removedSeeds = [];
     idle.commitUndo = {
       ...(commitUndo || {}),
       removedSeeds,
@@ -14866,6 +14869,7 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
   idle.selectedDraftId = draft.id;
   idle.hoverDraftId = draft.id;
   motherIdleTransitionTo(MOTHER_IDLE_EVENTS.DRAFT_READY);
+  setStatus("Mother: proposal ready.");
   appendMotherTraceLog({
     kind: "draft_ready",
     traceId: idle.telemetry?.traceId || null,
@@ -14875,7 +14879,7 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
     placement_policy: idle.intent?.placement_policy || null,
   }).catch(() => {});
   if (!isReelSizeLocked()) {
-    showToast("Mother draft ready. ✓ deploy, ✕ dismiss, R reroll.", "tip", 2200);
+    showToast("Mother proposal ready. ✓ deploy, ✕ dismiss, R reroll.", "tip", 2200);
   }
   requestRender();
   return true;
@@ -23134,7 +23138,9 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   const mox = Number(state.multiView?.offsetX) || 0;
   const moy = Number(state.multiView?.offsetY) || 0;
   const hiddenOfferSeedIds = motherV2OfferingHiddenSeedIds();
+  const dimOfferSeedIds = motherV2OfferingDimSeedIds();
   const isHiddenOfferSeedId = (rawId) => hiddenOfferSeedIds.has(String(rawId || "").trim());
+  const isDimOfferSeedId = (rawId) => dimOfferSeedIds.has(String(rawId || "").trim());
 
   const dpr = getDpr();
   wctx.save();
@@ -23154,17 +23160,30 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     const y = rect.y * ms + moy;
     const w = rect.w * ms;
     const h = rect.h * ms;
+    const dimOfferSeed = isDimOfferSeedId(imageId);
     const effectToken = imageId ? effectTokenForImageId(imageId) : null;
     if (effectToken) {
       // Token visuals are rendered by the Pixi effects runtime on a dedicated transparent layer.
     } else if (item?.img) {
+      wctx.save();
+      if (dimOfferSeed) wctx.globalAlpha = 0.62;
       wctx.drawImage(item.img, x, y, w, h);
+      if (dimOfferSeed) {
+        wctx.globalAlpha = 1;
+        wctx.fillStyle = "rgba(6, 10, 14, 0.26)";
+        wctx.fillRect(x, y, w, h);
+      }
+      wctx.restore();
     } else {
       const g = wctx.createLinearGradient(x, y, x, y + h);
       g.addColorStop(0, "rgba(18, 26, 37, 0.90)");
       g.addColorStop(1, "rgba(6, 8, 12, 0.96)");
       wctx.fillStyle = g;
       wctx.fillRect(x, y, w, h);
+      if (dimOfferSeed) {
+        wctx.fillStyle = "rgba(6, 10, 14, 0.26)";
+        wctx.fillRect(x, y, w, h);
+      }
       wctx.fillStyle = "rgba(230, 237, 243, 0.65)";
       wctx.font = `${Math.max(11, Math.round(12 * dpr))}px IBM Plex Mono`;
       wctx.fillText("LOADING…", x + Math.round(12 * dpr), y + Math.round(22 * dpr));
