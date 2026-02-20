@@ -52,6 +52,9 @@ import {
   parseIntentIconsJson as parseIntentIconsJsonUtil,
   parseIntentIconsJsonDetailed as parseIntentIconsJsonDetailedUtil,
 } from "./intent_icons_parser.js";
+import {
+  nextMotherRealtimeIntentFailureAction,
+} from "./realtime_intent_recovery.js";
 import { createDesktopEventHandlerMap } from "./event_handlers/index.js";
 import { installCanvasGestureHandlers } from "./canvas_handlers/gesture_handlers.js";
 import { installCanvasKeyboardHandlers } from "./canvas_handlers/keyboard_handlers.js";
@@ -173,6 +176,8 @@ const MOTHER_V2_COOLDOWN_AFTER_COMMIT_MS = 2000;
 const MOTHER_V2_COOLDOWN_AFTER_REJECT_MS = 1200;
 const MOTHER_V2_VISION_RETRY_MS = 220;
 const MOTHER_V2_INTENT_RT_TIMEOUT_MS = 30_000;
+const MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_MAX = 2;
+const MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_DELAY_MS = 220;
 const MOTHER_V2_INTENT_LATE_REALTIME_UPGRADE_MS = 12000;
 const MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL = 2;
 const MOTHER_V2_ROLE_KEYS = Object.freeze(["subject", "model", "mediator", "object"]);
@@ -648,6 +653,7 @@ const state = {
     multiUploadIdleBoostUntil: 0,
     pendingIntent: false,
     pendingIntentRequestId: null,
+    pendingIntentTransportRetryCount: 0,
     pendingIntentStartedAt: 0,
     pendingIntentUpgradeUntil: 0,
     pendingIntentRealtimePath: null,
@@ -11197,6 +11203,7 @@ function motherV2ResetInteractionState() {
   idle.pendingVisionImageIds = [];
   idle.pendingActionVersion = 0;
   idle.pendingIntentRequestId = null;
+  idle.pendingIntentTransportRetryCount = 0;
   idle.pendingIntentStartedAt = 0;
   idle.pendingIntentUpgradeUntil = 0;
   idle.pendingIntentRealtimePath = null;
@@ -11241,6 +11248,7 @@ function motherV2ClearIntentAndDrafts({ removeFiles = false } = {}) {
   clearTimeout(idle.pendingVisionRetryTimer);
   idle.pendingVisionRetryTimer = null;
   idle.pendingIntentRequestId = null;
+  idle.pendingIntentTransportRetryCount = 0;
   idle.pendingIntentStartedAt = 0;
   idle.pendingIntentUpgradeUntil = 0;
   idle.pendingIntentRealtimePath = null;
@@ -11625,6 +11633,7 @@ function resetMotherIdleAndWheelState() {
     state.motherIdle.multiUploadIdleBoostUntil = 0;
     state.motherIdle.pendingIntent = false;
     state.motherIdle.pendingIntentRequestId = null;
+    state.motherIdle.pendingIntentTransportRetryCount = 0;
     state.motherIdle.pendingIntentStartedAt = 0;
     state.motherIdle.pendingIntentUpgradeUntil = 0;
     state.motherIdle.pendingIntentRealtimePath = null;
@@ -12890,6 +12899,9 @@ function motherV2ApplyIntent(intentPayload = {}, { source = "local", preserveMod
   const canUpgradeFromLateRealtime = sourceKind !== "realtime" && priorPendingRealtimePath;
   idle.pendingIntentRealtimePath = canUpgradeFromLateRealtime ? priorPendingRealtimePath : null;
   idle.pendingIntentRequestId = canUpgradeFromLateRealtime ? (resolvedRequestId || priorRequestId || null) : null;
+  idle.pendingIntentTransportRetryCount = canUpgradeFromLateRealtime
+    ? (Number(idle.pendingIntentTransportRetryCount) || 0)
+    : 0;
   idle.pendingIntentStartedAt = canUpgradeFromLateRealtime ? (Number(idle.pendingIntentStartedAt) || Date.now()) : 0;
   idle.pendingIntentUpgradeUntil = canUpgradeFromLateRealtime ? Date.now() + MOTHER_V2_INTENT_LATE_REALTIME_UPGRADE_MS : 0;
   idle.pendingIntentPayload = null;
@@ -12928,24 +12940,121 @@ function motherV2ArmRealtimeIntentTimeout({ timeoutMs = MOTHER_V2_INTENT_RT_TIME
 
   clearTimeout(idle.pendingIntentTimeout);
   idle.pendingIntentTimeout = setTimeout(() => {
-    const current = state.motherIdle;
-    if (!current || !current.pendingIntent) return;
-    if ((Number(current.actionVersion) || 0) !== actionVersion) return;
-    if ((Number(current.pendingActionVersion) || 0) !== pendingActionVersion) return;
-    const currentRequestId = String(current.pendingIntentRequestId || "").trim() || null;
-    if (requestId && currentRequestId !== requestId) return;
+    const resolveActiveTimeoutRequest = () => {
+      const latest = state.motherIdle;
+      if (!latest || !latest.pendingIntent) return null;
+      if ((Number(latest.actionVersion) || 0) !== actionVersion) return null;
+      if ((Number(latest.pendingActionVersion) || 0) !== pendingActionVersion) return null;
+      const latestRequestId = String(latest.pendingIntentRequestId || "").trim() || null;
+      if (requestId && latestRequestId !== requestId) return null;
+      return latest;
+    };
+    const emitTimeoutFailure = (activeIdle) => {
+      if (!activeIdle) return;
+      appendMotherTraceLog({
+        kind: "intent_realtime_failed",
+        traceId: activeIdle.telemetry?.traceId || null,
+        actionVersion,
+        request_id: requestId,
+        source: "intent_rt_timeout",
+        error: message,
+      }).catch(() => {});
+      motherIdleHandleGenerationFailed(message);
+    };
+    const current = resolveActiveTimeoutRequest();
+    if (!current) return;
     const timeoutSec = Math.max(1, Math.round(ms / 1000));
     const message = `Mother realtime intent timed out after ${timeoutSec}s.`;
-    appendMotherTraceLog({
-      kind: "intent_realtime_failed",
-      traceId: current.telemetry?.traceId || null,
-      actionVersion,
-      request_id: requestId,
-      source: "intent_rt_timeout",
-      error: message,
-    }).catch(() => {});
-    motherIdleHandleGenerationFailed(message);
+    const snapshotPath = String(current.pendingIntentRealtimePath || "").trim();
+    const retryCount = Math.max(0, Number(current.pendingIntentTransportRetryCount) || 0);
+    if (snapshotPath && retryCount < MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_MAX) {
+      motherV2RetryRealtimeIntentTransport({ path: snapshotPath, errorMessage: message })
+        .then((retried) => {
+          if (!retried) {
+            const latest = resolveActiveTimeoutRequest();
+            if (!latest) return;
+            appendMotherTraceLog({
+              kind: "intent_realtime_retry_exhausted",
+              traceId: latest.telemetry?.traceId || null,
+              actionVersion,
+              request_id: requestId,
+              retry_count: Number(latest.pendingIntentTransportRetryCount) || 0,
+              max_retries: MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_MAX,
+              reason: "timeout_retry_dispatch_failed",
+              error: message,
+            }).catch(() => {});
+            emitTimeoutFailure(latest);
+          }
+        })
+        .catch(() => {
+          const latest = resolveActiveTimeoutRequest();
+          emitTimeoutFailure(latest);
+        });
+      return;
+    }
+    emitTimeoutFailure(current);
   }, ms);
+}
+
+async function motherV2RetryRealtimeIntentTransport({ path = "", errorMessage = null } = {}) {
+  const idle = state.motherIdle;
+  const snapshotPath = String(path || "").trim();
+  if (!idle || !snapshotPath) return false;
+  if (!idle.pendingIntent) return false;
+  if (String(idle.phase || "") !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) return false;
+  const actionVersion = Number(idle.actionVersion) || 0;
+  const pendingActionVersion = Number(idle.pendingActionVersion) || 0;
+  if (!actionVersion || actionVersion !== pendingActionVersion) return false;
+  const retryCount = Math.max(0, Number(idle.pendingIntentTransportRetryCount) || 0);
+  if (retryCount >= MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_MAX) return false;
+
+  const nextRetry = retryCount + 1;
+  const requestId = motherV2BuildIntentRequestId(actionVersion);
+  idle.pendingIntentTransportRetryCount = nextRetry;
+  idle.pendingIntentRequestId = requestId;
+  idle.pendingIntentStartedAt = Date.now();
+  idle.pendingIntentUpgradeUntil = 0;
+  idle.pendingIntentRealtimePath = snapshotPath;
+  clearTimeout(idle.pendingIntentTimeout);
+  idle.pendingIntentTimeout = null;
+
+  appendMotherTraceLog({
+    kind: "intent_realtime_retrying",
+    traceId: idle.telemetry?.traceId || null,
+    actionVersion,
+    request_id: requestId,
+    retry_count: nextRetry,
+    max_retries: MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_MAX,
+    snapshot_path: snapshotPath,
+    error: errorMessage ? String(errorMessage) : null,
+  }).catch(() => {});
+
+  const delayMs = Math.max(0, MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_DELAY_MS * nextRetry);
+  if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+  const current = state.motherIdle;
+  if (!current || !current.pendingIntent) return false;
+  if ((Number(current.actionVersion) || 0) !== actionVersion) return false;
+  if ((Number(current.pendingActionVersion) || 0) !== actionVersion) return false;
+  if (String(current.pendingIntentRequestId || "") !== requestId) return false;
+  if (!state.ptySpawned) return false;
+
+  await invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT_MOTHER_START}\n` }).catch(() => {});
+  const dispatched = await invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT_MOTHER} ${quoteForPtyArg(snapshotPath)}\n` })
+    .then(() => true)
+    .catch(() => false);
+  if (!dispatched) return false;
+
+  appendMotherTraceLog({
+    kind: "intent_realtime_retry_dispatched",
+    traceId: current.telemetry?.traceId || null,
+    actionVersion,
+    request_id: requestId,
+    retry_count: nextRetry,
+    snapshot_path: snapshotPath,
+  }).catch(() => {});
+  motherV2ArmRealtimeIntentTimeout({ timeoutMs: MOTHER_V2_INTENT_RT_TIMEOUT_MS });
+  return true;
 }
 
 async function motherV2RequestIntentInference() {
@@ -12990,6 +13099,7 @@ async function motherV2RequestIntentInference() {
     if (String(current.pendingIntentRequestId || "") !== requestId) return;
     current.pendingIntent = false;
     current.pendingIntentRequestId = null;
+    current.pendingIntentTransportRetryCount = 0;
     current.pendingIntentStartedAt = 0;
     current.pendingIntentUpgradeUntil = 0;
     current.pendingIntentRealtimePath = null;
@@ -13050,6 +13160,7 @@ async function motherV2RequestIntentInference() {
 
   idle.pendingIntent = true;
   idle.pendingIntentRequestId = requestId;
+  idle.pendingIntentTransportRetryCount = 0;
   idle.pendingIntentStartedAt = Date.now();
   idle.pendingIntentUpgradeUntil = 0;
   idle.pendingActionVersion = actionVersion;
@@ -14393,6 +14504,7 @@ function motherIdleHandleGenerationFailed(message = null) {
   idle.pendingPromptCompile = false;
   idle.pendingIntent = false;
   idle.pendingIntentRequestId = null;
+  idle.pendingIntentTransportRetryCount = 0;
   idle.pendingIntentStartedAt = 0;
   idle.pendingIntentUpgradeUntil = 0;
   idle.pendingIntentRealtimePath = null;
@@ -21625,8 +21737,12 @@ async function handleEventLegacy(event) {
       motherRealtimePath,
       motherActionVersion,
       eventActionVersion: eventActionVersionRaw,
+      eventIntentScope: event.intent_scope,
     });
     const { matchAmbient, matchIntent, matchMother, ignoreReason } = routing;
+    if (ignoreReason === "scope_mismatch") {
+      return;
+    }
     if (ignoreReason === "snapshot_path_mismatch" || ignoreReason === "path_mismatch") {
       if (!isPartial && ignoreReason === "snapshot_path_mismatch") {
         appendMotherTraceLog({
@@ -21960,9 +22076,12 @@ async function handleEventLegacy(event) {
     const motherIdle = state.motherIdle;
     const path = event.image_path ? String(event.image_path) : "";
     if (!path) return;
+    const eventIntentScope = String(event.intent_scope || "").trim().toLowerCase();
+    const eventIsMotherScoped = !eventIntentScope || eventIntentScope === "mother";
     const matchAmbient = Boolean(ambient?.pendingPath && String(ambient.pendingPath) === path);
     const matchIntent = Boolean(intent?.pendingPath && String(intent.pendingPath) === path);
     const matchMother = Boolean(
+      eventIsMotherScoped &&
       motherIdle?.pendingIntent &&
         String(motherIdle?.phase || "") === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING &&
         String(motherIdle?.pendingIntentRealtimePath || "") === path &&
@@ -21991,9 +22110,43 @@ async function handleEventLegacy(event) {
 
     const errRaw = typeof event.error === "string" ? event.error.trim() : "";
     const msg = errRaw ? `Intent inference failed: ${errRaw}` : "Intent inference failed.";
-	    if (matchIntent && intent) {
-	      intent.rtState = "failed";
-	      intent.lastError = msg;
+    const retryDecision = nextMotherRealtimeIntentFailureAction({
+      event,
+      matchMother,
+      pendingIntent: Boolean(motherIdle?.pendingIntent),
+      phase: motherIdle?.phase || "",
+      actionVersion: Number(motherIdle?.actionVersion) || 0,
+      pendingActionVersion: Number(motherIdle?.pendingActionVersion) || 0,
+      retryCount: Number(motherIdle?.pendingIntentTransportRetryCount) || 0,
+      maxRetries: MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_MAX,
+    });
+    if (retryDecision.action === "retry") {
+      const retried = await motherV2RetryRealtimeIntentTransport({
+        path,
+        errorMessage: msg,
+      });
+      if (retried) {
+        setStatus("Mother: retrying realtime intent…");
+        renderMotherReadout();
+        requestRender();
+        return;
+      }
+    }
+    if (retryDecision.retryable && retryDecision.action === "fail") {
+      appendMotherTraceLog({
+        kind: "intent_realtime_retry_exhausted",
+        traceId: motherIdle?.telemetry?.traceId || null,
+        actionVersion: Number(motherIdle?.actionVersion) || 0,
+        request_id: motherRequestId,
+        retry_count: Number(motherIdle?.pendingIntentTransportRetryCount) || 0,
+        max_retries: MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_MAX,
+        reason: retryDecision.reason || null,
+        error: msg,
+      }).catch(() => {});
+    }
+		    if (matchIntent && intent) {
+		      intent.rtState = "failed";
+		      intent.lastError = msg;
 	      intent.lastErrorAt = Date.now();
 	      intent.uiHideSuggestion = false;
 	    }
