@@ -23,8 +23,7 @@ use reqwest::header::AUTHORIZATION;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
-const DEFAULT_PRICING_TABLES_JSON: &str =
-    include_str!("../../../../brood_engine/pricing/default_pricing.json");
+const DEFAULT_PRICING_TABLES_JSON: &str = include_str!("../resources/default_pricing.json");
 
 #[derive(Debug, Clone)]
 pub struct PlanPreview {
