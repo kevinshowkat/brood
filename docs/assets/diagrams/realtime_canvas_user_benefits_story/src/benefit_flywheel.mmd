@@ -1,0 +1,13 @@
+flowchart TD
+  U1["User edits canvas\n(import, place, select, move)"] --> U2["Brood captures live context\n(spatial + interaction + semantic)"]
+  U2 --> U3["Intent + role inference\nproduces stronger proposals"]
+  U3 --> U4["Generation uses context-aware prompt + envelopes"]
+  U4 --> U5["Outputs are more on-target\nwith fewer retries"]
+  U5 --> U6["Users stay in flow\nand iterate faster"]
+  U6 --> U7["More high-quality interaction data\nfor the next proposal"]
+  U7 --> U2
+
+  U5 --> K1["KPI: higher first-pass acceptance"]
+  U6 --> K2["KPI: lower time-to-first-accept"]
+  U4 --> K3["KPI: lower prompt length per win"]
+  U4 --> K4["KPI: consistent receipts/events"]

@@ -91,6 +91,8 @@ struct ExportArgs {
     out: PathBuf,
 }
 
+const REALTIME_DESCRIPTION_MAX_CHARS: usize = 40;
+
 fn main() {
     match run() {
         Ok(code) => std::process::exit(code),
@@ -213,7 +215,7 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                     continue;
                 }
 
-                let max_chars = 64usize;
+                let max_chars = REALTIME_DESCRIPTION_MAX_CHARS;
                 if let Some(inference) = vision_infer_description(&path, max_chars) {
                     engine.emit_event(
                         "image_description",
@@ -1179,7 +1181,7 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                     println!("Swap DNA failed: file not found ({})", path_b.display());
                     continue;
                 }
-                let prompt = "Swap DNA between the two provided photos. Image A provides the STRUCTURE: crop/framing, composition, hierarchy, layout, and spatial logic. Image B provides the SURFACE: color palette, textures/materials, lighting, mood, and finish. This is decision transfer, not a split-screen or collage. Output a single coherent image that preserves A's structural decisions while applying B's surface qualities.";
+                let prompt = "Swap DNA between the two provided photos. Image A is the STRUCTURE source: framing/crop, geometry, pose, perspective, composition, object count, and spatial layout. Image B is the SURFACE source: color palette, materials/textures, lighting, mood, and finish. Preserve Image A structure decisions exactly while transferring Image B surface treatment. Resolve conflicts by prioritizing A for structure and B for surface. Output one coherent image only. Never output split-screen, collage, side-by-side, or double-exposure blends.";
                 let mut settings = chat_settings(&quality_preset);
                 settings.insert(
                     "init_image".to_string(),
@@ -2801,7 +2803,7 @@ impl RealtimeSessionKind {
         match self {
             Self::CanvasContext => None,
             Self::IntentIcons { .. } => Some(
-                "For image_descriptions labels, use concise computer-vision caption style. Prefer the most specific identifiable subject. If a person/character is confidently recognizable, use the proper name. Avoid generic role labels like 'basketball player' when identity is recognizable. If SOURCE_IMAGE_REFERENCE inputs are present, prioritize them for identity/detail over low-res canvas cues. Do not infer sports team/franchise from jersey colors alone; only mention a team when text/logo is clearly readable. Do not mirror generic vision_desc hints from CONTEXT_ENVELOPE_JSON. Return strict JSON only.",
+                "For image_descriptions labels, use concise computer-vision caption style and keep each label <= 40 characters. Prefer the most specific identifiable subject. If a person/character is confidently recognizable, use the proper name. Avoid generic role labels like 'basketball player' when identity is recognizable. If SOURCE_IMAGE_REFERENCE inputs are present, prioritize them for identity/detail over low-res canvas cues. Do not infer sports team/franchise from jersey colors alone; only mention a team when text/logo is clearly readable. Do not mirror generic vision_desc hints from CONTEXT_ENVELOPE_JSON. Return strict JSON only.",
             ),
         }
     }
@@ -4289,9 +4291,12 @@ fn build_intent_icons_payload(snapshot_path: &Path, mother: bool) -> Value {
                 .to_ascii_lowercase()
         };
         let label = if !hint.vision_desc.trim().is_empty() {
-            clamp_text(hint.vision_desc.trim(), 64)
+            clamp_text(hint.vision_desc.trim(), REALTIME_DESCRIPTION_MAX_CHARS)
         } else {
-            clamp_text(&humanize_file_name(&hint.file), 64)
+            clamp_text(
+                &humanize_file_name(&hint.file),
+                REALTIME_DESCRIPTION_MAX_CHARS,
+            )
         };
         if image_id.is_empty() || label.is_empty() {
             continue;
@@ -6594,7 +6599,7 @@ fn build_labeled_image_content(
 }
 
 fn description_realtime_instruction() -> &'static str {
-    "Describe the image as a short caption fragment, not a full sentence. Use noun-phrase style like 'LeBron James holding basketball'. Do not use auxiliary verbs like is/are/was/were. Return only the caption."
+    "Describe the image as one short caption fragment (<=40 chars), not a full sentence. Use noun-phrase style like 'LeBron James holding basketball'. Do not use auxiliary verbs like is/are/was/were. Return only the caption."
 }
 
 fn description_instruction(max_chars: usize) -> String {
@@ -6764,7 +6769,7 @@ OUTPUT FORMAT (STRICT JSON)
   "image_descriptions": [
     {
       "image_id": "<from CONTEXT_ENVELOPE_JSON.images[].id>",
-      "label": "<CV caption fragment, <=64 chars, concrete and specific>",
+      "label": "<CV caption fragment, <=40 chars, concrete and specific>",
       "confidence": 0.0
     }
   ],
@@ -7928,7 +7933,7 @@ mod tests {
     fn intent_icons_instruction_enforces_cv_caption_style_labels() {
         let instruction = intent_icons_instruction(false);
         assert!(instruction.contains("computer-vision caption style"));
-        assert!(instruction.contains("<=64 chars"));
+        assert!(instruction.contains("<=40 chars"));
         assert!(instruction.contains("A photo of ...` is acceptable but not required"));
         assert!(instruction.contains("use the proper name"));
         assert!(instruction.contains("Do not hedge (\"appears to\", \"looks like\")"));
@@ -7940,6 +7945,7 @@ mod tests {
             .per_request_input_text()
             .unwrap_or_default();
         assert!(hint.contains("computer-vision caption style"));
+        assert!(hint.contains("<= 40 characters"));
         assert!(hint.contains("use the proper name"));
         assert!(hint.contains("Avoid generic role labels like 'basketball player'"));
         assert!(hint.contains("Do not mirror generic vision_desc hints"));
@@ -7977,6 +7983,7 @@ mod tests {
     fn description_realtime_instruction_matches_probe_style() {
         let instruction = description_realtime_instruction();
         assert!(instruction.contains("short caption fragment"));
+        assert!(instruction.contains("<=40 chars"));
         assert!(instruction.contains("not a full sentence"));
         assert!(instruction.contains("Do not use auxiliary verbs"));
     }

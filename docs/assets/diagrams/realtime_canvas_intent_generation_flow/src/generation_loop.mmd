@@ -1,0 +1,26 @@
+sequenceDiagram
+  participant User as User
+  participant Canvas as Canvas UI
+  participant Tauri as Tauri PTY bridge
+  participant CLI as brood-rs chat
+  participant Engine as BroodEngine::generate
+  participant Provider as Native provider
+  participant Log as events.jsonl
+
+  User->>Canvas: Run skill (Combine/Bridge/Swap/Recast/Mother)
+  Canvas->>Tauri: /blend | /bridge | /swap_dna | /recast | /mother_generate <payload>
+  Tauri->>CLI: PTY line
+  CLI->>Engine: preview_plan(prompt, settings, intent)
+  Engine-->>Log: plan_preview
+  CLI->>Engine: generate(prompt, settings, intent)
+  Engine-->>Log: version_created
+  Engine->>Provider: provider.generate(...)
+  Provider-->>Engine: result image(s)
+  Engine-->>Log: artifact_created (1..N)
+  Engine-->>Log: cost_latency_update
+  Canvas->>Log: poll with read_file_since(events.jsonl)
+  Canvas->>Canvas: add image/timeline, clear pending state, render updates
+  opt generation error
+    Engine-->>Log: generation_failed
+    Canvas->>Canvas: show error, keep UI responsive
+  end

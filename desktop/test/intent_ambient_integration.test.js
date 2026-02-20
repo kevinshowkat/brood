@@ -63,7 +63,7 @@ test("Ambient intent: allows specific realtime vision labels to replace bland ea
   assert.match(app, /const keepExplicitDescribe =[\s\S]*prevSource === "openai_realtime_describe" \|\| prevSource === "openai_vision"/);
   assert.match(app, /maybeScheduleVisionDescribeFallback\(imgItem, prevLabel\);/);
   assert.match(app, /maybeScheduleVisionDescribeFallback\(imgItem, label\);/);
-  assert.match(app, /const cleaned = _normalizeVisionLabel\(desc,\s*\{\s*maxChars:\s*64\s*\}\) \|\| desc\.trim\(\);/);
+  assert.match(app, /const cleaned = _normalizeVisionLabel\(desc,\s*\{\s*maxChars:\s*REALTIME_VISION_LABEL_MAX_CHARS\s*\}\) \|\| desc\.trim\(\);/);
 });
 
 test("Ambient intent: missing realtime image_descriptions queues fallback describe", () => {
@@ -76,9 +76,9 @@ test("Ambient intent: empty vision hints are filtered before building realtime c
   assert.match(app, /if \(shouldBackfillVisionLabel\(label\)\) return null;/);
   assert.match(app, /function shouldBackfillVisionLabel\(/);
   assert.match(app, /return !label;/);
-  assert.match(app, /const label = _normalizeVisionLabel\(labelRaw,\s*\{\s*maxChars:\s*64\s*\}\);/);
-  assert.match(app, /vision_desc:\s*normalizeVisionHintForIntent\(image\.vision_desc,\s*\{\s*maxChars:\s*64\s*\}\)/);
-  assert.match(app, /const visionDesc = normalizeVisionHintForIntent\(item\?\.visionDesc,\s*\{\s*maxChars:\s*64\s*\}\);/);
+  assert.match(app, /const label = _normalizeVisionLabel\(labelRaw,\s*\{\s*maxChars:\s*REALTIME_VISION_LABEL_MAX_CHARS\s*\}\);/);
+  assert.match(app, /vision_desc:\s*normalizeVisionHintForIntent\(image\.vision_desc,\s*\{\s*maxChars:\s*REALTIME_VISION_LABEL_MAX_CHARS\s*\}\)/);
+  assert.match(app, /const visionDesc = normalizeVisionHintForIntent\(item\?\.visionDesc,\s*\{\s*maxChars:\s*REALTIME_VISION_LABEL_MAX_CHARS\s*\}\);/);
 });
 
 test("Ambient intent: proactive per-image describe scheduling stays fallback-gated", () => {

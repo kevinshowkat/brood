@@ -28,7 +28,7 @@ test("computeActionGridSlots: 1 selected -> single-image abilities (DIAG when AO
     "annotate",
     "soul_leech",
     "bg",
-    "variations",
+    "create_layers",
     "diagnose",
   ]);
 });

@@ -92,13 +92,13 @@
                     <button id="settings-toggle" type="button" role="menuitem" data-menu-close="1">Settings</button>
                   </div>
                   <div class="app-menu-divider" aria-hidden="true"></div>
-                  <label class="app-menu-toggle-row" title="Auto-accept Suggested Ability (max 3)">
+                  <label class="app-menu-toggle-row" title="Auto-accept Suggested Skill (max 3)">
                     <span class="app-menu-toggle-label" aria-hidden="true">AUTO</span>
                     <input
                       id="auto-accept-suggested-ability-toggle"
                       class="toggle-switch"
                       type="checkbox"
-                      aria-label="Auto-accept suggested ability"
+                      aria-label="Auto-accept suggested skill"
                     />
                   </label>
                 </div>
@@ -424,6 +424,24 @@
               <option value="gpt-image-1">gpt-image-1</option>
             </select>
           </label>
+          <label class="field">
+            <div class="field-label">Prompt Strategy</div>
+            <select id="prompt-strategy-mode">
+              <option value="tail">Constraint Tail (MUST)</option>
+              <option value="baseline">Baseline (no MUST tail)</option>
+            </select>
+          </label>
+          <label class="field">
+            <div class="field-label">Repeat Full Prompt</div>
+            <input id="prompt-repeat-full-toggle" type="checkbox" />
+          </label>
+          <div class="key-status-card">
+            <div class="key-status-title">Prompt Benchmark</div>
+            <div id="prompt-benchmark-readout" class="key-status-list muted">No benchmark data yet</div>
+            <div class="controls">
+              <button id="prompt-benchmark-reset" class="ghost" type="button">Reset</button>
+            </div>
+          </div>
           <div class="key-status-card">
             <div class="key-status-title">Aesthetic Preference</div>
             <div id="aesthetic-onboarding-status" class="key-status-list muted">Not set yet</div>
