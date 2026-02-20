@@ -7,6 +7,16 @@ The format is based on Keep a Changelog (https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 - TBD
 
+## [0.1.6] - 2026-02-20
+- Fix macOS publish notarization by signing staged `resources/brood-rs` with Developer ID, hardened runtime, and secure timestamp during release builds.
+
+## [0.1.5] - 2026-02-20
+- Move desktop runtime to native Rust engine by default while preserving explicit emergency compat fallback via `BROOD_EMERGENCY_COMPAT_FALLBACK`.
+- Keep PTY/slash-command and event-contract compatibility while routing Mother `/intent_infer` and `/prompt_compile` through provider-backed Rust paths.
+- Improve desktop-used provider parity for image edit/reference flows (OpenAI/Gemini/Flux/Imagen), including option normalization and metadata/warnings handling.
+- Harden always-on realtime vision labeling for faster, more specific per-image HUD descriptions without heuristic name injection.
+- Package and prefer repo-local/staged `brood-rs` binary paths across desktop/Tauri startup and export flows.
+
 ## [0.1.2] - 2026-02-14
 - Fix single-canvas pan tap detection so tap-to-open Mother wheel remains reliable after bridge output flows.
 - Restore add-photo visibility after single-view bridge flows by returning to multi canvas when multiple images are present.
