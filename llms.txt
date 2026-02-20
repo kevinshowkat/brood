@@ -6,7 +6,7 @@
 
 - Created by Kevin Showkat. Connect: <https://www.linkedin.com/in/kshowkat>
 - Expanded, inlined agent context: [`llms-full.txt`](llms-full.txt)
-- Regenerate expanded context: `python3 scripts/build_llms_full.py`
+- Expanded context file: [`llms-full.txt`](llms-full.txt)
 
 ## Agent Intake (Preferred)
 

@@ -192,10 +192,8 @@ Pricing/latency override file:
 ## Agent / LLM Entrypoints
 
 - `llms.txt` high-signal entrypoints and task routing
-- `llms-full.txt` expanded inlined context (`python3 scripts/build_llms_full.py`)
+- `llms-full.txt` expanded inlined context
 - `agent-intake.json` optional Agent Intake Protocol (AIP) contract
-- `scripts/aip_build_packs.py` build JSON context packs to `outputs/aip_packs/`
-- `scripts/aip_server.py` stdlib-only local AIP stub server
 
 ## License
 
