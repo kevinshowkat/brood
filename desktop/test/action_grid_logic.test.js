@@ -10,7 +10,7 @@ function slotKeys(slots) {
 test("computeActionGridSlots: returns 9 slots with base tools first", () => {
   const slots = computeActionGridSlots({ selectionCount: 0, hasImage: false, alwaysOnVisionEnabled: false });
   assert.equal(slots.length, 9);
-  assert.deepEqual(slotKeys(slots).slice(0, 4), ["annotate", "lasso", "bg", "variations"]);
+  assert.deepEqual(slotKeys(slots).slice(0, 4), ["annotate", "lasso", "bg", "prompt_generate"]);
 });
 
 test("computeActionGridSlots: no image -> dense fallback slots", () => {
@@ -19,12 +19,12 @@ test("computeActionGridSlots: no image -> dense fallback slots", () => {
     "annotate",
     "lasso",
     "bg",
+    "prompt_generate",
     "variations",
     "extract_dna",
     "soul_leech",
     "create_layers",
     "recast",
-    "crop_square",
   ]);
 });
 
@@ -37,15 +37,15 @@ test("computeActionGridSlots: 1 selected -> single-image abilities", () => {
     "soul_leech",
     "create_layers",
     "bg",
+    "prompt_generate",
     "variations",
     "recast",
-    "crop_square",
   ]);
 });
 
-test("computeActionGridSlots: 1 selected -> Square when AOV on", () => {
+test("computeActionGridSlots: 1 selected -> stable tail slot when AOV on", () => {
   const slots = computeActionGridSlots({ selectionCount: 1, hasImage: true, alwaysOnVisionEnabled: true });
-  assert.equal(slots[8]?.key, "crop_square");
+  assert.equal(slots[8]?.key, "recast");
 });
 
 test("computeActionGridSlots: 2 selected -> 2-image abilities are promoted", () => {

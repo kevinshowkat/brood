@@ -351,6 +351,13 @@ const els = {
   annotateText: document.getElementById("annotate-text"),
   annotateCancel: document.getElementById("annotate-cancel"),
   annotateSend: document.getElementById("annotate-send"),
+  promptGeneratePanel: document.getElementById("prompt-generate-panel"),
+  promptGenerateClose: document.getElementById("prompt-generate-close"),
+  promptGenerateMeta: document.getElementById("prompt-generate-meta"),
+  promptGenerateModel: document.getElementById("prompt-generate-model"),
+  promptGenerateText: document.getElementById("prompt-generate-text"),
+  promptGenerateCancel: document.getElementById("prompt-generate-cancel"),
+  promptGenerateSend: document.getElementById("prompt-generate-send"),
   markPanel: document.getElementById("mark-panel"),
   markTitle: document.getElementById("mark-title"),
   markClose: document.getElementById("mark-close"),
@@ -889,6 +896,7 @@ const state = {
   pendingOddOneOut: null, // { sourceIds: [string, string, string], startedAt: number }
   pendingTriforce: null, // { sourceIds: [string, string, string], startedAt: number }
   pendingCreateLayers: null, // { sourceId, sourcePath, layerSpecs, nextIndex, createdIds, startedAt }
+  pendingPromptGenerate: null, // { prompt: string, model: string, startedAt: number }
   pendingMotherDraft: null, // { sourceIds: string[], startedAt: number }
   pendingRecast: null, // { sourceId: string, startedAt: number }
   pendingGeneration: null, // { remaining: number, provider: string|null, model: string|null }
@@ -951,6 +959,7 @@ const state = {
   lassoDraft: [],
   annotateDraft: null, // { imageId, x0, y0, x1, y1, at } | null (image pixel space)
   annotateBox: null, // { imageId, x0, y0, x1, y1, at } | null (final box until dismissed)
+  promptGenerateDraft: { prompt: "", model: "" },
   circleDraft: null, // { imageId, cx, cy, r, color, at } | null (image pixel space)
   circlesByImageId: new Map(), // imageId -> [{ id, cx, cy, r, color, label, at }]
   activeCircle: null, // { imageId, id } | null
@@ -2832,6 +2841,7 @@ async function restoreIntentStateFromRunDir() {
 const CANVAS_CONTEXT_ENVELOPE_VERSION = 2;
 const CANVAS_CONTEXT_ALLOWED_ACTIONS = [
   "Create Layers",
+  "Prompt Generate",
   "Combine",
   "Bridge",
   "Swap DNA",
@@ -2853,6 +2863,11 @@ const CANVAS_CONTEXT_ACTION_GLOSSARY = [
     action: "Create Layers",
     what: "Generate semantic layer artifacts for background, main subject, and detachable props.",
     requires: "Exactly 1 active/selected image.",
+  },
+  {
+    action: "Prompt Generate",
+    what: "Generate a brand-new image from a custom text prompt and selected model.",
+    requires: "No source image required.",
   },
   {
     action: "Combine",
@@ -3099,6 +3114,7 @@ function canonicalizeCanvasContextAction(actionName, whyHint = null) {
 
   const compact = lower.replace(/\s+/g, " ").trim();
   if (compact === "create layers" || compact === "layers" || compact === "split layers") return "Create Layers";
+  if (compact === "prompt generate" || compact === "prompt" || compact === "text to image") return "Prompt Generate";
   if (compact === "extract rule" || compact === "extract the rule") return "Extract the Rule";
   if (compact === "odd one out") return "Odd One Out";
   if (compact === "swap dna" || compact.replace(/\s+/g, "") === "swapdna") return "Swap DNA";
@@ -3131,6 +3147,9 @@ function _canvasContextDisabledReason(action) {
   }
   if (action === "Create Layers") {
     if (nSelected !== 1) return `Requires exactly 1 selected image (you have ${nSelected}).`;
+    return "";
+  }
+  if (action === "Prompt Generate") {
     return "";
   }
   if (!getActiveImage()) return "No active image.";
@@ -3235,6 +3254,10 @@ async function triggerCanvasContextSuggestedAction(actionName) {
     await runCreateLayersFromSelection();
     return;
   }
+  if (action === "Prompt Generate") {
+    showPromptGeneratePanel();
+    return;
+  }
   if (action === "Bridge") {
     if (nSelected !== 2) throw new Error(`Bridge requires exactly 2 selected images (you have ${nSelected}).`);
     if (state.canvasMode !== "multi") setCanvasMode("multi");
@@ -3331,6 +3354,7 @@ function isForegroundActionRunning() {
       state.pendingTriforce ||
       state.pendingRecast ||
       state.pendingCreateLayers ||
+      state.pendingPromptGenerate ||
       state.expectingArtifacts ||
       state.pendingReplace
   );
@@ -11108,6 +11132,15 @@ async function _runActionGridAutomation(action = {}) {
     runCreateLayersFromSelection().catch(() => {});
     return { ok: true, detail: "create_layers started" };
   }
+  if (targetKey === "prompt_generate") {
+    const prompt = String(action.prompt || action.text || "").trim();
+    const model = String(action.model || "").trim();
+    if (!prompt) {
+      return { ok: false, detail: "prompt_generate requires action.prompt" };
+    }
+    runPromptGenerate({ prompt, model }).catch(() => {});
+    return { ok: true, detail: "prompt_generate started" };
+  }
   if (targetKey === "remove_people") {
     aiRemovePeople().catch(() => {});
     return { ok: true, detail: "remove_people started" };
@@ -16969,6 +17002,7 @@ function clearSelection() {
   state.circleDraft = null;
   hideMarkPanel();
   hideAnnotatePanel();
+  hidePromptGeneratePanel();
   setTip(DEFAULT_TIP);
   scheduleVisualPromptWrite();
   requestRender();
@@ -16984,6 +17018,7 @@ function setTool(tool) {
     state.annotateDraft = null;
     state.annotateBox = null;
     hideAnnotatePanel();
+    hidePromptGeneratePanel();
     state.circleDraft = null;
     hideMarkPanel();
   }
@@ -17058,6 +17093,174 @@ function showImageMenuAt(ptCss, imageId) {
 function hideAnnotatePanel() {
   if (!els.annotatePanel) return;
   els.annotatePanel.classList.add("hidden");
+}
+
+function promptGenerateAvailableModels() {
+  if (!els.imageModel) return [];
+  return Array.from(els.imageModel.options || [])
+    .map((opt) => String(opt?.value || "").trim())
+    .filter(Boolean);
+}
+
+function resolvePromptGenerateModel(rawModel = "") {
+  const requested = String(rawModel || "").trim();
+  const available = promptGenerateAvailableModels();
+  if (!available.length) {
+    return requested || settings.imageModel || DEFAULT_IMAGE_MODEL;
+  }
+  if (requested && available.includes(requested)) return requested;
+  if (settings.imageModel && available.includes(settings.imageModel)) return settings.imageModel;
+  return available[0];
+}
+
+function capturePromptGenerateDraftFromUi() {
+  const prompt = String(els.promptGenerateText?.value || "").trim();
+  const model = resolvePromptGenerateModel(els.promptGenerateModel?.value || "");
+  state.promptGenerateDraft = { prompt, model };
+}
+
+function hidePromptGeneratePanel({ clearDraft = false } = {}) {
+  if (!els.promptGeneratePanel) return;
+  capturePromptGenerateDraftFromUi();
+  if (clearDraft) {
+    state.promptGenerateDraft = { prompt: "", model: "" };
+    if (els.promptGenerateText) els.promptGenerateText.value = "";
+  }
+  els.promptGeneratePanel.classList.add("hidden");
+}
+
+function showPromptGeneratePanel() {
+  const panel = els.promptGeneratePanel;
+  if (!panel) return;
+
+  const targetModel = resolvePromptGenerateModel(
+    state.promptGenerateDraft?.model || settings.imageModel || DEFAULT_IMAGE_MODEL
+  );
+  if (els.promptGenerateModel) {
+    els.promptGenerateModel.innerHTML = "";
+    for (const opt of Array.from(els.imageModel?.options || [])) {
+      if (!opt?.value) continue;
+      const optionEl = document.createElement("option");
+      optionEl.value = opt.value;
+      optionEl.textContent = opt.textContent || opt.value;
+      els.promptGenerateModel.appendChild(optionEl);
+    }
+    els.promptGenerateModel.value = targetModel;
+    if (els.promptGenerateModel.value !== targetModel) {
+      const fallbackModel = resolvePromptGenerateModel(targetModel);
+      els.promptGenerateModel.value = fallbackModel;
+    }
+  }
+
+  if (els.promptGenerateText) {
+    const draftPrompt = String(state.promptGenerateDraft?.prompt || "");
+    els.promptGenerateText.value = draftPrompt;
+  }
+  if (els.promptGenerateMeta) {
+    els.promptGenerateMeta.textContent = "Create a new image (no source image required).";
+  }
+
+  panel.style.left = "50%";
+  panel.style.top = "50%";
+  panel.style.transform = "translate(-50%, -50%)";
+  panel.classList.remove("hidden");
+  setTimeout(() => {
+    try {
+      if (els.promptGenerateText) els.promptGenerateText.focus();
+    } catch {
+      // ignore
+    }
+  }, 0);
+}
+
+function normalizePromptGeneratePrompt(promptText = "") {
+  const trimmed = String(promptText || "").trim();
+  if (!trimmed) return "";
+  if (/^(edit|replace)\b/i.test(trimmed)) {
+    return `generate a brand-new image from text only: ${trimmed}`;
+  }
+  return trimmed;
+}
+
+async function runPromptGenerate({ prompt = "", model = "", fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
+  bumpInteraction();
+
+  const rawPrompt = String(prompt || "").trim();
+  if (!rawPrompt) {
+    showToast("Prompt Generate: enter a prompt.", "tip", 2200);
+    return;
+  }
+  const normalizedPrompt = normalizePromptGeneratePrompt(rawPrompt);
+  const selectedModel = resolvePromptGenerateModel(model || settings.imageModel || DEFAULT_IMAGE_MODEL);
+
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Prompt Generate",
+      key: "prompt_generate",
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runPromptGenerate({ prompt: rawPrompt, model: selectedModel, fromQueue: true }),
+    });
+    return;
+  }
+
+  await ensureRun();
+  setImageFxActive(true, "Prompt Generate");
+  portraitWorking("Prompt Generate", {
+    providerOverride: providerFromModel(selectedModel) || providerFromModel(settings.imageModel),
+  });
+
+  try {
+    const ok = await ensureEngineSpawned({ reason: "prompt generate" });
+    if (!ok) throw new Error("Engine unavailable");
+
+    await maybeOverrideEngineImageModel(selectedModel);
+
+    state.expectingArtifacts = true;
+    state.pendingPromptGenerate = {
+      prompt: normalizedPrompt,
+      model: selectedModel,
+      startedAt: Date.now(),
+    };
+    state.lastAction = "Prompt Generate";
+    setStatus("Engine: prompt generate…");
+    showToast(`Generating with ${selectedModel}…`, "info", 2200);
+    renderQuickActions();
+    requestRender();
+    await invoke("write_pty", { data: `${normalizedPrompt}\n` });
+  } catch (err) {
+    state.pendingPromptGenerate = null;
+    state.expectingArtifacts = false;
+    restoreEngineImageModelIfNeeded();
+    setImageFxActive(false);
+    updatePortraitIdle();
+    renderQuickActions();
+    throw err;
+  }
+}
+
+async function runPromptGenerateFromPanel() {
+  const rawPrompt = String(els.promptGenerateText?.value || "").trim();
+  const selectedModel = resolvePromptGenerateModel(
+    els.promptGenerateModel?.value || state.promptGenerateDraft?.model || settings.imageModel || DEFAULT_IMAGE_MODEL
+  );
+  state.promptGenerateDraft = {
+    prompt: rawPrompt,
+    model: selectedModel,
+  };
+  if (!rawPrompt) {
+    showToast("Prompt Generate: enter a prompt.", "tip", 2200);
+    if (els.promptGenerateText) {
+      try {
+        els.promptGenerateText.focus();
+      } catch {
+        // ignore
+      }
+    }
+    return;
+  }
+  hidePromptGeneratePanel();
+  await runPromptGenerate({ prompt: rawPrompt, model: selectedModel });
 }
 
 function _annotateBoxToCssRect(box) {
@@ -17838,6 +18041,7 @@ function isEngineBusy() {
       state.pendingTriforce ||
       state.pendingRecast ||
       state.pendingCreateLayers ||
+      state.pendingPromptGenerate ||
       state.pendingReplace ||
       state.pendingRecreate ||
       state.expectingArtifacts
@@ -18216,6 +18420,7 @@ function currentRunningActionKey() {
   if (state.pendingExtractRule) return "extract_rule";
   if (state.pendingOddOneOut) return "odd_one_out";
   if (state.pendingTriforce) return "triforce";
+  if (state.pendingPromptGenerate) return "prompt_generate";
   if (state.pendingRecast) return "recast";
   if (state.pendingCreateLayers) return "create_layers";
   if (state.pendingRecreate) return "variations";
@@ -18233,6 +18438,7 @@ function actionGridTitleFor(key) {
   if (k === "extract_dna") return "Extract DNA: collapse selected image(s) into transferable material/color helix";
   if (k === "soul_leech") return "Soul Leech: collapse selected image(s) into transferable emotional mask";
   if (k === "create_layers") return "Create Layers: semantic background/subject/props layer extraction";
+  if (k === "prompt_generate") return "Prompt Generate: create a brand-new image from text";
   if (k === "remove_people") return "Remove people from the active image";
   if (k === "variations") return "Zero-prompt variations";
   if (k === "recast") return "Reimagine the image in a different medium/context";
@@ -18298,6 +18504,12 @@ function actionGridIconFor(key) {
       <rect x="4" y="4" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" />
       <rect x="7" y="7" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" />
       <path d="M10 10h6M10 13h6M10 16h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </svg>`;
+  }
+  if (k === "prompt_generate") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 3l1.9 4.3 4.7.4-3.5 3 1 4.6-4.1-2.4-4.1 2.4 1-4.6-3.5-3 4.7-.4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+      <path d="M18.5 15.5l.9 2 .2 2.2-2-.9-2.2-.2 1.3-1.8.8-2.1z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
     </svg>`;
   }
   if (k === "remove_people") {
@@ -18401,10 +18613,10 @@ function renderActionGrid() {
   const reelNoImageSlots = [
     { key: "annotate", label: "Annotate", kind: "tool", hotkey: "1" },
     { key: "lasso", label: "Lasso", kind: "tool", hotkey: "2" },
-    { key: "bg", label: "BG", kind: "ability", hotkey: "3" },
-    { key: "variations", label: "Vars", kind: "ability", hotkey: "4" },
-    { key: "extract_dna", label: "DNA", kind: "ability", hotkey: "5" },
-    { key: "soul_leech", label: "Soul", kind: "ability", hotkey: "6" },
+    { key: "prompt_generate", label: "Prompt", kind: "ability", hotkey: "3" },
+    { key: "bg", label: "BG", kind: "ability", hotkey: "4" },
+    { key: "variations", label: "Vars", kind: "ability", hotkey: "5" },
+    { key: "extract_dna", label: "DNA", kind: "ability", hotkey: "6" },
   ];
   const visibleSlots = reelMode ? (!hasImage ? reelNoImageSlots : slots.slice(0, 6)) : slots;
   root.classList.toggle("reel-grid-2x3", reelMode);
@@ -18526,6 +18738,11 @@ function renderActionGrid() {
           statusScope: "Director",
           retryHint: "Select exactly one image and retry.",
         });
+        return;
+      }
+      if (key === "prompt_generate") {
+        if (!requireIntentUnlocked()) return;
+        showPromptGeneratePanel();
         return;
       }
       if (key === "remove_people") {
@@ -19065,6 +19282,7 @@ async function removeImageFromCanvas(imageId) {
     state.pendingExtractDna = null;
     state.pendingSoulLeech = null;
     state.pendingRecast = null;
+    state.pendingPromptGenerate = null;
     clearAllEffectTokens();
     clearSelection();
     if (state.intent && !state.intent.locked) {
@@ -20723,6 +20941,7 @@ async function createRun() {
   state.pendingTriforce = null;
   state.pendingRecast = null;
   state.pendingCreateLayers = null;
+  state.pendingPromptGenerate = null;
   state.pendingRecreate = null;
   resetActionQueue();
   state.tripletRuleAnnotations.clear();
@@ -20734,6 +20953,7 @@ async function createRun() {
   state.annotateDraft = null;
   state.annotateBox = null;
   hideAnnotatePanel();
+  hidePromptGeneratePanel({ clearDraft: true });
   state.circleDraft = null;
   state.circlesByImageId.clear();
   hideMarkPanel();
@@ -20839,6 +21059,7 @@ async function openExistingRun() {
   state.pendingTriforce = null;
   state.pendingRecast = null;
   state.pendingCreateLayers = null;
+  state.pendingPromptGenerate = null;
   state.pendingRecreate = null;
   resetActionQueue();
   state.tripletRuleAnnotations.clear();
@@ -20851,6 +21072,7 @@ async function openExistingRun() {
   state.annotateDraft = null;
   state.annotateBox = null;
   hideAnnotatePanel();
+  hidePromptGeneratePanel({ clearDraft: true });
   state.circleDraft = null;
   state.circlesByImageId.clear();
   hideMarkPanel();
@@ -21285,6 +21507,7 @@ async function handleEventLegacy(event) {
       !state.pendingOddOneOut &&
       !state.pendingTriforce &&
       !state.pendingRecast &&
+      !state.pendingPromptGenerate &&
       !state.pendingRecreate;
     if (
       idleForCancel &&
@@ -21322,6 +21545,7 @@ async function handleEventLegacy(event) {
       !state.pendingOddOneOut &&
       !state.pendingTriforce &&
       !state.pendingRecast &&
+      !state.pendingPromptGenerate &&
       !state.pendingRecreate;
     if (motherDispatchInFlight && !motherIdleDispatchVersionMatches(eventVersionId)) {
       if (eventVersionId) motherIdleRememberIgnoredVersion(eventVersionId);
@@ -21394,6 +21618,7 @@ async function handleEventLegacy(event) {
       !state.pendingOddOneOut &&
       !state.pendingTriforce &&
       !state.pendingRecast &&
+      !state.pendingPromptGenerate &&
       !state.pendingRecreate;
     const motherSingleSuggestionGuard =
       !motherDispatchInFlight &&
@@ -21432,6 +21657,7 @@ async function handleEventLegacy(event) {
     const bridge = state.pendingBridge;
     const triforce = state.pendingTriforce;
     const recast = state.pendingRecast;
+    const promptGenerate = state.pendingPromptGenerate;
     const recreate = state.pendingRecreate;
     const pending = state.pendingReplace;
 
@@ -21440,6 +21666,7 @@ async function handleEventLegacy(event) {
     const wasBridge = Boolean(bridge);
     const wasTriforce = Boolean(triforce);
     const wasRecast = Boolean(recast);
+    const wasPromptGenerate = Boolean(promptGenerate);
     const wasRecreate = Boolean(recreate);
     const wasMultiGenAction = wasBlend || wasSwapDna || wasBridge || wasTriforce;
 
@@ -21464,6 +21691,9 @@ async function handleEventLegacy(event) {
       timelineAction = "Recast";
       const parent = state.imagesById.get(recast.sourceId)?.timelineNodeId || null;
       timelineParents = parent ? [parent] : [];
+    } else if (wasPromptGenerate) {
+      timelineAction = "Prompt Generate";
+      timelineParents = [];
     } else {
       const activeParent = getActiveImage()?.timelineNodeId || null;
       timelineParents = activeParent ? [activeParent] : [];
@@ -21492,6 +21722,11 @@ async function handleEventLegacy(event) {
       state.pendingRecast = null;
       setTip("Recast complete. Output selected.");
       showToast("Recast complete.", "tip", 2400);
+    }
+    if (wasPromptGenerate) {
+      state.pendingPromptGenerate = null;
+      setTip("Prompt Generate complete. Output selected.");
+      showToast("Prompt Generate complete.", "tip", 2400);
     }
     if (pending?.targetId) {
       const targetId = pending.targetId;
@@ -21743,6 +21978,7 @@ async function handleEventLegacy(event) {
       Boolean(state.pendingExtractRule) ||
       Boolean(state.pendingOddOneOut) ||
       Boolean(state.pendingRecreate) ||
+      Boolean(state.pendingPromptGenerate) ||
       Boolean(state.pendingGeneration?.remaining);
     const motherRecentSuccess =
       !wasMotherDispatch &&
@@ -21788,6 +22024,7 @@ async function handleEventLegacy(event) {
     state.pendingTriforce = null;
     state.pendingRecast = null;
     state.pendingCreateLayers = null;
+    state.pendingPromptGenerate = null;
     state.pendingExtractRule = null;
     state.pendingOddOneOut = null;
     state.tripletRuleAnnotations.clear();
@@ -26562,6 +26799,42 @@ function installUi() {
     });
   }
 
+  if (els.promptGenerateClose) {
+    els.promptGenerateClose.addEventListener("click", () => {
+      bumpInteraction();
+      hidePromptGeneratePanel();
+    });
+  }
+  if (els.promptGenerateCancel) {
+    els.promptGenerateCancel.addEventListener("click", () => {
+      bumpInteraction();
+      hidePromptGeneratePanel();
+    });
+  }
+  if (els.promptGenerateSend) {
+    els.promptGenerateSend.addEventListener("click", () => {
+      runPromptGenerateFromPanel().catch((e) => console.error(e));
+    });
+  }
+  if (els.promptGenerateModel) {
+    els.promptGenerateModel.addEventListener("change", () => {
+      capturePromptGenerateDraftFromUi();
+    });
+  }
+  if (els.promptGenerateText) {
+    els.promptGenerateText.addEventListener("input", () => {
+      capturePromptGenerateDraftFromUi();
+    });
+    els.promptGenerateText.addEventListener("keydown", (event) => {
+      const key = String(event?.key || "");
+      const mod = Boolean(event?.metaKey || event?.ctrlKey);
+      if (mod && key === "Enter") {
+        event.preventDefault();
+        runPromptGenerateFromPanel().catch((e) => console.error(e));
+      }
+    });
+  }
+
   if (els.markClose) {
     els.markClose.addEventListener("click", () => {
       bumpInteraction();
@@ -26627,6 +26900,13 @@ function installUi() {
     hideImageMenu();
   });
 
+  document.addEventListener("pointerdown", (event) => {
+    if (!els.promptGeneratePanel || els.promptGeneratePanel.classList.contains("hidden")) return;
+    const hit = event?.target?.closest ? event.target.closest("#prompt-generate-panel") : null;
+    if (hit) return;
+    hidePromptGeneratePanel();
+  });
+
   if (els.filmstrip) {
     els.filmstrip.addEventListener("click", (event) => {
       const thumb = event?.target?.closest ? event.target.closest(".thumb") : null;
@@ -26682,6 +26962,10 @@ function installUi() {
 		        requestRender();
 		        return;
 		      }
+          if (els.promptGeneratePanel && !els.promptGeneratePanel.classList.contains("hidden")) {
+            hidePromptGeneratePanel();
+            return;
+          }
 		      clearSelection();
 		      return;
 		    }
@@ -26994,6 +27278,7 @@ async function boot() {
     state.pendingSoulLeech = null;
     state.pendingRecast = null;
     state.pendingCreateLayers = null;
+    state.pendingPromptGenerate = null;
     for (const [tokenId] of state.effectTokenApplyLocks.entries()) {
       const token = state.effectTokensById.get(tokenId) || null;
       if (token) recoverEffectTokenApply(token);

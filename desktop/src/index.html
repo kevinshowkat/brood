@@ -177,6 +177,29 @@
                 </div>
               </div>
             </div>
+            <div id="prompt-generate-panel" class="annotate-panel hidden prompt-generate-panel" role="dialog" aria-label="Prompt Generate">
+              <div class="annotate-header">
+                <div class="annotate-title">Prompt Generate</div>
+                <button id="prompt-generate-close" class="ghost" type="button" aria-label="Close prompt generate panel">Close</button>
+              </div>
+              <div class="annotate-body">
+                <div id="prompt-generate-meta" class="annotate-meta muted">Create a new image (no source image required).</div>
+                <label class="annotate-field">
+                  <div class="annotate-label">Model</div>
+                  <select id="prompt-generate-model"></select>
+                </label>
+                <textarea
+                  id="prompt-generate-text"
+                  class="annotate-text"
+                  rows="4"
+                  placeholder="Describe the image you want to generate…"
+                ></textarea>
+                <div class="annotate-actions">
+                  <button id="prompt-generate-cancel" type="button">Cancel</button>
+                  <button id="prompt-generate-send" type="button">Generate</button>
+                </div>
+              </div>
+            </div>
               <div id="mother-overlay" class="mother-overlay" aria-label="Mother">
                 <div id="mother-portrait-shell" class="mother-portrait-shell panel" aria-hidden="true">
                   <div class="mother-portrait">

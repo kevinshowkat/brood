@@ -12,12 +12,12 @@ export function computeActionGridSlots({
 
   const noImageFallback = [
     { key: "bg", label: "BG", kind: "ability" },
+    { key: "prompt_generate", label: "Prompt", kind: "ability" },
     { key: "variations", label: "Vars", kind: "ability" },
     { key: "extract_dna", label: "DNA", kind: "ability" },
     { key: "soul_leech", label: "Soul", kind: "ability" },
     { key: "create_layers", label: "Layers", kind: "ability" },
     { key: "recast", label: "Recast", kind: "ability" },
-    { key: "crop_square", label: "Square", kind: "ability" },
   ];
 
   const singleImage = [
@@ -25,9 +25,9 @@ export function computeActionGridSlots({
     { key: "soul_leech", label: "Soul", kind: "ability" },
     { key: "create_layers", label: "Layers", kind: "ability" },
     { key: "bg", label: "BG", kind: "ability" },
+    { key: "prompt_generate", label: "Prompt", kind: "ability" },
     { key: "variations", label: "Vars", kind: "ability" },
     { key: "recast", label: "Recast", kind: "ability" },
-    { key: "crop_square", label: "Square", kind: "ability" },
   ];
 
   const twoImage = [
