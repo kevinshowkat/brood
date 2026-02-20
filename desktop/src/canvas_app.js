@@ -278,6 +278,7 @@ const els = {
   topMetricTokensSparkIn: document.getElementById("top-metric-tokens-spark-in"),
   topMetricTokensSparkOut: document.getElementById("top-metric-tokens-spark-out"),
   topMetricApiCalls: document.getElementById("top-metric-api-calls"),
+  topMetricApiCallsValue: document.getElementById("top-metric-api-calls-value"),
   topMetricCost: document.getElementById("top-metric-cost"),
   topMetricCostValue: document.getElementById("top-metric-cost-value"),
   topMetricQueue: document.getElementById("top-metric-queue"),
@@ -1357,8 +1358,11 @@ function renderTopMetricsGrid() {
     els.topMetricTokensSparkOut.classList.add("hidden");
   }
   if (els.topMetricApiCalls) {
-    els.topMetricApiCalls.textContent = "";
-    els.topMetricApiCalls.classList.add("hidden");
+    els.topMetricApiCalls.dataset.heat = "nodata";
+  }
+  if (els.topMetricApiCallsValue) {
+    const apiCalls = Math.max(0, Number(state.sessionApiCalls) || 0);
+    els.topMetricApiCallsValue.textContent = Number.isFinite(apiCalls) ? `${Math.round(apiCalls).toLocaleString("en-US")}` : "0";
   }
   if (els.topMetricTokens) {
     els.topMetricTokens.dataset.heat = hasTokenData ? topMetricHeat("tokens_per_minute", tokenSmoothedPerMinute) : "nodata";
@@ -1556,6 +1560,13 @@ function startHudDescTypeout(imageId, text) {
   hudDescTypeoutTick();
 }
 
+function hudDescShouldStartTypeout(imageId, text) {
+  const targetImageId = String(imageId || "").trim();
+  const targetText = String(text || "").trim();
+  if (!targetImageId || !targetText) return false;
+  return hudDescTypeoutImageId !== targetImageId || hudDescTypeoutTarget !== targetText;
+}
+
 function renderHudReadout() {
   if (!els.hud) return;
   const img = getActiveImage();
@@ -1589,7 +1600,7 @@ function renderHudReadout() {
   let desc = "";
   let descFromVision = false;
   if (img?.visionDesc) {
-    desc = clampText(img.visionDesc, 32);
+    desc = String(img.visionDesc || "").trim();
     descFromVision = true;
   } else if (img?.visionPending) {
     desc = "ANALYZING…";
@@ -1601,12 +1612,15 @@ function renderHudReadout() {
     else desc = allowVision ? "—" : "NO VISION KEYS";
   }
   const descText = desc || "—";
+  const activeImageId = String(img?.id || "").trim();
   const typeoutLocked =
     descFromVision &&
-    hudDescTypeoutImageId === String(img?.id || "") &&
+    hudDescTypeoutImageId === activeImageId &&
     hudDescTypeoutTarget === descText &&
     hudDescTypeoutTimer;
-  if (!typeoutLocked && els.hudUnitDesc) {
+  if (descFromVision && !typeoutLocked && hudDescShouldStartTypeout(activeImageId, descText)) {
+    startHudDescTypeout(activeImageId, descText);
+  } else if (!typeoutLocked && els.hudUnitDesc) {
     els.hudUnitDesc.textContent = descText;
   }
   if (!descFromVision) {
@@ -14403,14 +14417,41 @@ function motherIdleHandleGenerationFailed(message = null) {
   if (message) showToast(message, "error", 2600);
 }
 
+function motherIdlePrimeDraftFx() {
+  const existingStartedAt = Number(state.pendingMotherDraft?.startedAt) || 0;
+  state.pendingMotherDraft = {
+    sourceIds: motherV2RoleContextIds(),
+    startedAt: existingStartedAt > 0 ? existingStartedAt : Date.now(),
+  };
+  setImageFxActive(true, "Mother Draft");
+}
+
+function motherIdleRollbackDraftFxIfDispatchUnarmed() {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  if (idle.phase !== MOTHER_IDLE_STATES.DRAFTING) return;
+  if (idle.pendingPromptCompile || idle.pendingGeneration || idle.pendingDispatchToken) return;
+  state.pendingMotherDraft = null;
+  setImageFxActive(false);
+}
+
 async function motherIdleDispatchGeneration() {
   const idle = state.motherIdle;
   if (!idle) return false;
   if (idle.phase !== MOTHER_IDLE_STATES.DRAFTING) return false;
   if (state.pointer.active) return false;
+  motherIdlePrimeDraftFx();
   const ok = await ensureEngineSpawned({ reason: "mother_drafting" });
-  if (!ok) return false;
+  if (!ok) {
+    motherIdleRollbackDraftFxIfDispatchUnarmed();
+    return false;
+  }
   await motherV2RequestPromptCompile();
+  const dispatchArmed = Boolean(idle.pendingPromptCompile || idle.pendingGeneration || idle.pendingDispatchToken);
+  if (!dispatchArmed) {
+    motherIdleRollbackDraftFxIfDispatchUnarmed();
+    return false;
+  }
   return true;
 }
 
@@ -18418,10 +18459,6 @@ async function setActiveImage(id, { preserveSelection = false } = {}) {
     console.error(err);
   }
   renderHudReadout();
-  if (prevActive !== id) {
-    const nextDesc = item?.visionDesc ? clampText(item.visionDesc, 32) : "";
-    if (nextDesc) startHudDescTypeout(id, nextDesc);
-  }
   resetViewToFit();
   requestRender();
   if (state.timelineOpen) renderTimeline();
