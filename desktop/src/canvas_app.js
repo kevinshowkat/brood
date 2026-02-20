@@ -892,6 +892,7 @@ const state = {
   pendingExtractRule: null, // { sourceIds: [string, string, string], startedAt: number }
   pendingOddOneOut: null, // { sourceIds: [string, string, string], startedAt: number }
   pendingTriforce: null, // { sourceIds: [string, string, string], startedAt: number }
+  pendingCreateLayers: null, // { sourceId, sourcePath, layerSpecs, nextIndex, createdIds, startedAt }
   pendingMotherDraft: null, // { sourceIds: string[], startedAt: number }
   pendingRecast: null, // { sourceId: string, startedAt: number }
   pendingDiagnose: null, // { sourceId: string, startedAt: number }
@@ -2864,7 +2865,7 @@ const AUTO_ACCEPT_SUGGESTED_MAX_PASSES = 3;
 const CANVAS_CONTEXT_ACTION_GLOSSARY = [
   {
     action: "Create Layers",
-    what: "Split the active image into four transparent layer artifacts that recompose to the original when stacked.",
+    what: "Generate semantic layer artifacts for background, main subject, and detachable props.",
     requires: "Exactly 1 active/selected image.",
   },
   {
@@ -3373,6 +3374,7 @@ function isForegroundActionRunning() {
       state.pendingRecast ||
       state.pendingCanvasDiagnose ||
       state.pendingDiagnose ||
+      state.pendingCreateLayers ||
       state.expectingArtifacts ||
       state.pendingReplace
   );
@@ -6885,6 +6887,7 @@ const ACTION_IMAGE_MODEL = {
   combine: "gemini-3-pro-image-preview",
   swap_dna: "gemini-3-pro-image-preview",
   bridge: "gemini-3-pro-image-preview",
+  create_layers: "gemini-3-pro-image-preview",
   extract_dna_apply: "gemini-2.5-flash-image",
   soul_leech_apply: "gemini-2.5-flash-image",
   recast: "gemini-3-pro-image-preview",
@@ -16061,12 +16064,223 @@ async function runSoulLeechFromSelection({ fromQueue = false } = {}) {
   }
 }
 
+const CREATE_LAYERS_CHROMA_KEY = Object.freeze({
+  r: 0,
+  g: 255,
+  b: 0,
+  tolerance: 38,
+  feather: 14,
+});
+
+function createSemanticLayerSpecs(imgItem = null) {
+  const sourceLabel = String(imgItem?.label || basename(imgItem?.path || "") || "the source image").trim();
+  return [
+    {
+      key: "background",
+      label: "Layer 1/3 - Background",
+      summary: "background only",
+      applyChromaKey: false,
+      prompt:
+        `edit the image: remove all foreground subjects and handheld props, and reconstruct only the clean background from ${sourceLabel}. ` +
+        "keep exact framing and dimensions. output one image. no text, no logos, no collage.",
+    },
+    {
+      key: "subject",
+      label: "Layer 2/3 - Main Subject",
+      summary: "main subject",
+      applyChromaKey: true,
+      prompt:
+        "edit the image: isolate only the main subject (usually the primary person or hero object). " +
+        "exclude detachable props such as balls, tools, bags, instruments, and accessories. " +
+        "replace everything else with a flat solid #00FF00 background (pure chroma green), no gradient, no texture, no shadow. " +
+        "keep exact framing and dimensions. output one image with clean edges. no text or logos.",
+    },
+    {
+      key: "props",
+      label: "Layer 3/3 - Key Props",
+      summary: "detachable props",
+      applyChromaKey: true,
+      prompt:
+        "edit the image: isolate only detachable foreground props (for example balls, tools, bags, instruments, accessories). " +
+        "remove the main subject. replace everything else with a flat solid #00FF00 background (pure chroma green), no gradient, no texture, no shadow. " +
+        "if no detachable props exist, return a full #00FF00 image. keep exact framing and dimensions. output one image with clean edges. no text or logos.",
+    },
+  ];
+}
+
+function applyChromaKeyToCreateLayerCanvas(canvas, chroma = CREATE_LAYERS_CHROMA_KEY) {
+  const ctx = canvas?.getContext?.("2d", { willReadFrequently: true });
+  const w = Math.max(1, Number(canvas?.width) || 0);
+  const h = Math.max(1, Number(canvas?.height) || 0);
+  if (!ctx || !w || !h) {
+    return { transparent_px: 0, softened_px: 0, total_px: 0 };
+  }
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const data = imageData.data;
+  const targetR = clamp(Math.round(Number(chroma?.r) || 0), 0, 255);
+  const targetG = clamp(Math.round(Number(chroma?.g) || 0), 0, 255);
+  const targetB = clamp(Math.round(Number(chroma?.b) || 0), 0, 255);
+  const tol = clamp(Number(chroma?.tolerance) || 38, 0, 255);
+  const feather = clamp(Number(chroma?.feather) || 14, 0, 255);
+  let transparentPx = 0;
+  let softenedPx = 0;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const alpha = data[i + 3];
+    if (!alpha) continue;
+    const dr = data[i] - targetR;
+    const dg = data[i + 1] - targetG;
+    const db = data[i + 2] - targetB;
+    const dist = Math.sqrt(dr * dr + dg * dg + db * db);
+    if (dist <= tol) {
+      data[i + 3] = 0;
+      transparentPx += 1;
+      continue;
+    }
+    if (feather > 0 && dist <= tol + feather) {
+      const keep = (dist - tol) / feather;
+      const nextAlpha = Math.max(0, Math.min(255, Math.round(alpha * keep)));
+      if (nextAlpha < alpha) {
+        data[i + 3] = nextAlpha;
+        softenedPx += 1;
+        if (nextAlpha === 0) transparentPx += 1;
+      }
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return {
+    transparent_px: transparentPx,
+    softened_px: softenedPx,
+    total_px: w * h,
+  };
+}
+
+async function dispatchCreateLayersPass() {
+  const pending = state.pendingCreateLayers;
+  if (!pending) return false;
+  const idx = Math.max(0, Number(pending.nextIndex) || 0);
+  const specs = Array.isArray(pending.layerSpecs) ? pending.layerSpecs : [];
+  const spec = specs[idx];
+  if (!spec) return false;
+
+  const okEngine = await ensureEngineSpawned({ reason: "create layers" });
+  if (!okEngine) throw new Error("Engine unavailable");
+  await setEngineActiveImage(pending.sourcePath);
+  await maybeOverrideEngineImageModel(ACTION_IMAGE_MODEL.create_layers || pickGeminiImageModel());
+
+  state.expectingArtifacts = true;
+  state.lastAction = "Create Layers";
+  setStatus(`Director: creating layers (${idx + 1}/${specs.length})…`);
+  showToast(`Create Layers: generating ${spec.summary}…`, "info", 1800);
+  await invoke("write_pty", { data: `${spec.prompt}\n` });
+  return true;
+}
+
+function finishCreateLayersFailure(message) {
+  state.pendingCreateLayers = null;
+  state.expectingArtifacts = false;
+  restoreEngineImageModelIfNeeded();
+  setImageFxActive(false);
+  updatePortraitIdle();
+  clearRunningAction("create_layers");
+  setStatus(`Director: ${message}`, true);
+  showToast(message, "error", 3600);
+  renderQuickActions();
+  renderHudReadout();
+  processActionQueue().catch(() => {});
+}
+
+async function handleCreateLayersArtifact(event) {
+  const pending = state.pendingCreateLayers;
+  if (!pending) return false;
+  const artifactId = String(event?.artifact_id || "").trim();
+  const imagePath = String(event?.image_path || "").trim();
+  if (!artifactId || !imagePath) return false;
+  const receiptPath = event?.receipt_path ? String(event.receipt_path) : null;
+  const idx = Math.max(0, Number(pending.nextIndex) || 0);
+  const specs = Array.isArray(pending.layerSpecs) ? pending.layerSpecs : [];
+  const spec = specs[idx] || null;
+  if (!spec) return false;
+
+  try {
+    const generated = await loadImage(imagePath);
+    const w = Math.max(1, Number(generated?.naturalWidth) || 0);
+    const h = Math.max(1, Number(generated?.naturalHeight) || 0);
+    if (!w || !h) throw new Error("layer artifact dimensions unavailable");
+
+    const out = document.createElement("canvas");
+    out.width = w;
+    out.height = h;
+    const outCtx = out.getContext("2d");
+    outCtx.drawImage(generated, 0, 0, w, h);
+    const chromaStats = spec.applyChromaKey ? applyChromaKeyToCreateLayerCanvas(out) : null;
+
+    await saveCanvasAsArtifact(out, {
+      operation: `create_layers_${String(spec.key || "layer")}`,
+      label: String(spec.label || `Layer ${idx + 1}/${specs.length}`),
+      meta: {
+        source_image_id: String(pending.sourceId || ""),
+        source_image_path: String(pending.sourcePath || ""),
+        layer_index: idx + 1,
+        layer_count: specs.length,
+        layer_key: String(spec.key || ""),
+        semantic_description: String(spec.summary || ""),
+        chroma_key_hex: spec.applyChromaKey ? "#00FF00" : null,
+        chroma_key_stats: chromaStats,
+        engine_artifact_id: artifactId,
+        engine_receipt_path: receiptPath,
+        recomposition_note: "Stack in order: Background -> Main Subject -> Key Props.",
+      },
+      replaceActive: false,
+      parentImageId: pending.sourceId,
+      select: false,
+    });
+    const created = state.images[state.images.length - 1];
+    if (created?.id) pending.createdIds.push(String(created.id));
+    removeFile(imagePath).catch(() => {});
+    if (receiptPath) removeFile(receiptPath).catch(() => {});
+
+    pending.nextIndex = idx + 1;
+    if (pending.nextIndex < specs.length) {
+      await dispatchCreateLayersPass();
+      return true;
+    }
+
+    const createdIds = Array.isArray(pending.createdIds) ? pending.createdIds.slice(0, 3) : [];
+    state.pendingCreateLayers = null;
+    state.expectingArtifacts = false;
+    restoreEngineImageModelIfNeeded();
+    setImageFxActive(false);
+    updatePortraitIdle();
+    clearRunningAction("create_layers");
+    if (createdIds.length) {
+      setSelectedIds(createdIds.slice(-3));
+      await setActiveImage(createdIds[0], { preserveSelection: true }).catch(() => {});
+    }
+    setStatus("Director: layers ready");
+    showToast(`Create Layers complete: ${createdIds.length} semantic layers generated.`, "tip", 2800);
+    renderQuickActions();
+    renderHudReadout();
+    requestRender();
+    processActionQueue().catch(() => {});
+    return true;
+  } catch (err) {
+    console.error(err);
+    finishCreateLayersFailure(`Create Layers failed (${err?.message || err}).`);
+    return true;
+  }
+}
+
 async function runCreateLayersFromSelection({ fromQueue = false } = {}) {
   if (!requireIntentUnlocked()) return;
   const selected = getSelectedImagesActiveFirst({ requireCount: 1 });
   const imgItem = selected.length === 1 ? selected[0] : null;
   if (!imgItem?.path) {
     showToast("Create Layers needs exactly one selected image.", "tip", 2400);
+    return;
+  }
+  if (state.pendingCreateLayers) {
+    showToast("Create Layers is already running.", "tip", 2200);
     return;
   }
 
@@ -16086,8 +16300,11 @@ async function runCreateLayersFromSelection({ fromQueue = false } = {}) {
   setImageFxActive(true, "Create Layers");
   state.lastAction = "Create Layers";
   setStatus("Director: creating layers…");
-  portraitWorking("Create Layers", { clearDirector: false });
-  showToast("Splitting image into layer artifacts…", "info", 2200);
+  portraitWorking("Create Layers", {
+    providerOverride: providerFromModel(ACTION_IMAGE_MODEL.create_layers) || "gemini",
+    clearDirector: false,
+  });
+  showToast("Splitting image into semantic layers…", "info", 2200);
   renderQuickActions();
   requestRender();
 
@@ -16097,74 +16314,20 @@ async function runCreateLayersFromSelection({ fromQueue = false } = {}) {
       imgItem.width = imgItem.img?.naturalWidth || imgItem.width || null;
       imgItem.height = imgItem.img?.naturalHeight || imgItem.height || null;
     }
-
-    const sourceImg = imgItem.img;
-    const w = Math.max(1, Number(sourceImg?.naturalWidth) || Number(imgItem.width) || 0);
-    const h = Math.max(1, Number(sourceImg?.naturalHeight) || Number(imgItem.height) || 0);
-    if (!w || !h) throw new Error("source image dimensions unavailable");
-
-    const srcCanvas = document.createElement("canvas");
-    srcCanvas.width = w;
-    srcCanvas.height = h;
-    const srcCtx = srcCanvas.getContext("2d", { willReadFrequently: true });
-    srcCtx.drawImage(sourceImg, 0, 0, w, h);
-    const src = srcCtx.getImageData(0, 0, w, h).data;
-
-    const layerCount = 4;
-    const layerPixels = Array.from({ length: layerCount }, () => new Uint8ClampedArray(src.length));
-    for (let y = 0; y < h; y += 1) {
-      for (let x = 0; x < w; x += 1) {
-        const pixelOffset = (y * w + x) * 4;
-        const layerIdx = ((x & 1) << 1) | (y & 1);
-        const out = layerPixels[layerIdx];
-        out[pixelOffset] = src[pixelOffset];
-        out[pixelOffset + 1] = src[pixelOffset + 1];
-        out[pixelOffset + 2] = src[pixelOffset + 2];
-        out[pixelOffset + 3] = src[pixelOffset + 3];
-      }
-    }
-
-    const createdIds = [];
-    for (let i = 0; i < layerCount; i += 1) {
-      const layerCanvas = document.createElement("canvas");
-      layerCanvas.width = w;
-      layerCanvas.height = h;
-      const layerCtx = layerCanvas.getContext("2d");
-      const imageData = layerCtx.createImageData(w, h);
-      imageData.data.set(layerPixels[i]);
-      layerCtx.putImageData(imageData, 0, 0);
-      await saveCanvasAsArtifact(layerCanvas, {
-        operation: `create_layers_l${i + 1}`,
-        label: `Layer ${i + 1}/${layerCount}`,
-        meta: {
-          source_image_id: String(imgItem.id || ""),
-          source_image_path: String(imgItem.path || ""),
-          layer_index: i + 1,
-          layer_count: layerCount,
-          partition: "checkerboard_mod2",
-          recomposition_note: "Stack all layers with normal alpha compositing to reconstruct the source image.",
-        },
-        replaceActive: false,
-        parentImageId: imgItem.id,
-        select: false,
-      });
-      const created = state.images[state.images.length - 1];
-      if (created?.id) createdIds.push(String(created.id));
-    }
-
-    if (createdIds.length) {
-      await setActiveImage(createdIds[0]).catch(() => {});
-    }
-    setStatus("Director: layers ready");
-    showToast(`Create Layers complete: ${createdIds.length} layers generated.`, "tip", 2600);
+    const specs = createSemanticLayerSpecs(imgItem);
+    if (!specs.length) throw new Error("no layer specs configured");
+    state.pendingCreateLayers = {
+      sourceId: String(imgItem.id || ""),
+      sourcePath: String(imgItem.path || ""),
+      layerSpecs: specs,
+      nextIndex: 0,
+      createdIds: [],
+      startedAt: Date.now(),
+    };
+    await dispatchCreateLayersPass();
   } catch (err) {
     console.error(err);
-    setStatus(`Director: create layers failed (${err?.message || err})`, true);
-    showToast("Create Layers failed.", "error", 3200);
-  } finally {
-    setImageFxActive(false);
-    updatePortraitIdle();
-    clearRunningAction("create_layers");
+    finishCreateLayersFailure(`Create Layers failed (${err?.message || err}).`);
   }
 }
 
@@ -16715,6 +16878,7 @@ async function runAutoCanvasDiagnose(signature) {
     state.pendingRecast ||
     state.pendingDiagnose ||
     state.pendingRecreate ||
+    state.pendingCreateLayers ||
     state.expectingArtifacts ||
     state.pendingReplace
   ) {
@@ -16906,6 +17070,9 @@ function getImageFxTargets() {
 
   const bridge = state.pendingBridge?.sourceIds;
   if (Array.isArray(bridge) && bridge.length >= 2) return [bridge[0], bridge[1]];
+
+  const createLayersId = state.pendingCreateLayers?.sourceId;
+  if (createLayersId) return [createLayersId];
 
   const replaceId = state.pendingReplace?.targetId;
   if (replaceId) return [replaceId];
@@ -17987,6 +18154,7 @@ function isEngineBusy() {
       state.pendingRecast ||
       state.pendingCanvasDiagnose ||
       state.pendingDiagnose ||
+      state.pendingCreateLayers ||
       state.pendingReplace ||
       state.pendingRecreate ||
       state.expectingArtifacts
@@ -18317,7 +18485,7 @@ function computeQuickActions() {
   actions.push({
     id: "create_layers",
     label: state.runningActionKey === "create_layers" ? "Create Layers (running…)" : "Create Layers",
-    title: "Split the active image into four transparent layer artifacts that recompose to the original.",
+    title: "Generate semantic layers: background, main subject, and detachable props.",
     disabled: nSelected !== 1,
     onClick: () => runCreateLayersFromSelection().catch((err) => console.error(err)),
   });
@@ -18386,6 +18554,7 @@ function currentRunningActionKey() {
   if (state.pendingTriforce) return "triforce";
   if (state.pendingRecast) return "recast";
   if (state.pendingDiagnose) return "diagnose";
+  if (state.pendingCreateLayers) return "create_layers";
   if (state.pendingRecreate) return "variations";
   if (state.pendingReplace) return _runningKeyFromPendingReplace(state.pendingReplace);
   return null;
@@ -18401,7 +18570,7 @@ function actionGridTitleFor(key) {
   if (k === "bg") return "Background replace (Shift: Sweep)";
   if (k === "extract_dna") return "Extract DNA: collapse selected image(s) into transferable material/color helix";
   if (k === "soul_leech") return "Soul Leech: collapse selected image(s) into transferable emotional mask";
-  if (k === "create_layers") return "Create Layers: split active image into transparent recomposition layers";
+  if (k === "create_layers") return "Create Layers: semantic background/subject/props layer extraction";
   if (k === "remove_people") return "Remove people from the active image";
   if (k === "variations") return "Zero-prompt variations";
   if (k === "diagnose") return "Creative-director diagnosis";
@@ -21045,6 +21214,7 @@ async function createRun() {
   state.pendingTriforce = null;
   state.pendingRecast = null;
   state.pendingDiagnose = null;
+  state.pendingCreateLayers = null;
   state.pendingRecreate = null;
   resetActionQueue();
   state.tripletRuleAnnotations.clear();
@@ -21164,6 +21334,7 @@ async function openExistingRun() {
   state.pendingTriforce = null;
   state.pendingRecast = null;
   state.pendingDiagnose = null;
+  state.pendingCreateLayers = null;
   state.pendingRecreate = null;
   resetActionQueue();
   state.tripletRuleAnnotations.clear();
@@ -21589,12 +21760,21 @@ async function handleEventLegacy(event) {
       }).catch(() => {});
     }
     renderSessionApiCallsReadout();
+    if (state.pendingCreateLayers) {
+      const handledCreateLayers = await handleCreateLayersArtifact(event).catch((err) => {
+        console.error(err);
+        finishCreateLayersFailure(`Create Layers failed (${err?.message || err}).`);
+        return true;
+      });
+      if (handledCreateLayers) return;
+    }
     const idleForCancel = state.motherIdle;
     const noForegroundPendingForCancel =
       !state.pendingReplace &&
       !state.pendingBlend &&
       !state.pendingSwapDna &&
       !state.pendingBridge &&
+      !state.pendingCreateLayers &&
       !state.pendingExtractDna &&
       !state.pendingSoulLeech &&
       !state.pendingArgue &&
@@ -21633,6 +21813,7 @@ async function handleEventLegacy(event) {
       !state.pendingBlend &&
       !state.pendingSwapDna &&
       !state.pendingBridge &&
+      !state.pendingCreateLayers &&
       !state.pendingExtractDna &&
       !state.pendingSoulLeech &&
       !state.pendingArgue &&
@@ -21706,6 +21887,7 @@ async function handleEventLegacy(event) {
       !state.pendingBlend &&
       !state.pendingSwapDna &&
       !state.pendingBridge &&
+      !state.pendingCreateLayers &&
       !state.pendingExtractDna &&
       !state.pendingSoulLeech &&
       !state.pendingArgue &&
@@ -22036,6 +22218,18 @@ async function handleEventLegacy(event) {
       });
       return;
     }
+    if (state.pendingCreateLayers) {
+      const pending = state.pendingCreateLayers;
+      const idx = Math.max(0, Number(pending?.nextIndex) || 0);
+      const specs = Array.isArray(pending?.layerSpecs) ? pending.layerSpecs : [];
+      const spec = specs[idx] || null;
+      const stageLabel = spec?.summary ? String(spec.summary) : `layer ${idx + 1}`;
+      const msg = event.error
+        ? `Create Layers failed while generating ${stageLabel}: ${event.error}`
+        : `Create Layers failed while generating ${stageLabel}.`;
+      finishCreateLayersFailure(msg);
+      return;
+    }
     const errText = String(event.error || "").trim();
     const errLower = errText.toLowerCase();
     const anyForegroundPending =
@@ -22043,6 +22237,7 @@ async function handleEventLegacy(event) {
       Boolean(state.pendingBlend) ||
       Boolean(state.pendingSwapDna) ||
       Boolean(state.pendingBridge) ||
+      Boolean(state.pendingCreateLayers) ||
       Boolean(state.pendingExtractDna) ||
       Boolean(state.pendingSoulLeech) ||
       Boolean(state.pendingTriforce) ||
@@ -22097,6 +22292,7 @@ async function handleEventLegacy(event) {
     state.pendingTriforce = null;
     state.pendingRecast = null;
     state.pendingDiagnose = null;
+    state.pendingCreateLayers = null;
     state.pendingArgue = null;
     state.pendingExtractRule = null;
     state.pendingOddOneOut = null;
@@ -27475,6 +27671,7 @@ async function boot() {
     state.pendingSoulLeech = null;
     state.pendingRecast = null;
     state.pendingDiagnose = null;
+    state.pendingCreateLayers = null;
     state.pendingArgue = null;
     for (const [tokenId] of state.effectTokenApplyLocks.entries()) {
       const token = state.effectTokensById.get(tokenId) || null;
