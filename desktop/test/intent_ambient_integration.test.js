@@ -51,6 +51,19 @@ test("Ambient intent: realtime event de-staling requires a matching active pendi
   assert.doesNotMatch(app, /const matchesAmbient = !path \|\| !ambient\?\.pendingPath \|\| path === ambient\.pendingPath/);
 });
 
+test("Ambient intent: allows specific realtime vision labels to replace bland early labels", () => {
+  assert.match(app, /function shouldPreferIncomingVisionLabel\(/);
+  assert.match(app, /if \(existingGeneric && !incomingGeneric\) return true;/);
+  assert.match(app, /if \(incomingScore > existingScore\) return true;/);
+  assert.match(app, /maybeScheduleVisionDescribeFallback\(imgItem, prevLabel\);/);
+  assert.match(app, /maybeScheduleVisionDescribeFallback\(imgItem, label\);/);
+});
+
+test("Ambient intent: missing realtime image_descriptions queues fallback describe", () => {
+  assert.match(app, /function maybeScheduleVisionDescribeFallbackForAmbientRealtime\(/);
+  assert.match(app, /if \(!isPartial && matchAmbient\) {\s*maybeScheduleVisionDescribeFallbackForAmbientRealtime\(ambient, imageDescs\);/);
+});
+
 test("Ambient nudge mapping: multi-canvas world->canvas conversion applies DPR", () => {
   assert.match(app, /x:\s*x \* dpr \* s \+ ox/);
   assert.match(app, /y:\s*y \* dpr \* s \+ oy/);
