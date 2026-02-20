@@ -961,6 +961,7 @@ const state = {
   annotateDraft: null, // { imageId, x0, y0, x1, y1, at } | null (image pixel space)
   annotateBox: null, // { imageId, x0, y0, x1, y1, at } | null (final box until dismissed)
   promptGenerateDraft: { prompt: "", model: "" },
+  promptGenerateDraftAnchor: null, // { anchorCss: {x,y}, anchorWorldCss: {x,y} } | null
   circleDraft: null, // { imageId, cx, cy, r, color, at } | null (image pixel space)
   circlesByImageId: new Map(), // imageId -> [{ id, cx, cy, r, color, label, at }]
   activeCircle: null, // { imageId, id } | null
@@ -17168,6 +17169,7 @@ function hidePromptGeneratePanel({ clearDraft = false } = {}) {
   capturePromptGenerateDraftFromUi();
   if (clearDraft) {
     state.promptGenerateDraft = { prompt: "", model: "" };
+    state.promptGenerateDraftAnchor = null;
     if (els.promptGenerateText) els.promptGenerateText.value = "";
   }
   els.promptGeneratePanel.classList.add("hidden");
@@ -17176,6 +17178,11 @@ function hidePromptGeneratePanel({ clearDraft = false } = {}) {
 function showPromptGeneratePanel() {
   const panel = els.promptGeneratePanel;
   if (!panel) return;
+  const anchorCss = currentPromptGenerateAnchorCss();
+  state.promptGenerateDraftAnchor = {
+    anchorCss,
+    anchorWorldCss: canvasScreenCssToWorldCss(anchorCss),
+  };
 
   const targetModel = resolvePromptGenerateModel(
     state.promptGenerateDraft?.model || settings.imageModel || DEFAULT_IMAGE_MODEL
@@ -17305,6 +17312,22 @@ async function runPromptGenerateFromPanel() {
   const selectedModel = resolvePromptGenerateModel(
     els.promptGenerateModel?.value || state.promptGenerateDraft?.model || settings.imageModel || DEFAULT_IMAGE_MODEL
   );
+  const draftAnchor = state.promptGenerateDraftAnchor
+    ? {
+        anchorCss: state.promptGenerateDraftAnchor.anchorCss
+          ? {
+              x: Number(state.promptGenerateDraftAnchor.anchorCss.x) || 0,
+              y: Number(state.promptGenerateDraftAnchor.anchorCss.y) || 0,
+            }
+          : null,
+        anchorWorldCss: state.promptGenerateDraftAnchor.anchorWorldCss
+          ? {
+              x: Number(state.promptGenerateDraftAnchor.anchorWorldCss.x) || 0,
+              y: Number(state.promptGenerateDraftAnchor.anchorWorldCss.y) || 0,
+            }
+          : null,
+      }
+    : null;
   state.promptGenerateDraft = {
     prompt: rawPrompt,
     model: selectedModel,
@@ -17321,7 +17344,12 @@ async function runPromptGenerateFromPanel() {
     return;
   }
   hidePromptGeneratePanel();
-  await runPromptGenerate({ prompt: rawPrompt, model: selectedModel });
+  await runPromptGenerate({
+    prompt: rawPrompt,
+    model: selectedModel,
+    anchorCss: draftAnchor?.anchorCss || null,
+    anchorWorldCss: draftAnchor?.anchorWorldCss || null,
+  });
 }
 
 function _annotateBoxToCssRect(box) {
