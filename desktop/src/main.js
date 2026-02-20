@@ -1317,6 +1317,12 @@ function formatUserBlock(line) {
   return full;
 }
 
+function parseRustNativePreference(raw) {
+  const normalized = String(raw == null ? "" : raw).trim().toLowerCase();
+  if (!normalized) return true;
+  return !["0", "false", "off", "no"].includes(normalized);
+}
+
 const storedRustNative = localStorage.getItem("brood.rsNative");
 const rustNativeDefaultMigrated = localStorage.getItem("brood.rsNative.default.v2") === "1";
 if (!rustNativeDefaultMigrated) {
@@ -1327,11 +1333,12 @@ if (!rustNativeDefaultMigrated) {
 } else if (storedRustNative == null) {
   localStorage.setItem("brood.rsNative", "1");
 }
-const effectiveRustNative = localStorage.getItem("brood.rsNative");
+const effectiveRustNative = parseRustNativePreference(localStorage.getItem("brood.rsNative"));
+localStorage.setItem("brood.rsNative", effectiveRustNative ? "1" : "0");
 
 const settings = {
   memory: localStorage.getItem("brood.memory") === "1",
-  rustNative: effectiveRustNative == null ? true : effectiveRustNative === "1",
+  rustNative: effectiveRustNative,
   textModel: localStorage.getItem("brood.textModel") || "gpt-5.2",
   imageModel: localStorage.getItem("brood.imageModel") || "dryrun-image-1",
   optimizeMode: localStorage.getItem("brood.optimizeMode") || "auto",

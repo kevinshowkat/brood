@@ -53,15 +53,43 @@ test("Ambient intent: realtime event de-staling requires a matching active pendi
 
 test("Ambient intent: allows specific realtime vision labels to replace bland early labels", () => {
   assert.match(app, /function shouldPreferIncomingVisionLabel\(/);
+  assert.match(app, /function _compactVisionCaptionFragment\(/);
+  assert.match(app, /function _visionLabelNameTokenCount\(/);
+  assert.match(app, /VISION_LABEL_AUX_TOKENS = new Set\(\["is", "are", "was", "were"\]\)/);
   assert.match(app, /if \(existingGeneric && !incomingGeneric\) return true;/);
+  assert.match(app, /if \(incomingNameTokens >= 2 && existingNameTokens < 2\) return true;/);
   assert.match(app, /if \(incomingScore > existingScore\) return true;/);
+  assert.match(app, /const s = _compactVisionCaptionFragment\(raw\);/);
+  assert.match(app, /const keepExplicitDescribe =[\s\S]*prevSource === "openai_realtime_describe" \|\| prevSource === "openai_vision"/);
   assert.match(app, /maybeScheduleVisionDescribeFallback\(imgItem, prevLabel\);/);
   assert.match(app, /maybeScheduleVisionDescribeFallback\(imgItem, label\);/);
+  assert.match(app, /const cleaned = _normalizeVisionLabel\(desc,\s*\{\s*maxChars:\s*64\s*\}\) \|\| desc\.trim\(\);/);
 });
 
 test("Ambient intent: missing realtime image_descriptions queues fallback describe", () => {
   assert.match(app, /function maybeScheduleVisionDescribeFallbackForAmbientRealtime\(/);
   assert.match(app, /if \(!isPartial && matchAmbient\) {\s*maybeScheduleVisionDescribeFallbackForAmbientRealtime\(ambient, imageDescs\);/);
+});
+
+test("Ambient intent: empty vision hints are filtered before building realtime context", () => {
+  assert.match(app, /function normalizeVisionHintForIntent\(/);
+  assert.match(app, /if \(shouldBackfillVisionLabel\(label\)\) return null;/);
+  assert.match(app, /function shouldBackfillVisionLabel\(/);
+  assert.match(app, /return !label;/);
+  assert.match(app, /const label = _normalizeVisionLabel\(labelRaw,\s*\{\s*maxChars:\s*64\s*\}\);/);
+  assert.match(app, /vision_desc:\s*normalizeVisionHintForIntent\(image\.vision_desc,\s*\{\s*maxChars:\s*64\s*\}\)/);
+  assert.match(app, /const visionDesc = normalizeVisionHintForIntent\(item\?\.visionDesc,\s*\{\s*maxChars:\s*64\s*\}\);/);
+});
+
+test("Ambient intent: proactive per-image describe scheduling stays fallback-gated", () => {
+  assert.match(app, /scheduleVisionDescribe\(unique\[i\], \{ priority: Boolean\(priority\) && i < burstLimit, fallback: true \}\);/);
+  assert.match(app, /if \(active\?\.path\) scheduleVisionDescribe\(active\.path, \{ priority: true, fallback: true \}\);/);
+  assert.match(app, /scheduleVisionDescribe\(item\.path, \{ fallback: true \}\);/);
+});
+
+test("Ambient intent: parse\/failure paths queue fallback describe for touched images", () => {
+  assert.match(app, /applyAmbientIntentFallback\("parse_failed", \{ message: intentParseMessage \}\);\s*maybeScheduleVisionDescribeFallbackForAmbientRealtime\(ambient, \[\]\);/);
+  assert.match(app, /applyAmbientIntentFallback\("failed", \{ message: msg, hardDisable \}\);\s*maybeScheduleVisionDescribeFallbackForAmbientRealtime\(ambient, \[\]\);/);
 });
 
 test("Ambient nudge mapping: multi-canvas world->canvas conversion applies DPR", () => {
