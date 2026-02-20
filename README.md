@@ -52,7 +52,7 @@ There is no web app, and Windows/Linux builds are not supported yet.
 ### Legacy Python Removal Plan (Brief)
 
 1. Lock parity: require Rust to pass provider/event/export parity matrix without compat fallback in normal runtime.
-2. Remove compat runtime path from desktop defaults (keep emergency switch only during short soak period).
+2. Retire compat runtime path from desktop runtime and fail explicitly when native launch/export fails.
 3. Delete Python-dependent runtime plumbing in desktop/Tauri after soak confidence is met.
 4. Remove legacy Python CLI/engine modules (`brood_engine/`) and migrate remaining references/tests to Rust equivalents.
 5. Remove Python release/runtime assumptions from docs/scripts/CI and cut a Rust-only release.
@@ -129,13 +129,8 @@ For Gemini wire-level inspection:
 ./scripts/dev_desktop.sh
 ```
 
-This runs the Tauri app in dev mode (`desktop/`) with the native Rust engine path by default.
-To force legacy compat mode for debugging only:
-
-```bash
-cd desktop
-BROOD_RS_MODE=compat npm run tauri dev
-```
+This runs the Tauri app in dev mode (`desktop/`) with the native Rust engine path.
+Desktop runtime no longer includes Python compat fallback paths.
 
 Build desktop app:
 
@@ -164,7 +159,7 @@ cargo run -p brood-cli -- run --prompt "hero image for Series A" --out /tmp/broo
 cargo run -p brood-cli -- recreate --reference path/to/image.png --out /tmp/brood-recreate
 ```
 
-### Python CLI (legacy/compat)
+### Python CLI (legacy/parity only; not used by desktop runtime)
 
 ```bash
 python -m venv .venv
