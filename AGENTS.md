@@ -25,7 +25,7 @@ Engine (Rust, default):
 - `cd rust_engine && cargo test`
 - `cd rust_engine && cargo run -p brood-cli -- chat --out /tmp/brood-run --events /tmp/brood-run/events.jsonl`
 
-Engine (Python legacy/compat):
+Engine (Python legacy/parity only; not desktop runtime):
 - `python -m venv .venv && source .venv/bin/activate`
 - `pip install -e .` — install the engine locally.
 - `brood chat --out /tmp/brood-run --events /tmp/brood-run/events.jsonl` — interactive CLI.
@@ -77,8 +77,7 @@ Tests:
 - Pricing overrides live at `~/.brood/pricing_overrides.json`.
 - Desktop uses a real PTY; keep terminal output stable and machine-readable via `events.jsonl`.
 - Desktop file access requires Tauri FS scope (see `desktop/src-tauri/tauri.conf.json`).
-- Desktop runtime is native Rust by default; use `BROOD_RS_MODE=compat` only for explicit compatibility runs.
-- Emergency fallback to legacy Python path is opt-in only via `BROOD_EMERGENCY_COMPAT_FALLBACK=1`.
+- Desktop runtime is native-only (`brood-rs`); Python compat fallback is retired from normal desktop runtime.
 - API keys are listed in `.env.example` and should be stored in a local `.env` (gitignored).
 
 ## Agent/LLM Intake (Optional)
