@@ -7,6 +7,11 @@ The format is based on Keep a Changelog (https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 - TBD
 
+## [0.1.7] - 2026-02-20
+- Fix Mother realtime intent recovery races by revalidating pending request state after async retry decisions.
+- Defer timeout-driven Mother realtime retries until the worker timeout window elapses to avoid duplicate in-flight realtime calls.
+- Restore native Rust cost/latency estimate parity in receipt metadata and `cost_latency_update` events so desktop top-ribbon cost updates correctly.
+
 ## [0.1.6] - 2026-02-20
 - Fix macOS publish notarization by signing staged `resources/brood-rs` with Developer ID, hardened runtime, and secure timestamp during release builds.
 
