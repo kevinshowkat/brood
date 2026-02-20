@@ -27,6 +27,7 @@
   --top-engine-w: clamp(260px, 44vw, 620px);
   --top-tok-w: clamp(176px, 21vw, 236px);
   --top-cost-w: clamp(88px, 10vw, 120px);
+  --top-api-w: clamp(56px, 7vw, 72px);
   --top-queue-w: clamp(116px, 13vw, 156px);
   --top-avg-w: clamp(72px, 8vw, 98px);
 }
@@ -125,7 +126,7 @@ body {
 .top-metrics {
   min-width: 0;
   display: grid;
-  grid-template-columns: var(--top-tok-w) var(--top-cost-w) var(--top-queue-w) var(--top-avg-w);
+  grid-template-columns: var(--top-tok-w) var(--top-cost-w) var(--top-api-w) var(--top-queue-w) var(--top-avg-w);
   align-items: center;
   justify-content: start;
   gap: 8px;
@@ -149,6 +150,7 @@ body {
 
 #top-metric-tokens,
 #top-metric-cost,
+#top-metric-api-calls,
 #top-metric-queue,
 #top-metric-render {
   justify-content: flex-start;
@@ -2278,19 +2280,22 @@ button.ghost:hover {
   z-index: 1;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 7px;
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
-  padding: 2px 0;
+  padding: 2px 0 2px 4px;
+  transform: translateY(-12px);
   font-family: "IBM Plex Mono", monospace;
 }
 
 .hud-line {
   display: grid;
-  grid-template-columns: 52px 1fr;
-  gap: 10px;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px;
   align-items: baseline;
+  min-width: 0;
 }
 
 .hud-k {
@@ -6986,6 +6991,7 @@ button.ghost:hover {
     --top-engine-w: clamp(170px, 37vw, 340px);
     --top-tok-w: clamp(150px, 21vw, 196px);
     --top-cost-w: clamp(76px, 10vw, 98px);
+    --top-api-w: clamp(48px, 7vw, 62px);
     --top-queue-w: clamp(98px, 12vw, 130px);
     --top-avg-w: clamp(62px, 8vw, 82px);
   }
