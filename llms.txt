@@ -27,7 +27,7 @@
 - Rust engine orchestration: [`rust_engine/crates/brood-engine/src/lib.rs`](rust_engine/crates/brood-engine/src/lib.rs)
 - Rust contracts/events: [`rust_engine/crates/brood-contracts/src/events.rs`](rust_engine/crates/brood-contracts/src/events.rs)
 - Python parity reference: [`brood_engine/cli.py`](brood_engine/cli.py), [`brood_engine/engine.py`](brood_engine/engine.py), [`brood_engine/providers/`](brood_engine/providers/)
-- Desktop UI (canvas + Abilities): [`desktop/src/canvas_app.js`](desktop/src/canvas_app.js), [`desktop/src/main.js`](desktop/src/main.js)
+- Desktop UI (canvas + Abilities): [`desktop/src/canvas_app.js`](desktop/src/canvas_app.js)
 - Tauri backend + FS scope: [`desktop/src-tauri/src/main.rs`](desktop/src-tauri/src/main.rs), [`desktop/src-tauri/tauri.conf.json`](desktop/src-tauri/tauri.conf.json)
 - Desktop dev runner: [`scripts/dev_desktop.sh`](scripts/dev_desktop.sh)
 

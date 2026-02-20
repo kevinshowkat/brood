@@ -36,7 +36,7 @@ Regenerate with:
 - Rust engine orchestration: [`rust_engine/crates/brood-engine/src/lib.rs`](rust_engine/crates/brood-engine/src/lib.rs)
 - Rust contracts/events: [`rust_engine/crates/brood-contracts/src/events.rs`](rust_engine/crates/brood-contracts/src/events.rs)
 - Python parity reference: [`brood_engine/cli.py`](brood_engine/cli.py), [`brood_engine/engine.py`](brood_engine/engine.py), [`brood_engine/providers/`](brood_engine/providers/)
-- Desktop UI (canvas + Abilities): [`desktop/src/canvas_app.js`](desktop/src/canvas_app.js), [`desktop/src/main.js`](desktop/src/main.js)
+- Desktop UI (canvas + Abilities): [`desktop/src/canvas_app.js`](desktop/src/canvas_app.js)
 - Tauri backend + FS scope: [`desktop/src-tauri/src/main.rs`](desktop/src-tauri/src/main.rs), [`desktop/src-tauri/tauri.conf.json`](desktop/src-tauri/tauri.conf.json)
 - Desktop dev runner: [`scripts/dev_desktop.sh`](scripts/dev_desktop.sh)
 
@@ -317,7 +317,7 @@ Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, an
 - `desktop/`: Tauri desktop app (canvas + Abilities UI). Frontend lives in `desktop/src/`, Rust backend in `desktop/src-tauri/`.
 - `tests/`: pytest suite for engine components.
 - `docs/`: project docs and Param Forge reference notes.
-- `scripts/`: helper scripts for packaging (`build_engine.sh`, `dev_desktop.sh`).
+- `scripts/`: helper scripts for packaging (`build_desktop.sh`, `dev_desktop.sh`).
 - `param_forge_ref/`: reference codebase (read-only; keep as input/compatibility reference).
 
 ## Build, Test, and Development Commands
