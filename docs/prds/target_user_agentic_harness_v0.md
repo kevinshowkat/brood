@@ -29,16 +29,16 @@ The harness should answer:
 
 ## Feasibility Snapshot
 Feasibility is high because the required primitives already exist:
-- `brood chat --out ... --events ...` supports multi-turn interaction.
+- `brood-rs chat --out ... --events ...` supports multi-turn interaction.
 - Abilities already exist as slash commands (`/diagnose`, `/argue`, `/bridge`, `/swap_dna`, `/triforce`, etc.).
 - `events.jsonl` is append-only and machine-readable.
-- `brood_engine/harness` already handles deterministic multi-step experiment runs and telemetry patterns.
+- Native CLI + `events.jsonl` contracts already support deterministic multi-step experiment runs and telemetry capture.
 - `desktop/src/canvas_app.js` already has snapshot capture helpers that write image files under `runDir` for intent/inference flows.
 
 The missing piece is orchestration for persona-driven user behavior and pain extraction, not core model capability.
 
 ## v0 Scope
-- Adapter: CLI-first (`brood chat` PTY) for speed and determinism.
+- Adapter: CLI-first (`brood-rs chat` PTY) for speed and determinism.
 - Persona + scenario pack input (JSON) with explicit usability hypotheses and expected friction points.
 - Agentic turn loop with explicit reflection logging.
 - Pain-point capture and severity scoring as first-class output.
@@ -72,7 +72,7 @@ Every scenario run should produce:
 Components:
 - Scenario pack loader: validates persona/scenario config.
 - Session runner: executes one scenario against one persona.
-- Chat adapter: sends utterances/commands to `brood chat`, tails `events.jsonl`.
+- Chat adapter: sends utterances/commands to `brood-rs chat`, tails `events.jsonl`.
 - Screenshot adapter: captures, versions, and records app screenshots for each turn.
 - Policy layer: chooses next action from scenario goals + recent events + latest screenshot.
 - Reflection writer: writes explicit turn reflections to `reflections.jsonl` with pain tags.
@@ -80,8 +80,7 @@ Components:
 - Evaluator: computes success and rubric scores from artifacts/events/reflections.
 
 Suggested code placement:
-- `brood_engine/harness/user_sim.py` (core loop + data models)
-- `scripts/target_user_harness.py` (CLI entrypoint)
+- `rust_engine/crates/brood-cli/src/main.rs` (CLI-side orchestration hooks)
 - `docs/target_user_harness.schema.json` (config contract)
 - `docs/target_user_harness_pain.schema.json` (if formalized later for shared validator usage)
 

@@ -12,24 +12,17 @@ Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, an
 
 ## Project Structure & Module Organization
 - `rust_engine/`: native Rust engine and CLI (`brood-rs`), default runtime for desktop.
-- `brood_engine/`: legacy Python engine/CLI retained for compatibility and parity reference.
 - `desktop/`: Tauri desktop app (canvas + Abilities UI). Frontend lives in `desktop/src/`, Rust backend in `desktop/src-tauri/`.
-- `tests/`: pytest suite for engine components.
+- `desktop/test/`: desktop JS test suite.
 - `docs/`: project docs and Param Forge reference notes.
-- `scripts/`: helper scripts for packaging (`build_engine.sh`, `dev_desktop.sh`).
-- `param_forge_ref/`: reference codebase (read-only; keep as input/compatibility reference).
+- `scripts/`: helper scripts for packaging (`build_desktop.sh`, `dev_desktop.sh`).
+- `docs/param_forge_reference.md`: archived Param Forge compatibility notes used as reference context.
 
 ## Build, Test, and Development Commands
 Engine (Rust, default):
 - `cd rust_engine && cargo fmt`
 - `cd rust_engine && cargo test`
 - `cd rust_engine && cargo run -p brood-cli -- chat --out /tmp/brood-run --events /tmp/brood-run/events.jsonl`
-
-Engine (Python legacy/compat):
-- `python -m venv .venv && source .venv/bin/activate`
-- `pip install -e .` — install the engine locally.
-- `brood chat --out /tmp/brood-run --events /tmp/brood-run/events.jsonl` — interactive CLI.
-- `brood recreate --reference <image> --out /tmp/brood-recreate` — recreate flow.
 
 Desktop:
 - `cd desktop && npm install`
@@ -45,16 +38,14 @@ Tests:
 - `cd rust_engine && cargo test` — run Rust engine tests.
 - `cd desktop && npm test` — run desktop tests.
 - `cd desktop/src-tauri && cargo fmt --check && cargo check` — run Tauri checks.
-- `python -m pytest` — run legacy Python parity tests.
 
 ## Coding Style & Naming Conventions
-- Python: 4 spaces; prefer type hints; line length ~100 (see `pyproject.toml`).
+- Python scripts in `scripts/`: 4 spaces and type hints where practical.
 - JS/CSS: follow existing formatting in `desktop/src/` (2-space indent).
-- Naming: snake_case for Python functions/files, lower/kebab for frontend assets.
+- Naming: snake_case for Python script functions/files, lower/kebab for frontend assets.
 
 ## Testing Guidelines
-- Frameworks: Rust (`cargo test` in `rust_engine/`), desktop (`npm test` in `desktop/`), Python parity (`pytest` in `tests/`).
-- Test naming: `tests/test_*.py` with descriptive function names (e.g., `test_context_tracker_alerts`).
+- Frameworks: Rust (`cargo test` in `rust_engine/`), desktop (`npm test` in `desktop/`).
 - Add tests for new run artifacts, events, or loops when changing engine behavior.
 
 ## Commit & Pull Request Guidelines
@@ -77,17 +68,12 @@ Tests:
 - Pricing overrides live at `~/.brood/pricing_overrides.json`.
 - Desktop uses a real PTY; keep terminal output stable and machine-readable via `events.jsonl`.
 - Desktop file access requires Tauri FS scope (see `desktop/src-tauri/tauri.conf.json`).
-- Desktop runtime is native Rust by default; use `BROOD_RS_MODE=compat` only for explicit compatibility runs.
-- Emergency fallback to legacy Python path is opt-in only via `BROOD_EMERGENCY_COMPAT_FALLBACK=1`.
+- Desktop runtime is native-only (`brood-rs`); Python compat fallback is retired from normal desktop runtime.
 - API keys are listed in `.env.example` and should be stored in a local `.env` (gitignored).
 
 ## Agent/LLM Intake (Optional)
 - `llms.txt` is the agent-facing entrypoints file (high-signal files + task routing).
 - `agent-intake.json` defines an optional Agent Intake Protocol (AIP) contract for a server you run (curated entrypoints + optional context packs). It does nothing unless an agent calls the `intake_endpoint`.
-
-Local test (stdlib-only):
-- Build packs: `python3 scripts/aip_build_packs.py --all --out-dir outputs/aip_packs --write-index`
-- Run stub server: `python3 scripts/aip_server.py --port 8787 --packs-dir outputs/aip_packs`
 
 Privacy guidance:
 - Prefer coarse `task.tags[]`; avoid raw prompts and never send/store secrets.

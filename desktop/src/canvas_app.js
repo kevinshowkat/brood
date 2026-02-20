@@ -412,28 +412,12 @@ const els = {
   aestheticOnboardingNext: document.getElementById("aesthetic-onboarding-next"),
 };
 
-function parseRustNativePreference(raw) {
-  const normalized = String(raw == null ? "" : raw).trim().toLowerCase();
-  if (!normalized) return true;
-  return !["0", "false", "off", "no"].includes(normalized);
-}
-
-const storedRustNative = localStorage.getItem("brood.rsNative");
-const rustNativeDefaultMigrated = localStorage.getItem("brood.rsNative.default.v2") === "1";
-if (!rustNativeDefaultMigrated) {
-  if (storedRustNative == null) {
-    localStorage.setItem("brood.rsNative", "1");
-  }
-  localStorage.setItem("brood.rsNative.default.v2", "1");
-} else if (storedRustNative == null) {
-  localStorage.setItem("brood.rsNative", "1");
-}
-const effectiveRustNative = parseRustNativePreference(localStorage.getItem("brood.rsNative"));
-localStorage.setItem("brood.rsNative", effectiveRustNative ? "1" : "0");
+localStorage.setItem("brood.rsNative", "1");
+localStorage.setItem("brood.rsNative.default.v2", "1");
+localStorage.removeItem("brood.emergencyCompatFallback");
 
 const settings = {
   memory: localStorage.getItem("brood.memory") === "1",
-  rustNative: effectiveRustNative,
   alwaysOnVision: (() => {
     const raw = localStorage.getItem("brood.alwaysOnVision");
     // Default ON: Mother suggestions depend on realtime canvas context.
@@ -459,10 +443,6 @@ const settings = {
   })(),
 };
 
-function emergencyCompatFallbackEnabled() {
-  return localStorage.getItem("brood.emergencyCompatFallback") === "1";
-}
-
 function defaultAestheticAnswers() {
   return {
     imageChoiceId: "",
@@ -485,9 +465,8 @@ const state = {
   eventsPath: null,
   ptySpawned: false,
   ptySpawning: false,
-  engineLaunchMode: "compat",
+  engineLaunchMode: "native",
   engineLaunchPath: null,
-  engineCompatRetried: false,
   pendingPtyExit: false,
   poller: null,
   pollInFlight: false,
@@ -890,7 +869,7 @@ const REEL_TOUCH_MOVE_VISIBLE_MS = 120;
 const REEL_TOUCH_TAP_VISIBLE_MS = 280;
 const REEL_TOUCH_RELEASE_VISIBLE_MS = 150;
 
-// Intent onboarding overlay icon assets (generated via scripts/gemini_generate_intent_icons.py).
+// Intent onboarding overlay icon assets.
 // Keep a procedural fallback so the app still renders if assets fail to load.
 const INTENT_UI_START_ICON_SCALE = 1.12; // modestly bigger than the original procedural glyphs
 const INTENT_UI_CHOICE_ICON_SCALE = 3.0; // YES/NO + suggested use-case glyph (requested: 300% larger)
@@ -20746,16 +20725,13 @@ async function loadExistingArtifacts() {
   return restored;
 }
 
-async function spawnEngine({ forceCompat = false } = {}) {
+async function spawnEngine() {
   if (!state.runDir || !state.eventsPath) return;
   if (state.ptySpawning) return;
   state.ptySpawning = true;
   setStatus("Engine: starting…");
   state.ptySpawned = false;
-  if (!forceCompat) {
-    state.engineCompatRetried = false;
-  }
-  const preferredMode = forceCompat ? "compat" : settings.rustNative ? "native" : "compat";
+  const preferredMode = "native";
   const baseEnv = { BROOD_MEMORY: settings.memory ? "1" : "0" };
   const broodArgs = ["chat", "--out", state.runDir, "--events", state.eventsPath];
   try {
@@ -20763,20 +20739,15 @@ async function spawnEngine({ forceCompat = false } = {}) {
     let lastErr = null;
     let launchMeta = null;
 
-    const envForMode = (mode) => ({
-      ...baseEnv,
-      BROOD_RS_MODE: mode,
-    });
-
-    const spawnAttempt = async ({ command, args, cwd, mode, label }) => {
+    const spawnAttempt = async ({ command, args, cwd, label }) => {
       if (spawned) return;
       try {
-        await invoke("spawn_pty", { command, args, cwd, env: envForMode(mode) });
+        await invoke("spawn_pty", { command, args, cwd, env: baseEnv });
         spawned = true;
-        launchMeta = { mode, label };
+        launchMeta = { mode: "native", label };
       } catch (err) {
         lastErr = err;
-        console.warn(`[brood] spawn attempt failed (${label}, mode=${mode})`, err);
+        console.warn(`[brood] spawn attempt failed (${label})`, err);
       }
     };
 
@@ -20788,71 +20759,31 @@ async function spawnEngine({ forceCompat = false } = {}) {
       repoRoot = null;
     }
 
-    const tryModeChain = async (mode) => {
-      if (repoRoot) {
-        await spawnAttempt({
-          command: "cargo",
-          args: ["run", "-q", "-p", "brood-cli", "--", ...broodArgs],
-          cwd: `${repoRoot}/rust_engine`,
-          mode,
-          label: "cargo run -p brood-cli",
-        });
-      }
-
+    if (repoRoot) {
       await spawnAttempt({
-        command: "brood-rs",
-        args: broodArgs,
-        cwd: state.runDir,
-        mode,
-        label: "brood-rs",
+        command: "cargo",
+        args: ["run", "-q", "-p", "brood-cli", "--", ...broodArgs],
+        cwd: `${repoRoot}/rust_engine`,
+        label: "cargo run -p brood-cli",
       });
-
-      if (mode !== "native" && !spawned && repoRoot) {
-        for (const py of ["python", "python3"]) {
-          await spawnAttempt({
-            command: py,
-            args: ["-m", "brood_engine.cli", ...broodArgs],
-            cwd: repoRoot,
-            mode,
-            label: `${py} -m brood_engine.cli`,
-          });
-          if (spawned) break;
-        }
-      }
-
-      if (mode !== "native" && !spawned) {
-        await spawnAttempt({
-          command: "brood",
-          args: broodArgs,
-          cwd: state.runDir,
-          mode,
-          label: "brood",
-        });
-      }
-    };
-
-    if (preferredMode === "native") {
-      await tryModeChain("native");
-      if (!spawned && emergencyCompatFallbackEnabled()) {
-        console.warn("[brood] native launch failed; retrying compat mode for startup (emergency fallback enabled)");
-        await tryModeChain("compat");
-      }
-      if (!spawned) {
-        const detail = lastErr?.message || String(lastErr || "native engine launch failed");
-        throw new Error(
-          `${detail}. Native launch failed and emergency compat fallback is disabled (set localStorage.brood.emergencyCompatFallback=\"1\" to allow compat retry).`
-        );
-      }
-    } else {
-      await tryModeChain("compat");
     }
 
+    await spawnAttempt({
+      command: "brood-rs",
+      args: broodArgs,
+      cwd: state.runDir,
+      label: "brood-rs",
+    });
+
     if (!spawned) {
-      throw lastErr;
+      const detail = lastErr?.message || String(lastErr || "native engine launch failed");
+      throw new Error(
+        `${detail}. Native engine launch failed; Python compatibility runtime is no longer available in desktop runtime.`
+      );
     }
 
     state.ptySpawned = true;
-    state.engineLaunchMode = launchMeta?.mode || "compat";
+    state.engineLaunchMode = launchMeta?.mode || "native";
     state.engineLaunchPath = launchMeta?.label || "unknown";
     console.info(
       `[brood] engine launch mode=${state.engineLaunchMode} path=${state.engineLaunchPath} preferred=${preferredMode}`

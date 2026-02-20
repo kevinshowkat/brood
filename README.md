@@ -41,21 +41,13 @@ There is no web app, and Windows/Linux builds are not supported yet.
 
 - Desktop runtime defaults to native Rust (`brood-rs`).
 - macOS release packaging/signing/notarization includes the staged Rust engine binary.
-- Legacy Python engine remains available only for explicit compatibility/parity workflows.
+- Legacy Python runtime paths have been retired from the repository.
 
 ### Near-Term (Next Milestones)
 
 - Expand Rust provider parity coverage for desktop-critical image/edit/reference flows.
 - Keep event/artifact compatibility stable (`events.jsonl`, receipt/thread/summary payload shapes).
 - Complete broader live-probe validation and eliminate remaining migration edge cases.
-
-### Legacy Python Removal Plan (Brief)
-
-1. Lock parity: require Rust to pass provider/event/export parity matrix without compat fallback in normal runtime.
-2. Remove compat runtime path from desktop defaults (keep emergency switch only during short soak period).
-3. Delete Python-dependent runtime plumbing in desktop/Tauri after soak confidence is met.
-4. Remove legacy Python CLI/engine modules (`brood_engine/`) and migrate remaining references/tests to Rust equivalents.
-5. Remove Python release/runtime assumptions from docs/scripts/CI and cut a Rust-only release.
 
 ## Download (macOS)
 
@@ -129,13 +121,8 @@ For Gemini wire-level inspection:
 ./scripts/dev_desktop.sh
 ```
 
-This runs the Tauri app in dev mode (`desktop/`) with the native Rust engine path by default.
-To force legacy compat mode for debugging only:
-
-```bash
-cd desktop
-BROOD_RS_MODE=compat npm run tauri dev
-```
+This runs the Tauri app in dev mode (`desktop/`) with the native Rust engine path.
+Desktop runtime no longer includes Python compat fallback paths.
 
 Build desktop app:
 
@@ -162,23 +149,6 @@ cargo run -p brood-cli -- run --prompt "hero image for Series A" --out /tmp/broo
 
 # Recreate flow
 cargo run -p brood-cli -- recreate --reference path/to/image.png --out /tmp/brood-recreate
-```
-
-### Python CLI (legacy/compat)
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev]
-
-# Chat loop (legacy)
-brood chat --out /tmp/brood-run --events /tmp/brood-run/events.jsonl
-
-# Single run (legacy)
-brood run --prompt "hero image for Series A" --out /tmp/brood-run
-
-# Recreate flow (legacy)
-brood recreate --reference path/to/image.png --out /tmp/brood-recreate
 ```
 
 ## API Keys
@@ -214,19 +184,16 @@ Pricing/latency override file:
 ## Project Layout
 
 - `rust_engine/` native engine and CLI (default desktop runtime)
-- `brood_engine/` legacy Python engine and CLI (compat/parity reference)
 - `desktop/` Tauri desktop app
-- `tests/` pytest suite
+- `desktop/test/` desktop JS tests
 - `docs/param_forge_reference.md` Param Forge reference notes
 - `docs/desktop.md` desktop UI notes (abilities + workflows)
 
 ## Agent / LLM Entrypoints
 
 - `llms.txt` high-signal entrypoints and task routing
-- `llms-full.txt` expanded inlined context (`python3 scripts/build_llms_full.py`)
+- `llms-full.txt` expanded inlined context
 - `agent-intake.json` optional Agent Intake Protocol (AIP) contract
-- `scripts/aip_build_packs.py` build JSON context packs to `outputs/aip_packs/`
-- `scripts/aip_server.py` stdlib-only local AIP stub server
 
 ## License
 
