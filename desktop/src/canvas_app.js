@@ -10840,10 +10840,20 @@ function _coerceAutomationPayloadNumber(value, fallback) {
   return fallback;
 }
 
-function _coerceAutomationMode(value, fallback = "multi") {
+function _resolveAutomationCanvasMode(value, actionName = "canvas_action") {
   const mode = String(value || "").trim().toLowerCase();
-  if (mode === "single" || mode === "multi") return mode;
-  return fallback;
+  if (!mode) return { ok: true, mode: "multi" };
+  if (mode === "multi") return { ok: true, mode };
+  if (mode === "single") {
+    return {
+      ok: false,
+      detail: `${actionName} mode=single is no longer supported; use mode=multi`,
+    };
+  }
+  return {
+    ok: false,
+    detail: `${actionName} unsupported mode=${mode}; use mode=multi`,
+  };
 }
 
 function _clampCanvasScale(value, fallback) {
@@ -10895,7 +10905,12 @@ function _appendCanvasStateEvent() {
 }
 
 function _applyCanvasPanFromPayload(payload = {}) {
-  const mode = _coerceAutomationMode(payload.mode, state.canvasMode);
+  const modeResult = _resolveAutomationCanvasMode(payload.mode, "canvas_pan");
+  if (!modeResult.ok) {
+    return { ok: false, detail: modeResult.detail };
+  }
+  const mode = modeResult.mode;
+  if (mode !== state.canvasMode) setCanvasMode(mode);
   const view = mode === "multi" ? state.multiView : state.view;
   if (!view) {
     return { ok: false, detail: "canvas view is not initialized" };
@@ -10933,7 +10948,12 @@ function _applyCanvasPanFromPayload(payload = {}) {
 }
 
 function _applyCanvasZoomFromPayload(payload = {}) {
-  const mode = _coerceAutomationMode(payload.mode, state.canvasMode);
+  const modeResult = _resolveAutomationCanvasMode(payload.mode, "canvas_zoom");
+  if (!modeResult.ok) {
+    return { ok: false, detail: modeResult.detail };
+  }
+  const mode = modeResult.mode;
+  if (mode !== state.canvasMode) setCanvasMode(mode);
   const view = mode === "multi" ? state.multiView : state.view;
   if (!view) {
     return { ok: false, detail: "canvas view is not initialized" };
@@ -10985,27 +11005,16 @@ function _applyCanvasZoomFromPayload(payload = {}) {
 }
 
 function _applyCanvasFitAllFromPayload(payload = {}) {
-  const mode = _coerceAutomationMode(payload.mode, state.canvasMode);
+  const modeResult = _resolveAutomationCanvasMode(payload.mode, "canvas_fit_all");
+  if (!modeResult.ok) {
+    return { ok: false, detail: modeResult.detail };
+  }
+  const mode = modeResult.mode;
   if (mode !== state.canvasMode) setCanvasMode(mode);
   const view = mode === "multi" ? state.multiView : state.view;
   const canvas = els.workCanvas;
   if (!view || !canvas) {
     return { ok: false, detail: "canvas view is not initialized" };
-  }
-  if (mode === "single") {
-    resetViewToFit();
-    return {
-      ok: true,
-      detail: "fit active image in single view",
-      event: {
-        type: "canvas_view_fitted",
-        marker: "canvas_view_fitted",
-        mode,
-        scale: Number(state.view?.scale) || 1,
-        offset_x: Number(state.view?.offsetX) || 0,
-        offset_y: Number(state.view?.offsetY) || 0,
-      },
-    };
   }
 
   if (!state.multiRects || state.multiRects.size === 0) {
@@ -11367,20 +11376,23 @@ async function handleDesktopAutomation(event = {}) {
         events.push({ type: "canvas_state", marker: "canvas_state", state: _automationStateEnvelope() });
       }
     } else if (action === "set_canvas_mode") {
-      const rawMode = String(actionPayload.mode || "").trim().toLowerCase();
-      const mode = rawMode === "single" ? "single" : "multi";
-      const before = state.canvasMode;
-      setCanvasMode(mode);
-      const after = state.canvasMode;
-      ok = true;
-      detail = `set_canvas_mode ${before || "unknown"} -> ${after || "unknown"}`;
-      events.push({
-        type: "canvas_mode_set",
-        marker: "canvas_mode_changed",
-        prev: before || null,
-        next: after || mode,
-      });
-      events.push({ type: "canvas_state", marker: "canvas_state", state: _automationStateEnvelope() });
+      const modeResult = _resolveAutomationCanvasMode(actionPayload.mode, "set_canvas_mode");
+      if (!modeResult.ok) {
+        detail = modeResult.detail;
+      } else {
+        const before = state.canvasMode;
+        setCanvasMode(modeResult.mode);
+        const after = state.canvasMode;
+        ok = true;
+        detail = `set_canvas_mode ${before || "unknown"} -> ${after || "unknown"}`;
+        events.push({
+          type: "canvas_mode_set",
+          marker: "canvas_mode_changed",
+          prev: before || null,
+          next: after || modeResult.mode,
+        });
+        events.push({ type: "canvas_state", marker: "canvas_state", state: _automationStateEnvelope() });
+      }
     } else if (action === "canvas_pan") {
       const result = _applyCanvasPanFromPayload({ ...actionPayload, mode: actionPayload.mode });
       if (!result.ok) {
