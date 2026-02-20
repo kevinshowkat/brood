@@ -18,6 +18,12 @@ test("Intent Canvas: onboarding gate stays disabled while ambient inference is e
   assert.match(app, /function intentAmbientActive\(\)/);
 });
 
+test("Vision descriptions: ambient realtime is preferred and /describe is fallback-only", () => {
+  assert.match(app, /function preferRealtimeVisionDescriptions\(\)/);
+  assert.match(app, /if \(ambient\.rtState === "failed"\) return false;/);
+  assert.match(app, /if \(preferRealtimeVisionDescriptions\(\)\) return Boolean\(fallback\);/);
+});
+
 test("Intent Canvas: ambient suggestion model uses future-ready asset fields", () => {
   assert.match(app, /asset_type/);
   assert.match(app, /asset_key/);

@@ -72,6 +72,11 @@ const state = {
   placeholders: [],
   flickerTimer: null,
   ptyReady: false,
+  ptySpawning: false,
+  engineLaunchMode: "compat",
+  engineLaunchPath: null,
+  engineCompatRetried: false,
+  pendingPtyExit: false,
   poller: null,
   blobUrls: new Map(),
   receiptCache: new Map(),
@@ -1057,8 +1062,34 @@ listen("pty-data", (event) => {
   }
 });
 
-listen("pty-exit", () => {
+async function handlePtyExit() {
+  try {
+    const status = await invoke("get_pty_status");
+    if (status?.running) {
+      if (state.pendingPtyExit) {
+        state.pendingPtyExit = false;
+      }
+      return;
+    }
+  } catch (_) {
+    // Best-effort stale-exit guard; continue with legacy handling on errors.
+  }
+  if (state.ptySpawning) {
+    state.pendingPtyExit = true;
+    return;
+  }
+  state.pendingPtyExit = false;
   setStatus("Engine: exited", true);
+  state.ptyReady = false;
+}
+
+async function flushDeferredPtyExit() {
+  if (!state.pendingPtyExit || state.ptySpawning) return;
+  await handlePtyExit();
+}
+
+listen("pty-exit", () => {
+  handlePtyExit().catch(() => {});
 });
 
 const INPUT_COLOR = "\x1b[38;2;139;213;255m";
@@ -1286,14 +1317,38 @@ function formatUserBlock(line) {
   return full;
 }
 
+function parseRustNativePreference(raw) {
+  const normalized = String(raw == null ? "" : raw).trim().toLowerCase();
+  if (!normalized) return true;
+  return !["0", "false", "off", "no"].includes(normalized);
+}
+
+const storedRustNative = localStorage.getItem("brood.rsNative");
+const rustNativeDefaultMigrated = localStorage.getItem("brood.rsNative.default.v2") === "1";
+if (!rustNativeDefaultMigrated) {
+  if (storedRustNative == null) {
+    localStorage.setItem("brood.rsNative", "1");
+  }
+  localStorage.setItem("brood.rsNative.default.v2", "1");
+} else if (storedRustNative == null) {
+  localStorage.setItem("brood.rsNative", "1");
+}
+const effectiveRustNative = parseRustNativePreference(localStorage.getItem("brood.rsNative"));
+localStorage.setItem("brood.rsNative", effectiveRustNative ? "1" : "0");
+
 const settings = {
   memory: localStorage.getItem("brood.memory") === "1",
+  rustNative: effectiveRustNative,
   textModel: localStorage.getItem("brood.textModel") || "gpt-5.2",
   imageModel: localStorage.getItem("brood.imageModel") || "dryrun-image-1",
   optimizeMode: localStorage.getItem("brood.optimizeMode") || "auto",
 };
 if (!["auto", "review"].includes(settings.optimizeMode)) {
   settings.optimizeMode = "auto";
+}
+
+function emergencyCompatFallbackEnabled() {
+  return localStorage.getItem("brood.emergencyCompatFallback") === "1";
 }
 
 const memoryToggle = document.getElementById("memory-toggle");
@@ -1383,24 +1438,122 @@ async function createRun() {
   }
 }
 
-async function spawnEngine() {
+async function spawnEngine({ forceCompat = false } = {}) {
   if (!state.runDir) return;
+  if (state.ptySpawning) return;
+  state.ptySpawning = true;
+  if (!forceCompat) {
+    state.engineCompatRetried = false;
+  }
   setStatus("Engine: starting…");
   term.writeln(formatBroodLine("[brood] starting engine..."));
   try {
-    await invoke("spawn_pty", {
-      command: "brood",
-      args: ["chat", "--out", state.runDir, "--events", state.eventsPath],
-      cwd: state.runDir,
-      env: { BROOD_MEMORY: settings.memory ? "1" : "0" },
+    const preferredMode = forceCompat ? "compat" : settings.rustNative ? "native" : "compat";
+    const baseEnv = { BROOD_MEMORY: settings.memory ? "1" : "0" };
+    const broodArgs = ["chat", "--out", state.runDir, "--events", state.eventsPath];
+    let spawned = false;
+    let lastErr = null;
+    let launchMeta = null;
+    let repoRoot = null;
+
+    const envForMode = (mode) => ({
+      ...baseEnv,
+      BROOD_RS_MODE: mode,
     });
+
+    const spawnAttempt = async ({ command, args, cwd, mode, label }) => {
+      if (spawned) return;
+      try {
+        await invoke("spawn_pty", {
+          command,
+          args,
+          cwd,
+          env: envForMode(mode),
+        });
+        spawned = true;
+        launchMeta = { mode, label };
+      } catch (err) {
+        lastErr = err;
+      }
+    };
+
+    try {
+      repoRoot = await invoke("get_repo_root");
+    } catch (_) {
+      repoRoot = null;
+    }
+
+    const tryModeChain = async (mode) => {
+      if (repoRoot) {
+        await spawnAttempt({
+          command: "cargo",
+          args: ["run", "-q", "-p", "brood-cli", "--", ...broodArgs],
+          cwd: `${repoRoot}/rust_engine`,
+          mode,
+          label: "cargo run -p brood-cli",
+        });
+      }
+
+      await spawnAttempt({
+        command: "brood-rs",
+        args: broodArgs,
+        cwd: state.runDir,
+        mode,
+        label: "brood-rs",
+      });
+
+      if (mode !== "native" && !spawned) {
+        await spawnAttempt({
+          command: "brood",
+          args: broodArgs,
+          cwd: state.runDir,
+          mode,
+          label: "brood",
+        });
+      }
+    };
+
+    if (preferredMode === "native") {
+      await tryModeChain("native");
+      if (!spawned && emergencyCompatFallbackEnabled()) {
+        term.writeln(
+          formatBroodLine(
+            "\r\n[brood] native launch failed; retrying compat mode for startup (emergency fallback enabled)..."
+          )
+        );
+        await tryModeChain("compat");
+      }
+      if (!spawned) {
+        const detail = lastErr?.message || String(lastErr || "native engine launch failed");
+        throw new Error(
+          `${detail}. Native launch failed and emergency compat fallback is disabled (set localStorage.brood.emergencyCompatFallback=\"1\" to allow compat retry).`
+        );
+      }
+    } else {
+      await tryModeChain("compat");
+    }
+
+    if (!spawned) {
+      throw lastErr;
+    }
+
+    state.engineLaunchMode = launchMeta?.mode || "compat";
+    state.engineLaunchPath = launchMeta?.label || "unknown";
+    term.writeln(
+      formatBroodLine(
+        `\r\n[brood] engine path=${state.engineLaunchPath} mode=${state.engineLaunchMode} preferred=${preferredMode}`
+      )
+    );
     resizePty();
-    setStatus("Engine: started");
+    setStatus(`Engine: started (${state.engineLaunchMode})`);
     invoke("write_pty", { data: `/text_model ${settings.textModel}\n` }).catch(() => {});
     invoke("write_pty", { data: `/image_model ${settings.imageModel}\n` }).catch(() => {});
   } catch (err) {
     term.writeln(formatBroodLine(`\r\n[brood] failed to spawn engine: ${err}`));
     setStatus(`Engine: failed (${err})`, true);
+  } finally {
+    state.ptySpawning = false;
+    await flushDeferredPtyExit();
   }
 }
 
