@@ -3181,6 +3181,9 @@ function maybeAutoAcceptCanvasContextSuggestion(action, rec) {
   const auto = state.autoAcceptSuggestedAbility;
   if (!auto?.enabled) return;
   if (!rec?.at || !action) return;
+  const autoAction = normalizeSuggestedActionName(action) || String(action || "").trim();
+  // Prompt Generate requires manual prompt entry in a modal, so it is not safe to auto-accept.
+  if (autoAction === "Prompt Generate") return;
   if (auto.inFlight) return;
   if (auto.passes >= AUTO_ACCEPT_SUGGESTED_MAX_PASSES) {
     disableAutoAcceptSuggestedAbility("Auto-accept: cap reached (3).");
@@ -3196,7 +3199,7 @@ function maybeAutoAcceptCanvasContextSuggestion(action, rec) {
     disableAutoAcceptSuggestedAbility("Auto-accept: cap reached (3).");
   }
 
-  triggerCanvasContextSuggestedAction(action)
+  triggerCanvasContextSuggestedAction(autoAction)
     .catch((err) => {
       const msg = err?.message || String(err);
       showToast(msg, "error", 2600);
