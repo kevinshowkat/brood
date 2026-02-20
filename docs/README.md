@@ -3,7 +3,7 @@
 - Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
 - `docs/desktop.md`: how to use the current desktop app (Abilities, HUD, multi-view).
 - `docs/realtime_canvas_intent_generation_flow.md`: end-to-end diagram for realtime canvas context, intent proposal, and generation event flow.
-- `docs/realtime_canvas_user_benefits_story.md`: product narrative of user benefits from realtime context capture and how those signals are used.
+- `docs/realtime_canvas_user_benefits_story.md`: simplified, slide-ready product narrative (with one-slide visual, value chain, and circular benefit loop).
 - `docs/assets/diagrams/realtime_canvas_intent_generation_flow/`: pre-rendered SVG/PNG exports for sharing the realtime flow diagrams.
 - `docs/assets/diagrams/realtime_canvas_user_benefits_story/`: pre-rendered SVG/PNG exports for the user-benefit value-chain and flywheel visuals.
 - `docs/features/effect-token-runtime/README.md`: Pixi extraction runtime + DNA/Soul effect-token lifecycle and drag/drop pipeline.
