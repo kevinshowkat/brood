@@ -5904,6 +5904,18 @@ button.ghost:hover {
   pointer-events: auto;
 }
 
+.prompt-generate-panel {
+  left: 50%;
+  top: 50%;
+  width: min(460px, calc(100% - 24px));
+  transform: translate(-50%, -50%);
+  z-index: 11;
+}
+
+.prompt-generate-panel .annotate-text {
+  min-height: 110px;
+}
+
 .annotate-header {
   display: flex;
   align-items: center;
