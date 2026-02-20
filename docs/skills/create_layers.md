@@ -1,16 +1,21 @@
 # Skill: Create Layers
 
 ## What it does
-Splits one image into four transparent layer artifacts.
+Splits one image into three semantic layer artifacts.
 
 ## Requirements
 - Exactly 1 selected/active image.
 
 ## How it works
-- Loads source pixels locally.
-- Partitions pixels into 4 non-overlapping checkerboard layers.
+- Runs 3 sequential semantic extraction passes:
+- `Layer 1/3 - Background` (background reconstruction)
+- `Layer 2/3 - Main Subject` (subject isolation)
+- `Layer 3/3 - Key Props` (detachable foreground props)
+- For subject/props, generated images are chroma-keyed (`#00FF00`) into transparency before saving local artifacts.
 - Writes each layer as a local artifact + receipt.
 
 ## Desired effect
-When all produced layers are stacked with normal alpha compositing,
-the original image is reconstituted.
+When stacked in order (background -> subject -> props), the layers should approximate the source image while remaining editable independently.
+
+## Notes
+- This is best-effort semantic decomposition, not mathematically exact pixel partitioning.
