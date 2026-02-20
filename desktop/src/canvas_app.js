@@ -16442,10 +16442,18 @@ function ensureCanvasImageLoaded(item) {
           const wrap = els.canvasWrap;
           const cw = wrap?.clientWidth || 0;
           const ch = wrap?.clientHeight || 0;
-          const margin = 14;
           if (cw && ch) {
-            rect.x = clamp(Math.round(rect.x), margin, Math.max(margin, Math.round(cw - rect.w - margin)));
-            rect.y = clamp(Math.round(rect.y), margin, Math.max(margin, Math.round(ch - rect.h - margin)));
+            const clamped = clampFreeformRectCss(
+              rect,
+              cw,
+              ch,
+              freeformWorkspaceClampOptions(cw, ch, { minSize: 44 })
+            );
+            rect.x = clamped.x;
+            rect.y = clamped.y;
+            rect.w = clamped.w;
+            rect.h = clamped.h;
+            rect.autoAspect = clamped.autoAspect;
           }
           scheduleVisualPromptWrite();
           if (intentAmbientActive()) {
@@ -16586,6 +16594,13 @@ function clampFreeformRectCss(rectCss, canvasCssW, canvasCssH, { margin = 14, mi
   };
 }
 
+function freeformWorkspaceClampOptions(canvasCssW, canvasCssH, { minSize = 44 } = {}) {
+  const span = Math.max(1, Math.round(Math.max(Number(canvasCssW) || 0, Number(canvasCssH) || 0)));
+  // Allow drag/resize across a wide off-screen workspace; avoid a hard wall at the visible canvas edge.
+  const workspaceMargin = -Math.max(2000, span * 4);
+  return { margin: workspaceMargin, minSize };
+}
+
 function hitTestFreeformCornerHandleWithPad(ptCanvas, rectPx, padPx = 0) {
   if (!ptCanvas || !rectPx) return null;
   const dpr = getDpr();
@@ -16622,7 +16637,7 @@ function hitTestAnyFreeformCornerHandle(ptCanvas, { padPx = 0 } = {}) {
   return null;
 }
 
-function resizeFreeformRectFromCorner(startRectCss, corner, pointerCss, canvasCssW, canvasCssH) {
+function resizeFreeformRectFromCorner(startRectCss, corner, pointerCss, canvasCssW, canvasCssH, clampOpts = {}) {
   const start = startRectCss || {};
   const x0 = Number(start.x) || 0;
   const y0 = Number(start.y) || 0;
@@ -16679,7 +16694,8 @@ function resizeFreeformRectFromCorner(startRectCss, corner, pointerCss, canvasCs
   return clampFreeformRectCss(
     { x: nx0, y: ny0, w: nx1 - nx0, h: ny1 - ny0, autoAspect: false },
     canvasCssW,
-    canvasCssH
+    canvasCssH,
+    clampOpts
   );
 }
 
@@ -25188,6 +25204,7 @@ function installCanvasHandlers() {
       const wrap = els.canvasWrap;
       const canvasCssW = wrap?.clientWidth || 0;
       const canvasCssH = wrap?.clientHeight || 0;
+      const clampOpts = freeformWorkspaceClampOptions(canvasCssW, canvasCssH, { minSize: 44 });
       const ms = state.multiView?.scale || 1;
       const dxCss = (Number(pCss.x) || 0) - state.pointer.startCssX;
       const dyCss = (Number(pCss.y) || 0) - state.pointer.startCssY;
@@ -25204,7 +25221,8 @@ function installCanvasHandlers() {
           autoAspect: false,
         },
         canvasCssW,
-        canvasCssH
+        canvasCssH,
+        clampOpts
       );
       state.freeformRects.set(id, next);
       state.pointer.moved = true;
@@ -25220,6 +25238,7 @@ function installCanvasHandlers() {
       const wrap = els.canvasWrap;
       const canvasCssW = wrap?.clientWidth || 0;
       const canvasCssH = wrap?.clientHeight || 0;
+      const clampOpts = freeformWorkspaceClampOptions(canvasCssW, canvasCssH, { minSize: 44 });
       const ms = state.multiView?.scale || 1;
       const dpr = getDpr();
       const mxCss = (Number(state.multiView?.offsetX) || 0) / Math.max(dpr, 0.0001);
@@ -25232,7 +25251,14 @@ function installCanvasHandlers() {
         x: ((Number(pCss.x) || 0) - mxCss) / Math.max(ms, 0.0001),
         y: ((Number(pCss.y) || 0) - myCss) / Math.max(ms, 0.0001),
       };
-      const next = resizeFreeformRectFromCorner(startRect, state.pointer.corner, worldPointerCss, canvasCssW, canvasCssH);
+      const next = resizeFreeformRectFromCorner(
+        startRect,
+        state.pointer.corner,
+        worldPointerCss,
+        canvasCssW,
+        canvasCssH,
+        clampOpts
+      );
       state.freeformRects.set(id, next);
       state.pointer.moved = true;
       scheduleVisualPromptWrite();
