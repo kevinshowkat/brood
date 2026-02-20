@@ -6,56 +6,75 @@ export function computeActionGridSlots({
   const slots = new Array(9).fill(null);
 
   const baseTools = [
-    { key: "annotate", label: "Annotate", kind: "tool", hotkey: "1" },
-    { key: "pan", label: "Pan", kind: "tool", hotkey: "2" },
-    { key: "lasso", label: "Lasso", kind: "tool", hotkey: "3" },
+    { key: "annotate", label: "Annotate", kind: "tool" },
+    { key: "lasso", label: "Lasso", kind: "tool" },
   ];
-  for (let i = 0; i < baseTools.length; i += 1) {
-    slots[i] = baseTools[i];
+
+  const noImageFallback = [
+    { key: "bg", label: "BG", kind: "ability" },
+    { key: "variations", label: "Vars", kind: "ability" },
+    { key: "extract_dna", label: "DNA", kind: "ability" },
+    { key: "soul_leech", label: "Soul", kind: "ability" },
+    { key: "create_layers", label: "Layers", kind: "ability" },
+    { key: "recast", label: "Recast", kind: "ability" },
+    { key: "crop_square", label: "Square", kind: "ability" },
+  ];
+
+  const singleImage = [
+    { key: "extract_dna", label: "DNA", kind: "ability" },
+    { key: "soul_leech", label: "Soul", kind: "ability" },
+    { key: "create_layers", label: "Layers", kind: "ability" },
+    { key: "bg", label: "BG", kind: "ability" },
+    { key: "variations", label: "Vars", kind: "ability" },
+    { key: "recast", label: "Recast", kind: "ability" },
+    { key: "crop_square", label: "Square", kind: "ability" },
+  ];
+
+  const twoImage = [
+    { key: "combine", label: "Combine", kind: "ability_multi" },
+    { key: "bridge", label: "Bridge", kind: "ability_multi" },
+    { key: "swap_dna", label: "Swap", kind: "ability_multi" },
+    { key: "extract_dna", label: "DNA", kind: "ability" },
+    { key: "soul_leech", label: "Soul", kind: "ability" },
+    { key: "bg", label: "BG", kind: "ability" },
+    { key: "variations", label: "Vars", kind: "ability" },
+  ];
+
+  const threeImage = [
+    { key: "extract_rule", label: "Rule", kind: "ability_multi" },
+    { key: "odd_one_out", label: "Odd", kind: "ability_multi" },
+    { key: "triforce", label: "Tri", kind: "ability_multi" },
+    { key: "extract_dna", label: "DNA", kind: "ability" },
+    { key: "soul_leech", label: "Soul", kind: "ability" },
+    { key: "bg", label: "BG", kind: "ability" },
+    { key: "variations", label: "Vars", kind: "ability" },
+  ];
+
+  const manyImage = [
+    { key: "extract_dna", label: "DNA", kind: "ability" },
+    { key: "soul_leech", label: "Soul", kind: "ability" },
+    { key: "bg", label: "BG", kind: "ability" },
+    { key: "variations", label: "Vars", kind: "ability" },
+    { key: "recast", label: "Recast", kind: "ability" },
+    { key: "crop_square", label: "Square", kind: "ability" },
+    { key: "remove_people", label: "No People", kind: "ability" },
+  ];
+
+  let ordered = [...baseTools];
+  if (!hasImage || n <= 0) {
+    ordered = ordered.concat(noImageFallback);
+  } else if (n === 1) {
+    ordered = ordered.concat(singleImage);
+  } else if (n === 2) {
+    ordered = ordered.concat(twoImage);
+  } else if (n === 3) {
+    ordered = ordered.concat(threeImage);
+  } else {
+    ordered = ordered.concat(manyImage);
   }
 
-  if (!hasImage || n <= 0) return slots;
-
-  if (n === 1) {
-    // Promote DNA extraction to key 1 and move annotate to key 5 for single-image flow.
-    slots[0] = { key: "extract_dna", label: "DNA", kind: "ability", hotkey: "1" };
-    const abilities = [
-      { key: "annotate", label: "Annotate", kind: "tool", hotkey: "5" },
-      { key: "soul_leech", label: "Soul", kind: "ability", hotkey: "6" },
-      { key: "bg", label: "BG", kind: "ability", hotkey: "7" },
-      { key: "create_layers", label: "Layers", kind: "ability", hotkey: "8" },
-      { key: "crop_square", label: "Square", kind: "ability", hotkey: "9" },
-    ];
-    for (let i = 0; i < abilities.length; i += 1) {
-      slots[4 + i] = abilities[i];
-    }
-    return slots;
+  for (let i = 0; i < slots.length && i < ordered.length; i += 1) {
+    slots[i] = { ...ordered[i], hotkey: String(i + 1) };
   }
-
-  if (n === 2) {
-    const abilities = [
-      { key: "combine", label: "Combine", kind: "ability_multi", hotkey: "5" },
-      { key: "bridge", label: "Bridge", kind: "ability_multi", hotkey: "6" },
-      { key: "swap_dna", label: "Swap", kind: "ability_multi", hotkey: "7" },
-    ];
-    for (let i = 0; i < abilities.length; i += 1) {
-      slots[4 + i] = abilities[i];
-    }
-    return slots;
-  }
-
-  if (n === 3) {
-    const abilities = [
-      { key: "extract_rule", label: "Rule", kind: "ability_multi", hotkey: "5" },
-      { key: "odd_one_out", label: "Odd", kind: "ability_multi", hotkey: "6" },
-      { key: "triforce", label: "Tri", kind: "ability_multi", hotkey: "7" },
-    ];
-    for (let i = 0; i < abilities.length; i += 1) {
-      slots[4 + i] = abilities[i];
-    }
-    return slots;
-  }
-
-  // 4+ selected: only keep the base tools visible.
   return slots;
 }

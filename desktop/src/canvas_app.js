@@ -18384,10 +18384,11 @@ function renderActionGrid() {
   const reelMode = isReelSizeLocked();
   const reelNoImageSlots = [
     { key: "annotate", label: "Annotate", kind: "tool", hotkey: "1" },
-    { key: "pan", label: "Pan", kind: "tool", hotkey: "2" },
-    { key: "lasso", label: "Lasso", kind: "tool", hotkey: "3" },
-    { key: "bg", label: "BG", kind: "ability", hotkey: "5" },
-    { key: "variations", label: "Vars", kind: "ability", hotkey: "6" },
+    { key: "lasso", label: "Lasso", kind: "tool", hotkey: "2" },
+    { key: "bg", label: "BG", kind: "ability", hotkey: "3" },
+    { key: "variations", label: "Vars", kind: "ability", hotkey: "4" },
+    { key: "extract_dna", label: "DNA", kind: "ability", hotkey: "5" },
+    { key: "soul_leech", label: "Soul", kind: "ability", hotkey: "6" },
   ];
   const visibleSlots = reelMode ? (!hasImage ? reelNoImageSlots : slots.slice(0, 6)) : slots;
   root.classList.toggle("reel-grid-2x3", reelMode);
@@ -18476,7 +18477,11 @@ function renderActionGrid() {
       });
 
       if (key === "annotate" || key === "pan" || key === "lasso") {
-        setTool(key);
+        if (key !== "pan" && state.tool === key) {
+          setTool("pan");
+        } else {
+          setTool(key);
+        }
         return;
       }
       if (key === "bg") {
