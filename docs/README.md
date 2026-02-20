@@ -9,5 +9,5 @@
 - `docs/target_user_harness.schema.json`: config schema for target-user simulation runs.
 - `docs/target_user_harness.scenarios.sample.json`: benchmark scenarios mapped to core target-user profiles.
 - `docs/target_user_panel_prompt.md`: default panel prompt for screenshot reaction simulation.
-- `docs/param_forge_reference.md`: Param Forge compatibility notes (reference tarball context).
+- `docs/param_forge_reference.md`: Param Forge compatibility notes (historical reference context).
 - `docs/prds/`: product/UX specs and drafts (not all implemented).

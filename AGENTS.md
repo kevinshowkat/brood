@@ -16,7 +16,7 @@ Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, an
 - `desktop/test/`: desktop JS test suite.
 - `docs/`: project docs and Param Forge reference notes.
 - `scripts/`: helper scripts for packaging (`build_desktop.sh`, `dev_desktop.sh`).
-- `param_forge_ref/`: reference codebase (read-only; keep as input/compatibility reference).
+- `docs/param_forge_reference.md`: archived Param Forge compatibility notes used as reference context.
 
 ## Build, Test, and Development Commands
 Engine (Rust, default):
