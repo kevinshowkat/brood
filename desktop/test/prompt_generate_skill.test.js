@@ -37,3 +37,8 @@ test("Prompt Generate normalizes edit-style prompts to standalone generation", (
   assert.match(app, /function normalizePromptGeneratePrompt\(/);
   assert.match(app, /generate a brand-new image from text only:/);
 });
+
+test("Prompt Generate is excluded from auto-accept suggested action passes", () => {
+  assert.match(app, /const autoAction = normalizeSuggestedActionName\(action\)/);
+  assert.match(app, /if \(autoAction === "Prompt Generate"\) return;/);
+});
