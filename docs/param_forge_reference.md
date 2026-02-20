@@ -1,11 +1,11 @@
 # Param Forge reference notes (for Brood)
 
-Note: This file documents the reference tarball (`param_forge_ref/`) and should be treated as read-only context for compatibility.
+Note: The original Param Forge snapshot is no longer shipped in this repo. This file preserves compatibility notes from that historical reference.
 
-This doc records the Param Forge receipt schema and loop patterns to mirror. It is based on the reference tarball in `param_forge_ref/` (see `scripts/forge_image_api/*`, `scripts/param_forge.py`, and `docs/`).
+This doc records the Param Forge receipt schema and loop patterns to mirror. These notes were extracted from the archived Param Forge code/docs (`forge_image_api/*`, `param_forge.py`, and supporting docs).
 
 ## Receipt schema (Param Forge)
-Defined in `param_forge_ref/param_forge/scripts/forge_image_api/core/receipts.py` and `core/contracts.py`.
+Defined in historical Param Forge sources `forge_image_api/core/receipts.py` and `core/contracts.py`.
 
 Top-level keys (schema_version = 1):
 - `schema_version` (int)
