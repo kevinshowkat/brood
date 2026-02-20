@@ -75,10 +75,6 @@ Tests:
 - `llms.txt` is the agent-facing entrypoints file (high-signal files + task routing).
 - `agent-intake.json` defines an optional Agent Intake Protocol (AIP) contract for a server you run (curated entrypoints + optional context packs). It does nothing unless an agent calls the `intake_endpoint`.
 
-Local test (stdlib-only):
-- Build packs: `python3 scripts/aip_build_packs.py --all --out-dir outputs/aip_packs --write-index`
-- Run stub server: `python3 scripts/aip_server.py --port 8787 --packs-dir outputs/aip_packs`
-
 Privacy guidance:
 - Prefer coarse `task.tags[]`; avoid raw prompts and never send/store secrets.
 - Support opt-out via `telemetry.opt_out: true` and/or `X-Brood-Opt-Out: 1`.

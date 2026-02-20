@@ -1,9 +1,6 @@
 # Brood llms-full.txt
 
-Expanded context for agents. This file is generated; do not edit manually.
-
-Regenerate with:
-`python3 scripts/build_llms_full.py`
+Expanded context for agents.
 
 ## Source: `llms.txt`
 
@@ -15,7 +12,7 @@ Regenerate with:
 
 - Created by Kevin Showkat. Connect: <https://www.linkedin.com/in/kshowkat>
 - Expanded, inlined agent context: [`llms-full.txt`](llms-full.txt)
-- Regenerate expanded context: `python3 scripts/build_llms_full.py`
+- Expanded context file: [`llms-full.txt`](llms-full.txt)
 
 ## Agent Intake (Preferred)
 
@@ -255,10 +252,8 @@ Pricing/latency override file:
 ## Agent / LLM Entrypoints
 
 - `llms.txt` high-signal entrypoints and task routing
-- `llms-full.txt` expanded inlined context (`python3 scripts/build_llms_full.py`)
+- `llms-full.txt` expanded inlined context
 - `agent-intake.json` optional Agent Intake Protocol (AIP) contract
-- `scripts/aip_build_packs.py` build JSON context packs to `outputs/aip_packs/`
-- `scripts/aip_server.py` stdlib-only local AIP stub server
 
 ## License
 
@@ -342,10 +337,6 @@ Tests:
 ## Agent/LLM Intake (Optional)
 - `llms.txt` is the agent-facing entrypoints file (high-signal files + task routing).
 - `agent-intake.json` defines an optional Agent Intake Protocol (AIP) contract for a server you run (curated entrypoints + optional context packs). It does nothing unless an agent calls the `intake_endpoint`.
-
-Local test (stdlib-only):
-- Build packs: `python3 scripts/aip_build_packs.py --all --out-dir outputs/aip_packs --write-index`
-- Run stub server: `python3 scripts/aip_server.py --port 8787 --packs-dir outputs/aip_packs`
 
 Privacy guidance:
 - Prefer coarse `task.tags[]`; avoid raw prompts and never send/store secrets.
