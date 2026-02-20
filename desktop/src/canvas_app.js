@@ -2842,8 +2842,6 @@ async function restoreIntentStateFromRunDir() {
 
 const CANVAS_CONTEXT_ENVELOPE_VERSION = 2;
 const CANVAS_CONTEXT_ALLOWED_ACTIONS = [
-  "Multi view",
-  "Single view",
   "Create Layers",
   "Combine",
   "Bridge",
@@ -2864,16 +2862,6 @@ const CANVAS_CONTEXT_ALLOWED_ACTIONS = [
 const AUTO_ACCEPT_SUGGESTED_MAX_PASSES = 3;
 
 const CANVAS_CONTEXT_ACTION_GLOSSARY = [
-  {
-    action: "Multi view",
-    what: "Show all loaded photos on the canvas (enables 2-photo and 3-photo actions when the right count is loaded).",
-    requires: "At least 2 photos loaded.",
-  },
-  {
-    action: "Single view",
-    what: "Show one image at a time (restores single-image actions).",
-    requires: "At least 1 photo loaded.",
-  },
   {
     action: "Create Layers",
     what: "Split the active image into four transparent layer artifacts that recompose to the original when stacked.",
@@ -3161,18 +3149,7 @@ function _hideCanvasContextSuggestion(wrap, btn) {
 }
 
 function _canvasContextDisabledReason(action) {
-  const nImages = state.images.length || 0;
   const nSelected = selectedCount();
-  if (action === "Multi view") {
-    if (nImages < 2) return `Requires at least 2 images (you have ${nImages}).`;
-    if (state.canvasMode === "multi") return "Already in multi view.";
-    return "";
-  }
-  if (action === "Single view") {
-    if (nImages < 1) return "No images loaded.";
-    if (state.canvasMode !== "multi") return "Already in single view.";
-    return "";
-  }
   if (["Combine", "Bridge", "Swap DNA", "Argue"].includes(action)) {
     if (nSelected !== 2) return `Requires exactly 2 selected images (you have ${nSelected}).`;
     return "";
@@ -3276,17 +3253,6 @@ async function triggerCanvasContextSuggestedAction(actionName) {
   if (!action) return;
   const active = getActiveImage();
   const nSelected = selectedCount();
-
-  if (action === "Multi view") {
-    if (state.images.length < 2) throw new Error("Multi view requires at least 2 images.");
-    if (state.canvasMode !== "multi") setCanvasMode("multi");
-    return;
-  }
-  if (action === "Single view") {
-    if (state.images.length < 1) throw new Error("Single view requires at least 1 image.");
-    if (state.canvasMode !== "single") setCanvasMode("single");
-    return;
-  }
   if (action === "Combine") {
     if (nSelected !== 2) throw new Error(`Combine requires exactly 2 selected images (you have ${nSelected}).`);
     if (state.canvasMode !== "multi") setCanvasMode("multi");
@@ -16391,27 +16357,18 @@ async function selectCanvasImage(imageId, { toggle = false } = {}) {
   await setActiveImage(nextActive, { preserveSelection: true }).catch(() => {});
 }
 
-function setCanvasMode(mode) {
-  const next = mode === "multi" ? "multi" : "single";
-  // Intent Mode requires the freeform spatial canvas; keep users in multi mode until intent is locked.
-  if (intentModeActive() && next !== "multi") return;
+function setCanvasMode(_mode) {
+  const next = "multi";
   if (state.canvasMode === next) return;
   const prevMode = state.canvasMode;
   state.canvasMode = next;
   recordUserEvent("canvas_mode_set", { prev: prevMode, next });
-  if (next === "single") {
-    const active = String(state.activeId || "").trim();
-    setSelectedIds(active ? [active] : []);
-  } else if (next === "multi") {
-    const active = String(state.activeId || "").trim();
-    if (active && selectedCount() === 0) setSelectedIds([active]);
-  }
+  const active = String(state.activeId || "").trim();
+  if (active && selectedCount() === 0) setSelectedIds([active]);
   state.multiRects.clear();
-  if (next === "multi") {
-    state.multiView.scale = 1;
-    state.multiView.offsetX = 0;
-    state.multiView.offsetY = 0;
-  }
+  state.multiView.scale = 1;
+  state.multiView.offsetX = 0;
+  state.multiView.offsetY = 0;
   state.pointer.active = false;
   state.selection = null;
   state.lassoDraft = [];
@@ -16424,15 +16381,11 @@ function setCanvasMode(mode) {
   hideDesignateMenu();
   chooseSpawnNodes();
   renderFilmstrip();
-  if (next === "multi") {
-    scheduleVisionDescribeAll();
-  }
+  scheduleVisionDescribeAll();
   renderSelectionMeta();
   scheduleVisualPromptWrite();
   motherIdleSyncFromInteraction({ userInteraction: false });
-  if (effectsRuntime) {
-    effectsRuntime.setSuspended(document.hidden || state.canvasMode !== "multi");
-  }
+  if (effectsRuntime) effectsRuntime.setSuspended(document.hidden || state.canvasMode !== "multi");
   requestRender();
 }
 
@@ -18265,24 +18218,7 @@ function computeQuickActions() {
     return actions;
   }
 
-  // View toggles.
-  if (state.canvasMode === "multi") {
-    actions.push({
-      id: "single_view",
-      label: "Single view",
-      title: "Show one image at a time (restores single-image skills)",
-      disabled: false,
-      onClick: () => setCanvasMode("single"),
-    });
-  } else if (state.images.length > 1) {
-    actions.push({
-      id: "multi_view",
-      label: "Multi view",
-      title: "Show all loaded photos (enables multi-select + multi-image skills)",
-      disabled: false,
-      onClick: () => setCanvasMode("multi"),
-    });
-  }
+  // Multi canvas is the only supported mode.
 
   // Multi-image skills are driven by *selected* images, not run size.
   if (nSelected === 2) {
@@ -21953,6 +21889,7 @@ async function handleEventLegacy(event) {
 
     // After multi-image generations (Combine / Swap DNA / Bridge / Triforce), show only the output
     // image on the canvas and collapse the run to the output (source images removed from the filmstrip).
+    // Keep multi canvas active so the resulting image remains draggable/resizable.
     if (wasMultiGenAction) {
       const sourceIds = [];
       if (blend?.sourceIds?.length) sourceIds.push(...blend.sourceIds);
@@ -21966,11 +21903,9 @@ async function handleEventLegacy(event) {
         if (!srcId || srcId === outputId) continue;
         await removeImageFromCanvas(srcId).catch(() => {});
       }
-      setCanvasMode("single");
     }
 
-    // For Recast, the desired workflow is to treat the output as the new run: keep only the
-    // newly-created artifact visible on the canvas and close out the source image(s).
+    // For Recast, keep only the output on canvas while preserving multi-canvas interactions.
     if (wasRecast) {
       const outputId = String(id);
       const removeIds = Array.from(new Set((state.images || []).map((item) => String(item?.id || "")).filter(Boolean)))
@@ -21978,10 +21913,9 @@ async function handleEventLegacy(event) {
       for (const imageId of removeIds) {
         await removeImageFromCanvas(imageId).catch(() => {});
       }
-      setCanvasMode("single");
     }
 
-    // Same workflow for Variations/Recreate: treat each new artifact as the new "current" image.
+    // Same workflow for Variations/Recreate: keep only the new artifact while preserving multi mode.
     if (wasRecreate) {
       const outputId = String(id);
       const removeIds = Array.from(new Set((state.images || []).map((item) => String(item?.id || "")).filter(Boolean)))
@@ -21989,7 +21923,6 @@ async function handleEventLegacy(event) {
       for (const imageId of removeIds) {
         await removeImageFromCanvas(imageId).catch(() => {});
       }
-      setCanvasMode("single");
     }
     state.expectingArtifacts = false;
     restoreEngineImageModelIfNeeded();
@@ -27395,13 +27328,12 @@ function installUi() {
         showToast("Intent Mode: Multi view only (until intent is locked).", "tip", 2200);
         return;
       }
-      if (state.images.length < 2) {
-        showToast("Multi view needs at least 2 images.", "tip", 2000);
+      if (state.images.length < 1) {
+        showToast("Import photos to arrange the canvas.", "tip", 2000);
         return;
       }
-      const next = state.canvasMode === "multi" ? "single" : "multi";
-      setCanvasMode(next);
-      showToast(next === "multi" ? "Multi view." : "Single view.", "tip", 1400);
+      setCanvasMode("multi");
+      showToast("Multi canvas mode.", "tip", 1400);
       return;
     }
     if (key === "f") {
