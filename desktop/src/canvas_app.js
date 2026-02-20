@@ -176,6 +176,8 @@ const MOTHER_V2_COOLDOWN_AFTER_COMMIT_MS = 2000;
 const MOTHER_V2_COOLDOWN_AFTER_REJECT_MS = 1200;
 const MOTHER_V2_VISION_RETRY_MS = 220;
 const MOTHER_V2_INTENT_RT_TIMEOUT_MS = 30_000;
+const MOTHER_V2_INTENT_RT_WORKER_TIMEOUT_MS = 42_000;
+const MOTHER_V2_INTENT_RT_TIMEOUT_DEFER_GRACE_MS = 250;
 const MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_MAX = 2;
 const MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_DELAY_MS = 220;
 const MOTHER_V2_INTENT_LATE_REALTIME_UPGRADE_MS = 12000;
@@ -12967,6 +12969,33 @@ function motherV2ArmRealtimeIntentTimeout({ timeoutMs = MOTHER_V2_INTENT_RT_TIME
     const message = `Mother realtime intent timed out after ${timeoutSec}s.`;
     const snapshotPath = String(current.pendingIntentRealtimePath || "").trim();
     const retryCount = Math.max(0, Number(current.pendingIntentTransportRetryCount) || 0);
+    const startedAt = Number(current.pendingIntentStartedAt) || 0;
+    const elapsedMs = startedAt > 0 ? Math.max(0, Date.now() - startedAt) : ms;
+    const workerTimeoutMs = Math.max(ms, MOTHER_V2_INTENT_RT_WORKER_TIMEOUT_MS);
+    if (
+      snapshotPath &&
+      retryCount < MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_MAX &&
+      elapsedMs + MOTHER_V2_INTENT_RT_TIMEOUT_DEFER_GRACE_MS < workerTimeoutMs
+    ) {
+      const deferMs = Math.max(
+        1_000,
+        Math.ceil(workerTimeoutMs - elapsedMs + MOTHER_V2_INTENT_RT_TIMEOUT_DEFER_GRACE_MS)
+      );
+      appendMotherTraceLog({
+        kind: "intent_realtime_retry_deferred",
+        traceId: current.telemetry?.traceId || null,
+        actionVersion,
+        request_id: requestId,
+        retry_count: retryCount,
+        max_retries: MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_MAX,
+        elapsed_ms: Math.round(elapsedMs),
+        worker_timeout_ms: workerTimeoutMs,
+        wait_ms: deferMs,
+        reason: "awaiting_worker_timeout",
+      }).catch(() => {});
+      motherV2ArmRealtimeIntentTimeout({ timeoutMs: deferMs });
+      return;
+    }
     if (snapshotPath && retryCount < MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_MAX) {
       motherV2RetryRealtimeIntentTransport({ path: snapshotPath, errorMessage: message })
         .then((retried) => {
@@ -22073,21 +22102,28 @@ async function handleEventLegacy(event) {
   } else if (event.type === DESKTOP_EVENT_TYPES.INTENT_ICONS_FAILED) {
     const intent = state.intent;
     const ambient = state.intentAmbient;
-    const motherIdle = state.motherIdle;
+    let motherIdle = state.motherIdle;
     const path = event.image_path ? String(event.image_path) : "";
     if (!path) return;
     const eventIntentScope = String(event.intent_scope || "").trim().toLowerCase();
     const eventIsMotherScoped = !eventIntentScope || eventIntentScope === "mother";
+    const resolveActiveMotherRealtimeFailureTarget = () => {
+      const motherIdleLatest = state.motherIdle;
+      const matchMotherLatest = Boolean(
+        eventIsMotherScoped &&
+          motherIdleLatest?.pendingIntent &&
+          String(motherIdleLatest?.phase || "") === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING &&
+          String(motherIdleLatest?.pendingIntentRealtimePath || "") === path &&
+          (Number(motherIdleLatest?.pendingActionVersion) || 0) === (Number(motherIdleLatest?.actionVersion) || 0)
+      );
+      const motherRequestIdLatest = String(motherIdleLatest?.pendingIntentRequestId || "").trim() || null;
+      return { motherIdleLatest, matchMotherLatest, motherRequestIdLatest };
+    };
     const matchAmbient = Boolean(ambient?.pendingPath && String(ambient.pendingPath) === path);
     const matchIntent = Boolean(intent?.pendingPath && String(intent.pendingPath) === path);
-    const matchMother = Boolean(
-      eventIsMotherScoped &&
-      motherIdle?.pendingIntent &&
-        String(motherIdle?.phase || "") === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING &&
-        String(motherIdle?.pendingIntentRealtimePath || "") === path &&
-        (Number(motherIdle?.pendingActionVersion) || 0) === (Number(motherIdle?.actionVersion) || 0)
-    );
-    const motherRequestId = String(motherIdle?.pendingIntentRequestId || "").trim() || null;
+    let { motherIdleLatest: resolvedMotherIdle, matchMotherLatest: matchMother, motherRequestIdLatest: motherRequestId } =
+      resolveActiveMotherRealtimeFailureTarget();
+    motherIdle = resolvedMotherIdle;
     if (!matchIntent && !matchAmbient && !matchMother) return;
 
     if (matchIntent && intent) {
@@ -22131,6 +22167,9 @@ async function handleEventLegacy(event) {
         requestRender();
         return;
       }
+      ({ motherIdleLatest: motherIdle, matchMotherLatest: matchMother, motherRequestIdLatest: motherRequestId } =
+        resolveActiveMotherRealtimeFailureTarget());
+      if (!matchIntent && !matchAmbient && !matchMother) return;
     }
     if (retryDecision.retryable && retryDecision.action === "fail") {
       appendMotherTraceLog({
