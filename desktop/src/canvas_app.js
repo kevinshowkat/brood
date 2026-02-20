@@ -89,6 +89,10 @@ const MOTHER_GENERATION_POST_VERSION_TIMEOUT_MS = 240_000;
 const DEFAULT_IMAGE_MODEL = "gemini-3-pro-image-preview";
 const LEGACY_DEFAULT_IMAGE_MODEL = "gemini-2.5-flash-image";
 const IMAGE_MODEL_DEFAULT_MIGRATION_KEY = "brood.imageModel.default.v2";
+const PROMPT_STRATEGY_MODE_KEY = "brood.promptStrategyMode.v1";
+const PROMPT_REPEAT_FULL_KEY = "brood.promptRepeatFull.v1";
+const PROMPT_BENCHMARK_LS_KEY = "brood.promptBenchmark.v1";
+const PROMPT_BENCHMARK_MAX_TRIALS = 600;
 const MOTHER_GENERATION_MODEL = DEFAULT_IMAGE_MODEL;
 const MOTHER_GENERATED_SOURCE = "mother_generated";
 const AESTHETIC_ONBOARDING_COMPLETED_KEY = "brood.aestheticOnboarding.completed.v1";
@@ -313,6 +317,10 @@ const els = {
   canvasContextSuggestBtn: document.getElementById("canvas-context-suggest-btn"),
   textModel: document.getElementById("text-model"),
   imageModel: document.getElementById("image-model"),
+  promptStrategyMode: document.getElementById("prompt-strategy-mode"),
+  promptRepeatFullToggle: document.getElementById("prompt-repeat-full-toggle"),
+  promptBenchmarkReadout: document.getElementById("prompt-benchmark-readout"),
+  promptBenchmarkReset: document.getElementById("prompt-benchmark-reset"),
   aestheticOnboardingStatus: document.getElementById("aesthetic-onboarding-status"),
   aestheticOnboardingOpen: document.getElementById("aesthetic-onboarding-open"),
   aestheticOnboardingClear: document.getElementById("aesthetic-onboarding-clear"),
@@ -416,6 +424,378 @@ localStorage.setItem("brood.rsNative", "1");
 localStorage.setItem("brood.rsNative.default.v2", "1");
 localStorage.removeItem("brood.emergencyCompatFallback");
 
+function normalizePromptStrategyMode(raw) {
+  const value = String(raw || "").trim().toLowerCase();
+  if (value === "baseline") return "baseline";
+  return "tail";
+}
+
+function loadPromptBenchmarkTrials() {
+  try {
+    const raw = localStorage.getItem(PROMPT_BENCHMARK_LS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((row) => (row && typeof row === "object" ? row : null))
+      .filter(Boolean)
+      .map((row) => ({
+        id: Number(row.id) || 0,
+        strategy: (() => {
+          const s = String(row.strategy || "").trim().toLowerCase();
+          if (s === "baseline" || s === "tail" || s === "repeat") return s;
+          return "tail";
+        })(),
+        model: String(row.model || "").trim() || "unknown",
+        startedAt: Number(row.startedAt) || Date.now(),
+        status: String(row.status || "").trim().toLowerCase() === "failed" ? "failed" : "success",
+        versionId: row.versionId ? String(row.versionId) : null,
+        promptChars: Math.max(0, Number(row.promptChars) || 0),
+        constraintCount: Math.max(0, Number(row.constraintCount) || 0),
+        costUsd: Number.isFinite(Number(row.costUsd)) ? Number(row.costUsd) : null,
+        latencyS: Number.isFinite(Number(row.latencyS)) ? Number(row.latencyS) : null,
+        error: row.error ? String(row.error) : null,
+      }))
+      .filter((row) => row.id > 0)
+      .slice(-PROMPT_BENCHMARK_MAX_TRIALS);
+  } catch {
+    return [];
+  }
+}
+
+function normalizePromptBenchmarkStrategy(raw) {
+  const value = String(raw || "").trim().toLowerCase();
+  if (value === "baseline" || value === "tail" || value === "repeat") return value;
+  return "tail";
+}
+
+function normalizePromptBenchmarkModel(raw) {
+  const value = String(raw || "").trim();
+  return value || "unknown";
+}
+
+function promptBenchmarkHydrateState() {
+  const bench = state.promptBenchmark;
+  if (!bench || typeof bench !== "object") return;
+  const history = Array.isArray(bench.trials) ? bench.trials.slice(-PROMPT_BENCHMARK_MAX_TRIALS) : [];
+  bench.trials = history;
+  bench.pendingIds = [];
+  bench.versionToTrialId = new Map();
+  bench.awaitingCostTrialIds = [];
+  bench.trialById = new Map();
+  let maxId = 0;
+  for (const row of history) {
+    if (!row || typeof row !== "object") continue;
+    const id = Number(row.id) || 0;
+    if (id <= 0) continue;
+    row.id = id;
+    row.strategy = normalizePromptBenchmarkStrategy(row.strategy);
+    row.model = normalizePromptBenchmarkModel(row.model);
+    row.status = String(row.status || "").trim().toLowerCase() === "failed" ? "failed" : "success";
+    row.versionId = row.versionId ? String(row.versionId) : null;
+    row.promptChars = Math.max(0, Number(row.promptChars) || 0);
+    row.constraintCount = Math.max(0, Number(row.constraintCount) || 0);
+    row.costUsd = Number.isFinite(Number(row.costUsd)) ? Number(row.costUsd) : null;
+    row.latencyS = Number.isFinite(Number(row.latencyS)) ? Number(row.latencyS) : null;
+    row.error = row.error ? String(row.error) : null;
+    bench.trialById.set(id, row);
+    if (id > maxId) maxId = id;
+  }
+  bench.nextId = Math.max(1, maxId + 1);
+}
+
+function promptBenchmarkPersistHistory() {
+  const bench = state.promptBenchmark;
+  if (!bench || typeof bench !== "object") return;
+  const serializable = (Array.isArray(bench.trials) ? bench.trials : [])
+    .slice(-PROMPT_BENCHMARK_MAX_TRIALS)
+    .map((row) => ({
+      id: Number(row?.id) || 0,
+      strategy: normalizePromptBenchmarkStrategy(row?.strategy),
+      model: normalizePromptBenchmarkModel(row?.model),
+      startedAt: Number(row?.startedAt) || Date.now(),
+      status: String(row?.status || "").trim().toLowerCase() === "failed" ? "failed" : "success",
+      versionId: row?.versionId ? String(row.versionId) : null,
+      promptChars: Math.max(0, Number(row?.promptChars) || 0),
+      constraintCount: Math.max(0, Number(row?.constraintCount) || 0),
+      costUsd: Number.isFinite(Number(row?.costUsd)) ? Number(row.costUsd) : null,
+      latencyS: Number.isFinite(Number(row?.latencyS)) ? Number(row.latencyS) : null,
+      error: row?.error ? String(row.error) : null,
+    }))
+    .filter((row) => row.id > 0);
+  try {
+    localStorage.setItem(PROMPT_BENCHMARK_LS_KEY, JSON.stringify(serializable));
+  } catch {
+    // ignore localStorage failures
+  }
+}
+
+function promptBenchmarkSyncHistoryRow(trialId) {
+  const bench = state.promptBenchmark;
+  if (!bench || typeof bench !== "object") return;
+  const id = Number(trialId) || 0;
+  if (id <= 0) return;
+  const trial = bench.trialById.get(id);
+  if (!trial) return;
+  const index = bench.trials.findIndex((row) => Number(row?.id) === id);
+  if (index >= 0) {
+    bench.trials[index] = trial;
+  } else {
+    bench.trials.push(trial);
+  }
+  if (bench.trials.length > PROMPT_BENCHMARK_MAX_TRIALS) {
+    const dropCount = bench.trials.length - PROMPT_BENCHMARK_MAX_TRIALS;
+    const removed = bench.trials.splice(0, dropCount);
+    for (const row of removed) {
+      const removedId = Number(row?.id) || 0;
+      if (!removedId) continue;
+      bench.trialById.delete(removedId);
+      bench.pendingIds = bench.pendingIds.filter((value) => Number(value) !== removedId);
+      bench.awaitingCostTrialIds = bench.awaitingCostTrialIds.filter((value) => Number(value) !== removedId);
+    }
+  }
+}
+
+function promptBenchmarkRenderReadout() {
+  if (!els.promptBenchmarkReadout) return;
+  const bench = state.promptBenchmark;
+  const trials = Array.isArray(bench?.trials) ? bench.trials : [];
+  if (!trials.length) {
+    els.promptBenchmarkReadout.textContent = "No benchmark data yet";
+    return;
+  }
+
+  const strategyOrder = ["baseline", "tail", "repeat"];
+  const modelRows = new Map();
+  for (const row of trials) {
+    if (!row || typeof row !== "object") continue;
+    const model = normalizePromptBenchmarkModel(row.model);
+    const strategy = normalizePromptBenchmarkStrategy(row.strategy);
+    if (!modelRows.has(model)) {
+      modelRows.set(model, {
+        total: 0,
+        byStrategy: new Map(strategyOrder.map((key) => [key, []])),
+      });
+    }
+    const bucket = modelRows.get(model);
+    bucket.total += 1;
+    if (!bucket.byStrategy.has(strategy)) bucket.byStrategy.set(strategy, []);
+    bucket.byStrategy.get(strategy).push(row);
+  }
+
+  const lines = [];
+  lines.push(`Total trials: ${trials.length}`);
+  const orderedModels = Array.from(modelRows.entries()).sort((a, b) => {
+    const totalA = Number(a?.[1]?.total) || 0;
+    const totalB = Number(b?.[1]?.total) || 0;
+    if (totalB !== totalA) return totalB - totalA;
+    return String(a?.[0] || "").localeCompare(String(b?.[0] || ""));
+  });
+  for (const [model, bucket] of orderedModels) {
+    lines.push(`${model} (${bucket.total})`);
+    for (const strategy of strategyOrder) {
+      const rows = Array.isArray(bucket.byStrategy.get(strategy)) ? bucket.byStrategy.get(strategy) : [];
+      if (!rows.length) {
+        lines.push(`  ${strategy}: no runs`);
+        continue;
+      }
+      const success = rows.filter((row) => row.status === "success").length;
+      const attempts = rows.length;
+      const successPct = Math.round((success / Math.max(1, attempts)) * 100);
+      const costRows = rows.map((row) => Number(row.costUsd)).filter((value) => Number.isFinite(value));
+      const latencyRows = rows.map((row) => Number(row.latencyS)).filter((value) => Number.isFinite(value));
+      const charsRows = rows.map((row) => Number(row.promptChars)).filter((value) => Number.isFinite(value));
+      const avgCost = costRows.length ? costRows.reduce((sum, value) => sum + value, 0) / costRows.length : null;
+      const avgLatency = latencyRows.length
+        ? latencyRows.reduce((sum, value) => sum + value, 0) / latencyRows.length
+        : null;
+      const avgChars = charsRows.length ? Math.round(charsRows.reduce((sum, value) => sum + value, 0) / charsRows.length) : 0;
+      lines.push(
+        `  ${strategy}: ${successPct}% (${success}/${attempts}) | cost ${formatUsd(avgCost) || "n/a"} | latency ${
+          avgLatency !== null ? `${avgLatency.toFixed(1)}s` : "n/a"
+        } | prompt ${avgChars} chars`
+      );
+    }
+  }
+  els.promptBenchmarkReadout.textContent = lines.join("\n");
+}
+
+function promptBenchmarkRegisterDispatch({ strategy = "tail", model = "unknown", promptChars = 0, constraintCount = 0 } = {}) {
+  const bench = state.promptBenchmark;
+  if (!bench || typeof bench !== "object") return 0;
+  const trialId = Math.max(1, Number(bench.nextId) || 1);
+  bench.nextId = trialId + 1;
+  const trial = {
+    id: trialId,
+    strategy: normalizePromptBenchmarkStrategy(strategy),
+    model: normalizePromptBenchmarkModel(model),
+    startedAt: Date.now(),
+    status: "pending",
+    versionId: null,
+    promptChars: Math.max(0, Number(promptChars) || 0),
+    constraintCount: Math.max(0, Number(constraintCount) || 0),
+    costUsd: null,
+    latencyS: null,
+    error: null,
+  };
+  bench.trialById.set(trialId, trial);
+  bench.pendingIds.push(trialId);
+  while (bench.pendingIds.length > 24) {
+    const dropped = Number(bench.pendingIds.shift()) || 0;
+    if (!dropped) break;
+    if (!bench.trials.some((row) => Number(row?.id) === dropped)) {
+      bench.trialById.delete(dropped);
+    }
+  }
+  promptBenchmarkRenderReadout();
+  return trialId;
+}
+
+function promptBenchmarkBindVersion(versionId) {
+  const bench = state.promptBenchmark;
+  if (!bench || typeof bench !== "object") return 0;
+  const normalizedVersionId = String(versionId || "").trim();
+  if (!normalizedVersionId) return 0;
+  if (bench.versionToTrialId.has(normalizedVersionId)) return Number(bench.versionToTrialId.get(normalizedVersionId)) || 0;
+  while (bench.pendingIds.length) {
+    const candidate = Number(bench.pendingIds.shift()) || 0;
+    if (!candidate) continue;
+    const trial = bench.trialById.get(candidate);
+    if (!trial) continue;
+    if (trial.status !== "pending") continue;
+    trial.versionId = normalizedVersionId;
+    bench.versionToTrialId.set(normalizedVersionId, candidate);
+    return candidate;
+  }
+  return 0;
+}
+
+function promptBenchmarkResolveTrialIdForFailure(versionId = null) {
+  const bench = state.promptBenchmark;
+  if (!bench || typeof bench !== "object") return 0;
+  const normalizedVersionId = String(versionId || "").trim();
+  if (normalizedVersionId && bench.versionToTrialId.has(normalizedVersionId)) {
+    return Number(bench.versionToTrialId.get(normalizedVersionId)) || 0;
+  }
+  for (const rawId of bench.pendingIds) {
+    const id = Number(rawId) || 0;
+    if (!id) continue;
+    const trial = bench.trialById.get(id);
+    if (trial && trial.status === "pending") return id;
+  }
+  return 0;
+}
+
+function promptBenchmarkFinalizeTrial(trialId, { status = "success", error = null, costUsd = null, latencyS = null } = {}) {
+  const bench = state.promptBenchmark;
+  if (!bench || typeof bench !== "object") return false;
+  const id = Number(trialId) || 0;
+  if (!id) return false;
+  const trial = bench.trialById.get(id);
+  if (!trial) return false;
+  if (trial.status !== "pending" && trial.status !== "success" && trial.status !== "failed") return false;
+  const nextStatus = String(status || "").trim().toLowerCase() === "failed" ? "failed" : "success";
+  if (trial.status !== "pending" && trial.status === nextStatus && nextStatus === "success") {
+    // Allow metrics hydration for already completed successful rows.
+  } else if (trial.status !== "pending") {
+    return false;
+  }
+  trial.status = nextStatus;
+  trial.error = nextStatus === "failed" ? (error ? String(error) : null) : null;
+  if (Number.isFinite(Number(costUsd))) trial.costUsd = Number(costUsd);
+  if (Number.isFinite(Number(latencyS))) trial.latencyS = Number(latencyS);
+
+  bench.pendingIds = bench.pendingIds.filter((value) => Number(value) !== id);
+  if (trial.versionId) {
+    bench.versionToTrialId.delete(String(trial.versionId));
+  }
+  if (nextStatus === "success" && (trial.costUsd === null || trial.latencyS === null)) {
+    if (!bench.awaitingCostTrialIds.includes(id)) bench.awaitingCostTrialIds.push(id);
+  } else {
+    bench.awaitingCostTrialIds = bench.awaitingCostTrialIds.filter((value) => Number(value) !== id);
+  }
+
+  promptBenchmarkSyncHistoryRow(id);
+  promptBenchmarkPersistHistory();
+  promptBenchmarkRenderReadout();
+  return true;
+}
+
+function promptBenchmarkMarkSuccessFromArtifactEvent(event = {}) {
+  const versionId = motherEventVersionId(event);
+  if (!versionId) return false;
+  const trialId = Number(state.promptBenchmark?.versionToTrialId?.get(versionId)) || 0;
+  if (!trialId) return false;
+  const metrics = event.metrics && typeof event.metrics === "object" ? event.metrics : null;
+  const costUsd = Number.isFinite(Number(metrics?.cost_total_usd)) ? Number(metrics.cost_total_usd) : null;
+  const latencyS = Number.isFinite(Number(metrics?.latency_per_image_s)) ? Number(metrics.latency_per_image_s) : null;
+  return promptBenchmarkFinalizeTrial(trialId, {
+    status: "success",
+    costUsd,
+    latencyS,
+  });
+}
+
+function promptBenchmarkMarkFailureFromGenerationFailedEvent(event = {}) {
+  const versionId = motherEventVersionId(event);
+  const trialId = promptBenchmarkResolveTrialIdForFailure(versionId);
+  if (!trialId) return false;
+  return promptBenchmarkFinalizeTrial(trialId, {
+    status: "failed",
+    error: event?.error ? String(event.error) : "generation_failed",
+  });
+}
+
+function promptBenchmarkAttachCostLatencyEvent(event = {}) {
+  const bench = state.promptBenchmark;
+  if (!bench || typeof bench !== "object") return false;
+  if (!bench.awaitingCostTrialIds.length) return false;
+  const incomingModel = normalizePromptBenchmarkModel(event?.model);
+  let trialId = 0;
+  if (incomingModel && incomingModel !== "unknown") {
+    for (const candidateRaw of bench.awaitingCostTrialIds) {
+      const candidate = Number(candidateRaw) || 0;
+      if (!candidate) continue;
+      const row = bench.trialById.get(candidate);
+      if (!row) continue;
+      if (normalizePromptBenchmarkModel(row.model) === incomingModel) {
+        trialId = candidate;
+        break;
+      }
+    }
+  }
+  if (!trialId) {
+    trialId = Number(bench.awaitingCostTrialIds[0]) || 0;
+  }
+  if (!trialId) return false;
+  const trial = bench.trialById.get(trialId);
+  if (!trial) return false;
+  if (Number.isFinite(Number(event?.cost_total_usd))) trial.costUsd = Number(event.cost_total_usd);
+  if (Number.isFinite(Number(event?.latency_per_image_s))) trial.latencyS = Number(event.latency_per_image_s);
+  bench.awaitingCostTrialIds = bench.awaitingCostTrialIds.filter((value) => Number(value) !== trialId);
+  promptBenchmarkSyncHistoryRow(trialId);
+  promptBenchmarkPersistHistory();
+  promptBenchmarkRenderReadout();
+  return true;
+}
+
+function promptBenchmarkReset() {
+  const bench = state.promptBenchmark;
+  if (!bench || typeof bench !== "object") return;
+  bench.trials = [];
+  bench.pendingIds = [];
+  bench.trialById = new Map();
+  bench.versionToTrialId = new Map();
+  bench.awaitingCostTrialIds = [];
+  bench.nextId = 1;
+  try {
+    localStorage.removeItem(PROMPT_BENCHMARK_LS_KEY);
+  } catch {
+    // ignore localStorage failures
+  }
+  promptBenchmarkRenderReadout();
+}
+
 const settings = {
   memory: localStorage.getItem("brood.memory") === "1",
   alwaysOnVision: (() => {
@@ -441,6 +821,8 @@ const settings = {
     if (!migrated) localStorage.setItem(IMAGE_MODEL_DEFAULT_MIGRATION_KEY, "1");
     return storedRaw;
   })(),
+  promptStrategyMode: normalizePromptStrategyMode(localStorage.getItem(PROMPT_STRATEGY_MODE_KEY) || "tail"),
+  promptRepeatFull: localStorage.getItem(PROMPT_REPEAT_FULL_KEY) === "1",
 };
 
 function defaultAestheticAnswers() {
@@ -727,6 +1109,14 @@ const state = {
     sessionEstimatedCostUsd: 0,
     renderDurationsS: [], // rolling last successful render durations
   },
+  promptBenchmark: {
+    trials: loadPromptBenchmarkTrials(),
+    pendingIds: [],
+    trialById: new Map(),
+    versionToTrialId: new Map(),
+    awaitingCostTrialIds: [],
+    nextId: 1,
+  },
   lastStatusText: "Engine: idle",
   lastStatusError: false,
   fallbackToFullRead: false,
@@ -833,6 +1223,8 @@ const state = {
     lastResolveError: null, // string|null (debug aid shown in Settings readout)
   },
 };
+
+promptBenchmarkHydrateState();
 
 let flushDeferredEnginePtyExit = async () => {};
 
@@ -2452,6 +2844,7 @@ const CANVAS_CONTEXT_ENVELOPE_VERSION = 2;
 const CANVAS_CONTEXT_ALLOWED_ACTIONS = [
   "Multi view",
   "Single view",
+  "Create Layers",
   "Combine",
   "Bridge",
   "Swap DNA",
@@ -2480,6 +2873,11 @@ const CANVAS_CONTEXT_ACTION_GLOSSARY = [
     action: "Single view",
     what: "Show one image at a time (restores single-image actions).",
     requires: "At least 1 photo loaded.",
+  },
+  {
+    action: "Create Layers",
+    what: "Split the active image into four transparent layer artifacts that recompose to the original when stacked.",
+    requires: "Exactly 1 active/selected image.",
   },
   {
     action: "Combine",
@@ -2741,6 +3139,7 @@ function canonicalizeCanvasContextAction(actionName, whyHint = null) {
   if (lower === "crop" || lower === "crop square" || lower === "square crop") return "Crop: Square";
 
   const compact = lower.replace(/\s+/g, " ").trim();
+  if (compact === "create layers" || compact === "layers" || compact === "split layers") return "Create Layers";
   if (compact === "extract rule" || compact === "extract the rule") return "Extract the Rule";
   if (compact === "odd one out") return "Odd One Out";
   if (compact === "swap dna" || compact.replace(/\s+/g, "") === "swapdna") return "Swap DNA";
@@ -2780,6 +3179,10 @@ function _canvasContextDisabledReason(action) {
   }
   if (["Extract the Rule", "Odd One Out", "Triforce"].includes(action)) {
     if (nSelected !== 3) return `Requires exactly 3 selected images (you have ${nSelected}).`;
+    return "";
+  }
+  if (action === "Create Layers") {
+    if (nSelected !== 1) return `Requires exactly 1 selected image (you have ${nSelected}).`;
     return "";
   }
   if (!getActiveImage()) return "No active image.";
@@ -2890,6 +3293,11 @@ async function triggerCanvasContextSuggestedAction(actionName) {
     await runBlendPair();
     return;
   }
+  if (action === "Create Layers") {
+    if (nSelected !== 1) throw new Error(`Create Layers requires exactly 1 selected image (you have ${nSelected}).`);
+    await runCreateLayersFromSelection();
+    return;
+  }
   if (action === "Bridge") {
     if (nSelected !== 2) throw new Error(`Bridge requires exactly 2 selected images (you have ${nSelected}).`);
     if (state.canvasMode !== "multi") setCanvasMode("multi");
@@ -2964,7 +3372,7 @@ async function triggerCanvasContextSuggestedAction(actionName) {
     return;
   }
 
-  // Fallback: attempt to route to an existing Ability by label.
+  // Fallback: attempt to route to an existing skill by label.
   const match = (computeQuickActions() || []).find((qa) => {
     const label = _stableQuickActionLabel(qa?.label);
     return label && label.toLowerCase() === action.toLowerCase();
@@ -2978,7 +3386,7 @@ async function triggerCanvasContextSuggestedAction(actionName) {
 
 function requireIntentUnlocked(message = null) {
   if (!intentModeActive()) return true;
-  const msg = message ? String(message) : "Lock an intent to unlock abilities.";
+  const msg = message ? String(message) : "Lock an intent to unlock skills.";
   showToast(msg, "tip", 2200);
   return false;
 }
@@ -3969,7 +4377,7 @@ function buildMotherRealtimeContextEnvelope({ motherContextPayload = null, image
       return {
         id: imageId,
         file: image.file ? String(image.file) : pathText ? basename(pathText) : null,
-        vision_desc: normalizeVisionHintForIntent(image.vision_desc, { maxChars: 64 }),
+        vision_desc: normalizeVisionHintForIntent(image.vision_desc, { maxChars: REALTIME_VISION_LABEL_MAX_CHARS }),
         origin,
         rect_norm: rectNorm,
       };
@@ -4017,7 +4425,7 @@ function buildIntentContextEnvelope(frameId, { motherContextPayload = null } = {
     const item = imageId ? state.imagesById.get(imageId) : null;
     const rect = imageId ? state.freeformRects.get(imageId) : null;
     if (!item?.path || !rect) continue;
-    const visionDesc = normalizeVisionHintForIntent(item?.visionDesc, { maxChars: 64 });
+    const visionDesc = normalizeVisionHintForIntent(item?.visionDesc, { maxChars: REALTIME_VISION_LABEL_MAX_CHARS });
     const vmeta = item?.visionDescMeta || null;
     const x = Number(rect.x) || 0;
     const y = Number(rect.y) || 0;
@@ -4338,6 +4746,7 @@ const VISION_LABEL_DETAIL_TOKENS = new Set([
 
 const VISION_LABEL_ARTICLE_TOKENS = new Set(["a", "an", "the"]);
 const VISION_LABEL_AUX_TOKENS = new Set(["is", "are", "was", "were"]);
+const REALTIME_VISION_LABEL_MAX_CHARS = 40;
 
 function _visionTokenCore(raw) {
   return String(raw || "")
@@ -4443,7 +4852,7 @@ function _normalizeVisionLabel(raw, { maxChars = 32 } = {}) {
   return clipped.replace(/[|]/g, "/").trim();
 }
 
-function normalizeVisionHintForIntent(raw, { maxChars = 64 } = {}) {
+function normalizeVisionHintForIntent(raw, { maxChars = REALTIME_VISION_LABEL_MAX_CHARS } = {}) {
   const label = _normalizeVisionLabel(raw, { maxChars });
   if (!label) return null;
   if (shouldBackfillVisionLabel(label)) return null;
@@ -4584,7 +4993,7 @@ function extractIntentImageDescriptions(parsed) {
     if (!item || typeof item !== "object") continue;
     const imageId = item.image_id ? String(item.image_id) : item.id ? String(item.id) : "";
     const labelRaw = item.label ?? item.description ?? item.text ?? "";
-    const label = _normalizeVisionLabel(labelRaw, { maxChars: 64 });
+    const label = _normalizeVisionLabel(labelRaw, { maxChars: REALTIME_VISION_LABEL_MAX_CHARS });
     const confidence = typeof item.confidence === "number" ? item.confidence : null;
     if (!imageId || !label) continue;
     out.push({ image_id: imageId, label, confidence });
@@ -10761,6 +11170,10 @@ async function _runActionGridAutomation(action = {}) {
     runSoulLeechFromSelection().catch(() => {});
     return { ok: true, detail: "soul_leech started" };
   }
+  if (targetKey === "create_layers") {
+    runCreateLayersFromSelection().catch(() => {});
+    return { ok: true, detail: "create_layers started" };
+  }
   if (targetKey === "remove_people") {
     aiRemovePeople().catch(() => {});
     return { ok: true, detail: "remove_people started" };
@@ -12779,7 +13192,7 @@ function motherV2IntentPayload() {
   const canvasSummary = motherV2CanvasContextSummaryHint();
   const images = motherIdleBaseImageItems().map((item) => {
     const rect = state.freeformRects.get(item.id) || null;
-    const visionDesc = normalizeVisionHintForIntent(item?.visionDesc, { maxChars: 64 }) || "";
+    const visionDesc = normalizeVisionHintForIntent(item?.visionDesc, { maxChars: REALTIME_VISION_LABEL_MAX_CHARS }) || "";
     return {
       id: String(item.id || ""),
       path: String(item.path || ""),
@@ -13229,7 +13642,7 @@ async function motherV2RequestPromptCompile() {
     images: motherIdleBaseImageItems().map((item) => ({
       id: String(item.id || ""),
       file: basename(item.path || ""),
-      vision_desc: normalizeVisionHintForIntent(item?.visionDesc, { maxChars: 64 }) || "",
+      vision_desc: normalizeVisionHintForIntent(item?.visionDesc, { maxChars: REALTIME_VISION_LABEL_MAX_CHARS }) || "",
     })),
   };
   const payloadPath = await motherV2WritePayloadFile("mother_prompt_compile", payload);
@@ -13256,14 +13669,66 @@ async function motherV2RequestPromptCompile() {
   return payloadPath;
 }
 
-function motherV2PromptLineFromCompiled(compiled = {}) {
+function motherV2SplitConstraints(raw = "") {
+  return String(raw || "")
+    .split(/\n|;|,/g)
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean)
+    .map((entry) => entry.replace(/^[-*•]\s*/, "").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function motherV2ExtractPromptConstraints(compiled = {}) {
+  const constraints = [];
+  const seen = new Set();
+  const push = (raw) => {
+    const text = String(raw || "").trim().replace(/\s+/g, " ");
+    if (!text) return;
+    const key = text.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    constraints.push(text);
+  };
+  for (const item of Array.isArray(compiled?.compile_constraints) ? compiled.compile_constraints : []) {
+    push(item);
+  }
+  const negative = String(compiled?.negative_prompt || "").trim();
+  if (negative) {
+    for (const item of motherV2SplitConstraints(negative)) push(item);
+  }
+  return constraints;
+}
+
+function motherV2BuildPromptComposerResult(compiled = {}) {
   let positive = String(compiled?.positive_prompt || "").trim();
   if (positive && !positive.toLowerCase().includes(MOTHER_CREATIVE_DIRECTIVE)) {
     positive = `Create one ${MOTHER_CREATIVE_DIRECTIVE} image. ${positive}`.trim();
   }
   const negative = String(compiled?.negative_prompt || "").trim();
-  const raw = negative ? `${positive}\nAvoid: ${negative}` : positive;
-  return motherIdlePromptLineForPty(raw);
+  const constraints = motherV2ExtractPromptConstraints(compiled).slice(0, 8);
+  const strategyMode = normalizePromptStrategyMode(settings.promptStrategyMode);
+  const repeatFull = Boolean(settings.promptRepeatFull);
+  const lines = [];
+  if (positive) lines.push(positive);
+  if (negative) lines.push(`Avoid: ${negative}`);
+  if (strategyMode === "tail" && constraints.length) {
+    lines.push(`MUST: ${constraints.join("; ")}`);
+  }
+  let rawPrompt = lines.join("\n");
+  if (repeatFull && rawPrompt) {
+    rawPrompt = `${rawPrompt}\n${rawPrompt}`;
+  }
+  const line = motherIdlePromptLineForPty(rawPrompt);
+  return {
+    line,
+    strategy: repeatFull ? "repeat" : strategyMode,
+    promptChars: line.length,
+    constraintCount: constraints.length,
+  };
+}
+
+function motherV2PromptLineFromCompiled(compiled = {}) {
+  return motherV2BuildPromptComposerResult(compiled).line;
 }
 
 function motherV2CollectGenerationImagePaths() {
@@ -14377,7 +14842,8 @@ async function motherV2DispatchCompiledPrompt(compiled = {}) {
   clearTimeout(idle.pendingPromptCompileTimeout);
   idle.pendingPromptCompileTimeout = null;
   idle.promptMotionProfile = motherV2PromptMotionProfileFromCompiled(compiled);
-  const promptLine = motherV2PromptLineFromCompiled(compiled);
+  const promptComposer = motherV2BuildPromptComposerResult(compiled);
+  const promptLine = promptComposer.line;
   if (!promptLine) {
     motherIdleHandleGenerationFailed("Mother prompt compile produced an empty prompt.");
     return false;
@@ -14405,8 +14871,20 @@ async function motherV2DispatchCompiledPrompt(compiled = {}) {
     `Mother draft timed out after ${Math.round((MOTHER_GENERATION_TIMEOUT_MS + MOTHER_GENERATION_TIMEOUT_EXTENSION_MS) / 1000)}s.`,
     { allowExtension: true }
   );
+  const benchmarkTrialId = promptBenchmarkRegisterDispatch({
+    strategy: promptComposer.strategy,
+    model: selectedModel,
+    promptChars: promptComposer.promptChars,
+    constraintCount: promptComposer.constraintCount,
+  });
   const sentViaPayload = await motherV2DispatchViaImagePayload(compiled, promptLine, { selectedModel }).catch(() => false);
   if (!sentViaPayload) {
+    if (benchmarkTrialId) {
+      promptBenchmarkFinalizeTrial(benchmarkTrialId, {
+        status: "failed",
+        error: "dispatch_failed",
+      });
+    }
     // Mother drafts must dispatch via structured payload so source_images always includes
     // the full canvas context (uploaded + Mother-generated images).
     motherIdleHandleGenerationFailed("Mother could not start drafting payload.");
@@ -15602,6 +16080,113 @@ async function runSoulLeechFromSelection({ fromQueue = false } = {}) {
     showToast("Soul Leech failed to start.", "error", 3200);
     updatePortraitIdle();
     renderQuickActions();
+  }
+}
+
+async function runCreateLayersFromSelection({ fromQueue = false } = {}) {
+  if (!requireIntentUnlocked()) return;
+  const selected = getSelectedImagesActiveFirst({ requireCount: 1 });
+  const imgItem = selected.length === 1 ? selected[0] : null;
+  if (!imgItem?.path) {
+    showToast("Create Layers needs exactly one selected image.", "tip", 2400);
+    return;
+  }
+
+  if (!fromQueue && (isEngineBusy() || state.actionQueueActive || state.actionQueue.length)) {
+    enqueueAction({
+      label: "Create Layers",
+      key: `create_layers:${String(imgItem.id || "")}`,
+      priority: ACTION_QUEUE_PRIORITY.user,
+      run: () => runCreateLayersFromSelection({ fromQueue: true }),
+    });
+    return;
+  }
+
+  bumpInteraction();
+  await ensureRun();
+  beginRunningAction("create_layers");
+  setImageFxActive(true, "Create Layers");
+  state.lastAction = "Create Layers";
+  setStatus("Director: creating layers…");
+  portraitWorking("Create Layers", { clearDirector: false });
+  showToast("Splitting image into layer artifacts…", "info", 2200);
+  renderQuickActions();
+  requestRender();
+
+  try {
+    if (!imgItem.img) {
+      imgItem.img = await loadImage(imgItem.path);
+      imgItem.width = imgItem.img?.naturalWidth || imgItem.width || null;
+      imgItem.height = imgItem.img?.naturalHeight || imgItem.height || null;
+    }
+
+    const sourceImg = imgItem.img;
+    const w = Math.max(1, Number(sourceImg?.naturalWidth) || Number(imgItem.width) || 0);
+    const h = Math.max(1, Number(sourceImg?.naturalHeight) || Number(imgItem.height) || 0);
+    if (!w || !h) throw new Error("source image dimensions unavailable");
+
+    const srcCanvas = document.createElement("canvas");
+    srcCanvas.width = w;
+    srcCanvas.height = h;
+    const srcCtx = srcCanvas.getContext("2d", { willReadFrequently: true });
+    srcCtx.drawImage(sourceImg, 0, 0, w, h);
+    const src = srcCtx.getImageData(0, 0, w, h).data;
+
+    const layerCount = 4;
+    const layerPixels = Array.from({ length: layerCount }, () => new Uint8ClampedArray(src.length));
+    for (let y = 0; y < h; y += 1) {
+      for (let x = 0; x < w; x += 1) {
+        const pixelOffset = (y * w + x) * 4;
+        const layerIdx = ((x & 1) << 1) | (y & 1);
+        const out = layerPixels[layerIdx];
+        out[pixelOffset] = src[pixelOffset];
+        out[pixelOffset + 1] = src[pixelOffset + 1];
+        out[pixelOffset + 2] = src[pixelOffset + 2];
+        out[pixelOffset + 3] = src[pixelOffset + 3];
+      }
+    }
+
+    const createdIds = [];
+    for (let i = 0; i < layerCount; i += 1) {
+      const layerCanvas = document.createElement("canvas");
+      layerCanvas.width = w;
+      layerCanvas.height = h;
+      const layerCtx = layerCanvas.getContext("2d");
+      const imageData = layerCtx.createImageData(w, h);
+      imageData.data.set(layerPixels[i]);
+      layerCtx.putImageData(imageData, 0, 0);
+      await saveCanvasAsArtifact(layerCanvas, {
+        operation: `create_layers_l${i + 1}`,
+        label: `Layer ${i + 1}/${layerCount}`,
+        meta: {
+          source_image_id: String(imgItem.id || ""),
+          source_image_path: String(imgItem.path || ""),
+          layer_index: i + 1,
+          layer_count: layerCount,
+          partition: "checkerboard_mod2",
+          recomposition_note: "Stack all layers with normal alpha compositing to reconstruct the source image.",
+        },
+        replaceActive: false,
+        parentImageId: imgItem.id,
+        select: false,
+      });
+      const created = state.images[state.images.length - 1];
+      if (created?.id) createdIds.push(String(created.id));
+    }
+
+    if (createdIds.length) {
+      await setActiveImage(createdIds[0]).catch(() => {});
+    }
+    setStatus("Director: layers ready");
+    showToast(`Create Layers complete: ${createdIds.length} layers generated.`, "tip", 2600);
+  } catch (err) {
+    console.error(err);
+    setStatus(`Director: create layers failed (${err?.message || err})`, true);
+    showToast("Create Layers failed.", "error", 3200);
+  } finally {
+    setImageFxActive(false);
+    updatePortraitIdle();
+    clearRunningAction("create_layers");
   }
 }
 
@@ -17599,7 +18184,7 @@ async function processActionQueue() {
         await Promise.resolve(item.run());
       } catch (err) {
         console.error("Queued action failed:", item?.label, err);
-        reportUserError(item?.label || "Queued action", err, { retryHint: "Retry from Abilities." });
+        reportUserError(item?.label || "Queued action", err, { retryHint: "Retry from Skills." });
       }
 
       if (isEngineBusy()) {
@@ -17674,7 +18259,7 @@ function computeQuickActions() {
   if (!active) {
     actions.push({
       id: "no_image",
-      label: "Import photos to unlock abilities",
+      label: "Import photos to unlock skills",
       disabled: true,
     });
     return actions;
@@ -17685,7 +18270,7 @@ function computeQuickActions() {
     actions.push({
       id: "single_view",
       label: "Single view",
-      title: "Show one image at a time (restores single-image abilities)",
+      title: "Show one image at a time (restores single-image skills)",
       disabled: false,
       onClick: () => setCanvasMode("single"),
     });
@@ -17693,13 +18278,13 @@ function computeQuickActions() {
     actions.push({
       id: "multi_view",
       label: "Multi view",
-      title: "Show all loaded photos (enables multi-select + multi-image abilities)",
+      title: "Show all loaded photos (enables multi-select + multi-image skills)",
       disabled: false,
       onClick: () => setCanvasMode("multi"),
     });
   }
 
-  // Multi-image abilities are driven by *selected* images, not run size.
+  // Multi-image skills are driven by *selected* images, not run size.
   if (nSelected === 2) {
     actions.push({
       id: "combine",
@@ -17782,6 +18367,13 @@ function computeQuickActions() {
     });
   }
   actions.push({
+    id: "create_layers",
+    label: state.runningActionKey === "create_layers" ? "Create Layers (running…)" : "Create Layers",
+    title: "Split the active image into four transparent layer artifacts that recompose to the original.",
+    disabled: nSelected !== 1,
+    onClick: () => runCreateLayersFromSelection().catch((err) => console.error(err)),
+  });
+  actions.push({
     id: "recast",
     label: state.pendingRecast ? "Recast (running…)" : "Recast",
     title: "Reimagine the image in a totally different medium/context (lateral leap)",
@@ -17861,6 +18453,7 @@ function actionGridTitleFor(key) {
   if (k === "bg") return "Background replace (Shift: Sweep)";
   if (k === "extract_dna") return "Extract DNA: collapse selected image(s) into transferable material/color helix";
   if (k === "soul_leech") return "Soul Leech: collapse selected image(s) into transferable emotional mask";
+  if (k === "create_layers") return "Create Layers: split active image into transparent recomposition layers";
   if (k === "remove_people") return "Remove people from the active image";
   if (k === "variations") return "Zero-prompt variations";
   if (k === "diagnose") return "Creative-director diagnosis";
@@ -17927,6 +18520,13 @@ function actionGridIconFor(key) {
       <path d="M9 10h.01M15 10h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
       <path d="M9.5 14c1.8 1.7 3.2 1.7 5 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
       <path d="M12 3v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </svg>`;
+  }
+  if (k === "create_layers") {
+    return `<svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="4" y="4" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" />
+      <rect x="7" y="7" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" />
+      <path d="M10 10h6M10 13h6M10 16h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
     </svg>`;
   }
   if (k === "remove_people") {
@@ -18062,6 +18662,7 @@ function renderActionGrid() {
     "bg",
     "extract_dna",
     "soul_leech",
+    "create_layers",
     "remove_people",
     "variations",
     "diagnose",
@@ -18156,6 +18757,13 @@ function renderActionGrid() {
         runWithUserError("Soul Leech", () => runSoulLeechFromSelection(), {
           statusScope: "Director",
           retryHint: "Select at least one image and retry.",
+        });
+        return;
+      }
+      if (key === "create_layers") {
+        runWithUserError("Create Layers", () => runCreateLayersFromSelection(), {
+          statusScope: "Director",
+          retryHint: "Select exactly one image and retry.",
         });
         return;
       }
@@ -19825,7 +20433,10 @@ async function writeCanvasPngToPath(canvas, outPath) {
   return outPath;
 }
 
-async function saveCanvasAsArtifact(canvas, { operation, label, meta = {}, replaceActive = false, targetId = null }) {
+async function saveCanvasAsArtifact(
+  canvas,
+  { operation, label, meta = {}, replaceActive = false, targetId = null, parentImageId = null, select = true }
+) {
   if (!state.runDir) return;
   const stamp = Date.now();
   const artifactId = `local-${operation}-${stamp}`;
@@ -19870,7 +20481,8 @@ async function saveCanvasAsArtifact(canvas, { operation, label, meta = {}, repla
       );
     }
   } else {
-    const parentNodeId = state.activeId ? state.imagesById.get(state.activeId)?.timelineNodeId || null : null;
+    const parentSourceId = parentImageId ? String(parentImageId) : state.activeId;
+    const parentNodeId = parentSourceId ? state.imagesById.get(parentSourceId)?.timelineNodeId || null : null;
     addImage(
       {
         id: artifactId,
@@ -19881,7 +20493,7 @@ async function saveCanvasAsArtifact(canvas, { operation, label, meta = {}, repla
         timelineAction: label || operation,
         timelineParents: parentNodeId ? [parentNodeId] : [],
       },
-      { select: true }
+      { select: Boolean(select) }
     );
   }
   setStatus("Engine: ready");
@@ -20938,6 +21550,7 @@ async function handleEventLegacy(event) {
     return;
   }
   if (eventType === DESKTOP_EVENT_TYPES.VERSION_CREATED) {
+    promptBenchmarkBindVersion(motherEventVersionId(event));
     motherIdleTrackVersionCreated(event);
     return;
   }
@@ -21062,6 +21675,9 @@ async function handleEventLegacy(event) {
       return;
     }
     const eventVersionId = motherEventVersionId(event);
+    if (eventVersionId) {
+      promptBenchmarkMarkSuccessFromArtifactEvent(event);
+    }
     const motherDispatchInFlight =
       state.motherIdle?.phase === MOTHER_IDLE_STATES.GENERATION_DISPATCHED &&
       Boolean(state.motherIdle?.pendingDispatchToken) &&
@@ -21384,6 +22000,7 @@ async function handleEventLegacy(event) {
     renderHudReadout();
     processActionQueue().catch(() => {});
   } else if (eventType === DESKTOP_EVENT_TYPES.GENERATION_FAILED) {
+    promptBenchmarkMarkFailureFromGenerationFailedEvent(event);
     const idleDrafting = state.motherIdle?.phase === MOTHER_IDLE_STATES.DRAFTING;
     const idleDispatching = Boolean(state.motherIdle?.pendingDispatchToken);
     if (idleDrafting && idleDispatching) {
@@ -21556,6 +22173,7 @@ async function handleEventLegacy(event) {
     requestRender();
     processActionQueue().catch(() => {});
   } else if (eventType === DESKTOP_EVENT_TYPES.COST_LATENCY_UPDATE) {
+    promptBenchmarkAttachCostLatencyEvent(event);
     state.lastCostLatency = {
       provider: event.provider,
       model: event.model,
@@ -21819,7 +22437,7 @@ async function handleEventLegacy(event) {
             if (!imageId || !label) continue;
             const imgItem = state.imagesById.get(imageId) || null;
             if (!imgItem) continue;
-            const prevLabel = _normalizeVisionLabel(imgItem.visionDesc, { maxChars: 64 });
+            const prevLabel = _normalizeVisionLabel(imgItem.visionDesc, { maxChars: REALTIME_VISION_LABEL_MAX_CHARS });
             const prevSource = String(imgItem?.visionDescMeta?.source || "").trim();
             const keepExplicitDescribe =
               Boolean(prevLabel) &&
@@ -22192,7 +22810,7 @@ async function handleEventLegacy(event) {
 	    const path = event.image_path;
 	    const desc = event.description;
 	    if (typeof path === "string" && typeof desc === "string" && desc.trim()) {
-	      const cleaned = _normalizeVisionLabel(desc, { maxChars: 64 }) || desc.trim();
+	      const cleaned = _normalizeVisionLabel(desc, { maxChars: REALTIME_VISION_LABEL_MAX_CHARS }) || desc.trim();
 	      for (const item of state.images) {
 	        if (item?.path === path) {
 	          item.visionDesc = cleaned;
@@ -26144,6 +26762,7 @@ function installUi() {
       refreshKeyStatus().catch(() => {});
       refreshPortraitsDirReadout().catch(() => {});
       renderAestheticOnboardingStatus();
+      promptBenchmarkRenderReadout();
     });
   }
   if (els.settingsClose && els.settingsDrawer) {
@@ -26366,6 +26985,35 @@ function installUi() {
       applyImageModelSetting(els.imageModel.value, { announce: false }).catch(() => {});
     });
   }
+  if (els.promptStrategyMode) {
+    els.promptStrategyMode.value = normalizePromptStrategyMode(settings.promptStrategyMode);
+    els.promptStrategyMode.addEventListener("change", () => {
+      bumpInteraction();
+      settings.promptStrategyMode = normalizePromptStrategyMode(els.promptStrategyMode.value);
+      localStorage.setItem(PROMPT_STRATEGY_MODE_KEY, settings.promptStrategyMode);
+      if (els.promptStrategyMode.value !== settings.promptStrategyMode) {
+        els.promptStrategyMode.value = settings.promptStrategyMode;
+      }
+      promptBenchmarkRenderReadout();
+    });
+  }
+  if (els.promptRepeatFullToggle) {
+    els.promptRepeatFullToggle.checked = Boolean(settings.promptRepeatFull);
+    els.promptRepeatFullToggle.addEventListener("change", () => {
+      bumpInteraction();
+      settings.promptRepeatFull = Boolean(els.promptRepeatFullToggle.checked);
+      localStorage.setItem(PROMPT_REPEAT_FULL_KEY, settings.promptRepeatFull ? "1" : "0");
+      promptBenchmarkRenderReadout();
+    });
+  }
+  if (els.promptBenchmarkReset) {
+    els.promptBenchmarkReset.addEventListener("click", () => {
+      bumpInteraction();
+      promptBenchmarkReset();
+      showToast("Prompt benchmark cleared.", "tip", 1600);
+    });
+  }
+  promptBenchmarkRenderReadout();
 
   if (els.annotateClose) {
     els.annotateClose.addEventListener("click", () => {

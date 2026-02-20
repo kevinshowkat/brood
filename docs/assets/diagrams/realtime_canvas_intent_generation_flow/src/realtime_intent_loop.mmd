@@ -1,0 +1,26 @@
+sequenceDiagram
+  participant User as User
+  participant Canvas as Canvas UI (canvas_app.js)
+  participant Tauri as Tauri PTY bridge
+  participant CLI as brood-rs chat
+  participant RT as IntentIconsRealtimeSession
+  participant Log as events.jsonl
+
+  User->>Canvas: Import/move/resize/select images
+  Canvas->>Canvas: scheduleAmbientIntentInference() / motherV2RequestIntentInference()
+  Canvas->>Canvas: writeIntentSnapshot() + writeIntentContextEnvelope()
+  Canvas->>Tauri: /intent_rt_start or /intent_rt_mother_start
+  Canvas->>Tauri: /intent_rt "<snapshot>" or /intent_rt_mother "<snapshot>"
+  Tauri->>CLI: PTY line
+  CLI->>RT: submit_snapshot(path)
+  RT-->>Log: intent_icons (partial=true, streaming deltas)
+  RT-->>Log: intent_icons (partial=false, final payload)
+  Canvas->>Log: poll with read_file_since(events.jsonl)
+  Canvas->>Canvas: parseIntentIconsJsonDetailed(text)
+  alt payload parses
+    Canvas->>Canvas: update iconState (intent/ambient)
+    Canvas->>Canvas: rebuild ambient suggestions + update per-image vision_desc
+    Canvas->>Canvas: motherV2ApplyIntent() when mother-scoped
+  else parse/error/timeout/fatal
+    Canvas->>Canvas: local fallback icon state + retry policy
+  end

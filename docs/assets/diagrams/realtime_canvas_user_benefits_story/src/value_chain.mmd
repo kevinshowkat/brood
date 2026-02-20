@@ -1,0 +1,32 @@
+flowchart LR
+  subgraph Capture["1) Capture Context"]
+    A1["Canvas geometry\nposition, scale, overlap"]
+    A2["Interaction signals\nmove, resize, select, recency"]
+    A3["Vision summaries\nper-image semantic labels"]
+  end
+
+  subgraph Understand["2) Understand Intent"]
+    B1["Intent branches + confidence"]
+    B2["Role mapping\nsubject/model/mediator/object"]
+    B3["Transformation mode selection"]
+  end
+
+  subgraph Decide["3) Decide Execution"]
+    C1["Prompt composition\nconstraint-tail strategy"]
+    C2["Model context envelope\nprovider-aware guidance"]
+  end
+
+  subgraph Execute["4) Execute Reliably"]
+    D1["Engine generation"]
+    D2["Ordered events\nplan -> version -> artifact -> cost"]
+    D3["Receipts + timeline artifacts"]
+  end
+
+  subgraph Outcome["5) User Outcomes"]
+    E1["Faster first usable draft"]
+    E2["Higher first-pass adherence"]
+    E3["Fewer retries + lower prompt burden"]
+    E4["Higher trust + reproducibility"]
+  end
+
+  Capture --> Understand --> Decide --> Execute --> Outcome

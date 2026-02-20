@@ -6558,6 +6558,12 @@ button.ghost:hover {
   line-height: 1.4;
 }
 
+#prompt-benchmark-readout {
+  max-height: 180px;
+  overflow: auto;
+  line-height: 1.4;
+}
+
 .aesthetic-onboarding-modal {
   position: fixed;
   inset: 0;

@@ -25,7 +25,7 @@ export function computeActionGridSlots({
       { key: "annotate", label: "Annotate", kind: "tool", hotkey: "5" },
       { key: "soul_leech", label: "Soul", kind: "ability", hotkey: "6" },
       { key: "bg", label: "BG", kind: "ability", hotkey: "7" },
-      { key: "variations", label: "Vars", kind: "ability", hotkey: "8" },
+      { key: "create_layers", label: "Layers", kind: "ability", hotkey: "8" },
       alwaysOnVisionEnabled
         ? { key: "crop_square", label: "Square", kind: "ability", hotkey: "9" }
         : { key: "diagnose", label: "DIAG", kind: "ability", hotkey: "9" },
