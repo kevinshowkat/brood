@@ -14883,6 +14883,7 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
   idle.hoverDraftId = draft.id;
   motherIdleTransitionTo(MOTHER_IDLE_EVENTS.DRAFT_READY);
   setStatus("Mother: proposal ready.");
+  renderMotherReadout();
   appendMotherTraceLog({
     kind: "draft_ready",
     traceId: idle.telemetry?.traceId || null,
@@ -21724,6 +21725,7 @@ async function handleEventLegacy(event) {
         setStatus("Engine: ready");
         updatePortraitIdle();
         setImageFxActive(false);
+        renderMotherReadout();
         renderQuickActions();
         renderHudReadout();
         processActionQueue().catch(() => {});
