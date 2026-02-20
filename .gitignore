@@ -18,6 +18,8 @@ desktop/.vite/
 desktop/src-tauri/target/
 desktop/dist/
 desktop/src-tauri/gen/
+desktop/src-tauri/resources/brood-rs
+rust_engine/target/
 
 # Environment
 .env

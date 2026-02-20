@@ -44,6 +44,24 @@ test("Mother dispatch uses preferred current image model instead of hard-pinning
   assert.match(fnText, /await maybeOverrideEngineImageModel\(selectedModel\)/);
 });
 
+test("Mother dispatch primes image FX immediately and rolls back when dispatch does not arm", () => {
+  const primeMatch = app.match(/function motherIdlePrimeDraftFx\(\)[\s\S]*?\n}/);
+  assert.ok(primeMatch, "motherIdlePrimeDraftFx function not found");
+  assert.match(primeMatch[0], /state\.pendingMotherDraft = \{/);
+  assert.match(primeMatch[0], /sourceIds:\s*motherV2RoleContextIds\(\)/);
+  assert.match(primeMatch[0], /setImageFxActive\(true,\s*"Mother Draft"\)/);
+
+  const fnMatch = app.match(/async function motherIdleDispatchGeneration\(\)[\s\S]*?return true;\n}/);
+  assert.ok(fnMatch, "motherIdleDispatchGeneration function not found");
+  const fnText = fnMatch[0];
+
+  assert.match(fnText, /motherIdlePrimeDraftFx\(\);/);
+  assert.match(fnText, /const ok = await ensureEngineSpawned\(\{ reason: "mother_drafting" \}\);/);
+  assert.match(fnText, /if \(!ok\) \{\s*motherIdleRollbackDraftFxIfDispatchUnarmed\(\);/);
+  assert.match(fnText, /const dispatchArmed = Boolean\(idle\.pendingPromptCompile \|\| idle\.pendingGeneration \|\| idle\.pendingDispatchToken\);/);
+  assert.match(fnText, /if \(!dispatchArmed\) \{\s*motherIdleRollbackDraftFxIfDispatchUnarmed\(\);/);
+});
+
 test("Mother model context envelopes normalize SDXL provider key to replicate", () => {
   const fnMatch = app.match(/function motherV2BuildModelContextEnvelopes[\s\S]*?\n}\n\nfunction motherV2BuildGeminiContextPacket/);
   assert.ok(fnMatch, "motherV2BuildModelContextEnvelopes block not found");

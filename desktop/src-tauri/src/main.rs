@@ -8,12 +8,12 @@ use std::collections::HashMap;
 #[cfg(target_family = "unix")]
 use std::io::{BufRead, BufReader};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::process;
 #[cfg(target_family = "unix")]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(target_family = "unix")]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::process;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -143,6 +143,189 @@ fn collect_brood_env_snapshot() -> HashMap<String, String> {
     vars
 }
 
+#[derive(Debug, Clone)]
+struct EngineProgramCandidate {
+    program: String,
+    label: String,
+}
+
+fn command_exit_detail(status: portable_pty::ExitStatus) -> String {
+    if status.success() {
+        "success".to_string()
+    } else {
+        status.to_string()
+    }
+}
+
+fn native_engine_bin_name() -> &'static str {
+    if cfg!(windows) {
+        "brood-rs.exe"
+    } else {
+        "brood-rs"
+    }
+}
+
+fn native_engine_host_triple() -> String {
+    let arch = std::env::consts::ARCH;
+    let os = std::env::consts::OS;
+    let os_suffix = match os {
+        "macos" => "apple-darwin",
+        "linux" => "unknown-linux-gnu",
+        "windows" => "pc-windows-msvc",
+        _ => os,
+    };
+    format!("{arch}-{os_suffix}")
+}
+
+fn push_engine_candidate(
+    into: &mut Vec<EngineProgramCandidate>,
+    program: impl Into<String>,
+    label: impl Into<String>,
+) {
+    let program = program.into();
+    if program.trim().is_empty() {
+        return;
+    }
+    if into.iter().any(|existing| existing.program == program) {
+        return;
+    }
+    into.push(EngineProgramCandidate {
+        program,
+        label: label.into(),
+    });
+}
+
+fn push_native_path_candidate(
+    into: &mut Vec<EngineProgramCandidate>,
+    path: PathBuf,
+    label: impl Into<String>,
+) {
+    if !path.exists() || !path.is_file() {
+        return;
+    }
+    if is_native_engine_placeholder(&path) {
+        eprintln!(
+            "brood desktop skipping placeholder native engine candidate '{}'",
+            path.display()
+        );
+        return;
+    }
+    push_engine_candidate(into, path.to_string_lossy().to_string(), label.into());
+}
+
+fn is_native_engine_placeholder(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if metadata.len() > 8 * 1024 {
+        return false;
+    }
+    let Ok(raw) = std::fs::read(path) else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&raw).to_ascii_lowercase();
+    text.contains("brood-rs resource not staged") || text.contains("brood_rs_placeholder_stub")
+}
+
+fn resolve_existing_env_binary_path(value: &str) -> Option<PathBuf> {
+    let raw = PathBuf::from(value);
+    let candidate = if raw.is_absolute() {
+        raw
+    } else {
+        std::env::current_dir().ok()?.join(raw)
+    };
+    if !candidate.exists() || !candidate.is_file() {
+        return None;
+    }
+    Some(std::fs::canonicalize(&candidate).unwrap_or(candidate))
+}
+
+fn native_engine_program_candidates(app: Option<&tauri::AppHandle>) -> Vec<EngineProgramCandidate> {
+    let mut out: Vec<EngineProgramCandidate> = Vec::new();
+    let bin_name = native_engine_bin_name();
+    let bin_with_triple = format!("{bin_name}-{}", native_engine_host_triple());
+
+    for env_key in ["BROOD_RS_BIN", "BROOD_ENGINE_BINARY"] {
+        if let Ok(raw) = std::env::var(env_key) {
+            let value = raw.trim();
+            if value.is_empty() {
+                continue;
+            }
+            if let Some(path) = resolve_existing_env_binary_path(value) {
+                push_native_path_candidate(&mut out, path, format!("{env_key} ({})", value));
+            } else {
+                // Allow executable names (e.g. "brood-rs") via env override.
+                push_engine_candidate(&mut out, value.to_string(), format!("{env_key} ({value})"));
+            }
+        }
+    }
+
+    if let Some(app) = app {
+        for resource in [
+            format!("resources/{bin_name}"),
+            format!("resources/{bin_with_triple}"),
+            bin_name.to_string(),
+            bin_with_triple.clone(),
+        ] {
+            if let Some(path) = app.path_resolver().resolve_resource(&resource) {
+                push_native_path_candidate(
+                    &mut out,
+                    path,
+                    format!("bundled resource ({resource})"),
+                );
+            }
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            push_native_path_candidate(
+                &mut out,
+                exe_dir.join(bin_name),
+                "current_exe sibling".to_string(),
+            );
+            push_native_path_candidate(
+                &mut out,
+                exe_dir.join("../Resources").join(bin_name),
+                "macOS app Resources".to_string(),
+            );
+            push_native_path_candidate(
+                &mut out,
+                exe_dir.join("../Resources").join(&bin_with_triple),
+                "macOS app Resources (triple)".to_string(),
+            );
+        }
+    }
+
+    // Final fallback is PATH resolution.
+    push_engine_candidate(&mut out, bin_name.to_string(), "PATH lookup".to_string());
+    out
+}
+
+fn native_engine_command_requested(command: &str) -> bool {
+    let trimmed = command.trim();
+    trimmed == "brood-rs" || trimmed == native_engine_bin_name()
+}
+
+fn resolve_spawn_candidates(app: &tauri::AppHandle, command: &str) -> Vec<EngineProgramCandidate> {
+    if !native_engine_command_requested(command) {
+        return vec![EngineProgramCandidate {
+            program: command.to_string(),
+            label: "requested command".to_string(),
+        }];
+    }
+
+    let candidates = native_engine_program_candidates(Some(app));
+    if candidates.is_empty() {
+        vec![EngineProgramCandidate {
+            program: command.to_string(),
+            label: "requested command".to_string(),
+        }]
+    } else {
+        candidates
+    }
+}
+
 struct PtyState {
     writer: Option<Box<dyn Write + Send>>,
     child: Option<Box<dyn portable_pty::Child + Send>>,
@@ -246,26 +429,11 @@ fn spawn_pty(
     if let Some(mut child) = state.child.take() {
         let _ = child.kill();
     }
+    state.writer = None;
+    state.master = None;
     state.run_dir = None;
     state.events_path = None;
 
-    let pty_system = NativePtySystem::default();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: 40,
-            cols: 120,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| e.to_string())?;
-
-    let mut cmd = CommandBuilder::new(command);
-    for arg in &args {
-        cmd.arg(arg);
-    }
-    if let Some(dir) = cwd {
-        cmd.cwd(PathBuf::from(dir));
-    }
     let mut merged_env = env.unwrap_or_default();
     if let Some(home) = tauri::api::path::home_dir() {
         merge_dotenv_vars(&mut merged_env, &home.join(".brood").join(".env"));
@@ -276,17 +444,94 @@ fn spawn_pty(
             merge_dotenv_vars(&mut merged_env, &env_path);
         }
     }
-    for (key, value) in merged_env {
-        cmd.env(key, value);
+
+    let pty_system = NativePtySystem::default();
+    let mut launch_errors: Vec<String> = Vec::new();
+    let mut launched: Option<(
+        EngineProgramCandidate,
+        Box<dyn portable_pty::Child + Send>,
+        Box<dyn portable_pty::MasterPty + Send>,
+    )> = None;
+    let candidates = resolve_spawn_candidates(&app, &command);
+
+    for candidate in candidates {
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 40,
+                cols: 120,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| e.to_string())?;
+        let mut cmd = CommandBuilder::new(candidate.program.clone());
+        for arg in &args {
+            cmd.arg(arg);
+        }
+        if let Some(dir) = cwd.as_ref() {
+            cmd.cwd(PathBuf::from(dir));
+        }
+        for (key, value) in &merged_env {
+            cmd.env(key, value);
+        }
+
+        eprintln!(
+            "brood desktop spawn attempting '{}' ({})",
+            candidate.program, candidate.label
+        );
+        let mut child = match pair.slave.spawn_command(cmd) {
+            Ok(child) => child,
+            Err(err) => {
+                launch_errors.push(format!("{}: {}", candidate.label, err));
+                continue;
+            }
+        };
+
+        let mut immediate_exit = child
+            .try_wait()
+            .ok()
+            .and_then(|status| status.map(command_exit_detail));
+        if immediate_exit.is_none() {
+            std::thread::sleep(Duration::from_millis(220));
+            immediate_exit = child
+                .try_wait()
+                .ok()
+                .and_then(|status| status.map(command_exit_detail));
+        }
+        if let Some(detail) = immediate_exit {
+            launch_errors.push(format!(
+                "{}: exited immediately ({detail})",
+                candidate.label
+            ));
+            continue;
+        }
+
+        launched = Some((candidate, child, pair.master));
+        break;
     }
 
-    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    let Some((resolved_candidate, child, master)) = launched else {
+        if launch_errors.is_empty() {
+            return Err(format!(
+                "failed to spawn engine command '{}'",
+                command.trim()
+            ));
+        }
+        return Err(format!(
+            "failed to spawn engine command '{}': {}",
+            command.trim(),
+            launch_errors.join(" | ")
+        ));
+    };
+
+    eprintln!(
+        "brood desktop spawn command resolved '{}' -> '{}' ({})",
+        command, resolved_candidate.program, resolved_candidate.label
+    );
     let run_dir = extract_arg_value(&args, "--out");
     let events_path = extract_arg_value(&args, "--events");
 
-    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-    let master = pair.master;
+    let mut reader = master.try_clone_reader().map_err(|e| e.to_string())?;
+    let writer = master.take_writer().map_err(|e| e.to_string())?;
 
     let app_handle = app.clone();
     std::thread::spawn(move || {
@@ -392,8 +637,24 @@ fn run_export_attempt(
     Err(format!("{program}: {detail}"))
 }
 
+fn compat_fallback_enabled(env: &HashMap<String, String>) -> bool {
+    for key in [
+        "BROOD_EMERGENCY_COMPAT_FALLBACK",
+        "BROOD_ENABLE_COMPAT_FALLBACK",
+    ] {
+        let Some(raw) = env.get(key) else {
+            continue;
+        };
+        let lowered = raw.trim().to_ascii_lowercase();
+        if matches!(lowered.as_str(), "1" | "true" | "yes" | "on") {
+            return true;
+        }
+    }
+    false
+}
+
 #[tauri::command]
-fn export_run(run_dir: String, out_path: String) -> Result<(), String> {
+fn export_run(app: tauri::AppHandle, run_dir: String, out_path: String) -> Result<(), String> {
     let run_dir_path = PathBuf::from(&run_dir);
     if !run_dir_path.exists() {
         return Err(format!("run dir not found: {run_dir}"));
@@ -405,6 +666,8 @@ fn export_run(run_dir: String, out_path: String) -> Result<(), String> {
     }
 
     let env = collect_brood_env_snapshot();
+    let mut env_native = env.clone();
+    env_native.insert("BROOD_RS_MODE".to_string(), "native".to_string());
     let py_args = vec![
         "-m".to_string(),
         "brood_engine.cli".to_string(),
@@ -424,22 +687,59 @@ fn export_run(run_dir: String, out_path: String) -> Result<(), String> {
 
     let mut errors: Vec<String> = Vec::new();
 
-    if let Some(repo_root) = find_repo_root_best_effort() {
-        for py in ["python", "python3"] {
-            match run_export_attempt(py, &py_args, Some(&repo_root), &env) {
-                Ok(()) => return Ok(()),
-                Err(err) => errors.push(err),
-            }
+    for candidate in native_engine_program_candidates(Some(&app)) {
+        match run_export_attempt(
+            &candidate.program,
+            &brood_args,
+            Some(&run_dir_path),
+            &env_native,
+        ) {
+            Ok(()) => return Ok(()),
+            Err(err) => errors.push(format!("{}: {err}", candidate.label)),
         }
     }
 
-    match run_export_attempt("brood", &brood_args, Some(&run_dir_path), &env) {
-        Ok(()) => Ok(()),
-        Err(err) => {
-            errors.push(err);
-            Err(format!("export failed: {}", errors.join(" | ")))
+    if let Some(repo_root) = find_repo_root_best_effort() {
+        let cargo_args = vec![
+            "run".to_string(),
+            "-q".to_string(),
+            "-p".to_string(),
+            "brood-cli".to_string(),
+            "--".to_string(),
+            "export".to_string(),
+            "--run".to_string(),
+            run_dir.clone(),
+            "--out".to_string(),
+            out_path.clone(),
+        ];
+        let cargo_cwd = repo_root.join("rust_engine");
+        match run_export_attempt("cargo", &cargo_args, Some(&cargo_cwd), &env_native) {
+            Ok(()) => return Ok(()),
+            Err(err) => errors.push(err),
         }
     }
+
+    if compat_fallback_enabled(&env) {
+        if let Some(repo_root) = find_repo_root_best_effort() {
+            for py in ["python", "python3"] {
+                match run_export_attempt(py, &py_args, Some(&repo_root), &env) {
+                    Ok(()) => return Ok(()),
+                    Err(err) => errors.push(err),
+                }
+            }
+        }
+
+        match run_export_attempt("brood", &brood_args, Some(&run_dir_path), &env) {
+            Ok(()) => return Ok(()),
+            Err(err) => errors.push(err),
+        }
+    } else {
+        errors.push(
+            "compat fallback disabled (set BROOD_EMERGENCY_COMPAT_FALLBACK=1 to enable)"
+                .to_string(),
+        );
+    }
+    Err(format!("export failed: {}", errors.join(" | ")))
 }
 
 #[tauri::command]
@@ -531,7 +831,11 @@ fn write_bridge_response(stream: &mut UnixStream, payload: serde_json::Value) {
 }
 
 #[cfg(target_family = "unix")]
-fn handle_bridge_client(mut stream: UnixStream, state: SharedPtyState, app_handle: tauri::AppHandle) {
+fn handle_bridge_client(
+    mut stream: UnixStream,
+    state: SharedPtyState,
+    app_handle: tauri::AppHandle,
+) {
     let reader_stream = match stream.try_clone() {
         Ok(s) => s,
         Err(_) => return,
@@ -674,8 +978,7 @@ fn handle_bridge_client(mut stream: UnixStream, state: SharedPtyState, app_handl
 
                 eprintln!(
                     "brood desktop bridge automation request {} dispatched (action={})",
-                    request_id,
-                    action
+                    request_id, action
                 );
                 let _ = app_handle.emit_all("desktop-automation", emit_payload);
                 eprintln!("brood desktop bridge automation event emitted request_id={request_id}");
@@ -705,7 +1008,10 @@ fn handle_bridge_client(mut stream: UnixStream, state: SharedPtyState, app_handl
 
                 if let Some(map) = result_payload.as_object_mut() {
                     if map.get("request_id").is_none() {
-                        map.insert("request_id".to_string(), serde_json::json!(request_id.clone()));
+                        map.insert(
+                            "request_id".to_string(),
+                            serde_json::json!(request_id.clone()),
+                        );
                     }
                     if map.get("ok").is_none() {
                         map.insert("ok".to_string(), serde_json::json!(true));
@@ -821,7 +1127,9 @@ fn start_external_bridge(state: SharedPtyState, app_handle: tauri::AppHandle) {
                     Ok(stream) => {
                         let clone = state.clone();
                         let bridge_handle = app_handle.clone();
-                        std::thread::spawn(move || handle_bridge_client(stream, clone, bridge_handle));
+                        std::thread::spawn(move || {
+                            handle_bridge_client(stream, clone, bridge_handle)
+                        });
                     }
                     Err(err) => {
                         eprintln!("brood desktop bridge accept failed: {err}");
@@ -856,9 +1164,106 @@ fn main() {
         ])
         .setup(|app| {
             let handle = app.handle();
-            start_external_bridge(app.state::<SharedPtyState>().inner().clone(), handle.clone());
+            start_external_bridge(
+                app.state::<SharedPtyState>().inner().clone(),
+                handle.clone(),
+            );
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{
+        compat_fallback_enabled, is_native_engine_placeholder, push_native_path_candidate,
+        resolve_existing_env_binary_path, EngineProgramCandidate,
+    };
+
+    fn temp_file_path(name: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|row| row.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("brood-tauri-test-{stamp}-{name}"))
+    }
+
+    #[test]
+    fn placeholder_candidate_is_skipped() {
+        let path = temp_file_path("stub-brood-rs");
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(
+            &path,
+            "#!/usr/bin/env bash\n# BROOD_RS_PLACEHOLDER_STUB\necho \"brood-rs resource not staged\" >&2\nexit 1\n",
+        )
+        .expect("write placeholder");
+        let mut candidates: Vec<EngineProgramCandidate> = Vec::new();
+        push_native_path_candidate(&mut candidates, path.clone(), "stub");
+        assert!(is_native_engine_placeholder(&path));
+        assert!(candidates.is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn real_candidate_is_kept() {
+        let path = temp_file_path("real-brood-rs");
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, b"\x7fELFnot-a-real-binary").expect("write binary");
+        let mut candidates: Vec<EngineProgramCandidate> = Vec::new();
+        push_native_path_candidate(&mut candidates, path.clone(), "real");
+        assert!(!is_native_engine_placeholder(&path));
+        assert_eq!(candidates.len(), 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn resolve_existing_env_binary_path_canonicalizes_relative_paths() {
+        let cwd = std::env::current_dir().expect("cwd");
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|row| row.as_nanos())
+            .unwrap_or(0);
+        let filename = format!("brood-tauri-rel-bin-{stamp}");
+        let full = cwd.join(&filename);
+        let _ = std::fs::remove_file(&full);
+        std::fs::write(&full, b"\x7fELFnot-a-real-binary").expect("write binary");
+
+        let resolved =
+            resolve_existing_env_binary_path(&filename).expect("resolve relative env binary path");
+        let expected = std::fs::canonicalize(&full).unwrap_or(full.clone());
+        assert_eq!(resolved, expected);
+
+        let _ = std::fs::remove_file(full);
+    }
+
+    #[test]
+    fn compat_fallback_flag_uses_env_snapshot_values() {
+        let mut env = HashMap::new();
+        env.insert(
+            "BROOD_EMERGENCY_COMPAT_FALLBACK".to_string(),
+            "1".to_string(),
+        );
+        assert!(compat_fallback_enabled(&env));
+
+        env.insert(
+            "BROOD_EMERGENCY_COMPAT_FALLBACK".to_string(),
+            "0".to_string(),
+        );
+        env.insert(
+            "BROOD_ENABLE_COMPAT_FALLBACK".to_string(),
+            "true".to_string(),
+        );
+        assert!(compat_fallback_enabled(&env));
+
+        env.insert(
+            "BROOD_ENABLE_COMPAT_FALLBACK".to_string(),
+            "off".to_string(),
+        );
+        assert!(!compat_fallback_enabled(&env));
+    }
 }
