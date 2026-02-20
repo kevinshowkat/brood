@@ -14,6 +14,23 @@ build_host_release() {
   (cd "$RUST_ENGINE_DIR" && cargo build --release -p brood-cli)
 }
 
+maybe_sign_macos_binary() {
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    return 0
+  fi
+
+  local identity="${APPLE_SIGNING_IDENTITY:-}"
+  if [[ -z "$identity" ]]; then
+    echo "[brood] APPLE_SIGNING_IDENTITY not set; leaving staged engine unsigned"
+    return 0
+  fi
+
+  echo "[brood] signing staged engine with Developer ID identity: $identity"
+  # Notarization requires a valid Developer ID signature, hardened runtime, and timestamp.
+  codesign --force --sign "$identity" --options runtime --timestamp "$DEST_BIN"
+  codesign --verify --deep --strict --verbose=2 "$DEST_BIN"
+}
+
 build_macos_universal() {
   if [[ "$(uname -s)" != "Darwin" ]]; then
     return 1
@@ -38,6 +55,7 @@ build_macos_universal() {
 
   lipo -create "$aarch_bin" "$x64_bin" -output "$DEST_BIN"
   chmod +x "$DEST_BIN"
+  maybe_sign_macos_binary
   echo "[brood] staged universal native engine at $DEST_BIN"
   return 0
 }
@@ -50,5 +68,6 @@ if ! build_macos_universal; then
   fi
   cp "$HOST_BIN" "$DEST_BIN"
   chmod +x "$DEST_BIN"
+  maybe_sign_macos_binary
   echo "[brood] staged host native engine at $DEST_BIN"
 fi
