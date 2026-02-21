@@ -709,6 +709,7 @@ fn get_key_status() -> Result<serde_json::Value, String> {
     };
 
     let openai = has("OPENAI_API_KEY") || has("OPENAI_API_KEY_BACKUP");
+    let openrouter = has("OPENROUTER_API_KEY");
     let gemini = has("GEMINI_API_KEY") || has("GOOGLE_API_KEY");
     let flux = has("BFL_API_KEY") || has("FLUX_API_KEY");
     let imagen = has("IMAGEN_API_KEY")
@@ -716,12 +717,80 @@ fn get_key_status() -> Result<serde_json::Value, String> {
         || has("IMAGEN_VERTEX_PROJECT")
         || has("GOOGLE_APPLICATION_CREDENTIALS");
     let anthropic = has("ANTHROPIC_API_KEY");
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum RealtimeProvider {
+        OpenAiRealtime,
+        GeminiFlash,
+    }
+
+    impl RealtimeProvider {
+        fn as_str(self) -> &'static str {
+            match self {
+                Self::OpenAiRealtime => "openai_realtime",
+                Self::GeminiFlash => "gemini_flash",
+            }
+        }
+
+        fn from_raw(raw: &str) -> Option<Self> {
+            let normalized = raw.trim().to_ascii_lowercase();
+            match normalized.as_str() {
+                "openai" | "openai_realtime" => Some(Self::OpenAiRealtime),
+                "gemini" | "gemini_flash" => Some(Self::GeminiFlash),
+                _ => None,
+            }
+        }
+    }
+
+    let configured_global = vars
+        .get("BROOD_REALTIME_PROVIDER")
+        .and_then(|raw| RealtimeProvider::from_raw(raw));
+    let infer_default = || {
+        if openai {
+            RealtimeProvider::OpenAiRealtime
+        } else if openrouter || gemini {
+            RealtimeProvider::GeminiFlash
+        } else {
+            RealtimeProvider::OpenAiRealtime
+        }
+    };
+    let default_provider = configured_global.unwrap_or_else(infer_default);
+    let resolve_provider = |key: &str| -> RealtimeProvider {
+        vars.get(key)
+            .and_then(|raw| RealtimeProvider::from_raw(raw))
+            .or(configured_global)
+            .unwrap_or_else(infer_default)
+    };
+    let canvas_provider = resolve_provider("BROOD_CANVAS_CONTEXT_REALTIME_PROVIDER");
+    let intent_provider = resolve_provider("BROOD_INTENT_REALTIME_PROVIDER");
+    let mother_intent_provider = resolve_provider("BROOD_MOTHER_INTENT_REALTIME_PROVIDER");
+    let provider_ready = |provider: RealtimeProvider| -> bool {
+        match provider {
+            RealtimeProvider::OpenAiRealtime => openai,
+            RealtimeProvider::GeminiFlash => gemini,
+        }
+    };
+    let realtime_ready_canvas_context = provider_ready(canvas_provider);
+    let realtime_ready_intent = provider_ready(intent_provider);
+    let realtime_ready_mother_intent = provider_ready(mother_intent_provider);
+
     Ok(serde_json::json!({
         "openai": openai,
+        "openrouter": openrouter,
         "gemini": gemini,
         "imagen": imagen,
         "flux": flux,
         "anthropic": anthropic,
+        "realtime_provider_default": default_provider.as_str(),
+        "realtime_provider_canvas_context": canvas_provider.as_str(),
+        "realtime_provider_intent": intent_provider.as_str(),
+        "realtime_provider_mother_intent": mother_intent_provider.as_str(),
+        "realtime_ready": realtime_ready_canvas_context && realtime_ready_intent && realtime_ready_mother_intent,
+        "realtime_ready_canvas_context": realtime_ready_canvas_context,
+        "realtime_ready_intent": realtime_ready_intent,
+        "realtime_ready_mother_intent": realtime_ready_mother_intent,
+        "realtime_ready_openai": openai,
+        "realtime_ready_gemini": gemini,
     }))
 }
 
