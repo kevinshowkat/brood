@@ -183,6 +183,7 @@ const MOTHER_V2_UPLOAD_PREFETCH_WINDOW_MS = 120_000;
 const MOTHER_V2_SPECULATIVE_PREFETCH_DELAY_MS = 40;
 const MOTHER_V2_LIVE_PROPOSAL_REFRESH_DEBOUNCE_MS = 170;
 const MOTHER_V2_LIVE_PROPOSAL_REFRESH_MIN_INTERVAL_MS = 550;
+const MOTHER_V2_SINGLE_RESULT_GUARD_WINDOW_MS = 20_000;
 const MOTHER_V2_PROMPT_COMPILE_FALLBACK_MS = 520;
 const MOTHER_V2_INTENT_TARGET_IMAGE_LIMIT = 2;
 const MOTHER_V2_INTENT_REFERENCE_IMAGE_LIMIT = 1;
@@ -418,13 +419,6 @@ const MOTHER_V2_ROLE_PREVIEW_PANEL_PAD_PX = 0;
 const MOTHER_OFFER_PREVIEW_SCALE = 1.62;
 const MOTHER_OFFER_PREVIEW_MIN_VIEWPORT_COVER = 0.46;
 const MOTHER_OFFER_PREVIEW_MAX_VIEWPORT_COVER = 0.92;
-const MOTHER_INTENT_USECASE_DEFAULT_ORDER = Object.freeze([
-  "streaming_content",
-  "ecommerce_pod",
-  "uiux_prototyping",
-  "game_dev_assets",
-  "content_engine",
-]);
 // World-projection overscan: keep viewport boxes from filling panel projections immediately when zooming out.
 const WORLD_PROJECTION_OVERSCAN_RATIO = 0.75;
 const ENABLE_FILE_BROWSER_DOCK = true;
@@ -1115,9 +1109,20 @@ function promptBenchmarkReset() {
   promptBenchmarkRenderReadout();
 }
 
+// Product direction: use Mother intent realtime only; disable always-on canvas context.
+const ALWAYS_ON_CANVAS_CONTEXT_ENABLED = false;
+
 const settings = {
   memory: localStorage.getItem("brood.memory") === "1",
   alwaysOnVision: (() => {
+    if (!ALWAYS_ON_CANVAS_CONTEXT_ENABLED) {
+      try {
+        localStorage.setItem("brood.alwaysOnVision", "0");
+      } catch {
+        // ignore localStorage failures
+      }
+      return false;
+    }
     const raw = localStorage.getItem("brood.alwaysOnVision");
     // Default ON: Mother suggestions depend on realtime canvas context.
     if (raw === null) return true;
@@ -1509,7 +1514,7 @@ const state = {
 	    uiHits: [], // [{ kind, id, rect }]
 	  },
   intentAmbient: {
-    enabled: true,
+    enabled: false,
     pending: false,
     pendingPath: null,
     pendingAt: 0,
@@ -1606,7 +1611,7 @@ const ENABLE_DRAG_DROP_IMPORT = false;
 // Intent Canvas feature flags. Keep the full implementation in place so we can
 // re-enable specific behaviors without ripping out code.
 const INTENT_CANVAS_ENABLED = false; // disable onboarding intent decider (keep code intact)
-const INTENT_AMBIENT_ENABLED = true; // ambient intent runs in the background while editing
+const INTENT_AMBIENT_ENABLED = false; // ambient intent disabled
 const INTENT_AMBIENT_ICON_PLACEMENT_ENABLED = false; // keep ambient inference, disable icon nudges/placement
 const INTENT_TIMER_ENABLED = false; // hide LED timer + disable timeout-based force-choice
 const INTENT_ROUNDS_ENABLED = false; // disable "max rounds" gating
@@ -1625,18 +1630,12 @@ const PROMPT_GENERATE_SHIMMER_LOOP_MS = 1700;
 // Intent onboarding overlay icon assets.
 // Keep a procedural fallback so the app still renders if assets fail to load.
 const INTENT_UI_START_ICON_SCALE = 1.12; // modestly bigger than the original procedural glyphs
-const INTENT_UI_CHOICE_ICON_SCALE = 3.0; // YES/NO + suggested use-case glyph (requested: 300% larger)
+const INTENT_UI_CHOICE_ICON_SCALE = 3.0; // YES/NO + suggested branch glyph (requested: 300% larger)
 const INTENT_UI_ICON_ASSETS = {
   start_lock: new URL("./assets/intent-icons-sc/icons/intent-start-lock.png", import.meta.url).href,
   token_yes: new URL("./assets/intent-icons-sc/icons/intent-token-yes.png", import.meta.url).href,
   token_no: new URL("./assets/intent-icons-sc/icons/intent-token-no.png", import.meta.url).href,
-  usecases: {
-    game_dev_assets: new URL("./assets/intent-icons-sc/icons/intent-usecase-game-dev-assets.png", import.meta.url).href,
-    streaming_content: new URL("./assets/intent-icons-sc/icons/intent-usecase-streaming-content.png", import.meta.url).href,
-    uiux_prototyping: new URL("./assets/intent-icons-sc/icons/intent-usecase-uiux-prototyping.png", import.meta.url).href,
-    ecommerce_pod: new URL("./assets/intent-icons-sc/icons/intent-usecase-ecommerce-pod.png", import.meta.url).href,
-    content_engine: new URL("./assets/intent-icons-sc/icons/intent-usecase-content-engine.png", import.meta.url).href,
-  },
+  usecases: {},
 };
 
 const intentUiIcons = {
@@ -3176,7 +3175,9 @@ function updateAlwaysOnVisionReadout() {
   const hasOutput = typeof aov?.lastText === "string" && aov.lastText.trim();
   let text = "";
 
-  if (!aov?.enabled) {
+  if (!ALWAYS_ON_CANVAS_CONTEXT_ENABLED) {
+    text = "Disabled";
+  } else if (!aov?.enabled) {
     if (aov?.disabledReason) {
       const cleaned = String(aov.disabledReason || "").trim();
       text = cleaned.length > 1400 ? `${cleaned.slice(0, 1399).trimEnd()}\n…` : cleaned;
@@ -3290,6 +3291,7 @@ function realtimePortraitProviderForScope(scope = "intent") {
 }
 
 function allowAlwaysOnVision() {
+  if (!ALWAYS_ON_CANVAS_CONTEXT_ENABLED) return false;
   if (intentModeActive()) return false;
   if (!state.alwaysOnVision?.enabled) return false;
   if (!getVisibleCanvasImages().length) return false;
@@ -4440,11 +4442,11 @@ function _ambientUseCaseKeyForBranch(branch) {
   const icons = Array.isArray(branch.icons)
     ? branch.icons.map((v) => String(v || "").trim().toUpperCase()).filter(Boolean)
     : [];
-  if (icons.includes("GAME_DEV_ASSETS")) return "game_dev_assets";
-  if (icons.includes("STREAMING_CONTENT")) return "streaming_content";
-  if (icons.includes("UI_UX_PROTOTYPING")) return "uiux_prototyping";
-  if (icons.includes("ECOMMERCE_POD")) return "ecommerce_pod";
-  if (icons.includes("CONTENT_ENGINE")) return "content_engine";
+  for (const iconId of icons) {
+    if (iconId === "YES_TOKEN" || iconId === "NO_TOKEN" || iconId === "MAYBE_TOKEN") continue;
+    const normalized = _normalizeIntentKey(iconId);
+    if (normalized) return normalized;
+  }
   return null;
 }
 
@@ -5403,38 +5405,20 @@ async function motherV2WriteIntentContextEnvelopeWithRefRetry(
 }
 
 function buildFallbackIntentIconState(frameId, { reason = null } = {}) {
-  const seed = String(reason || "fallback").toUpperCase();
   const gen = { icon_id: "IMAGE_GENERATION", confidence: 0.52, position_hint: "primary" };
   const iterate = { icon_id: "ITERATION", confidence: 0.44, position_hint: "primary" };
   const outputs = { icon_id: "OUTPUTS", confidence: 0.34, position_hint: "secondary" };
   const pipeline = { icon_id: "PIPELINE", confidence: 0.30, position_hint: "emerging" };
-  const branches = [
-    {
-      branch_id: "game_dev_assets",
-      icons: ["GAME_DEV_ASSETS", "CONCEPT_ART", "SPRITES", "TEXTURES", "CHARACTER_SHEETS", "MIXED_FIDELITY", "ITERATION"],
-      lane_position: "left",
-    },
-    {
-      branch_id: "streaming_content",
-      icons: ["STREAMING_CONTENT", "THUMBNAILS", "OVERLAYS", "EMOTES", "SOCIAL_GRAPHICS", "VOLUME", "OUTCOMES"],
-      lane_position: "right",
-    },
-    {
-      branch_id: "uiux_prototyping",
-      icons: ["UI_UX_PROTOTYPING", "SCREENS", "WIREFRAMES", "MOCKUPS", "USER_FLOWS", "STRUCTURED", "SINGULAR"],
-      lane_position: "left",
-    },
-    {
-      branch_id: "ecommerce_pod",
-      icons: ["ECOMMERCE_POD", "MERCH_DESIGN", "PRODUCT_PHOTOS", "MARKETPLACE_LISTINGS", "PHYSICAL_OUTPUT", "VOLUME"],
-      lane_position: "right",
-    },
-    {
-      branch_id: "content_engine",
-      icons: ["CONTENT_ENGINE", "BRAND_SYSTEM", "MULTI_CHANNEL", "PROCESS", "AUTOMATION", "PIPELINE", "VOLUME"],
-      lane_position: "left",
-    },
-  ];
+  const fallbackModes = ["hybridize", "amplify", "transcend", "destabilize", "purify"];
+  const branches = fallbackModes.map((mode, idx) => ({
+    branch_id: mode,
+    icons: [String(mode).toUpperCase(), "IMAGE_GENERATION", "ITERATION"],
+    lane_position: idx % 2 === 0 ? "left" : "right",
+  }));
+  const transformation_mode_candidates = fallbackModes.map((mode, idx) => ({
+    mode,
+    confidence: clamp(0.74 - idx * 0.08, 0.3, 0.74),
+  }));
   return {
     frame_id: String(frameId || `fallback-${Date.now()}`),
     schema: "brood.intent_icons",
@@ -5445,7 +5429,9 @@ function buildFallbackIntentIconState(frameId, { reason = null } = {}) {
       { from_icon: "IMAGE_GENERATION", to_icon: "OUTPUTS", relation_type: "FLOW" },
     ],
     branches,
-    checkpoint: { icons: ["YES_TOKEN", "NO_TOKEN", "MAYBE_TOKEN"], applies_to: seed ? seed : "branches" },
+    transformation_mode: fallbackModes[0],
+    transformation_mode_candidates,
+    checkpoint: { icons: ["YES_TOKEN", "NO_TOKEN", "MAYBE_TOKEN"], applies_to: fallbackModes[0] || "branches" },
   };
 }
 
@@ -5958,6 +5944,60 @@ function upsertIntentSelection({ round, branchId, tokenId }) {
   intent.selections = next;
 }
 
+const INTENT_BRANCH_TOKEN_STOPWORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "that",
+  "this",
+  "mode",
+  "branch",
+  "image",
+  "images",
+  "icon",
+  "icons",
+  "intent",
+  "token",
+  "primary",
+  "secondary",
+  "left",
+  "right",
+  "lane",
+  "position",
+]);
+
+function _intentBranchTokenScore(haystack, branch = null) {
+  if (!haystack || !branch || typeof branch !== "object") return 0;
+  const tokenSet = new Set();
+  const branchKey = _normalizeIntentKey(branch.branch_id);
+  if (branchKey) {
+    for (const token of branchKey.split("_")) {
+      const t = String(token || "").trim();
+      if (!t || t.length < 3 || INTENT_BRANCH_TOKEN_STOPWORDS.has(t)) continue;
+      tokenSet.add(t);
+    }
+  }
+  const icons = Array.isArray(branch.icons) ? branch.icons : [];
+  for (const iconId of icons) {
+    const normalized = _normalizeIntentKey(iconId);
+    if (!normalized) continue;
+    for (const token of normalized.split("_")) {
+      const t = String(token || "").trim();
+      if (!t || t.length < 3 || INTENT_BRANCH_TOKEN_STOPWORDS.has(t)) continue;
+      tokenSet.add(t);
+    }
+  }
+  if (!tokenSet.size) return 0;
+  let score = 0;
+  for (const token of tokenSet) {
+    if (!haystack.includes(token)) continue;
+    score += token.length >= 6 ? 2 : 1;
+  }
+  return score;
+}
+
 function inferIntentBranchFromVisionDescriptions() {
   const items = Array.isArray(state.images) ? state.images : [];
   const texts = [];
@@ -5966,71 +6006,25 @@ function inferIntentBranchFromVisionDescriptions() {
   }
   const haystack = texts.join(" ").toLowerCase().trim();
   if (!haystack) return null;
-
-  const scores = {
-    game_dev_assets: 0,
-    streaming_content: 0,
-    uiux_prototyping: 0,
-    ecommerce_pod: 0,
-    content_engine: 0,
-  };
-
-  const bump = (key, re, weight) => {
-    if (!key || !re) return;
-    if (!scores[key] && scores[key] !== 0) return;
-    try {
-      if (re.test(haystack)) scores[key] += Number(weight) || 0;
-    } catch {
-      // ignore
-    }
-  };
-
-  // These keywords are intentionally "small + concrete" because vision descriptions are short
-  // (e.g. "instagram app icon", "couch"). They should be treated as weak signals.
-  bump("game_dev_assets", /\b(sprite|sprites|tileset|texture|textures)\b/i, 4);
-  bump("game_dev_assets", /\b(character sheet|character sheets)\b/i, 4);
-  bump("game_dev_assets", /\b(concept art)\b/i, 4);
-  bump("game_dev_assets", /\b(unreal|unity)\b/i, 2);
-  bump("game_dev_assets", /\b(faction|factions|rts|real[- ]?time strategy)\b/i, 4);
-  bump("game_dev_assets", /\b(game|gamedev|mod)\b/i, 2);
-
-  bump("streaming_content", /\b(instagram|twitch|youtube|tiktok)\b/i, 5);
-  bump("streaming_content", /\b(thumbnail|thumbnails)\b/i, 4);
-  bump("streaming_content", /\b(overlay|overlays)\b/i, 4);
-  bump("streaming_content", /\b(emote|emotes)\b/i, 4);
-  bump("streaming_content", /\b(social|stream|streaming|channel)\b/i, 2);
-  bump("streaming_content", /\b(logo|banner|profile)\b/i, 1);
-
-  bump("uiux_prototyping", /\b(wireframe|wireframes)\b/i, 5);
-  bump("uiux_prototyping", /\b(mockup|mockups)\b/i, 4);
-  bump("uiux_prototyping", /\b(prototype|prototyping)\b/i, 4);
-  bump("uiux_prototyping", /\b(user flow|user flows|flow diagram)\b/i, 4);
-  bump("uiux_prototyping", /\b(dashboard|app screen|app screens|screens)\b/i, 3);
-  bump("uiux_prototyping", /\b(ui|ux)\b/i, 2);
-
-  bump("ecommerce_pod", /\b(product photo|product photos)\b/i, 5);
-  bump("ecommerce_pod", /\b(listing|listings|marketplace)\b/i, 4);
-  bump("ecommerce_pod", /\b(etsy|amazon|shop)\b/i, 3);
-  bump("ecommerce_pod", /\b(merch|t-?shirt|hoodie|mug|poster)\b/i, 4);
-  bump("ecommerce_pod", /\b(packaging)\b/i, 3);
-  bump("ecommerce_pod", /\b(couch|sofa|chair|table)\b/i, 3);
-
-  bump("content_engine", /\b(pipeline|workflow|automation|automated|system|systems)\b/i, 4);
-  bump("content_engine", /\b(brand system|brand|template)\b/i, 2);
-  bump("content_engine", /\b(multi-?channel|batch)\b/i, 2);
-
-  let bestKey = null;
+  const branches = Array.isArray(state.intent?.iconState?.branches) ? state.intent.iconState.branches : [];
+  if (!branches.length) return null;
+  let bestBranchId = null;
   let bestScore = 0;
-  for (const [key, score] of Object.entries(scores)) {
-    const s = Number(score) || 0;
+  for (const branch of branches) {
+    const branchId = String(branch?.branch_id || "").trim();
+    if (!branchId) continue;
+    let s = _intentBranchTokenScore(haystack, branch);
+    if (typeof branch?.confidence === "number" && Number.isFinite(branch.confidence)) {
+      s += clamp(Number(branch.confidence), 0, 1) * 0.75;
+    }
     if (s > bestScore) {
       bestScore = s;
-      bestKey = key;
+      bestBranchId = branchId;
     }
   }
   // Require a little evidence before overriding icon-state suggestion.
-  if (!bestKey || bestScore < 3) return null;
-  return bestKey;
+  if (!bestBranchId || bestScore < 1.5) return null;
+  return bestBranchId;
 }
 
 function _primaryBranchSuggestion(iconState) {
@@ -14671,52 +14665,13 @@ async function dispatchMotherWheelAction(action) {
 }
 
 function motherIdleUseCasePromptMeta(useCaseKey) {
-  const key = String(useCaseKey || "").trim();
-  if (key === "streaming_content") {
-    return {
-      key,
-      title: _intentUseCaseTitle(key),
-      goal: "creator-facing social/stream visuals that test thumbnail or overlay direction",
-      cue: "bold focal subject, high-contrast framing, headline/overlay-safe composition",
-    };
-  }
-  if (key === "ecommerce_pod") {
-    return {
-      key,
-      title: _intentUseCaseTitle(key),
-      goal: "product/listing-ready composition that tests merch or catalog intent",
-      cue: "clean product hero, sellable lighting, marketplace-friendly framing",
-    };
-  }
-  if (key === "uiux_prototyping") {
-    return {
-      key,
-      title: _intentUseCaseTitle(key),
-      goal: "app/interface concept direction that tests UI or workflow exploration",
-      cue: "screen-first layout, structured hierarchy, legible panel/flow shapes",
-    };
-  }
-  if (key === "game_dev_assets") {
-    return {
-      key,
-      title: _intentUseCaseTitle(key),
-      goal: "game-art direction that tests asset-pack or concept-art workflows",
-      cue: "stylized subject, production-style key art lighting, asset-ready silhouette",
-    };
-  }
-  if (key === "content_engine") {
-    return {
-      key,
-      title: _intentUseCaseTitle(key),
-      goal: "repeatable multi-output brand/system direction",
-      cue: "modular visual system motifs, reusable template logic, channel-ready composition",
-    };
-  }
+  const key = _intentUseCaseKeyFromBranchId(useCaseKey) || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE;
+  const title = _intentUseCaseTitle(key);
   return {
-    key: "streaming_content",
-    title: _intentUseCaseTitle("streaming_content"),
-    goal: "creator-facing social/stream visuals that test thumbnail or overlay direction",
-    cue: "bold focal subject with clean, high-contrast composition",
+    key,
+    title,
+    goal: `direction anchored to ${String(title || "the active branch").toLowerCase()} while preserving active-image continuity`,
+    cue: "keep the active image as the anchor and let secondary references support composition and atmosphere",
   };
 }
 
@@ -14728,40 +14683,23 @@ function motherIdleInferUseCaseFromVisionLines(lines = []) {
     .toLowerCase()
     .trim();
   if (!haystack) return null;
-
-  const scores = {
-    game_dev_assets: 0,
-    streaming_content: 0,
-    uiux_prototyping: 0,
-    ecommerce_pod: 0,
-    content_engine: 0,
-  };
-  const bump = (key, re, weight) => {
-    if (!key || !re) return;
-    if (!(key in scores)) return;
-    try {
-      if (re.test(haystack)) scores[key] += Number(weight) || 0;
-    } catch {
-      // ignore
-    }
-  };
-
-  bump("game_dev_assets", /\b(sprite|sprites|tileset|texture|textures|concept art|unreal|unity|character sheet|game)\b/i, 3);
-  bump("streaming_content", /\b(instagram|twitch|youtube|tiktok|thumbnail|overlay|emote|stream|social)\b/i, 3);
-  bump("uiux_prototyping", /\b(wireframe|mockup|prototype|user flow|dashboard|app screen|ui|ux)\b/i, 3);
-  bump("ecommerce_pod", /\b(product photo|listing|marketplace|etsy|amazon|shop|merch|packaging|hoodie|mug)\b/i, 3);
-  bump("content_engine", /\b(pipeline|workflow|automation|system|template|brand system|batch)\b/i, 3);
-
+  const branches = Array.isArray(state.intent?.iconState?.branches) ? state.intent.iconState.branches : [];
+  if (!branches.length) return null;
   let bestKey = null;
   let bestScore = 0;
-  for (const [key, score] of Object.entries(scores)) {
-    const s = Number(score) || 0;
+  for (const branch of branches) {
+    const key = String(branch?.branch_id || "").trim();
+    if (!key) continue;
+    let s = _intentBranchTokenScore(haystack, branch);
+    if (typeof branch?.confidence === "number" && Number.isFinite(branch.confidence)) {
+      s += clamp(Number(branch.confidence), 0, 1) * 0.75;
+    }
     if (s > bestScore) {
       bestScore = s;
       bestKey = key;
     }
   }
-  if (!bestKey || bestScore < 3) return null;
+  if (!bestKey || bestScore < 1.5) return null;
   return bestKey;
 }
 
@@ -14783,22 +14721,26 @@ function motherIdlePickIntentHypotheses(visionLines = []) {
   if (visionHint) push(visionHint, "vision_descriptions");
 
   const iconState = state.intent?.iconState || null;
+  const availableBranchIds = (Array.isArray(iconState?.branches) ? iconState.branches : [])
+    .map((branch) => String(branch?.branch_id || "").trim())
+    .filter(Boolean);
   const suggested = pickSuggestedIntentBranch(iconState);
-  const suggestedKey = _intentUseCaseKeyFromBranchId(suggested?.branch_id);
+  const suggestedKey = _intentUseCaseKeyFromBranchId(suggested?.branch_id) || String(suggested?.branch_id || "").trim();
   if (suggestedKey) push(suggestedKey, suggested?.reason ? `intent_${suggested.reason}` : "intent_branch");
 
   const focusKey = _intentUseCaseKeyFromBranchId(state.intent?.focusBranchId || state.intent?.lockedBranchId || "");
   if (focusKey) push(focusKey, "intent_focus");
 
   if (!candidates.length) {
-    push("streaming_content", "default_fallback");
+    push(availableBranchIds[0] || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE, "default_fallback");
   }
 
-  const primary = candidates[0]?.key || "streaming_content";
+  const primary = candidates[0]?.key || availableBranchIds[0] || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE;
   const alternate =
     candidates.find((entry) => entry.key !== primary)?.key ||
-    MOTHER_INTENT_USECASE_DEFAULT_ORDER.find((key) => key !== primary) ||
-    "ecommerce_pod";
+    availableBranchIds.find((key) => key !== primary) ||
+    MOTHER_V2_TRANSFORMATION_MODES.find((key) => key !== primary) ||
+    primary;
 
   const whyParts = [];
   const primaryReason = candidates[0]?.reason || "signal";
@@ -14814,6 +14756,7 @@ function motherIdlePickIntentHypotheses(visionLines = []) {
     reasonText: whyParts.join("; "),
     signals: candidates.map((entry) => ({
       use_case: entry.key,
+      branch_id: entry.key,
       title: _intentUseCaseTitle(entry.key),
       reason: entry.reason,
     })),
@@ -18019,6 +17962,10 @@ async function motherV2DispatchCompiledPrompt(compiled = {}) {
   idle.dispatchTimeoutExtensions = 0;
   idle.cancelArtifactUntil = 0;
   idle.cancelArtifactReason = null;
+  idle.hasGeneratedSinceInteraction = false;
+  idle.generatedImageId = null;
+  idle.generatedVersionId = null;
+  idle.suppressFailureUntil = 0;
   idle.pendingGeneration = true;
   idle.pendingDispatchToken = Date.now();
   idle.pendingPromptLine = promptLine;
@@ -18132,6 +18079,8 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
   idle.generatedImageId = id;
   idle.generatedVersionId = incomingVersionId || null;
   idle.lastSuggestionAt = Date.now();
+  idle.hasGeneratedSinceInteraction = true;
+  idle.suppressFailureUntil = idle.lastSuggestionAt + MOTHER_V2_SINGLE_RESULT_GUARD_WINDOW_MS;
   state.expectingArtifacts = false;
   restoreEngineImageModelIfNeeded();
   setImageFxActive(false);
@@ -18487,6 +18436,10 @@ function motherIdleSyncFromInteraction({ userInteraction = false, semantic = tru
         actionVersion: Number(idle.actionVersion) || 0,
       }).catch(() => {});
     }
+    idle.hasGeneratedSinceInteraction = false;
+    idle.generatedImageId = null;
+    idle.generatedVersionId = null;
+    idle.suppressFailureUntil = 0;
     idle.multiUploadIdleBoostUntil = 0;
     const shouldPreserveLiveProposal = Boolean(
       proposalLiveRefresh &&
@@ -25476,7 +25429,7 @@ async function handleEventLegacy(event) {
       Boolean(motherIdle?.hasGeneratedSinceInteraction) &&
       noForegroundPending &&
       String(state.lastAction || "") === "Mother Suggestion" &&
-      Date.now() <= (Number(motherIdle?.lastSuggestionAt) || 0) + 20_000;
+      Date.now() <= (Number(motherIdle?.lastSuggestionAt) || 0) + MOTHER_V2_SINGLE_RESULT_GUARD_WINDOW_MS;
     if (motherSingleSuggestionGuard && String(id) !== String(motherIdle.generatedImageId)) {
       appendMotherSuggestionLog({
         stage: "extra_result_ignored",
@@ -28505,23 +28458,13 @@ function _normalizeIntentKey(value) {
 function _intentUseCaseKeyFromBranchId(branchId) {
   const key = _normalizeIntentKey(branchId);
   if (!key) return null;
-  if (key.includes("game")) return "game_dev_assets";
-  if (key.includes("stream")) return "streaming_content";
-  if (key.includes("ui") || key.includes("ux") || key.includes("wireframe") || key.includes("mock")) return "uiux_prototyping";
-  if (key.includes("ecommerce") || key.includes("pod") || key.includes("product") || key.includes("merch")) return "ecommerce_pod";
-  if (key.includes("engine") || key.includes("system") || key.includes("pipeline") || key.includes("automation") || key.includes("brand"))
-    return "content_engine";
-  return null;
+  if (key === "primary") return null;
+  return key;
 }
 
 function _intentUseCaseTitle(useCaseKey) {
-  const key = String(useCaseKey || "").trim();
+  const key = _intentUseCaseKeyFromBranchId(useCaseKey);
   if (!key) return "";
-  if (key === "game_dev_assets") return "GAME ASSETS";
-  if (key === "streaming_content") return "STREAMING";
-  if (key === "uiux_prototyping") return "UI/UX";
-  if (key === "ecommerce_pod") return "ECOMMERCE";
-  if (key === "content_engine") return "PIPELINE";
   return key
     .toUpperCase()
     .replace(/[^A-Z0-9/]+/g, " ")
@@ -28592,109 +28535,35 @@ function _drawIntentUseCaseGlyph(ctx, useCaseKey, cx, cy, size, { alpha = 1 } = 
     return;
   }
   const s = Math.max(12, Number(size) || 0);
-  const lw = Math.max(1, Math.round(s * 0.09));
+  const lw = Math.max(1, Math.round(s * 0.07));
   const fg = "rgba(230, 237, 243, 0.90)";
+  const monogram = (() => {
+    const normalized = _normalizeIntentKey(key);
+    if (!normalized) return "?";
+    const parts = normalized.split("_").filter(Boolean);
+    if (!parts.length) return "?";
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return `${parts[0].slice(0, 1)}${parts[1].slice(0, 1)}`.toUpperCase();
+  })();
+  const x = cx - s / 2;
+  const y = cy - s / 2;
+  const radius = Math.max(2, Math.round(s * 0.2));
+  const fontPx = Math.max(9, Math.round(s * 0.34));
   ctx.save();
   ctx.globalAlpha = clamp(Number(alpha) || 1, 0.05, 1);
-  ctx.strokeStyle = fg;
-  ctx.fillStyle = fg;
+  ctx.fillStyle = "rgba(8, 10, 14, 0.82)";
+  ctx.strokeStyle = "rgba(82, 255, 148, 0.36)";
   ctx.lineWidth = lw;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-
-  if (key === "game_dev_assets") {
-    const w = s * 1.05;
-    const h = s * 0.68;
-    const x = cx - w / 2;
-    const y = cy - h / 2;
-    _drawRoundedRect(ctx, x, y, w, h, h * 0.38);
-    ctx.stroke();
-    // D-pad.
-    ctx.beginPath();
-    ctx.moveTo(cx - w * 0.26, cy);
-    ctx.lineTo(cx - w * 0.12, cy);
-    ctx.moveTo(cx - w * 0.19, cy - h * 0.14);
-    ctx.lineTo(cx - w * 0.19, cy + h * 0.14);
-    ctx.stroke();
-    // Buttons.
-    const br = Math.max(1.5, s * 0.06);
-    const bx = cx + w * 0.22;
-    const by = cy;
-    for (const off of [
-      { x: -br * 1.1, y: -br * 1.1 },
-      { x: br * 1.1, y: -br * 1.1 },
-      { x: -br * 1.1, y: br * 1.1 },
-      { x: br * 1.1, y: br * 1.1 },
-    ]) {
-      ctx.beginPath();
-      ctx.arc(bx + off.x, by + off.y, br, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-  } else if (key === "streaming_content") {
-    // Lightning bolt.
-    ctx.beginPath();
-    ctx.moveTo(cx - s * 0.10, cy - s * 0.52);
-    ctx.lineTo(cx + s * 0.10, cy - s * 0.10);
-    ctx.lineTo(cx - s * 0.02, cy - s * 0.10);
-    ctx.lineTo(cx + s * 0.02, cy + s * 0.52);
-    ctx.lineTo(cx - s * 0.10, cy + s * 0.12);
-    ctx.lineTo(cx + s * 0.02, cy + s * 0.12);
-    ctx.closePath();
-    ctx.stroke();
-  } else if (key === "uiux_prototyping") {
-    const w = s * 1.05;
-    const h = s * 0.82;
-    const x = cx - w / 2;
-    const y = cy - h / 2;
-    _drawRoundedRect(ctx, x, y, w, h, s * 0.16);
-    ctx.stroke();
-    // Top bar + columns.
-    ctx.beginPath();
-    ctx.moveTo(x + lw, y + h * 0.22);
-    ctx.lineTo(x + w - lw, y + h * 0.22);
-    ctx.moveTo(x + w * 0.42, y + h * 0.22);
-    ctx.lineTo(x + w * 0.42, y + h - lw);
-    ctx.stroke();
-  } else if (key === "ecommerce_pod") {
-    // Box/cube.
-    const w = s * 0.95;
-    const h = s * 0.78;
-    const x0 = cx - w / 2;
-    const y0 = cy - h / 2 + s * 0.06;
-    ctx.beginPath();
-    ctx.rect(x0, y0, w, h);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(x0, y0);
-    ctx.lineTo(x0 + w * 0.18, y0 - s * 0.18);
-    ctx.lineTo(x0 + w * 1.18, y0 - s * 0.18);
-    ctx.lineTo(x0 + w, y0);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(x0 + w, y0);
-    ctx.lineTo(x0 + w * 1.18, y0 - s * 0.18);
-    ctx.lineTo(x0 + w * 1.18, y0 - s * 0.18 + h);
-    ctx.lineTo(x0 + w, y0 + h);
-    ctx.stroke();
-  } else if (key === "content_engine") {
-    // Simple gear.
-    const r = s * 0.34;
-    const teeth = 7;
-    for (let i = 0; i < teeth; i += 1) {
-      const a = (i / teeth) * Math.PI * 2;
-      const tx = cx + Math.cos(a) * r * 1.2;
-      const ty = cy + Math.sin(a) * r * 1.2;
-      ctx.beginPath();
-      ctx.arc(tx, ty, Math.max(1.5, s * 0.05), 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(cx, cy, r * 0.42, 0, Math.PI * 2);
-    ctx.stroke();
-  }
+  _drawRoundedRect(ctx, x, y, s, s, radius);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = fg;
+  ctx.font = `600 ${fontPx}px "SF Mono", "Menlo", "Monaco", ui-monospace, monospace`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(monogram, Math.round(cx), Math.round(cy + fontPx * 0.04));
 
   ctx.restore();
 }
@@ -31691,42 +31560,65 @@ function installUi() {
   }
   if (els.alwaysOnVisionToggle) {
     els.alwaysOnVisionToggle.checked = settings.alwaysOnVision;
-    els.alwaysOnVisionToggle.addEventListener("change", () => {
-      bumpInteraction();
-      settings.alwaysOnVision = els.alwaysOnVisionToggle.checked;
-      localStorage.setItem("brood.alwaysOnVision", settings.alwaysOnVision ? "1" : "0");
+    if (!ALWAYS_ON_CANVAS_CONTEXT_ENABLED) {
+      els.alwaysOnVisionToggle.checked = false;
+      els.alwaysOnVisionToggle.disabled = true;
+      els.alwaysOnVisionToggle.title = "Always-on canvas context is disabled. Mother intent realtime remains active.";
+      settings.alwaysOnVision = false;
       if (state.alwaysOnVision) {
-        state.alwaysOnVision.enabled = settings.alwaysOnVision;
+        state.alwaysOnVision.enabled = false;
         state.alwaysOnVision.pending = false;
         state.alwaysOnVision.pendingPath = null;
         state.alwaysOnVision.pendingAt = 0;
         state.alwaysOnVision.contentDirty = false;
         state.alwaysOnVision.dirtyReason = null;
         state.alwaysOnVision.disabledReason = null;
-        state.alwaysOnVision.rtState = settings.alwaysOnVision ? "connecting" : "off";
-        if (!settings.alwaysOnVision) state.alwaysOnVision.lastText = null;
+        state.alwaysOnVision.rtState = "off";
+        state.alwaysOnVision.lastText = null;
       }
       state.canvasContextSuggestion = null;
       updateAlwaysOnVisionReadout();
       renderQuickActions();
-      if (settings.alwaysOnVision) {
-        setStatus("Engine: always-on vision enabled");
-        markAlwaysOnVisionDirty("aov_enable");
-        ensureEngineSpawned({ reason: "always-on vision" })
-          .then((ok) => {
-            if (!ok) return;
-            return invoke("write_pty", { data: `${PTY_COMMANDS.CANVAS_CONTEXT_RT_START}\n` }).catch(() => {});
-          })
-          .catch(() => {});
-        scheduleAlwaysOnVision({ immediate: true });
-      } else {
-        setStatus("Engine: always-on vision disabled");
-        updatePortraitIdle({ fromSettings: true });
-        if (state.ptySpawned) {
-          invoke("write_pty", { data: `${PTY_COMMANDS.CANVAS_CONTEXT_RT_STOP}\n` }).catch(() => {});
+    } else {
+      els.alwaysOnVisionToggle.disabled = false;
+      els.alwaysOnVisionToggle.title = "";
+      els.alwaysOnVisionToggle.addEventListener("change", () => {
+        bumpInteraction();
+        settings.alwaysOnVision = els.alwaysOnVisionToggle.checked;
+        localStorage.setItem("brood.alwaysOnVision", settings.alwaysOnVision ? "1" : "0");
+        if (state.alwaysOnVision) {
+          state.alwaysOnVision.enabled = settings.alwaysOnVision;
+          state.alwaysOnVision.pending = false;
+          state.alwaysOnVision.pendingPath = null;
+          state.alwaysOnVision.pendingAt = 0;
+          state.alwaysOnVision.contentDirty = false;
+          state.alwaysOnVision.dirtyReason = null;
+          state.alwaysOnVision.disabledReason = null;
+          state.alwaysOnVision.rtState = settings.alwaysOnVision ? "connecting" : "off";
+          if (!settings.alwaysOnVision) state.alwaysOnVision.lastText = null;
         }
-      }
-    });
+        state.canvasContextSuggestion = null;
+        updateAlwaysOnVisionReadout();
+        renderQuickActions();
+        if (settings.alwaysOnVision) {
+          setStatus("Engine: always-on vision enabled");
+          markAlwaysOnVisionDirty("aov_enable");
+          ensureEngineSpawned({ reason: "always-on vision" })
+            .then((ok) => {
+              if (!ok) return;
+              return invoke("write_pty", { data: `${PTY_COMMANDS.CANVAS_CONTEXT_RT_START}\n` }).catch(() => {});
+            })
+            .catch(() => {});
+          scheduleAlwaysOnVision({ immediate: true });
+        } else {
+          setStatus("Engine: always-on vision disabled");
+          updatePortraitIdle({ fromSettings: true });
+          if (state.ptySpawned) {
+            invoke("write_pty", { data: `${PTY_COMMANDS.CANVAS_CONTEXT_RT_STOP}\n` }).catch(() => {});
+          }
+        }
+      });
+    }
   }
   if (els.autoAcceptSuggestedAbilityToggle) {
     els.autoAcceptSuggestedAbilityToggle.checked = settings.autoAcceptSuggestedAbility;

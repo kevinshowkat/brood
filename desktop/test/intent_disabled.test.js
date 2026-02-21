@@ -10,9 +10,9 @@ const cssPath = join(here, "..", "src", "styles.css");
 const app = readFileSync(appPath, "utf8");
 const css = readFileSync(cssPath, "utf8");
 
-test("Intent Canvas: onboarding gate stays disabled while ambient inference is enabled", () => {
+test("Intent Canvas: onboarding gate stays disabled while ambient inference is disabled", () => {
   assert.match(app, /const INTENT_CANVAS_ENABLED = false/);
-  assert.match(app, /const INTENT_AMBIENT_ENABLED = true/);
+  assert.match(app, /const INTENT_AMBIENT_ENABLED = false/);
   assert.match(app, /const INTENT_AMBIENT_ICON_PLACEMENT_ENABLED = false/);
   assert.match(app, /intentAmbient:\s*\{/);
   assert.match(app, /function intentAmbientActive\(\)/);
