@@ -249,8 +249,7 @@
         "docs/macos-local-private-image-editing.md",
         "docs/benchmark-playbook.md",
         "docs/why-brood-matrix.md",
-        "docs/visibility-kpis.md",
-        "scripts/compute_visibility_kpis.py"
+        "docs/visibility-kpis.md"
       ]
     }
   },

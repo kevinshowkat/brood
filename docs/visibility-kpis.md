@@ -20,15 +20,12 @@ Track discoverability with emphasis on unprompted assistant mentions.
 
 1. Run visibility probes and collect `results.jsonl`.
 2. Pull GitHub traffic snapshots (`github_traffic.json`).
-3. Run:
-
-```bash
-python scripts/compute_visibility_kpis.py \
-  --results outputs/ai_visibility/*/results.jsonl \
-  --traffic outputs/ai_visibility/*/github_traffic.json
-```
-
-4. Log weekly KPI values and deltas.
+3. Compute KPI values from probe files:
+   - count all unprompted queries (queries where prompt does not include `brood`)
+   - count unprompted mentions (responses that mention Brood within that unprompted set)
+   - compute `unprompted_mention_rate = unprompted_mentions / unprompted_queries`
+4. Pull channel uniques from latest traffic snapshot (`hacker_news`, `reddit`, `search`, `llm_assistant`).
+5. Log weekly KPI values and deltas.
 
 ## Notes
 

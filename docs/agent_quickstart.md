@@ -46,10 +46,9 @@ Use this when you need to pick a high-confidence starting path quickly.
 - Read: `docs/visibility-kpis.md`
 - Run:
   - `./scripts/check_agent_entrypoints.py`
-  - `python scripts/compute_visibility_kpis.py --results outputs/ai_visibility/*/results.jsonl`
 - Expected output:
   - Query-targeted docs are linked from README/intake.
-  - Unprompted mention KPI is reproducible from repo data.
+  - Unprompted mention KPI is computed from `results.jsonl` and traffic snapshots.
 
 ## Intake-first flow (if endpoint is reachable)
 
