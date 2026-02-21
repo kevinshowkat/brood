@@ -1,0 +1,7 @@
+# Keep GitHub language stats focused on shipped product/runtime source.
+# Exclude test-only code from Linguist language detection.
+desktop/test/** linguist-detectable=false
+
+# Aggressive profile: de-emphasize desktop webview surface area.
+desktop/src/canvas_app.js linguist-detectable=false
+desktop/src/styles.css linguist-detectable=false

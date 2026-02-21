@@ -84,6 +84,8 @@ yellow.png
 docs/ai_visibility.md
 docs/ai_visibility.schema.json
 docs/ai_visibility_queries.sample.json
+docs/realtime_intent_pipeline_simulation_prompt_v2.md
+docs/realtime_intent_tuning_handoff_2026-02-21.md
 scripts/visibility_probe.py
 
 # Editor
