@@ -313,6 +313,22 @@ body {
     inset 0 0 0 1px rgba(236, 255, 246, 0.48);
 }
 
+.mother-intent-source-indicator.is-realtime-openai-mini {
+  border-color: rgba(106, 194, 255, 0.96);
+  background: rgba(106, 194, 255, 0.95);
+  box-shadow:
+    0 0 10px rgba(106, 194, 255, 0.5),
+    inset 0 0 0 1px rgba(236, 248, 255, 0.46);
+}
+
+.mother-intent-source-indicator.is-realtime-gemini-flash {
+  border-color: rgba(255, 191, 88, 0.96);
+  background: rgba(255, 191, 88, 0.95);
+  box-shadow:
+    0 0 10px rgba(255, 191, 88, 0.44),
+    inset 0 0 0 1px rgba(255, 247, 232, 0.42);
+}
+
 .mother-intent-source-indicator.is-fallback {
   border-color: rgba(255, 122, 122, 0.96);
   background: rgba(255, 122, 122, 0.95);

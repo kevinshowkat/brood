@@ -251,23 +251,17 @@ function motherMoodConfig(raw = null) {
 
 function loadMotherMoodPreference() {
   try {
-    return motherNormalizeMood(localStorage.getItem(MOTHER_MOOD_PROFILE_KEY) || "") || null;
-  } catch {
-    return null;
-  }
-}
-
-function saveMotherMoodPreference(mood = null) {
-  try {
-    const key = motherNormalizeMood(mood);
-    if (!key) {
-      localStorage.removeItem(MOTHER_MOOD_PROFILE_KEY);
-      return;
-    }
-    localStorage.setItem(MOTHER_MOOD_PROFILE_KEY, key);
+    // Session-scoped behavior: always start with an unset vibe.
+    localStorage.removeItem(MOTHER_MOOD_PROFILE_KEY);
   } catch {
     // ignore localStorage failures
   }
+  return null;
+}
+
+function saveMotherMoodPreference(mood = null) {
+  void mood;
+  // Session-scoped behavior: do not persist vibe across app restarts.
 }
 
 function motherCurrentCreativeDirective() {
@@ -1285,6 +1279,7 @@ const state = {
     importPointCss: null, // { x, y }
     wheelOnTap: false,
     moved: false,
+    semanticInteractionEmitted: false,
   },
   promptGenerateHoverCss: null, // last known canvas hover point in CSS px
   reelTouch: {
@@ -1974,9 +1969,35 @@ function engineStatusDotTooltip(statusText = "", stateKey = "idle") {
   return `Engine status dot\nShows current engine activity.\nState: ${stateLabel}\n${detail}`;
 }
 
-function intentSourceDotTooltip(kind = "") {
+function realtimeIntentModelLabel(raw = "") {
+  const normalized = String(raw || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (normalized.includes("gpt-realtime-mini")) return "gpt-realtime-mini";
+  if (
+    normalized.includes("gemini-3.0-flash") ||
+    normalized.includes("gemini-3-flash-preview") ||
+    normalized.includes("gemini-3-flash")
+  ) {
+    return "gemini-3.0-flash";
+  }
+  return String(raw || "").trim();
+}
+
+function realtimeIntentModelTone(raw = "") {
+  const label = realtimeIntentModelLabel(raw).toLowerCase();
+  if (!label) return "";
+  if (label === "gpt-realtime-mini") return "openai-mini";
+  if (label === "gemini-3.0-flash") return "gemini-flash";
+  return "";
+}
+
+function intentSourceDotTooltip(kind = "", model = "") {
   const normalized = String(kind || "").trim().toLowerCase();
-  const source = normalized === "realtime" || normalized === "fallback" ? normalized : "idle";
+  const source = normalized === "realtime" ? "realtime" : "idle";
+  const modelLabel = source === "realtime" ? realtimeIntentModelLabel(model) : "";
+  if (modelLabel) {
+    return `Intent source dot\nShows where Mother intent came from.\nSource: ${source}\nModel: ${modelLabel}`;
+  }
   return `Intent source dot\nShows where Mother intent came from.\nSource: ${source}`;
 }
 
@@ -9584,14 +9605,24 @@ function syncMotherIntentSourceIndicator() {
   const indicator = els.motherIntentSourceIndicator;
   if (!indicator) return;
   const sourceKind = String(state.motherIdle?.intent?._intent_source_kind || "").trim().toLowerCase();
-  const normalized = sourceKind === "realtime" || sourceKind === "fallback" ? sourceKind : "";
-  indicator.classList.remove("hidden", "is-realtime", "is-fallback");
+  const sourceModel = String(state.motherIdle?.intent?._intent_source_model || "").trim();
+  const normalized = sourceKind === "realtime" ? "realtime" : "";
+  const tone = normalized === "realtime" ? realtimeIntentModelTone(sourceModel) : "";
+  indicator.classList.remove(
+    "hidden",
+    "is-realtime",
+    "is-fallback",
+    "is-realtime-openai-mini",
+    "is-realtime-gemini-flash"
+  );
   if (!normalized) {
-    indicator.title = intentSourceDotTooltip("");
+    indicator.title = intentSourceDotTooltip("", "");
     return;
   }
   indicator.classList.add(`is-${normalized}`);
-  indicator.title = intentSourceDotTooltip(normalized);
+  if (tone === "openai-mini") indicator.classList.add("is-realtime-openai-mini");
+  if (tone === "gemini-flash") indicator.classList.add("is-realtime-gemini-flash");
+  indicator.title = intentSourceDotTooltip(normalized, sourceModel);
 }
 
 function motherV2RolePreviewEntries() {
@@ -10657,142 +10688,7 @@ function motherV2RolePreviewHtml(
     mergeRect = { x, y, w: targetW, h: targetH };
   }
 
-  const activeRec =
-    projectedEntries.find((it) => Boolean(it?.entry?.isActive)) ||
-    subjectRec ||
-    modelRec ||
-    projectedEntries[0] ||
-    null;
-  const previewRectCorners = (rec) => {
-    if (!rec?.projected) return [];
-    const projected = rec.projected;
-    const baseTransform = readFreeformRectTransform(rec?.entry?.transform || null);
-    const points = transformedRectPolygonPoints({
-      x: Number(projected.x) || 0,
-      y: Number(projected.y) || 0,
-      w: Math.max(1, Number(projected.w) || 1),
-      h: Math.max(1, Number(projected.h) || 1),
-      rotateDeg: baseTransform.rotateDeg,
-      skewXDeg: baseTransform.skewXDeg,
-    });
-    if (Array.isArray(points) && points.length === 4) return points;
-    const x = Number(projected.x) || 0;
-    const y = Number(projected.y) || 0;
-    const w = Math.max(1, Number(projected.w) || 1);
-    const h = Math.max(1, Number(projected.h) || 1);
-    return [
-      { x, y },
-      { x: x + w, y },
-      { x: x + w, y: y + h },
-      { x, y: y + h },
-    ];
-  };
-  const activeCorners = activeRec ? previewRectCorners(activeRec) : [];
-  const flowGradients = [];
-  const flowStreams = [];
-  const sankeyBendAmount = motherV2SankeyBendAmountForMode(modeKey, performance.now());
-  if (activeRec && projectedEntries.length > 1) {
-    let flowIdx = 0;
-    const targetId = String(
-      activeRec?.entry?.imageId || activeRec?.entry?.imagePath || activeRec?.entry?.imageLabel || "__active__"
-    ).trim();
-    const midpoint = (a, b) => ({
-      x: ((Number(a?.x) || 0) + (Number(b?.x) || 0)) * 0.5,
-      y: ((Number(a?.y) || 0) + (Number(b?.y) || 0)) * 0.5,
-    });
-    for (const rec of projectedEntries) {
-      if (!rec || rec === activeRec) continue;
-      const sourceCorners = previewRectCorners(rec);
-      if (!Array.isArray(sourceCorners) || sourceCorners.length !== 4 || activeCorners.length !== 4) continue;
-      const sourceLaneOffset =
-        (flowIdx - Math.max(0, projectedEntries.length - 2) * 0.5) * 4.6;
-      const sourceId = String(
-        rec?.entry?.imageId || rec?.entry?.imagePath || rec?.entry?.imageLabel || `source-${flowIdx}`
-      ).trim();
-      const sourceTop = midpoint(sourceCorners[0], sourceCorners[1]);
-      const sourceBottom = midpoint(sourceCorners[3], sourceCorners[2]);
-      const targetTop = midpoint(activeCorners[0], activeCorners[1]);
-      const targetBottom = midpoint(activeCorners[3], activeCorners[2]);
-      if (
-        !Number.isFinite(sourceTop.x) ||
-        !Number.isFinite(sourceTop.y) ||
-        !Number.isFinite(sourceBottom.x) ||
-        !Number.isFinite(sourceBottom.y) ||
-        !Number.isFinite(targetTop.x) ||
-        !Number.isFinite(targetTop.y) ||
-        !Number.isFinite(targetBottom.x) ||
-        !Number.isFinite(targetBottom.y)
-      ) {
-        continue;
-      }
-      const prismGeom = motherV2BuildSankeyPrismFromEdgePair({
-        sourceTop,
-        sourceBottom,
-        targetTop,
-        targetBottom,
-        surfaceW: maxSurfaceW,
-        surfaceH: maxSurfaceH,
-        laneOffset: sourceLaneOffset,
-        bendAmount: sankeyBendAmount,
-      });
-      if (!prismGeom) continue;
-      const gradIdCore = `mother-flow-g-${flowIdx}-core`;
-      const gradIdTop = `mother-flow-g-${flowIdx}-top`;
-      const gradIdSide = `mother-flow-g-${flowIdx}-side`;
-      flowGradients.push(
-        `<linearGradient id="${escapeHtml(
-          gradIdCore
-        )}" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${maxSurfaceW.toFixed(
-          2
-        )}" y2="0"><stop offset="0%" stop-color="#2563eb" stop-opacity="0.96"/><stop offset="100%" stop-color="#ef4444" stop-opacity="0.96"/></linearGradient>`
-      );
-      flowGradients.push(
-        `<linearGradient id="${escapeHtml(
-          gradIdTop
-        )}" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${maxSurfaceW.toFixed(
-          2
-        )}" y2="0"><stop offset="0%" stop-color="#2563eb" stop-opacity="0.9"/><stop offset="100%" stop-color="#ef4444" stop-opacity="0.9"/></linearGradient>`
-      );
-      flowGradients.push(
-        `<linearGradient id="${escapeHtml(
-          gradIdSide
-        )}" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${maxSurfaceW.toFixed(
-          2
-        )}" y2="0"><stop offset="0%" stop-color="#2563eb" stop-opacity="0.82"/><stop offset="100%" stop-color="#ef4444" stop-opacity="0.82"/></linearGradient>`
-      );
-      const streamKey = `s-${flowIdx}`;
-      const streamHtml = `<g class="mother-role-preview-sankey-stream" data-stream-key="${escapeHtml(
-        streamKey
-      )}" data-source-id="${escapeHtml(sourceId)}" data-target-id="${escapeHtml(
-        targetId
-      )}" data-lane-offset="${sourceLaneOffset.toFixed(
-        3
-      )}"><path class="mother-role-preview-sankey-ribbon is-core" data-stream-role="core" d="${escapeHtml(
-        prismGeom.frontD
-      )}" fill="url(#${escapeHtml(
-        gradIdCore
-      )})"></path><path class="mother-role-preview-sankey-ribbon is-top" data-stream-role="top" d="${escapeHtml(
-        prismGeom.topFaceD
-      )}" fill="url(#${escapeHtml(
-        gradIdTop
-      )})"></path><path class="mother-role-preview-sankey-ribbon is-side" data-stream-role="side" d="${escapeHtml(
-        prismGeom.sideFaceD
-      )}" fill="url(#${escapeHtml(
-        gradIdSide
-      )})"></path></g>`;
-      flowStreams.push(streamHtml);
-      flowIdx += 1;
-    }
-  }
-  const flowHtml =
-    activeRec && flowStreams.length
-      ? `<div class="mother-role-preview-flow" aria-hidden="true"><svg class="mother-role-preview-sankey" viewBox="0 0 ${Math.max(
-          1,
-          Math.round(maxSurfaceW)
-        )} ${Math.max(1, Math.round(maxSurfaceH))}" preserveAspectRatio="none"><defs>${flowGradients.join(
-          ""
-        )}</defs>${flowStreams.join("")}</svg></div>`
-      : "";
+  const flowHtml = "";
 
   const rects = [];
   for (let i = 0; i < projectedEntries.length; i += 1) {
@@ -11010,18 +10906,8 @@ function motherV2RolePreviewSankeyTick() {
 }
 
 function motherV2StartRolePreviewSankeyTicker() {
-  const root = els.motherRolePreview;
-  if (!root || root.classList.contains("hidden")) return;
-  if (!(motherRolePreviewSankeyBendEpochMs > 0)) {
-    motherRolePreviewSankeyBendEpochMs = performance.now();
-  }
-  motherV2SyncRolePreviewSankeyStreams(root);
-  if (root.getAttribute("data-motion") === "paused") {
-    motherV2StopRolePreviewSankeyTicker();
-    return;
-  }
-  if (motherRolePreviewSankeyRaf) return;
-  motherRolePreviewSankeyRaf = requestAnimationFrame(motherV2RolePreviewSankeyTick);
+  // Sankey visualization is disabled; keep rectangle-only role preview rendering.
+  motherV2StopRolePreviewSankeyTicker();
 }
 
 function renderMotherRolePreview() {
@@ -11090,7 +10976,7 @@ function renderMotherRolePreview() {
   if (!sig) return;
   if (root.dataset.previewSig === sig) {
     motherV2SyncRolePreviewViewport(root, projection, { canvasCssW, canvasCssH });
-    motherV2StartRolePreviewSankeyTicker();
+    motherV2StopRolePreviewSankeyTicker();
     return;
   }
 
@@ -11111,7 +10997,7 @@ function renderMotherRolePreview() {
   root.innerHTML = html;
   root.dataset.previewSig = sig;
   motherV2SyncRolePreviewViewport(root, projection, { canvasCssW, canvasCssH });
-  motherV2StartRolePreviewSankeyTicker();
+  motherV2StopRolePreviewSankeyTicker();
 }
 
 function buildMotherText() {
@@ -11274,7 +11160,7 @@ function motherV2IntentSourceKind(source = "") {
   if (realtimeSourceSupported(raw)) return "realtime";
   if (raw.startsWith("openai_realtime") || raw.startsWith("gemini_flash")) return "realtime";
   if (raw.includes("intent_rt") || raw.includes("realtime")) return "realtime";
-  return "fallback";
+  return "";
 }
 
 function motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml }) {
@@ -15202,33 +15088,30 @@ function motherV2IntentFromRealtimeIcons(iconState = null, payload = {}) {
     const nextIdx = Number.isFinite(Number(normalized._idx)) ? Number(normalized._idx) : Number.MAX_SAFE_INTEGER;
     existing._idx = Math.min(priorIdx, nextIdx);
   };
-  const explicitModeHint = motherV2MaybeTransformationMode(
-    icons?.transformation_mode || payload.preferred_transformation_mode
-  );
-  if (explicitModeHint) pushModeCandidate(explicitModeHint, null, null, { idx: 0 });
-  let modeCandidateIdx = explicitModeHint ? 1 : 0;
+  const explicitRealtimeModeHint = motherV2MaybeTransformationMode(icons?.transformation_mode);
+  if (explicitRealtimeModeHint) pushModeCandidate(explicitRealtimeModeHint, null, null, { idx: 0 });
+  let modeCandidateIdx = explicitRealtimeModeHint ? 1 : 0;
   for (const candidate of Array.isArray(icons?.transformation_mode_candidates) ? icons.transformation_mode_candidates : []) {
     pushModeCandidate(candidate?.mode || candidate?.transformation_mode, candidate?.confidence, candidate?.awe_joy_score, {
       idx: modeCandidateIdx,
     });
     modeCandidateIdx += 1;
   }
-  if (!transformationModeCandidates.length) {
-    pushModeCandidate(payload.preferred_transformation_mode, null, null, { idx: modeCandidateIdx });
+  transformationModeCandidates.sort(motherV2CompareModeCandidates);
+  const transformationMode = motherV2MaybeTransformationMode(transformationModeCandidates[0]?.mode || explicitRealtimeModeHint);
+  if (transformationMode) {
+    pushModeCandidate(transformationMode, null, null, { idx: modeCandidateIdx + 1 });
+    transformationModeCandidates.sort(motherV2CompareModeCandidates);
   }
-  transformationModeCandidates.sort(motherV2CompareModeCandidates);
-  const transformationMode = motherV2NormalizeTransformationMode(
-    transformationModeCandidates[0]?.mode || explicitModeHint || payload.preferred_transformation_mode
-  );
-  pushModeCandidate(transformationMode, null, null, { idx: modeCandidateIdx + 1 });
-  transformationModeCandidates.sort(motherV2CompareModeCandidates);
   const rankedTransformationModeCandidates = transformationModeCandidates.map((entry) => ({
     mode: entry.mode,
     awe_joy_score: typeof entry.awe_joy_score === "number" ? entry.awe_joy_score : null,
     confidence: typeof entry.confidence === "number" ? entry.confidence : null,
   }));
 
-  const summary = motherV2ProposalSentence({ transformation_mode: transformationMode });
+  const summary = transformationMode
+    ? motherV2ProposalSentence({ transformation_mode: transformationMode })
+    : "Proposal pending realtime mode";
   const confidence = clamp(
     typeof topBranch?.confidence === "number" && Number.isFinite(topBranch.confidence)
       ? Number(topBranch.confidence)
@@ -15263,7 +15146,7 @@ function motherV2IntentFromRealtimeIcons(iconState = null, payload = {}) {
     intent_id: frameId ? `intent-rt-${frameId}` : `intent-rt-${actionVersion}-${Math.random().toString(16).slice(2, 7)}`,
     summary,
     creative_directive: motherCurrentCreativeDirective(),
-    transformation_mode: transformationMode,
+    transformation_mode: transformationMode || null,
     transformation_mode_candidates: rankedTransformationModeCandidates,
     shot_type: shotTypeHints.primary_shot_type,
     alternate_shot_type: shotTypeHints.alternate_shot_type,
@@ -16024,11 +15907,15 @@ function motherV2BuildIntentRequestId(actionVersion = 0) {
   return `mother-intent-a${Number(actionVersion) || 0}-${stamp}-${rand}`;
 }
 
-function motherV2ApplyIntent(intentPayload = {}, { source = "local", preserveMode = false, requestId = null } = {}) {
+function motherV2ApplyIntent(
+  intentPayload = {},
+  { source = "local", sourceModel = null, preserveMode = false, requestId = null } = {}
+) {
   const idle = state.motherIdle;
   if (!idle) return;
   if (idle.phase !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) return;
   const sourceTag = String(source || "local").trim();
+  const sourceModelLabel = realtimeIntentModelLabel(sourceModel || intentPayload?._intent_source_model || "");
   const priorPendingRealtimePath = String(idle.pendingIntentRealtimePath || "").trim();
   const priorPendingIntentPath = String(idle.pendingIntentPath || "").trim();
   const priorRequestId = String(idle.pendingIntentRequestId || "").trim();
@@ -16042,7 +15929,8 @@ function motherV2ApplyIntent(intentPayload = {}, { source = "local", preserveMod
           creative_directive: String(intentPayload.creative_directive || "").trim() || motherCurrentCreativeDirective(),
           transformation_mode: motherV2NormalizeTransformationMode(intentPayload.transformation_mode),
           _intent_request_id: resolvedRequestId,
-          _intent_source_kind: sourceKind || "fallback",
+          _intent_source_kind: sourceKind || null,
+          _intent_source_model: sourceModelLabel || null,
         }
       : null;
   normalizedIntent = motherV2DiversifyIntentForRejectFollowup(normalizedIntent);
@@ -16269,40 +16157,6 @@ async function motherV2RetryRealtimeIntentTransport({ path = "", errorMessage = 
   return true;
 }
 
-function motherV2SeedProvisionalIntent(payload = null, { requestId = null } = {}) {
-  const idle = state.motherIdle;
-  if (!idle) return false;
-  if (idle.phase !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) return false;
-  const payloadForIntent = payload && typeof payload === "object" ? payload : motherV2IntentPayload();
-  const realtimeIcons = state.intentAmbient?.iconState && typeof state.intentAmbient.iconState === "object"
-    ? state.intentAmbient.iconState
-    : null;
-  const provisional = motherV2IntentFromRealtimeIcons(realtimeIcons, payloadForIntent);
-  if (!provisional || typeof provisional !== "object") return false;
-  const normalized = motherV2EnsureProposalCandidates(
-    motherV2SanitizeIntentImageIds({
-      ...provisional,
-      creative_directive: String(provisional.creative_directive || "").trim() || motherCurrentCreativeDirective(),
-      _intent_request_id: String(requestId || idle.pendingIntentRequestId || "").trim() || null,
-      _intent_source_kind: "fallback",
-    })
-  );
-  if (!motherV2HasRealProposalPayload(normalized)) return false;
-  idle.intent = normalized;
-  motherV2NormalizeRoles(normalized.roles || null);
-  idle.liveProposalUpdating = false;
-  appendMotherTraceLog({
-    kind: "intent_seeded_local",
-    traceId: idle.telemetry?.traceId || null,
-    actionVersion: Number(idle.actionVersion) || 0,
-    request_id: String(requestId || idle.pendingIntentRequestId || "").trim() || null,
-    proposal_mode: motherV2NormalizeTransformationMode(normalized?.transformation_mode),
-  }).catch(() => {});
-  renderMotherReadout();
-  requestRender();
-  return true;
-}
-
 async function motherV2RequestIntentInference({
   snapshotLoadTimeoutMs = INTENT_SNAPSHOT_FAST_LOAD_TIMEOUT_MS,
   snapshotMaxDimPx = INTENT_SNAPSHOT_MAX_DIM_PX,
@@ -16347,26 +16201,6 @@ async function motherV2RequestIntentInference({
   const ok = await ensureEngineSpawned({ reason: "mother_intent_rt" });
   if (!ok) return false;
   const uploadFastPath = Boolean(fastUploadPath);
-  let seededFastIntent = false;
-  if (uploadFastPath) {
-    seededFastIntent = motherV2SeedProvisionalIntent(payload, { requestId });
-    if (seededFastIntent) {
-      motherIdleDispatchGeneration()
-        .then((started) => {
-          if (started) return;
-          motherV2ScheduleSpeculativePrefetch({
-            reason: "upload_fast_seed_retry",
-            delayMs: 0,
-          });
-        })
-        .catch(() => {
-          motherV2ScheduleSpeculativePrefetch({
-            reason: "upload_fast_seed_retry",
-            delayMs: 0,
-          });
-        });
-    }
-  }
 
   const failRealtimeIntent = ({ sourceTag = "intent_rt_failed", message = null } = {}) => {
     const current = state.motherIdle;
@@ -16374,29 +16208,16 @@ async function motherV2RequestIntentInference({
       clearOwnedPendingRequest(current);
       return;
     }
-    const fallbackMessage = String(message || "Mother realtime intent inference failed.").trim();
-    if (uploadFastPath) {
-      appendMotherTraceLog({
-        kind: "intent_realtime_soft_failed",
-        traceId: current.telemetry?.traceId || null,
-        actionVersion,
-        request_id: requestId,
-        source: String(sourceTag || "intent_rt_failed"),
-        error: fallbackMessage,
-      }).catch(() => {});
-      clearOwnedPendingRequest(current);
-      renderMotherReadout();
-      return;
-    }
+    const failureMessage = String(message || "Mother realtime intent inference failed.").trim();
     appendMotherTraceLog({
       kind: "intent_realtime_failed",
       traceId: current.telemetry?.traceId || null,
       actionVersion,
       request_id: requestId,
       source: String(sourceTag || "intent_rt_failed"),
-      error: fallbackMessage,
+      error: failureMessage,
     }).catch(() => {});
-    motherIdleHandleGenerationFailed(fallbackMessage);
+    motherIdleHandleGenerationFailed(failureMessage);
   };
 
   let snapshotPath = null;
@@ -16469,9 +16290,6 @@ async function motherV2RequestIntentInference({
     payload_path: payloadPath || null,
     snapshot_path: snapshotPath || null,
   }).catch(() => {});
-  if (!seededFastIntent) {
-    motherV2SeedProvisionalIntent(payload, { requestId });
-  }
   setStatus("Mother: hypothesizing intent (realtime)…");
   renderMotherReadout();
 
@@ -18788,6 +18606,19 @@ function getMultiViewTransform() {
     offsetX: Number(state.multiView?.offsetX) || 0,
     offsetY: Number(state.multiView?.offsetY) || 0,
   };
+}
+
+function isFreeformTransformDragKind(kind) {
+  return (
+    kind === POINTER_KINDS.FREEFORM_MOVE ||
+    kind === POINTER_KINDS.FREEFORM_RESIZE ||
+    kind === POINTER_KINDS.FREEFORM_ROTATE ||
+    kind === POINTER_KINDS.FREEFORM_SKEW
+  );
+}
+
+function isFreeformTransformPointerDragActive() {
+  return Boolean(state.pointer?.active && isFreeformTransformDragKind(state.pointer.kind));
 }
 
 function multiRectToScreenRect(rect, transform = getMultiViewTransform()) {
@@ -26425,6 +26256,26 @@ async function handleEventLegacy(event) {
             ? motherIdle.pendingIntentPayload
             : motherV2IntentPayload();
           const realtimeIntent = motherV2IntentFromRealtimeIcons(parsed, payloadForMother);
+          const hasRealtimeModeSignal = Boolean(
+            motherV2MaybeTransformationMode(realtimeIntent?.transformation_mode) ||
+              (Array.isArray(realtimeIntent?.transformation_mode_candidates) &&
+                realtimeIntent.transformation_mode_candidates.some((entry) =>
+                  Boolean(motherV2MaybeTransformationMode(entry?.mode || entry?.transformation_mode))
+                ))
+          );
+          if (!hasRealtimeModeSignal) {
+            const missingModeMessage = "Mother realtime intent missing transformation mode.";
+            appendMotherTraceLog({
+              kind: "intent_realtime_failed",
+              traceId: motherIdle.telemetry?.traceId || null,
+              actionVersion: Number(motherIdle.actionVersion) || 0,
+              request_id: motherRequestId,
+              source: event.source || "intent_rt_realtime",
+              error: missingModeMessage,
+            }).catch(() => {});
+            motherIdleHandleGenerationFailed(missingModeMessage);
+            return;
+          }
           const isLateRealtimeUpgrade = !motherIdle.pendingIntent;
           if (!motherIdle.pendingIntent) {
             appendMotherTraceLog({
@@ -26437,6 +26288,7 @@ async function handleEventLegacy(event) {
           }
           motherV2ApplyIntent(realtimeIntent, {
             source: event.source || "intent_rt_realtime",
+            sourceModel: event.model || null,
             requestId: motherRequestId,
             preserveMode: isLateRealtimeUpgrade,
           });
@@ -27057,6 +26909,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   state.motherOverlayUiHits = [];
   const items = state.images || [];
   const nowMs = performance.now ? performance.now() : Date.now();
+  const dragPerfMode = isFreeformTransformPointerDragActive();
   for (const item of items) {
     ensureCanvasImageLoaded(item);
   }
@@ -27073,7 +26926,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   const dpr = getDpr();
   wctx.save();
   wctx.imageSmoothingEnabled = true;
-  wctx.imageSmoothingQuality = "high";
+  wctx.imageSmoothingQuality = dragPerfMode ? "medium" : "high";
 
   const drawOrder = Array.isArray(state.freeformZOrder) && state.freeformZOrder.length
     ? state.freeformZOrder
@@ -27239,18 +27092,23 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
         skewXDeg: activeTransform.skewXDeg,
       });
 
+      const activeBorderPerfMode = dragPerfMode && String(state.pointer?.imageId || "") === String(state.activeId || "");
+      const outerLineWidth = activeBorderPerfMode ? Math.max(1, Math.round(6 * dpr)) : Math.max(1, Math.round(10 * dpr));
+      const outerShadowBlur = activeBorderPerfMode ? Math.round(20 * dpr) : Math.round(44 * dpr);
+      const mainShadowBlur = activeBorderPerfMode ? Math.round(14 * dpr) : Math.round(28 * dpr);
+
       // Outer glow stroke (wide + soft).
       octx.strokeStyle = outerStroke;
-      octx.lineWidth = Math.max(1, Math.round(10 * dpr));
+      octx.lineWidth = outerLineWidth;
       octx.shadowColor = mainShadow;
-      octx.shadowBlur = Math.round(44 * dpr);
+      octx.shadowBlur = outerShadowBlur;
       if (drawPolygonPath(octx, activeBorderPoints)) octx.stroke();
 
       // Main border stroke.
       octx.strokeStyle = mainStroke;
       octx.lineWidth = Math.max(1, Math.round(3.4 * dpr));
       octx.shadowColor = mainShadow;
-      octx.shadowBlur = Math.round(28 * dpr);
+      octx.shadowBlur = mainShadowBlur;
       if (drawPolygonPath(octx, activeBorderPoints)) octx.stroke();
 
       // Inner crisp stroke for definition.
@@ -27826,6 +27684,7 @@ function beginActiveImageTransformDrag(event, { ptCanvas = null, ptCss = null, h
   state.pointer.transformStartSkewXDeg = Number(transform.skewXDeg) || 0;
   state.pointer.wheelOnTap = false;
   state.pointer.moved = false;
+  state.pointer.semanticInteractionEmitted = false;
   return true;
 }
 
@@ -29448,7 +29307,7 @@ function render() {
       wctx.save();
       wctx.setTransform(state.view.scale, 0, 0, state.view.scale, state.view.offsetX, state.view.offsetY);
       wctx.imageSmoothingEnabled = true;
-      wctx.imageSmoothingQuality = "high";
+      wctx.imageSmoothingQuality = isFreeformTransformPointerDragActive() ? "medium" : "high";
       drawImageRectWithTransform(wctx, img, {
         x: 0,
         y: 0,
@@ -29466,6 +29325,10 @@ function render() {
       const mainStroke = motherGenerated ? "rgba(82, 255, 148, 0.94)" : "rgba(255, 212, 0, 0.96)";
       const mainShadow = motherGenerated ? "rgba(82, 255, 148, 0.28)" : "rgba(255, 212, 0, 0.26)";
       const innerStroke = motherGenerated ? "rgba(208, 255, 226, 0.60)" : "rgba(255, 247, 210, 0.58)";
+      const singleDragPerfMode = isFreeformTransformPointerDragActive() && String(state.pointer?.imageId || "") === String(item?.id || "");
+      const singleOuterLineWidth = singleDragPerfMode ? Math.max(1, Math.round(6 * dpr)) : Math.max(1, Math.round(10 * dpr));
+      const singleOuterShadowBlur = singleDragPerfMode ? Math.round(20 * dpr) : Math.round(44 * dpr);
+      const singleMainShadowBlur = singleDragPerfMode ? Math.round(14 * dpr) : Math.round(28 * dpr);
       const ix = state.view.offsetX;
       const iy = state.view.offsetY;
       const iw = (img.naturalWidth || item.width || 1) * state.view.scale;
@@ -29482,15 +29345,15 @@ function render() {
       octx.save();
       octx.lineJoin = "round";
       octx.strokeStyle = outerStroke;
-      octx.lineWidth = Math.max(1, Math.round(10 * dpr));
+      octx.lineWidth = singleOuterLineWidth;
       octx.shadowColor = mainShadow;
-      octx.shadowBlur = Math.round(44 * dpr);
+      octx.shadowBlur = singleOuterShadowBlur;
       if (drawPolygonPath(octx, singleBorderPoints)) octx.stroke();
 
       octx.strokeStyle = mainStroke;
       octx.lineWidth = Math.max(1, Math.round(3.4 * dpr));
       octx.shadowColor = mainShadow;
-      octx.shadowBlur = Math.round(28 * dpr);
+      octx.shadowBlur = singleMainShadowBlur;
       if (drawPolygonPath(octx, singleBorderPoints)) octx.stroke();
 
 	      octx.shadowBlur = 0;
@@ -29721,8 +29584,9 @@ function installCanvasHandlers() {
   };
 
   const handlePointerDown = (event) => {
-				    closeMotherWheelMenu({ immediate: false });
+					    closeMotherWheelMenu({ immediate: false });
         state.pointer.wheelOnTap = false;
+        state.pointer.semanticInteractionEmitted = false;
 		    if (state.canvasMode === "multi") {
 		      const canvas = els.workCanvas;
 		      if (canvas && state.multiRects.size === 0) {
@@ -30323,10 +30187,15 @@ function installCanvasHandlers() {
         (Number(pCss.x) || 0) - state.pointer.startCssX,
         (Number(pCss.y) || 0) - state.pointer.startCssY
       );
+      const hasSemanticDrag =
+        Boolean(state.pointer.moved) || dragDistCss > MOTHER_SELECTION_SEMANTIC_DRAG_PX;
+      const emitSemanticInteraction = hasSemanticDrag && !Boolean(state.pointer.semanticInteractionEmitted);
       bumpInteraction({
-        semantic: state.pointer.moved || dragDistCss > MOTHER_SELECTION_SEMANTIC_DRAG_PX,
-        proposalLiveRefresh: true,
+        motherHot: false,
+        semantic: emitSemanticInteraction,
+        proposalLiveRefresh: emitSemanticInteraction,
       });
+      if (emitSemanticInteraction) state.pointer.semanticInteractionEmitted = true;
     } else {
       bumpInteraction();
     }
@@ -30369,7 +30238,6 @@ function installCanvasHandlers() {
       state.freeformRects.set(id, next);
       state.pointer.moved = true;
       scheduleVisualPromptWrite();
-      if (intentAmbientActive()) scheduleAmbientIntentInference({ reason: "move", imageIds: [id] });
       requestRender();
       return;
     }
@@ -30413,7 +30281,6 @@ function installCanvasHandlers() {
       state.freeformRects.set(id, next);
       state.pointer.moved = true;
       scheduleVisualPromptWrite();
-      if (intentAmbientActive()) scheduleAmbientIntentInference({ reason: "resize", imageIds: [id] });
       requestRender();
       return;
     }
@@ -30451,7 +30318,6 @@ function installCanvasHandlers() {
       state.freeformRects.set(id, next);
       state.pointer.moved = true;
       scheduleVisualPromptWrite();
-      if (intentAmbientActive()) scheduleAmbientIntentInference({ reason: "transform", imageIds: [id] });
       requestRender();
       return;
     }
@@ -30485,7 +30351,6 @@ function installCanvasHandlers() {
       state.freeformRects.set(id, next);
       state.pointer.moved = true;
       scheduleVisualPromptWrite();
-      if (intentAmbientActive()) scheduleAmbientIntentInference({ reason: "transform", imageIds: [id] });
       requestRender();
       return;
     }
@@ -30582,6 +30447,7 @@ function installCanvasHandlers() {
 		    state.pointer.importPointCss = null;
         state.pointer.wheelOnTap = false;
 		    state.pointer.moved = false;
+        state.pointer.semanticInteractionEmitted = false;
         setOverlayCursor(INTENT_IMPORT_CURSOR);
         if (isReelSizeLocked()) {
           const p = canvasPointFromEvent(event);
@@ -30653,6 +30519,25 @@ function installCanvasHandlers() {
           }
           markAlwaysOnVisionDirty("image_transform");
           scheduleAlwaysOnVision();
+        }
+        if (
+          moved &&
+          imageId &&
+          intentAmbientActive() &&
+          (
+            kind === POINTER_KINDS.FREEFORM_MOVE ||
+            kind === POINTER_KINDS.FREEFORM_RESIZE ||
+            kind === POINTER_KINDS.FREEFORM_ROTATE ||
+            kind === POINTER_KINDS.FREEFORM_SKEW
+          )
+        ) {
+          if (kind === POINTER_KINDS.FREEFORM_MOVE) {
+            scheduleAmbientIntentInference({ reason: "move", imageIds: [imageId] });
+          } else if (kind === POINTER_KINDS.FREEFORM_RESIZE) {
+            scheduleAmbientIntentInference({ reason: "resize", imageIds: [imageId] });
+          } else {
+            scheduleAmbientIntentInference({ reason: "composition_change", imageIds: [imageId] });
+          }
         }
 
 			    if (kind === POINTER_KINDS.FREEFORM_IMPORT) {
