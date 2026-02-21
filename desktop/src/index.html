@@ -456,6 +456,14 @@
             </div>
           </div>
           <div class="key-status-card">
+            <div class="key-status-title">OpenRouter Onboarding</div>
+            <div id="openrouter-onboarding-status" class="key-status-list muted">Not started</div>
+            <div class="controls">
+              <button id="openrouter-onboarding-open" type="button">Run setup</button>
+              <button id="openrouter-onboarding-reset" class="ghost" type="button">Reset</button>
+            </div>
+          </div>
+          <div class="key-status-card">
             <div class="key-status-title">Run Directory</div>
             <div id="run-info" class="run-info-text muted">No run</div>
           </div>
@@ -491,6 +499,60 @@
           </div>
           <div class="drawer-footnote muted">
             For image-to-image edits and recreate, prefer a model that accepts image inputs (Gemini).
+          </div>
+        </div>
+      </div>
+      <div
+        id="openrouter-onboarding-modal"
+        class="openrouter-onboarding-modal hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-label="OpenRouter onboarding"
+      >
+        <div class="openrouter-onboarding-shell">
+          <div class="openrouter-onboarding-layout">
+            <section class="openrouter-onboarding-main">
+              <div id="openrouter-onboarding-header" class="openrouter-onboarding-header">
+                <div>
+                  <div class="openrouter-onboarding-title" id="openrouter-onboarding-title">
+                    OpenRouter onboarding
+                  </div>
+                  <div class="openrouter-onboarding-subtitle" id="openrouter-onboarding-subtitle">
+                    Intro
+                  </div>
+                </div>
+              </div>
+              <div id="openrouter-onboarding-body" class="openrouter-onboarding-body"></div>
+              <div
+                id="openrouter-onboarding-progress"
+                class="openrouter-onboarding-progress"
+                aria-label="OpenRouter onboarding progress"
+              ></div>
+              <div class="openrouter-onboarding-footer">
+                <div class="openrouter-onboarding-footer-left">
+                  <button id="openrouter-onboarding-back" class="ghost" type="button">Back</button>
+                  <a id="openrouter-onboarding-skip" class="openrouter-onboarding-skip-link" href="#" role="button">Skip for now</a>
+                </div>
+                <div class="openrouter-onboarding-footer-actions">
+                  <button id="openrouter-onboarding-next" type="button">Next</button>
+                </div>
+              </div>
+            </section>
+            <div class="openrouter-onboarding-media" aria-label="Mother portrait video">
+              <div class="openrouter-onboarding-media-frame">
+                <div id="openrouter-onboarding-media-slot" class="openrouter-onboarding-media-slot" aria-hidden="true">
+                  <video
+                    id="openrouter-onboarding-media-video"
+                    class="openrouter-onboarding-media-video"
+                    muted
+                    loop
+                    autoplay
+                    playsinline
+                    preload="metadata"
+                  ></video>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>

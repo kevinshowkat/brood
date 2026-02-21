@@ -7,7 +7,7 @@ The user can click anywhere on the canvas to import photos. Imported photos are 
 
 The user has **60 seconds (max)** from the moment the first photo is placed to lock in an intent via a guided, icon-only flow. After 3 rounds of model proposals + user selection, the user must choose an intent and Abilities unlock.
 
-Mental model: starting a StarCraft 2 game as Zerg. You decide what units to build and where to place buildings, but here the "units" are visual media (photos/references) and the layout is the strategy signal.
+Mental model: a strategy-game opening where you choose what to build and where to place it, but here the "units" are visual media (photos/references) and the layout is the strategy signal.
 
 ## Goals
 - Make the first minute feel like a guided "place images, reveal intent" flow.

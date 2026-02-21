@@ -92,6 +92,9 @@ struct ExportArgs {
 }
 
 const REALTIME_DESCRIPTION_MAX_CHARS: usize = 40;
+const OPENAI_VISION_FALLBACK_MODEL: &str = "gpt-5.2";
+const OPENAI_VISION_SECONDARY_MODEL: &str = "gpt-5-nano";
+const OPENROUTER_OPENAI_VISION_FALLBACK_MODEL: &str = "openai/gpt-5.2";
 
 fn main() {
     match run() {
@@ -139,6 +142,8 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
     let mut canvas_context_rt: Option<CanvasContextRealtimeSession> = None;
     let mut intent_rt: Option<IntentIconsRealtimeSession> = None;
     let mut mother_intent_rt: Option<IntentIconsRealtimeSession> = None;
+    let canvas_rt_source = || canvas_context_realtime_provider().as_str().to_string();
+    let intent_rt_source = |mother: bool| intent_realtime_provider(mother).as_str().to_string();
 
     println!("Brood chat started. Type /help for commands.");
 
@@ -595,7 +600,7 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": Value::Null,
                             "error": error,
-                            "source": "openai_realtime",
+                            "source": session.source(),
                             "model": session.model(),
                             "fatal": true,
                         })),
@@ -628,7 +633,10 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": Value::Null,
                             "error": msg,
-                            "source": "openai_realtime",
+                            "source": canvas_context_rt
+                                .as_ref()
+                                .map(|session| session.source().to_string())
+                                .unwrap_or_else(|| canvas_rt_source()),
                             "model": model,
                             "fatal": true,
                         })),
@@ -651,7 +659,10 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": path.to_string_lossy().to_string(),
                             "error": msg,
-                            "source": "openai_realtime",
+                            "source": canvas_context_rt
+                                .as_ref()
+                                .map(|session| session.source().to_string())
+                                .unwrap_or_else(|| canvas_rt_source()),
                             "model": model,
                             "fatal": true,
                         })),
@@ -674,7 +685,7 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": path.to_string_lossy().to_string(),
                             "error": error,
-                            "source": "openai_realtime",
+                            "source": session.source(),
                             "model": session.model(),
                             "fatal": true,
                         })),
@@ -702,7 +713,7 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": Value::Null,
                             "error": error,
-                            "source": "openai_realtime",
+                            "source": session.source(),
                             "model": session.model(),
                             "fatal": true,
                         })),
@@ -734,7 +745,10 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": Value::Null,
                             "error": msg,
-                            "source": "openai_realtime",
+                            "source": intent_rt
+                                .as_ref()
+                                .map(|session| session.source().to_string())
+                                .unwrap_or_else(|| intent_rt_source(false)),
                             "model": model,
                             "fatal": true,
                         })),
@@ -757,7 +771,10 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": path.to_string_lossy().to_string(),
                             "error": msg,
-                            "source": "openai_realtime",
+                            "source": intent_rt
+                                .as_ref()
+                                .map(|session| session.source().to_string())
+                                .unwrap_or_else(|| intent_rt_source(false)),
                             "model": model,
                             "fatal": true,
                         })),
@@ -782,7 +799,7 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": path.to_string_lossy().to_string(),
                             "error": error,
-                            "source": "openai_realtime",
+                            "source": session.source(),
                             "model": session.model(),
                             "fatal": true,
                         })),
@@ -808,7 +825,7 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": Value::Null,
                             "error": error,
-                            "source": "openai_realtime",
+                            "source": session.source(),
                             "model": session.model(),
                             "fatal": true,
                         })),
@@ -841,7 +858,10 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": Value::Null,
                             "error": msg,
-                            "source": "openai_realtime",
+                            "source": mother_intent_rt
+                                .as_ref()
+                                .map(|session| session.source().to_string())
+                                .unwrap_or_else(|| intent_rt_source(true)),
                             "model": model,
                             "fatal": true,
                         })),
@@ -864,7 +884,10 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": path.to_string_lossy().to_string(),
                             "error": msg,
-                            "source": "openai_realtime",
+                            "source": mother_intent_rt
+                                .as_ref()
+                                .map(|session| session.source().to_string())
+                                .unwrap_or_else(|| intent_rt_source(true)),
                             "model": model,
                             "fatal": true,
                         })),
@@ -885,7 +908,7 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                     let mut payload = json_object(json!({
                         "image_path": path.to_string_lossy().to_string(),
                         "error": error,
-                        "source": "openai_realtime",
+                        "source": session.source(),
                         "model": session.model(),
                         "fatal": true,
                     }));
@@ -2720,47 +2743,134 @@ fn normalize_realtime_model_name(raw: &str, default: &str) -> String {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RealtimeProvider {
+    OpenAiRealtime,
+    GeminiFlash,
+}
+
+impl RealtimeProvider {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAiRealtime => "openai_realtime",
+            Self::GeminiFlash => "gemini_flash",
+        }
+    }
+
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "openai" | "openai_realtime" => Some(Self::OpenAiRealtime),
+            "gemini" | "gemini_flash" => Some(Self::GeminiFlash),
+            _ => None,
+        }
+    }
+}
+
+fn infer_default_realtime_provider() -> RealtimeProvider {
+    if openai_api_key().is_some() {
+        return RealtimeProvider::OpenAiRealtime;
+    }
+    if openrouter_api_key().is_some() || gemini_api_key().is_some() {
+        return RealtimeProvider::GeminiFlash;
+    }
+    RealtimeProvider::OpenAiRealtime
+}
+
+fn realtime_provider_from_env(keys: &[&str]) -> Option<RealtimeProvider> {
+    for key in keys {
+        if let Ok(value) = env::var(key) {
+            if let Some(provider) = RealtimeProvider::parse(&value) {
+                return Some(provider);
+            }
+        }
+    }
+    None
+}
+
+fn canvas_context_realtime_provider() -> RealtimeProvider {
+    realtime_provider_from_env(&[
+        "BROOD_CANVAS_CONTEXT_REALTIME_PROVIDER",
+        "BROOD_REALTIME_PROVIDER",
+    ])
+    .unwrap_or_else(infer_default_realtime_provider)
+}
+
+fn intent_realtime_provider(mother: bool) -> RealtimeProvider {
+    let keys = if mother {
+        vec![
+            "BROOD_MOTHER_INTENT_REALTIME_PROVIDER",
+            "BROOD_INTENT_REALTIME_PROVIDER",
+            "BROOD_REALTIME_PROVIDER",
+        ]
+    } else {
+        vec!["BROOD_INTENT_REALTIME_PROVIDER", "BROOD_REALTIME_PROVIDER"]
+    };
+    realtime_provider_from_env(&keys).unwrap_or_else(infer_default_realtime_provider)
+}
+
+fn default_realtime_model(provider: RealtimeProvider, mother: bool) -> &'static str {
+    match provider {
+        RealtimeProvider::OpenAiRealtime => {
+            if mother {
+                "gpt-realtime"
+            } else {
+                "gpt-realtime-mini"
+            }
+        }
+        RealtimeProvider::GeminiFlash => "gemini-3-flash-preview",
+    }
+}
+
 fn canvas_context_realtime_model() -> String {
+    let provider = canvas_context_realtime_provider();
     let value = env::var("BROOD_CANVAS_CONTEXT_REALTIME_MODEL")
         .ok()
-        .or_else(|| env::var("OPENAI_CANVAS_CONTEXT_REALTIME_MODEL").ok())
-        .unwrap_or_else(|| "gpt-realtime-mini".to_string());
-    normalize_realtime_model_name(&value, "gpt-realtime-mini")
+        .or_else(|| {
+            if provider == RealtimeProvider::OpenAiRealtime {
+                env::var("OPENAI_CANVAS_CONTEXT_REALTIME_MODEL").ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| default_realtime_model(provider, false).to_string());
+    normalize_realtime_model_name(&value, default_realtime_model(provider, false))
 }
 
 fn intent_realtime_model(mother: bool) -> String {
+    let provider = intent_realtime_provider(mother);
     let keys: Vec<&str> = if mother {
-        vec![
-            "BROOD_MOTHER_INTENT_REALTIME_MODEL",
-            "BROOD_INTENT_REALTIME_MODEL",
-            "OPENAI_INTENT_REALTIME_MODEL",
-        ]
+        if provider == RealtimeProvider::OpenAiRealtime {
+            vec![
+                "BROOD_MOTHER_INTENT_REALTIME_MODEL",
+                "BROOD_INTENT_REALTIME_MODEL",
+                "OPENAI_INTENT_REALTIME_MODEL",
+            ]
+        } else {
+            vec![
+                "BROOD_MOTHER_INTENT_REALTIME_MODEL",
+                "BROOD_INTENT_REALTIME_MODEL",
+            ]
+        }
     } else {
-        vec![
-            "BROOD_INTENT_REALTIME_MODEL",
-            "OPENAI_INTENT_REALTIME_MODEL",
-        ]
+        if provider == RealtimeProvider::OpenAiRealtime {
+            vec![
+                "BROOD_INTENT_REALTIME_MODEL",
+                "OPENAI_INTENT_REALTIME_MODEL",
+            ]
+        } else {
+            vec!["BROOD_INTENT_REALTIME_MODEL"]
+        }
     };
     for key in keys {
         if let Ok(value) = env::var(key) {
-            let normalized = normalize_realtime_model_name(
-                &value,
-                if mother {
-                    "gpt-realtime"
-                } else {
-                    "gpt-realtime-mini"
-                },
-            );
+            let normalized =
+                normalize_realtime_model_name(&value, default_realtime_model(provider, mother));
             if !normalized.trim().is_empty() {
                 return normalized;
             }
         }
     }
-    if mother {
-        "gpt-realtime".to_string()
-    } else {
-        "gpt-realtime-mini".to_string()
-    }
+    default_realtime_model(provider, mother).to_string()
 }
 
 fn extract_action_version_from_path(path: &Path) -> Option<i64> {
@@ -2785,7 +2895,6 @@ fn extract_action_version_from_text(raw: &str) -> Option<i64> {
     None
 }
 
-const REALTIME_SOURCE: &str = "openai_realtime";
 const REALTIME_BETA_HEADER_VALUE: &str = "realtime=v1";
 const REALTIME_TIMEOUT_SECONDS: f64 = 42.0;
 const REALTIME_MAX_PARTIAL_HZ_MS: u64 = 250;
@@ -2808,6 +2917,21 @@ enum RealtimeSessionKind {
 }
 
 impl RealtimeSessionKind {
+    fn provider(self) -> RealtimeProvider {
+        match self {
+            Self::CanvasContext => canvas_context_realtime_provider(),
+            Self::IntentIcons { mother } => intent_realtime_provider(mother),
+        }
+    }
+
+    fn provider_env_key(self) -> &'static str {
+        match self {
+            Self::CanvasContext => "BROOD_CANVAS_CONTEXT_REALTIME_PROVIDER",
+            Self::IntentIcons { mother: true } => "BROOD_MOTHER_INTENT_REALTIME_PROVIDER",
+            Self::IntentIcons { mother: false } => "BROOD_INTENT_REALTIME_PROVIDER",
+        }
+    }
+
     fn event_type(self) -> &'static str {
         match self {
             Self::CanvasContext => "canvas_context",
@@ -2917,6 +3041,7 @@ enum RealtimeCommand {
 struct RealtimeSnapshotSession {
     events: EventWriter,
     model: String,
+    provider: RealtimeProvider,
     disabled: bool,
     kind: RealtimeSessionKind,
     sender: Option<mpsc::Sender<RealtimeCommand>>,
@@ -2930,6 +3055,7 @@ impl RealtimeSnapshotSession {
         Self {
             events,
             model,
+            provider: kind.provider(),
             disabled,
             kind,
             sender: None,
@@ -2943,16 +3069,42 @@ impl RealtimeSnapshotSession {
         &self.model
     }
 
+    fn source(&self) -> &'static str {
+        self.provider.as_str()
+    }
+
+    fn missing_api_key_message(&self) -> String {
+        match self.provider {
+            RealtimeProvider::OpenAiRealtime => {
+                if openrouter_api_key().is_some() {
+                    format!(
+                        "Realtime provider '{}' requires OPENAI_API_KEY (or OPENAI_API_KEY_BACKUP). OpenRouter does not support OpenAI realtime websocket for this flow. Set {}=gemini_flash and configure OPENROUTER_API_KEY or GEMINI_API_KEY (or GOOGLE_API_KEY), or provide OpenAI realtime credentials.",
+                        self.provider.as_str(),
+                        self.kind.provider_env_key()
+                    )
+                } else {
+                    "Missing OPENAI_API_KEY (or OPENAI_API_KEY_BACKUP).".to_string()
+                }
+            }
+            RealtimeProvider::GeminiFlash => "Missing GEMINI_API_KEY (or GOOGLE_API_KEY) or OPENROUTER_API_KEY for realtime provider gemini_flash.".to_string(),
+        }
+    }
+
     fn start(&mut self) -> (bool, Option<String>) {
         if self.disabled {
             return (false, Some(self.kind.disabled_message().to_string()));
         }
-        let Some(api_key) = openai_api_key() else {
-            return (
-                false,
-                Some("Missing OPENAI_API_KEY (or OPENAI_API_KEY_BACKUP).".to_string()),
-            );
+        let (api_key, gemini_via_openrouter) = match self.provider {
+            RealtimeProvider::OpenAiRealtime => (openai_api_key(), false),
+            RealtimeProvider::GeminiFlash => resolve_gemini_flash_credentials(),
         };
+        let Some(api_key) = api_key else {
+            return (false, Some(self.missing_api_key_message()));
+        };
+        if self.provider == RealtimeProvider::GeminiFlash {
+            self.model =
+                resolve_realtime_gemini_model_for_transport(&self.model, gemini_via_openrouter);
+        }
 
         self.cleanup_finished_worker();
         if self.worker_alive() {
@@ -2968,8 +3120,10 @@ impl RealtimeSnapshotSession {
         let worker = RealtimeWorker {
             events: self.events.clone(),
             model: self.model.clone(),
+            provider: self.provider,
             kind: self.kind,
             api_key,
+            gemini_via_openrouter,
             fatal_error: Arc::clone(&self.fatal_error),
             stop_flag: Arc::clone(&stop_flag),
         };
@@ -3069,6 +3223,97 @@ impl RealtimeSnapshotSession {
     }
 }
 
+fn resolve_gemini_flash_credentials() -> (Option<String>, bool) {
+    if let Some(key) = openrouter_api_key() {
+        return (Some(key), true);
+    }
+    if let Some(key) = gemini_api_key() {
+        return (Some(key), false);
+    }
+    (None, false)
+}
+
+fn resolve_realtime_gemini_model_for_transport(raw: &str, via_openrouter: bool) -> String {
+    if via_openrouter {
+        sanitize_openrouter_gemini_model(raw, "google/gemini-3-flash-preview")
+    } else {
+        sanitize_gemini_generate_content_model(raw, "gemini-3-flash-preview")
+    }
+}
+
+fn sanitize_gemini_generate_content_model(raw: &str, default_model: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return default_model.to_string();
+    }
+
+    let mut cleaned = trimmed
+        .strip_prefix("models/")
+        .unwrap_or(trimmed)
+        .trim()
+        .to_string();
+    if let Some(stripped) = cleaned.strip_prefix("google/") {
+        cleaned = stripped.trim().to_string();
+    }
+    if cleaned.is_empty() {
+        return default_model.to_string();
+    }
+
+    match cleaned.to_ascii_lowercase().as_str() {
+        "gemini-3.0-flash" | "gemini-3-flash" => "gemini-3-flash-preview".to_string(),
+        "gemini-3.0-pro" | "gemini-3-pro" => "gemini-3-pro-preview".to_string(),
+        "gemini-2.0-flash" => "gemini-2.0-flash-001".to_string(),
+        "gemini-2.0-flash-lite" => "gemini-2.0-flash-lite-001".to_string(),
+        _ => cleaned,
+    }
+}
+
+fn sanitize_openrouter_gemini_model(raw: &str, default_model: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return default_model.to_string();
+    }
+    if trimmed.starts_with("google/") {
+        return trimmed.to_string();
+    }
+
+    let cleaned = sanitize_gemini_generate_content_model(trimmed, "gemini-3-flash-preview");
+    let lowered = cleaned.to_ascii_lowercase();
+    if cleaned.starts_with("google/") {
+        cleaned
+    } else if lowered.starts_with("gemini-") {
+        format!("google/{cleaned}")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn sanitize_openrouter_model(raw: &str, default_model: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return default_model.to_string();
+    }
+    if trimmed.contains('/') {
+        return trimmed.to_string();
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    if lowered.starts_with("gemini") {
+        return sanitize_openrouter_gemini_model(trimmed, "google/gemini-3-flash-preview");
+    }
+    if lowered.starts_with("gpt-")
+        || lowered.starts_with("o1")
+        || lowered.starts_with("o3")
+        || lowered.starts_with("o4")
+    {
+        return format!("openai/{trimmed}");
+    }
+    if lowered.starts_with("claude") {
+        return format!("anthropic/{trimmed}");
+    }
+    trimmed.to_string()
+}
+
 struct CanvasContextRealtimeSession {
     inner: RealtimeSnapshotSession,
 }
@@ -3089,6 +3334,10 @@ impl CanvasContextRealtimeSession {
 
     fn model(&self) -> &str {
         self.inner.model()
+    }
+
+    fn source(&self) -> &'static str {
+        self.inner.source()
     }
 
     fn start(&mut self) -> (bool, Option<String>) {
@@ -3124,6 +3373,10 @@ impl IntentIconsRealtimeSession {
 
     fn model(&self) -> &str {
         self.inner.model()
+    }
+
+    fn source(&self) -> &'static str {
+        self.inner.source()
     }
 
     fn start(&mut self) -> (bool, Option<String>) {
@@ -3198,8 +3451,10 @@ impl std::fmt::Display for RealtimeJobError {
 struct RealtimeWorker {
     events: EventWriter,
     model: String,
+    provider: RealtimeProvider,
     kind: RealtimeSessionKind,
     api_key: String,
+    gemini_via_openrouter: bool,
     fatal_error: Arc<Mutex<Option<String>>>,
     stop_flag: Arc<AtomicBool>,
 }
@@ -3211,7 +3466,14 @@ impl RealtimeWorker {
         }
     }
 
-    fn open_session(&self) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
+    fn run_inner(&self, rx: mpsc::Receiver<RealtimeCommand>) -> Result<()> {
+        match self.provider {
+            RealtimeProvider::OpenAiRealtime => self.run_inner_openai(rx),
+            RealtimeProvider::GeminiFlash => self.run_inner_gemini(rx),
+        }
+    }
+
+    fn open_openai_session(&self) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
         let mut ws = open_realtime_websocket(&self.model, &self.api_key)?;
         let session_update = json!({
             "type": "session.update",
@@ -3226,9 +3488,9 @@ impl RealtimeWorker {
         Ok(ws)
     }
 
-    fn run_inner(&self, rx: mpsc::Receiver<RealtimeCommand>) -> Result<()> {
+    fn run_inner_openai(&self, rx: mpsc::Receiver<RealtimeCommand>) -> Result<()> {
         let max_retries = realtime_transport_retry_limit();
-        let mut ws = self.open_session()?;
+        let mut ws = self.open_openai_session()?;
 
         while !self.stop_flag.load(Ordering::SeqCst) {
             let command = match rx.recv_timeout(Duration::from_millis(200)) {
@@ -3261,7 +3523,7 @@ impl RealtimeWorker {
             };
             let mut attempt: usize = 0;
             loop {
-                match self.run_job(&mut ws, &job) {
+                match self.run_openai_job(&mut ws, &job) {
                     Ok(()) => break,
                     Err(err) => {
                         if !err.is_transport()
@@ -3277,7 +3539,7 @@ impl RealtimeWorker {
                         if !backoff.is_zero() {
                             thread::sleep(backoff);
                         }
-                        let reconnect = self.open_session().with_context(|| {
+                        let reconnect = self.open_openai_session().with_context(|| {
                             format!(
                                 "failed to reconnect realtime session after transient transport error (attempt {attempt}/{max_retries})"
                             )
@@ -3303,7 +3565,7 @@ impl RealtimeWorker {
         Ok(())
     }
 
-    fn run_job(
+    fn run_openai_job(
         &self,
         ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
         job: &RealtimeSnapshotJob,
@@ -3485,6 +3747,455 @@ impl RealtimeWorker {
         Ok(())
     }
 
+    fn run_inner_gemini(&self, rx: mpsc::Receiver<RealtimeCommand>) -> Result<()> {
+        let max_retries = realtime_transport_retry_limit();
+
+        while !self.stop_flag.load(Ordering::SeqCst) {
+            let command = match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(command) => command,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+
+            let mut jobs: Vec<RealtimeSnapshotJob> = Vec::new();
+            match command {
+                RealtimeCommand::Snapshot(job) => jobs.push(job),
+                RealtimeCommand::Stop => break,
+            }
+
+            while let Ok(next) = rx.try_recv() {
+                match next {
+                    RealtimeCommand::Snapshot(job) => jobs.push(job),
+                    RealtimeCommand::Stop => {
+                        self.stop_flag.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                }
+            }
+            if self.stop_flag.load(Ordering::SeqCst) {
+                break;
+            }
+
+            let Some(job) = self.kind.select_job(&jobs) else {
+                continue;
+            };
+            let mut attempt: usize = 0;
+            loop {
+                match self.run_gemini_job(&job) {
+                    Ok(()) => break,
+                    Err(err) => {
+                        if !err.is_transport()
+                            || attempt >= max_retries
+                            || self.stop_flag.load(Ordering::SeqCst)
+                        {
+                            self.fail_fatal(Some(&job.image_path), err.to_string());
+                            return Ok(());
+                        }
+                        attempt += 1;
+                        let backoff = realtime_transport_retry_backoff(attempt);
+                        if !backoff.is_zero() {
+                            thread::sleep(backoff);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn run_gemini_job(
+        &self,
+        job: &RealtimeSnapshotJob,
+    ) -> std::result::Result<(), RealtimeJobError> {
+        if self.gemini_via_openrouter {
+            return self.run_openrouter_gemini_job(job);
+        }
+        let _submitted_at_ms = job.submitted_at_ms;
+        let image_path = PathBuf::from(&job.image_path);
+        let main_image_part = read_image_as_gemini_inline_part(&image_path).ok_or_else(|| {
+            RealtimeJobError::terminal("failed to read image for realtime request")
+        })?;
+
+        let mut parts: Vec<Value> = Vec::new();
+        if let Some(context_text) = read_canvas_context_envelope(&image_path) {
+            parts.push(json!({ "text": context_text }));
+        }
+        if let Some(inline_instruction) = self.kind.per_request_input_text() {
+            parts.push(json!({ "text": inline_instruction }));
+        }
+
+        let context_refs = read_canvas_context_image_references(&image_path, 12);
+        if !context_refs.is_empty() {
+            let image_id_order = context_refs
+                .iter()
+                .map(|row| row.id.clone())
+                .collect::<Vec<String>>()
+                .join(", ");
+            parts.push(json!({
+                "text": format!("IMAGE_ID_ORDER: {image_id_order}"),
+            }));
+            parts.push(json!({
+                "text": "For image_descriptions, emit exactly one row per IMAGE_ID_ORDER id, preserve that order, and never swap labels across ids.",
+            }));
+        }
+        let reference_limit = match self.kind {
+            RealtimeSessionKind::IntentIcons { .. } => intent_realtime_reference_image_limit(),
+            RealtimeSessionKind::CanvasContext => 2,
+        };
+        for image_ref in context_refs.iter().take(reference_limit) {
+            if let Some((bytes, mime)) = prepare_vision_image(&image_ref.path, 1024) {
+                parts.push(json!({
+                    "text": format!("SOURCE_IMAGE_REFERENCE {} (high-res):", image_ref.id),
+                }));
+                parts.push(json!({
+                    "inlineData": {
+                        "mimeType": mime,
+                        "data": BASE64.encode(bytes),
+                    }
+                }));
+            }
+        }
+        parts.push(main_image_part);
+
+        let mut generation_config = Map::new();
+        generation_config.insert("temperature".to_string(), json!(self.kind.temperature()));
+        generation_config.insert(
+            "maxOutputTokens".to_string(),
+            Value::Number(self.kind.max_output_tokens().into()),
+        );
+        if let RealtimeSessionKind::IntentIcons { .. } = self.kind {
+            generation_config.insert(
+                "responseMimeType".to_string(),
+                Value::String("application/json".to_string()),
+            );
+        }
+        let payload = json!({
+            "systemInstruction": {
+                "parts": [{
+                    "text": self.kind.instruction()
+                }]
+            },
+            "contents": [{
+                "role": "user",
+                "parts": parts,
+            }],
+            "generationConfig": Value::Object(generation_config),
+        });
+        let endpoint = gemini_generate_content_endpoint(&self.model);
+        let client = HttpClient::builder()
+            .timeout(Duration::from_secs_f64(REALTIME_TIMEOUT_SECONDS))
+            .build()
+            .map_err(|err| {
+                RealtimeJobError::terminal(format!("failed to build realtime http client: {err}"))
+            })?;
+        let response = client
+            .post(&endpoint)
+            .query(&[("key", self.api_key.as_str())])
+            .header(CONTENT_TYPE, "application/json")
+            .json(&payload)
+            .send()
+            .map_err(|err| {
+                if is_reqwest_realtime_transport_error(&err) {
+                    RealtimeJobError::transport(format!("Gemini realtime request failed: {err}"))
+                } else {
+                    RealtimeJobError::terminal(format!("Gemini realtime request failed: {err}"))
+                }
+            })?;
+        if !response.status().is_success() {
+            let code = response.status().as_u16();
+            let body = response.text().unwrap_or_default();
+            return Err(RealtimeJobError::terminal(format!(
+                "Gemini realtime request failed ({code}): {}",
+                truncate_chars(&body, 420, 360)
+            )));
+        }
+        let parsed: Value = response.json().map_err(|err| {
+            RealtimeJobError::terminal(format!("Gemini realtime decode failed: {err}"))
+        })?;
+        let cleaned = extract_gemini_output_text(&parsed).trim().to_string();
+        if cleaned.is_empty() {
+            return Err(RealtimeJobError::terminal(
+                self.kind.empty_response_message(&parsed),
+            ));
+        }
+
+        let mut response_meta = Map::new();
+        if let Some((input_tokens, output_tokens)) = extract_gemini_token_usage_pair(&parsed) {
+            if let Some(value) = input_tokens {
+                response_meta.insert("input_tokens".to_string(), Value::Number(value.into()));
+            }
+            if let Some(value) = output_tokens {
+                response_meta.insert("output_tokens".to_string(), Value::Number(value.into()));
+            }
+        }
+        response_meta.insert(
+            "response_status".to_string(),
+            Value::String("completed".to_string()),
+        );
+        if let Some(reason) = extract_gemini_finish_reason(&parsed) {
+            response_meta.insert("response_status_reason".to_string(), Value::String(reason));
+        }
+
+        self.emit_stream_payload(&job.image_path, &cleaned, false, Some(response_meta));
+        Ok(())
+    }
+
+    fn run_openrouter_gemini_job(
+        &self,
+        job: &RealtimeSnapshotJob,
+    ) -> std::result::Result<(), RealtimeJobError> {
+        let _submitted_at_ms = job.submitted_at_ms;
+        let image_path = PathBuf::from(&job.image_path);
+        let data_url = read_image_as_data_url(&image_path).ok_or_else(|| {
+            RealtimeJobError::terminal("failed to read image for realtime request")
+        })?;
+
+        let mut chat_content: Vec<Value> = Vec::new();
+        if let Some(context_text) = read_canvas_context_envelope(&image_path) {
+            chat_content.push(json!({ "type": "text", "text": context_text }));
+        }
+        if let Some(inline_instruction) = self.kind.per_request_input_text() {
+            chat_content.push(json!({ "type": "text", "text": inline_instruction }));
+        }
+
+        let context_refs = read_canvas_context_image_references(&image_path, 12);
+        if !context_refs.is_empty() {
+            let image_id_order = context_refs
+                .iter()
+                .map(|row| row.id.clone())
+                .collect::<Vec<String>>()
+                .join(", ");
+            chat_content.push(json!({
+                "type": "text",
+                "text": format!("IMAGE_ID_ORDER: {image_id_order}"),
+            }));
+            chat_content.push(json!({
+                "type": "text",
+                "text": "For image_descriptions, emit exactly one row per IMAGE_ID_ORDER id, preserve that order, and never swap labels across ids.",
+            }));
+        }
+        let reference_limit = match self.kind {
+            RealtimeSessionKind::IntentIcons { .. } => intent_realtime_reference_image_limit(),
+            RealtimeSessionKind::CanvasContext => 2,
+        };
+        for image_ref in context_refs.iter().take(reference_limit) {
+            if let Some(reference_data_url) = prepare_vision_image_data_url(&image_ref.path, 1024) {
+                chat_content.push(json!({
+                    "type": "text",
+                    "text": format!("SOURCE_IMAGE_REFERENCE {} (high-res):", image_ref.id),
+                }));
+                chat_content.push(json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": reference_data_url,
+                    }
+                }));
+            }
+        }
+        chat_content.push(json!({
+            "type": "image_url",
+            "image_url": {
+                "url": data_url,
+            }
+        }));
+
+        let (response, cleaned, response_meta) =
+            self.request_openrouter_gemini_realtime(&chat_content)?;
+        if cleaned.trim().is_empty() {
+            return Err(RealtimeJobError::terminal(
+                self.kind.empty_response_message(&response),
+            ));
+        }
+        self.emit_stream_payload(&job.image_path, &cleaned, false, Some(response_meta));
+        Ok(())
+    }
+
+    fn request_openrouter_gemini_realtime(
+        &self,
+        chat_content: &[Value],
+    ) -> std::result::Result<(Value, String, Map<String, Value>), RealtimeJobError> {
+        if let Some(responses_result) = self.try_openrouter_responses_realtime(chat_content)? {
+            return Ok(responses_result);
+        }
+        self.request_openrouter_chat_completion_realtime(chat_content)
+    }
+
+    fn try_openrouter_responses_realtime(
+        &self,
+        chat_content: &[Value],
+    ) -> std::result::Result<Option<(Value, String, Map<String, Value>)>, RealtimeJobError> {
+        let endpoint = format!("{}/responses", openrouter_api_base());
+        let input_content = openrouter_chat_content_to_responses_input(chat_content);
+        let request_model = sanitize_openrouter_model(&self.model, "google/gemini-3-flash-preview");
+        let payload = json!({
+            "model": request_model,
+            "instructions": self.kind.instruction(),
+            "input": [{
+                "role": "user",
+                "content": input_content,
+            }],
+            "modalities": ["text"],
+            "temperature": self.kind.temperature(),
+            "max_output_tokens": self.kind.max_output_tokens(),
+            "stream": false,
+        });
+        let client = HttpClient::builder()
+            .timeout(Duration::from_secs_f64(REALTIME_TIMEOUT_SECONDS))
+            .build()
+            .map_err(|err| {
+                RealtimeJobError::terminal(format!("failed to build realtime http client: {err}"))
+            })?;
+        let request = client
+            .post(&endpoint)
+            .bearer_auth(&self.api_key)
+            .header(CONTENT_TYPE, "application/json");
+        let response = apply_openrouter_request_headers(request)
+            .json(&payload)
+            .send()
+            .map_err(|err| {
+                if is_reqwest_realtime_transport_error(&err) {
+                    RealtimeJobError::transport(format!(
+                        "OpenRouter responses realtime request failed: {err}"
+                    ))
+                } else {
+                    RealtimeJobError::terminal(format!(
+                        "OpenRouter responses realtime request failed: {err}"
+                    ))
+                }
+            })?;
+        if !response.status().is_success() {
+            let code = response.status().as_u16();
+            let body = response.text().unwrap_or_default();
+            if should_fallback_openrouter_responses(code, &body) {
+                return Ok(None);
+            }
+            return Err(RealtimeJobError::terminal(format!(
+                "OpenRouter responses realtime request failed ({code}): {}",
+                truncate_chars(&body, 420, 360)
+            )));
+        }
+        let parsed: Value = response.json().map_err(|err| {
+            RealtimeJobError::terminal(format!(
+                "OpenRouter responses realtime decode failed: {err}"
+            ))
+        })?;
+        let (cleaned, mut response_meta) = resolve_streamed_response_text("", &parsed);
+        if cleaned.trim().is_empty() {
+            return Ok(None);
+        }
+        response_meta.insert(
+            "provider_transport".to_string(),
+            Value::String("openrouter_responses".to_string()),
+        );
+        if !response_meta.contains_key("response_status") {
+            response_meta.insert(
+                "response_status".to_string(),
+                Value::String("completed".to_string()),
+            );
+        }
+        response_meta.insert("provider_model".to_string(), Value::String(request_model));
+        Ok(Some((parsed, cleaned, response_meta)))
+    }
+
+    fn request_openrouter_chat_completion_realtime(
+        &self,
+        chat_content: &[Value],
+    ) -> std::result::Result<(Value, String, Map<String, Value>), RealtimeJobError> {
+        let endpoint = format!("{}/chat/completions", openrouter_api_base());
+        let request_model = sanitize_openrouter_model(&self.model, "google/gemini-3-flash-preview");
+        let payload = json!({
+            "model": request_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": self.kind.instruction(),
+                },
+                {
+                    "role": "user",
+                    "content": chat_content,
+                }
+            ],
+            "modalities": ["text"],
+            "temperature": self.kind.temperature(),
+            "max_tokens": self.kind.max_output_tokens(),
+            "stream": false,
+        });
+        let client = HttpClient::builder()
+            .timeout(Duration::from_secs_f64(REALTIME_TIMEOUT_SECONDS))
+            .build()
+            .map_err(|err| {
+                RealtimeJobError::terminal(format!("failed to build realtime http client: {err}"))
+            })?;
+        let request = client
+            .post(&endpoint)
+            .bearer_auth(&self.api_key)
+            .header(CONTENT_TYPE, "application/json");
+        let response = apply_openrouter_request_headers(request)
+            .json(&payload)
+            .send()
+            .map_err(|err| {
+                if is_reqwest_realtime_transport_error(&err) {
+                    RealtimeJobError::transport(format!(
+                        "OpenRouter chat realtime request failed: {err}"
+                    ))
+                } else {
+                    RealtimeJobError::terminal(format!(
+                        "OpenRouter chat realtime request failed: {err}"
+                    ))
+                }
+            })?;
+        if !response.status().is_success() {
+            let code = response.status().as_u16();
+            let body = response.text().unwrap_or_default();
+            return Err(RealtimeJobError::terminal(format!(
+                "OpenRouter chat realtime request failed ({code}): {}",
+                truncate_chars(&body, 420, 360)
+            )));
+        }
+        let parsed: Value = response.json().map_err(|err| {
+            RealtimeJobError::terminal(format!("OpenRouter chat realtime decode failed: {err}"))
+        })?;
+        let cleaned = extract_openrouter_chat_output_text(&parsed)
+            .trim()
+            .to_string();
+        if cleaned.trim().is_empty() {
+            return Err(RealtimeJobError::terminal(
+                self.kind.empty_response_message(&parsed),
+            ));
+        }
+
+        let mut response_meta = Map::new();
+        let (input_tokens, output_tokens) = extract_token_usage_pair(&parsed);
+        if let Some(value) = input_tokens {
+            response_meta.insert("input_tokens".to_string(), Value::Number(value.into()));
+        }
+        if let Some(value) = output_tokens {
+            response_meta.insert("output_tokens".to_string(), Value::Number(value.into()));
+        }
+        if let Some(value) = parsed
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            response_meta.insert("response_id".to_string(), Value::String(value.to_string()));
+        }
+        response_meta.insert(
+            "response_status".to_string(),
+            Value::String("completed".to_string()),
+        );
+        if let Some(reason) = extract_openrouter_chat_finish_reason(&parsed) {
+            response_meta.insert("response_status_reason".to_string(), Value::String(reason));
+        }
+        response_meta.insert(
+            "provider_transport".to_string(),
+            Value::String("openrouter_chat_completions".to_string()),
+        );
+        response_meta.insert("provider_model".to_string(), Value::String(request_model));
+        Ok((parsed, cleaned, response_meta))
+    }
+
     fn fail_fatal(&self, image_path: Option<&str>, message: String) {
         if let Ok(mut fatal) = self.fatal_error.lock() {
             *fatal = Some(if message.trim().is_empty() {
@@ -3511,7 +4222,11 @@ impl RealtimeWorker {
         payload.insert("text".to_string(), Value::String(text.to_string()));
         payload.insert(
             "source".to_string(),
-            Value::String(REALTIME_SOURCE.to_string()),
+            Value::String(self.provider.as_str().to_string()),
+        );
+        payload.insert(
+            "provider".to_string(),
+            Value::String(self.provider.as_str().to_string()),
         );
         payload.insert("model".to_string(), Value::String(self.model.clone()));
         if partial {
@@ -3547,7 +4262,11 @@ impl RealtimeWorker {
         payload.insert("error".to_string(), Value::String(error.to_string()));
         payload.insert(
             "source".to_string(),
-            Value::String(REALTIME_SOURCE.to_string()),
+            Value::String(self.provider.as_str().to_string()),
+        );
+        payload.insert(
+            "provider".to_string(),
+            Value::String(self.provider.as_str().to_string()),
         );
         payload.insert("model".to_string(), Value::String(self.model.clone()));
         if let RealtimeSessionKind::IntentIcons { .. } = self.kind {
@@ -3615,7 +4334,15 @@ fn is_anyhow_realtime_transport_error(err: &anyhow::Error) -> bool {
                 .downcast_ref::<io::Error>()
                 .map(|io_err| is_transport_io_error_kind(io_err.kind()))
                 .unwrap_or(false)
+            || cause
+                .downcast_ref::<reqwest::Error>()
+                .map(is_reqwest_realtime_transport_error)
+                .unwrap_or(false)
     })
+}
+
+fn is_reqwest_realtime_transport_error(err: &reqwest::Error) -> bool {
+    err.is_timeout() || err.is_connect() || err.is_request() || err.is_body()
 }
 
 fn is_tungstenite_transport_error(err: &tungstenite::Error) -> bool {
@@ -3709,6 +4436,91 @@ fn openai_realtime_ws_url(model: &str) -> String {
         return url.to_string();
     }
     format!("wss://api.openai.com/v1/realtime?model={}", model.trim())
+}
+
+fn gemini_generate_content_endpoint(model: &str) -> String {
+    let base = gemini_api_base();
+    let trimmed = model.trim();
+    let model_path = if trimmed.starts_with("models/") {
+        trimmed.to_string()
+    } else {
+        format!("models/{trimmed}")
+    };
+    format!("{}/{}:generateContent", base, model_path)
+}
+
+fn read_image_as_gemini_inline_part(path: &Path) -> Option<Value> {
+    let bytes = fs::read(path).ok()?;
+    Some(json!({
+        "inlineData": {
+            "mimeType": guess_image_mime(path),
+            "data": BASE64.encode(bytes),
+        }
+    }))
+}
+
+fn extract_gemini_output_text(response: &Value) -> String {
+    let mut chunks: Vec<String> = Vec::new();
+    if let Some(candidates) = response.get("candidates").and_then(Value::as_array) {
+        for candidate in candidates {
+            let Some(parts) = candidate
+                .get("content")
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("parts"))
+                .and_then(Value::as_array)
+            else {
+                continue;
+            };
+            for part in parts {
+                let text = part
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or_default();
+                if !text.is_empty() {
+                    chunks.push(text.to_string());
+                }
+            }
+        }
+    }
+    chunks.join("\n")
+}
+
+fn extract_gemini_token_usage_pair(response: &Value) -> Option<(Option<i64>, Option<i64>)> {
+    let usage = response
+        .get("usageMetadata")
+        .or_else(|| response.get("usage_metadata"))
+        .and_then(Value::as_object)?;
+    let input_tokens = usage
+        .get("promptTokenCount")
+        .or_else(|| usage.get("prompt_token_count"))
+        .and_then(Value::as_i64);
+    let output_tokens = usage
+        .get("candidatesTokenCount")
+        .or_else(|| usage.get("candidates_token_count"))
+        .or_else(|| usage.get("outputTokenCount"))
+        .or_else(|| usage.get("output_token_count"))
+        .and_then(Value::as_i64);
+    if input_tokens.is_none() && output_tokens.is_none() {
+        return None;
+    }
+    Some((input_tokens, output_tokens))
+}
+
+fn extract_gemini_finish_reason(response: &Value) -> Option<String> {
+    response
+        .get("candidates")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(Value::as_object)
+        .and_then(|row| {
+            row.get("finishReason")
+                .or_else(|| row.get("finish_reason"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn read_image_as_data_url(path: &Path) -> Option<String> {
@@ -4564,11 +5376,13 @@ fn openai_json_object_inference(
     max_output_tokens: u64,
     timeout: Duration,
 ) -> Option<(Map<String, Value>, String)> {
-    let requested =
-        sanitize_openai_responses_model(model_hint.unwrap_or("gpt-4o-mini"), "gpt-4o-mini");
+    let requested = sanitize_openai_responses_model(
+        model_hint.unwrap_or(OPENAI_VISION_FALLBACK_MODEL),
+        OPENAI_VISION_FALLBACK_MODEL,
+    );
     let mut models = vec![requested.clone()];
-    if requested != "gpt-4o-mini" {
-        models.push("gpt-4o-mini".to_string());
+    if requested != OPENAI_VISION_FALLBACK_MODEL {
+        models.push(OPENAI_VISION_FALLBACK_MODEL.to_string());
     }
 
     for model in models {
@@ -5945,6 +6759,14 @@ fn openai_api_key() -> Option<String> {
     first_non_empty_env(&["OPENAI_API_KEY", "OPENAI_API_KEY_BACKUP"])
 }
 
+fn openrouter_api_key() -> Option<String> {
+    first_non_empty_env(&["OPENROUTER_API_KEY"])
+}
+
+fn gemini_api_key() -> Option<String> {
+    first_non_empty_env(&["GEMINI_API_KEY", "GOOGLE_API_KEY"])
+}
+
 fn openai_api_base() -> String {
     let raw = first_non_empty_env(&["OPENAI_API_BASE", "OPENAI_BASE_URL"])
         .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
@@ -5955,6 +6777,40 @@ fn openai_api_base() -> String {
         }
     }
     base.trim_end_matches('/').to_string()
+}
+
+fn gemini_api_base() -> String {
+    first_non_empty_env(&["GEMINI_API_BASE"])
+        .unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta".to_string())
+        .trim()
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn openrouter_api_base() -> String {
+    let raw = first_non_empty_env(&["OPENROUTER_API_BASE", "OPENROUTER_BASE_URL"])
+        .unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string());
+    let mut base = raw.trim().trim_end_matches('/').to_string();
+    if let Ok(parsed) = reqwest::Url::parse(&base) {
+        if parsed.path().trim().is_empty() || parsed.path() == "/" {
+            base = format!("{base}/api/v1");
+        }
+    }
+    base.trim_end_matches('/').to_string()
+}
+
+fn apply_openrouter_request_headers(
+    mut request: reqwest::blocking::RequestBuilder,
+) -> reqwest::blocking::RequestBuilder {
+    if let Some(referer) =
+        first_non_empty_env(&["OPENROUTER_HTTP_REFERER", "BROOD_OPENROUTER_HTTP_REFERER"])
+    {
+        request = request.header("HTTP-Referer", referer);
+    }
+    if let Some(title) = first_non_empty_env(&["OPENROUTER_X_TITLE", "BROOD_OPENROUTER_X_TITLE"]) {
+        request = request.header("X-Title", title);
+    }
+    request
 }
 
 fn sanitize_openai_responses_model(raw: &str, default_model: &str) -> String {
@@ -5974,37 +6830,104 @@ fn openai_vision_request(
     max_output_tokens: u64,
     timeout: Duration,
 ) -> Option<(String, Option<i64>, Option<i64>, String)> {
-    let api_key = openai_api_key()?;
-    let request_model = sanitize_openai_responses_model(model, "gpt-4o-mini");
-    let endpoint = format!("{}/responses", openai_api_base());
-    let payload = json!({
-        "model": request_model,
+    let request_model = sanitize_openai_responses_model(model, OPENAI_VISION_FALLBACK_MODEL);
+    let client = HttpClient::builder().timeout(timeout).build().ok()?;
+    if let Some(api_key) = openai_api_key() {
+        let endpoint = format!("{}/responses", openai_api_base());
+        let payload = json!({
+            "model": request_model,
+            "input": [{
+                "role": "user",
+                "content": content.clone(),
+            }],
+            "max_output_tokens": max_output_tokens,
+        });
+        let response = client
+            .post(endpoint)
+            .bearer_auth(api_key)
+            .header(CONTENT_TYPE, "application/json")
+            .json(&payload)
+            .send();
+        if let Ok(response) = response {
+            if response.status().is_success() {
+                if let Ok(parsed) = response.json::<Value>() {
+                    let text = extract_openai_output_text(&parsed);
+                    if !text.trim().is_empty() {
+                        let (input_tokens, output_tokens) = extract_token_usage_pair(&parsed);
+                        return Some((text, input_tokens, output_tokens, request_model.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    let openrouter_key = openrouter_api_key()?;
+    let openrouter_base = openrouter_api_base();
+    let openrouter_model =
+        sanitize_openrouter_model(&request_model, OPENROUTER_OPENAI_VISION_FALLBACK_MODEL);
+    let responses_endpoint = format!("{openrouter_base}/responses");
+    let responses_payload = json!({
+        "model": openrouter_model,
         "input": [{
             "role": "user",
             "content": content,
         }],
+        "modalities": ["text"],
         "max_output_tokens": max_output_tokens,
+        "stream": false,
     });
-
-    let client = HttpClient::builder().timeout(timeout).build().ok()?;
-    let response = client
-        .post(endpoint)
-        .bearer_auth(api_key)
-        .header(CONTENT_TYPE, "application/json")
-        .json(&payload)
+    let responses_request = client
+        .post(&responses_endpoint)
+        .bearer_auth(&openrouter_key)
+        .header(CONTENT_TYPE, "application/json");
+    let responses_response = apply_openrouter_request_headers(responses_request)
+        .json(&responses_payload)
         .send()
         .ok()?;
-    if !response.status().is_success() {
-        return None;
+    if responses_response.status().is_success() {
+        let parsed: Value = responses_response.json().ok()?;
+        let text = extract_openai_output_text(&parsed);
+        if !text.trim().is_empty() {
+            let (input_tokens, output_tokens) = extract_token_usage_pair(&parsed);
+            return Some((text, input_tokens, output_tokens, openrouter_model));
+        }
+    } else {
+        let code = responses_response.status().as_u16();
+        let body = responses_response.text().ok()?;
+        if !should_fallback_openrouter_responses(code, &body) {
+            return None;
+        }
     }
 
-    let parsed: Value = response.json().ok()?;
-    let text = extract_openai_output_text(&parsed);
+    let chat_endpoint = format!("{openrouter_base}/chat/completions");
+    let chat_payload = json!({
+        "model": openrouter_model,
+        "messages": [{
+            "role": "user",
+            "content": openrouter_responses_content_to_chat_content(&content),
+        }],
+        "modalities": ["text"],
+        "max_tokens": max_output_tokens,
+        "stream": false,
+    });
+    let chat_request = client
+        .post(&chat_endpoint)
+        .bearer_auth(openrouter_key)
+        .header(CONTENT_TYPE, "application/json");
+    let chat_response = apply_openrouter_request_headers(chat_request)
+        .json(&chat_payload)
+        .send()
+        .ok()?;
+    if !chat_response.status().is_success() {
+        return None;
+    }
+    let parsed: Value = chat_response.json().ok()?;
+    let text = extract_openrouter_chat_output_text(&parsed);
     if text.trim().is_empty() {
         return None;
     }
     let (input_tokens, output_tokens) = extract_token_usage_pair(&parsed);
-    Some((text, input_tokens, output_tokens, request_model))
+    Some((text, input_tokens, output_tokens, openrouter_model))
 }
 
 fn prepare_vision_image_data_url(path: &Path, max_dim: u32) -> Option<String> {
@@ -6116,6 +7039,204 @@ fn extract_openai_output_text(response: &Value) -> String {
     }
 
     parts.join("\n").trim().to_string()
+}
+
+fn openrouter_chat_content_to_responses_input(chat_content: &[Value]) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for item in chat_content {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let kind = obj
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if kind == "text" {
+            if let Some(text) = obj
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                out.push(json!({
+                    "type": "input_text",
+                    "text": text,
+                }));
+            }
+            continue;
+        }
+        if kind == "image_url" {
+            let image_url = obj
+                .get("image_url")
+                .and_then(|value| {
+                    value
+                        .as_object()
+                        .and_then(|row| row.get("url"))
+                        .and_then(Value::as_str)
+                        .or_else(|| value.as_str())
+                })
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if let Some(url) = image_url {
+                out.push(json!({
+                    "type": "input_image",
+                    "image_url": url,
+                }));
+            }
+        }
+    }
+    out
+}
+
+fn openrouter_responses_content_to_chat_content(content: &[Value]) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for item in content {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let kind = obj
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if kind == "input_text" {
+            if let Some(text) = obj
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                out.push(json!({
+                    "type": "text",
+                    "text": text,
+                }));
+            }
+            continue;
+        }
+        if kind == "input_image" {
+            let image_url = obj
+                .get("image_url")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    obj.get("image_url")
+                        .and_then(Value::as_object)
+                        .and_then(|row| row.get("url"))
+                        .and_then(Value::as_str)
+                })
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if let Some(url) = image_url {
+                out.push(json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": url,
+                    }
+                }));
+            }
+        }
+    }
+    out
+}
+
+fn extract_openrouter_chat_output_text(response: &Value) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for choice in response
+        .get("choices")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let Some(message) = choice.get("message").and_then(Value::as_object) else {
+            continue;
+        };
+        if let Some(content) = message.get("content") {
+            match content {
+                Value::String(text) => {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        parts.push(trimmed.to_string());
+                    }
+                }
+                Value::Array(rows) => {
+                    for row in rows {
+                        let Some(obj) = row.as_object() else {
+                            continue;
+                        };
+                        let kind = obj
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .unwrap_or_default()
+                            .to_ascii_lowercase();
+                        if !matches!(kind.as_str(), "text" | "output_text") {
+                            continue;
+                        }
+                        if let Some(text) = obj
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                        {
+                            parts.push(text.to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(refusal) = message
+            .get("refusal")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            parts.push(refusal.to_string());
+        }
+    }
+    let joined = parts.join("\n").trim().to_string();
+    if !joined.is_empty() {
+        joined
+    } else {
+        extract_openai_output_text(response)
+    }
+}
+
+fn extract_openrouter_chat_finish_reason(response: &Value) -> Option<String> {
+    response
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(Value::as_object)
+        .and_then(|row| row.get("finish_reason").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn should_fallback_openrouter_responses(status_code: u16, body: &str) -> bool {
+    if matches!(status_code, 404 | 405 | 415 | 501) {
+        return true;
+    }
+    if matches!(status_code, 400 | 422) {
+        return body_indicates_openrouter_responses_unavailable(body);
+    }
+    false
+}
+
+fn body_indicates_openrouter_responses_unavailable(body: &str) -> bool {
+    let lowered = body.to_ascii_lowercase();
+    if !lowered.contains("response") {
+        return false;
+    }
+    lowered.contains("unsupported")
+        || lowered.contains("not supported")
+        || lowered.contains("not found")
+        || lowered.contains("unknown")
+        || lowered.contains("unavailable")
+        || lowered.contains("does not exist")
 }
 
 fn value_to_nonnegative_i64(value: &Value) -> Option<i64> {
@@ -6890,6 +8011,57 @@ fn vision_description_realtime_model() -> String {
     normalize_realtime_model_name(&value, "gpt-realtime-mini")
 }
 
+fn vision_description_model_candidates_for(
+    provider: RealtimeProvider,
+    explicit_model: Option<&str>,
+) -> Vec<String> {
+    let explicit = explicit_model
+        .map(str::trim)
+        .map(str::to_string)
+        .filter(|value| !value.is_empty());
+    let mut models: Vec<String> = Vec::new();
+    if let Some(requested) = explicit {
+        models.push(requested.clone());
+        if requested != OPENAI_VISION_SECONDARY_MODEL {
+            models.push(OPENAI_VISION_SECONDARY_MODEL.to_string());
+        }
+    } else if provider == RealtimeProvider::GeminiFlash {
+        models.push("gemini-3.0-flash".to_string());
+        models.push("gemini-3-flash-preview".to_string());
+        models.push("google/gemini-3-flash-preview".to_string());
+    } else {
+        models.push(OPENAI_VISION_FALLBACK_MODEL.to_string());
+        models.push(OPENAI_VISION_SECONDARY_MODEL.to_string());
+    }
+    fn model_dedupe_key(provider: RealtimeProvider, model: &str) -> String {
+        if provider == RealtimeProvider::GeminiFlash {
+            sanitize_openrouter_model(model, OPENROUTER_OPENAI_VISION_FALLBACK_MODEL)
+                .trim()
+                .to_ascii_lowercase()
+        } else {
+            sanitize_openai_responses_model(model, OPENAI_VISION_FALLBACK_MODEL)
+                .trim()
+                .to_ascii_lowercase()
+        }
+    }
+
+    let mut deduped = Vec::new();
+    let mut seen = HashSet::new();
+    for model in models {
+        let normalized = model_dedupe_key(provider, &model);
+        if normalized.is_empty() || !seen.insert(normalized) {
+            continue;
+        }
+        deduped.push(model);
+    }
+    deduped
+}
+
+fn vision_description_model_candidates() -> Vec<String> {
+    let explicit = first_non_empty_env(&["BROOD_DESCRIBE_MODEL", "OPENAI_DESCRIBE_MODEL"]);
+    vision_description_model_candidates_for(canvas_context_realtime_provider(), explicit.as_deref())
+}
+
 fn vision_infer_description_realtime(
     path: &Path,
     max_chars: usize,
@@ -7049,12 +8221,7 @@ fn vision_infer_description(path: &Path, max_chars: usize) -> Option<Description
     if let Some(inference) = vision_infer_description_realtime(path, max_chars) {
         return Some(inference);
     }
-    let requested = first_non_empty_env(&["BROOD_DESCRIBE_MODEL", "OPENAI_DESCRIBE_MODEL"])
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
-    let mut models = vec![requested.clone()];
-    if requested != "gpt-5-nano" {
-        models.push("gpt-5-nano".to_string());
-    }
+    let models = vision_description_model_candidates();
     let data_url = prepare_vision_image_data_url(path, 1024)?;
     for model in models {
         let content = vec![
@@ -7082,7 +8249,7 @@ fn vision_infer_description(path: &Path, max_chars: usize) -> Option<Description
 
 fn vision_infer_diagnosis(path: &Path) -> Option<TextVisionInference> {
     let model = first_non_empty_env(&["BROOD_DIAGNOSE_MODEL", "OPENAI_DIAGNOSE_MODEL"])
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+        .unwrap_or_else(|| OPENAI_VISION_FALLBACK_MODEL.to_string());
     let data_url = prepare_vision_image_data_url(path, 1024)?;
     let content = vec![
         json!({"type": "input_text", "text": diagnose_instruction()}),
@@ -7112,11 +8279,11 @@ fn vision_infer_canvas_context(
         .or_else(|| {
             first_non_empty_env(&["BROOD_CANVAS_CONTEXT_MODEL", "OPENAI_CANVAS_CONTEXT_MODEL"])
         })
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
-    let requested = sanitize_openai_responses_model(&model_raw, "gpt-4o-mini");
+        .unwrap_or_else(|| OPENAI_VISION_FALLBACK_MODEL.to_string());
+    let requested = sanitize_openai_responses_model(&model_raw, OPENAI_VISION_FALLBACK_MODEL);
     let mut models = vec![requested.clone()];
-    if requested != "gpt-4o-mini" {
-        models.push("gpt-4o-mini".to_string());
+    if requested != OPENAI_VISION_FALLBACK_MODEL {
+        models.push(OPENAI_VISION_FALLBACK_MODEL.to_string());
     }
     let data_url = prepare_vision_image_data_url(path, 768)?;
     for model in models {
@@ -7145,7 +8312,7 @@ fn vision_infer_canvas_context(
 
 fn vision_infer_argument(path_a: &Path, path_b: &Path) -> Option<TextVisionInference> {
     let model = first_non_empty_env(&["BROOD_ARGUE_MODEL", "OPENAI_ARGUE_MODEL"])
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+        .unwrap_or_else(|| OPENAI_VISION_FALLBACK_MODEL.to_string());
     let content = build_labeled_image_content(
         &[("Image A:", path_a), ("Image B:", path_b)],
         argue_instruction(),
@@ -7168,7 +8335,7 @@ fn vision_infer_argument(path_a: &Path, path_b: &Path) -> Option<TextVisionInfer
 
 fn vision_infer_dna_signature(path: &Path) -> Option<DnaVisionInference> {
     let model = first_non_empty_env(&["BROOD_DNA_VISION_MODEL", "OPENAI_DNA_MODEL"])
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+        .unwrap_or_else(|| OPENAI_VISION_FALLBACK_MODEL.to_string());
     let data_url = prepare_vision_image_data_url(path, 1024)?;
     let content = vec![
         json!({"type": "input_text", "text": dna_extract_instruction()}),
@@ -7192,7 +8359,7 @@ fn vision_infer_dna_signature(path: &Path) -> Option<DnaVisionInference> {
 
 fn vision_infer_soul_signature(path: &Path) -> Option<SoulVisionInference> {
     let model = first_non_empty_env(&["BROOD_SOUL_VISION_MODEL", "OPENAI_SOUL_MODEL"])
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+        .unwrap_or_else(|| OPENAI_VISION_FALLBACK_MODEL.to_string());
     let data_url = prepare_vision_image_data_url(path, 1024)?;
     let content = vec![
         json!({"type": "input_text", "text": soul_extract_instruction()}),
@@ -7302,7 +8469,7 @@ fn vision_infer_triplet_rule(
         "BROOD_DIAGNOSE_MODEL",
         "OPENAI_DIAGNOSE_MODEL",
     ])
-    .unwrap_or_else(|| "gpt-4o-mini".to_string());
+    .unwrap_or_else(|| OPENAI_VISION_FALLBACK_MODEL.to_string());
     let content = build_labeled_image_content(
         &[
             ("Image A:", path_a),
@@ -7375,7 +8542,7 @@ fn vision_infer_triplet_odd_one_out(
         "BROOD_ARGUE_MODEL",
         "OPENAI_ARGUE_MODEL",
     ])
-    .unwrap_or_else(|| "gpt-4o-mini".to_string());
+    .unwrap_or_else(|| OPENAI_VISION_FALLBACK_MODEL.to_string());
     let content = build_labeled_image_content(
         &[
             ("Image A:", path_a),
@@ -7929,10 +9096,16 @@ fn json_object(value: Value) -> Map<String, Value> {
 mod tests {
     use super::{
         active_image_for_edit_prompt, build_realtime_websocket_request, clean_description,
-        description_realtime_instruction, intent_icons_instruction,
+        default_realtime_model, description_realtime_instruction, extract_gemini_finish_reason,
+        extract_gemini_output_text, extract_gemini_token_usage_pair,
+        extract_openrouter_chat_output_text, intent_icons_instruction,
         intent_realtime_reference_image_limit, is_anyhow_realtime_transport_error,
-        is_edit_style_prompt, resolve_streamed_response_text, RealtimeJobError,
-        RealtimeJobErrorKind, RealtimeSessionKind, REALTIME_BETA_HEADER_VALUE,
+        is_edit_style_prompt, openrouter_chat_content_to_responses_input,
+        openrouter_responses_content_to_chat_content, resolve_streamed_response_text,
+        sanitize_gemini_generate_content_model, sanitize_openrouter_gemini_model,
+        sanitize_openrouter_model, should_fallback_openrouter_responses,
+        vision_description_model_candidates_for, RealtimeJobError, RealtimeJobErrorKind,
+        RealtimeProvider, RealtimeSessionKind, REALTIME_BETA_HEADER_VALUE,
         REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX,
     };
     use serde_json::json;
@@ -8054,6 +9227,124 @@ mod tests {
     }
 
     #[test]
+    fn realtime_provider_parse_accepts_openai_and_gemini_aliases() {
+        assert_eq!(
+            RealtimeProvider::parse("openai_realtime"),
+            Some(RealtimeProvider::OpenAiRealtime)
+        );
+        assert_eq!(
+            RealtimeProvider::parse("OPENAI"),
+            Some(RealtimeProvider::OpenAiRealtime)
+        );
+        assert_eq!(
+            RealtimeProvider::parse("gemini_flash"),
+            Some(RealtimeProvider::GeminiFlash)
+        );
+        assert_eq!(
+            RealtimeProvider::parse("GEMINI"),
+            Some(RealtimeProvider::GeminiFlash)
+        );
+        assert_eq!(RealtimeProvider::parse("unknown"), None);
+    }
+
+    #[test]
+    fn gemini_realtime_default_model_is_gemini_three_flash_preview() {
+        assert_eq!(
+            default_realtime_model(RealtimeProvider::GeminiFlash, false),
+            "gemini-3-flash-preview"
+        );
+        assert_eq!(
+            default_realtime_model(RealtimeProvider::GeminiFlash, true),
+            "gemini-3-flash-preview"
+        );
+    }
+
+    #[test]
+    fn describe_model_candidates_prefer_gemini_when_gemini_realtime_provider_active() {
+        let models = vision_description_model_candidates_for(RealtimeProvider::GeminiFlash, None);
+        assert_eq!(models, vec!["gemini-3.0-flash".to_string()]);
+    }
+
+    #[test]
+    fn describe_model_candidates_default_to_openai_family_when_openai_realtime_provider_active() {
+        let models =
+            vision_description_model_candidates_for(RealtimeProvider::OpenAiRealtime, None);
+        assert_eq!(
+            models,
+            vec!["gpt-5.2".to_string(), "gpt-5-nano".to_string()]
+        );
+    }
+
+    #[test]
+    fn describe_model_candidates_respect_explicit_override() {
+        let models = vision_description_model_candidates_for(
+            RealtimeProvider::GeminiFlash,
+            Some("openai/gpt-4.1-mini"),
+        );
+        assert_eq!(
+            models,
+            vec!["openai/gpt-4.1-mini".to_string(), "gpt-5-nano".to_string()]
+        );
+    }
+
+    #[test]
+    fn openrouter_gemini_model_normalization_maps_aliases() {
+        assert_eq!(
+            sanitize_openrouter_gemini_model("gemini-3.0-flash", "google/gemini-3-flash-preview"),
+            "google/gemini-3-flash-preview"
+        );
+        assert_eq!(
+            sanitize_openrouter_gemini_model("gemini-2.0-flash", "google/gemini-3-flash-preview"),
+            "google/gemini-2.0-flash-001"
+        );
+        assert_eq!(
+            sanitize_openrouter_gemini_model(
+                "google/gemini-2.5-flash",
+                "google/gemini-3-flash-preview"
+            ),
+            "google/gemini-2.5-flash"
+        );
+    }
+
+    #[test]
+    fn openrouter_model_normalization_maps_openai_and_gemini_aliases() {
+        assert_eq!(
+            sanitize_openrouter_model("gpt-4o-mini", "openai/gpt-4o-mini"),
+            "openai/gpt-4o-mini"
+        );
+        assert_eq!(
+            sanitize_openrouter_model("gemini-3.0-flash", "google/gemini-3-flash-preview"),
+            "google/gemini-3-flash-preview"
+        );
+        assert_eq!(
+            sanitize_openrouter_model("openrouter/auto", "openrouter/auto"),
+            "openrouter/auto"
+        );
+    }
+
+    #[test]
+    fn gemini_generate_content_model_normalization_strips_prefix_and_aliases() {
+        assert_eq!(
+            sanitize_gemini_generate_content_model(
+                "google/gemini-3-flash-preview",
+                "gemini-3-flash-preview"
+            ),
+            "gemini-3-flash-preview"
+        );
+        assert_eq!(
+            sanitize_gemini_generate_content_model("gemini-3.0-flash", "gemini-3-flash-preview"),
+            "gemini-3-flash-preview"
+        );
+        assert_eq!(
+            sanitize_gemini_generate_content_model(
+                "models/gemini-2.0-flash",
+                "gemini-3-flash-preview"
+            ),
+            "gemini-2.0-flash-001"
+        );
+    }
+
+    #[test]
     fn resolve_streamed_response_text_includes_usage_tokens_in_meta() {
         let response = json!({
             "id": "resp_test",
@@ -8066,6 +9357,107 @@ mod tests {
         let (_text, meta) = resolve_streamed_response_text("ok", &response);
         assert_eq!(meta.get("input_tokens"), Some(&json!(321)));
         assert_eq!(meta.get("output_tokens"), Some(&json!(89)));
+    }
+
+    #[test]
+    fn gemini_extractors_pull_text_usage_and_finish_reason() {
+        let response = json!({
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": {
+                    "parts": [
+                        {"text": "line one"},
+                        {"text": "line two"}
+                    ]
+                }
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 111,
+                "candidatesTokenCount": 37
+            }
+        });
+        assert_eq!(extract_gemini_output_text(&response), "line one\nline two");
+        assert_eq!(
+            extract_gemini_token_usage_pair(&response),
+            Some((Some(111), Some(37)))
+        );
+        assert_eq!(
+            extract_gemini_finish_reason(&response),
+            Some("STOP".to_string())
+        );
+    }
+
+    #[test]
+    fn openrouter_chat_content_maps_to_responses_input_shapes() {
+        let chat_content = vec![
+            json!({"type": "text", "text": "hello"}),
+            json!({"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}),
+        ];
+        let mapped = openrouter_chat_content_to_responses_input(&chat_content);
+        assert_eq!(mapped.len(), 2);
+        assert_eq!(mapped[0], json!({"type": "input_text", "text": "hello"}));
+        assert_eq!(
+            mapped[1],
+            json!({"type": "input_image", "image_url": "data:image/png;base64,AAAA"})
+        );
+    }
+
+    #[test]
+    fn openrouter_responses_content_maps_back_to_chat_shapes() {
+        let responses_content = vec![
+            json!({"type": "input_text", "text": "hello"}),
+            json!({"type": "input_image", "image_url": "data:image/png;base64,AAAA"}),
+        ];
+        let mapped = openrouter_responses_content_to_chat_content(&responses_content);
+        assert_eq!(mapped.len(), 2);
+        assert_eq!(mapped[0], json!({"type": "text", "text": "hello"}));
+        assert_eq!(
+            mapped[1],
+            json!({"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}})
+        );
+    }
+
+    #[test]
+    fn openrouter_chat_output_extractor_supports_string_and_chunked_content() {
+        let chunked = json!({
+            "choices": [{
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "line one"},
+                        {"type": "text", "text": "line two"}
+                    ]
+                }
+            }]
+        });
+        assert_eq!(
+            extract_openrouter_chat_output_text(&chunked),
+            "line one\nline two"
+        );
+
+        let string_content = json!({
+            "choices": [{
+                "message": {
+                    "content": "single-line"
+                }
+            }]
+        });
+        assert_eq!(
+            extract_openrouter_chat_output_text(&string_content),
+            "single-line"
+        );
+    }
+
+    #[test]
+    fn openrouter_responses_fallback_only_triggers_for_unsupported_shapes() {
+        assert!(should_fallback_openrouter_responses(
+            404,
+            "Not Found: /responses route"
+        ));
+        assert!(should_fallback_openrouter_responses(
+            400,
+            "responses API is not supported for this model"
+        ));
+        assert!(!should_fallback_openrouter_responses(401, "unauthorized"));
     }
 
     #[test]

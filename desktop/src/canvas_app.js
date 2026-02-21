@@ -71,11 +71,12 @@ const THUMB_PLACEHOLDER_SRC = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yw
 
 const MOTHER_VIDEO_IDLE_SRC = new URL("./assets/mother/mother_idle.mirrored.mp4", import.meta.url).href;
 const MOTHER_VIDEO_WORKING_SRC = new URL("./assets/mother/mother_working.mp4", import.meta.url).href;
-const MOTHER_VIDEO_TAKEOVER_SRC = new URL(
-  "./assets/mother/mother_working_sora-2_720x1280_12s_20260210_160837_v05.mp4",
+const MOTHER_VIDEO_TAKEOVER_SRC = new URL("./assets/mother/mother_takeover.mp4", import.meta.url).href;
+const MOTHER_VIDEO_REALTIME_SRC = new URL("./assets/mother/mother_realtime.mp4", import.meta.url).href;
+const OPENROUTER_ONBOARDING_SORA_VIDEO_SRC = new URL(
+  "./assets/onboarding/videos/openrouter_onboarding.mp4",
   import.meta.url
 ).href;
-const MOTHER_VIDEO_REALTIME_SRC = new URL("./assets/mother/mother_realtime.mp4", import.meta.url).href;
 const MOTHER_REALTIME_MIN_MS = 4000;
 const MOTHER_USER_HOT_IDLE_MS = 10_000;
 // Avoid brief watch-phase spikes from flashing realtime chrome/video.
@@ -97,6 +98,8 @@ const MOTHER_GENERATION_MODEL = DEFAULT_IMAGE_MODEL;
 const MOTHER_GENERATED_SOURCE = "mother_generated";
 const AESTHETIC_ONBOARDING_COMPLETED_KEY = "brood.aestheticOnboarding.completed.v1";
 const AESTHETIC_ONBOARDING_PROFILE_KEY = "brood.aestheticOnboarding.profile.v1";
+const OPENROUTER_ONBOARDING_COMPLETED_KEY = "brood.openrouterOnboarding.completed.v1";
+const OPENROUTER_ONBOARDING_PROFILE_KEY = "brood.openrouterOnboarding.profile.v1";
 const AESTHETIC_ONBOARDING_PROMPT =
   "Hyper-real modern loft interior with warm sunbeams, layered textures, and a hero seating area staged for a magazine shoot. Style focus: Interior designs.";
 const AESTHETIC_ONBOARDING_MODEL_CHOICES = Object.freeze([
@@ -282,6 +285,8 @@ const SPARKLINE_GLYPHS = Object.freeze(["▁", "▂", "▃", "▄", "▅", "▆"
 // Per-1K-token estimates for realtime text calls (input/output priced separately).
 const REALTIME_TOKEN_PRICING_USD_PER_1K = Object.freeze({
   "gpt-realtime-mini": Object.freeze({ input: 0.0006, output: 0.0024 }),
+  "gpt-4o-mini": Object.freeze({ input: 0.00015, output: 0.0006 }),
+  "gemini-3-flash-preview": Object.freeze({ input: 0.0005, output: 0.003 }),
 });
 const REEL_PRESET = Object.freeze({
   width: 540,
@@ -332,6 +337,9 @@ const els = {
   aestheticOnboardingStatus: document.getElementById("aesthetic-onboarding-status"),
   aestheticOnboardingOpen: document.getElementById("aesthetic-onboarding-open"),
   aestheticOnboardingClear: document.getElementById("aesthetic-onboarding-clear"),
+  openrouterOnboardingStatus: document.getElementById("openrouter-onboarding-status"),
+  openrouterOnboardingOpen: document.getElementById("openrouter-onboarding-open"),
+  openrouterOnboardingReset: document.getElementById("openrouter-onboarding-reset"),
   portraitsDir: document.getElementById("portraits-dir"),
   portraitsDirPick: document.getElementById("portraits-dir-pick"),
   portraitsDirClear: document.getElementById("portraits-dir-clear"),
@@ -423,6 +431,17 @@ const els = {
   timelineClose: document.getElementById("timeline-close"),
   timelineStrip: document.getElementById("timeline-strip"),
   timelineDetail: document.getElementById("timeline-detail"),
+  openrouterOnboardingModal: document.getElementById("openrouter-onboarding-modal"),
+  openrouterOnboardingHeader: document.getElementById("openrouter-onboarding-header"),
+  openrouterOnboardingTitle: document.getElementById("openrouter-onboarding-title"),
+  openrouterOnboardingSubtitle: document.getElementById("openrouter-onboarding-subtitle"),
+  openrouterOnboardingProgress: document.getElementById("openrouter-onboarding-progress"),
+  openrouterOnboardingBody: document.getElementById("openrouter-onboarding-body"),
+  openrouterOnboardingClose: document.getElementById("openrouter-onboarding-close"),
+  openrouterOnboardingBack: document.getElementById("openrouter-onboarding-back"),
+  openrouterOnboardingSkip: document.getElementById("openrouter-onboarding-skip"),
+  openrouterOnboardingNext: document.getElementById("openrouter-onboarding-next"),
+  openrouterOnboardingMediaVideo: document.getElementById("openrouter-onboarding-media-video"),
   aestheticOnboardingModal: document.getElementById("aesthetic-onboarding-modal"),
   aestheticOnboardingTitle: document.getElementById("aesthetic-onboarding-title"),
   aestheticOnboardingSubtitle: document.getElementById("aesthetic-onboarding-subtitle"),
@@ -856,6 +875,25 @@ const aestheticOnboardingState = {
   transitionTimer: null,
 };
 
+function defaultOpenRouterOnboardingDraft() {
+  return {
+    apiKey: "",
+  };
+}
+
+const openrouterOnboardingState = {
+  open: false,
+  stepIndex: 0,
+  source: "first_run",
+  draft: defaultOpenRouterOnboardingDraft(),
+  submitting: false,
+  statusMessage: "",
+  statusError: false,
+  keyMasked: null,
+  envPath: null,
+  transitionTimer: null,
+};
+
 const state = {
   runDir: null,
   eventsPath: null,
@@ -1135,7 +1173,7 @@ const state = {
   lastStatusText: "Engine: idle",
   lastStatusError: false,
   fallbackToFullRead: false,
-  keyStatus: null, // { openai, gemini, imagen, flux, anthropic }
+  keyStatus: null, // { openai, openrouter, gemini, imagen, flux, anthropic, realtime_provider_*, realtime_ready_* }
   intent: {
     locked: true,
     lockedAt: 0,
@@ -1366,6 +1404,10 @@ const INTENT_TRACE_FILENAME = "intent_trace.jsonl";
 let visualPromptWriteTimer = null;
 let intentTraceSeq = 0;
 let intentRealtimePortraitBusy = false;
+const OPENAI_REALTIME_PORTRAIT_COOLDOWN_MS = 5_000;
+let openaiRealtimePortraitHotUntil = 0;
+let openaiRealtimePortraitBoostActive = false;
+let openaiRealtimePortraitCooldownTimer = null;
 let effectsRuntime = null;
 
 function _intentTracePath() {
@@ -1692,8 +1734,20 @@ function topMetricIngestTokensFromPayload(payload, { atMs = Date.now(), render =
 function topMetricRealtimePricingForModel(model) {
   const raw = String(model || "").trim().toLowerCase();
   if (!raw) return null;
-  if (raw.startsWith("gpt-realtime-mini")) return REALTIME_TOKEN_PRICING_USD_PER_1K["gpt-realtime-mini"];
-  if (raw.startsWith("gpt-4o-mini")) return REALTIME_TOKEN_PRICING_USD_PER_1K["gpt-realtime-mini"];
+  const normalized = raw
+    .replace(/^openai\//, "")
+    .replace(/^google\//, "")
+    .replace(/^openrouter\//, "");
+  if (normalized.startsWith("gpt-realtime-mini")) return REALTIME_TOKEN_PRICING_USD_PER_1K["gpt-realtime-mini"];
+  if (normalized.startsWith("gpt-4o-mini")) return REALTIME_TOKEN_PRICING_USD_PER_1K["gpt-4o-mini"];
+  if (
+    normalized.startsWith("gemini-3-flash-preview") ||
+    normalized.startsWith("gemini-3.0-flash") ||
+    normalized.startsWith("gemini-3-flash") ||
+    (normalized.startsWith("gemini-") && normalized.includes("flash"))
+  ) {
+    return REALTIME_TOKEN_PRICING_USD_PER_1K["gemini-3-flash-preview"];
+  }
   return null;
 }
 
@@ -1714,11 +1768,12 @@ function topMetricIngestRealtimeCostFromPayload(payload, { render = false } = {}
   if (!payload || typeof payload !== "object") return false;
   if (payload.partial) return false;
   const source = String(payload.source || "").trim().toLowerCase();
-  if (source !== "openai_realtime") return false;
+  if (!realtimeSourceSupported(source)) return false;
   const tokens = extractTokenUsage(payload);
   if (!tokens) return false;
+  const pricingModel = payload.provider_model || payload.model;
   const estimate = estimateRealtimeTokenCostUsd({
-    model: payload.model,
+    model: pricingModel,
     inputTokens: tokens.input_tokens,
     outputTokens: tokens.output_tokens,
   });
@@ -2042,7 +2097,9 @@ function renderHudReadout() {
   } else if (img?.path && describeQueued.has(img.path)) {
     desc = state.ptySpawned ? "QUEUED…" : state.ptySpawning ? "STARTING…" : "ENGINE OFFLINE";
   } else {
-    const allowVision = state.keyStatus ? Boolean(state.keyStatus.openai || state.keyStatus.gemini) : true;
+    const allowVision = state.keyStatus
+      ? Boolean(state.keyStatus.openai || state.keyStatus.gemini || state.keyStatus.openrouter)
+      : true;
     if (!state.ptySpawned) desc = "ENGINE OFFLINE";
     else desc = allowVision ? "—" : "NO VISION KEYS";
   }
@@ -2184,7 +2241,9 @@ async function ensureEngineSpawned({ reason = "engine" } = {}) {
 }
 
 function allowVisionDescribe() {
-  return state.keyStatus ? Boolean(state.keyStatus.openai || state.keyStatus.gemini) : true;
+  return state.keyStatus
+    ? Boolean(state.keyStatus.openai || state.keyStatus.gemini || state.keyStatus.openrouter)
+    : true;
 }
 
 function preferRealtimeVisionDescriptions() {
@@ -2429,7 +2488,7 @@ function _handlePtyLine(line) {
   if (trimmed.startsWith("Describe unavailable")) {
     _completeDescribeInFlight({
       description: null,
-      errorMessage: "Vision describe unavailable. Check OpenAI/Gemini keys and network.",
+      errorMessage: "Vision describe unavailable. Check OpenAI/Gemini/OpenRouter keys and network.",
     });
     return;
   }
@@ -2612,15 +2671,97 @@ function updateAlwaysOnVisionReadout() {
   renderMotherReadout();
 }
 
+function normalizeRealtimeProviderName(raw) {
+  const value = String(raw || "").trim().toLowerCase();
+  if (value === "openai" || value === "openai_realtime") return "openai_realtime";
+  if (value === "gemini" || value === "gemini_flash") return "gemini_flash";
+  return "";
+}
+
+function realtimeProviderForScope(scope = "intent") {
+  const status = state.keyStatus;
+  if (!status || typeof status !== "object") return "";
+  const key =
+    scope === "canvas_context"
+      ? "realtime_provider_canvas_context"
+      : scope === "mother_intent"
+      ? "realtime_provider_mother_intent"
+      : "realtime_provider_intent";
+  const scoped = normalizeRealtimeProviderName(status[key]);
+  if (scoped) return scoped;
+  const fallback = normalizeRealtimeProviderName(status.realtime_provider_default);
+  if (fallback) return fallback;
+  if (status.openai) return "openai_realtime";
+  if (status.openrouter || status.gemini) return "gemini_flash";
+  return "openai_realtime";
+}
+
+function realtimeScopeReady(scope = "intent") {
+  const status = state.keyStatus;
+  if (!status || typeof status !== "object") return true;
+  const key =
+    scope === "canvas_context"
+      ? "realtime_ready_canvas_context"
+      : scope === "mother_intent"
+      ? "realtime_ready_mother_intent"
+      : "realtime_ready_intent";
+  if (typeof status[key] === "boolean") return status[key];
+  const provider = realtimeProviderForScope(scope);
+  if (provider === "openai_realtime") return Boolean(status.openai);
+  if (provider === "gemini_flash") return Boolean(status.gemini || status.openrouter);
+  return Boolean(status.openai || status.gemini || status.openrouter);
+}
+
+function realtimeSourceSupported(source) {
+  const normalized = String(source || "").trim().toLowerCase();
+  return normalized === "openai_realtime" || normalized === "gemini_flash";
+}
+
+function isOpenAiProvider(provider) {
+  return String(provider || "").trim().toLowerCase() === "openai";
+}
+
+function isOpenAiRealtimeSignal({ source = null, model = null } = {}) {
+  const sourceRaw = String(source || "").trim().toLowerCase();
+  if (sourceRaw === "openai_realtime" || sourceRaw.startsWith("openai_realtime_")) return true;
+  const modelRaw = String(model || "").trim().toLowerCase();
+  return modelRaw.startsWith("gpt-realtime");
+}
+
+function realtimeScopeUnavailableMessage(scope = "intent") {
+  const status = state.keyStatus;
+  const provider = realtimeProviderForScope(scope);
+  if (provider === "gemini_flash") {
+    if (status && !status.gemini && !status.openrouter) {
+      return "Realtime provider gemini_flash requires GEMINI_API_KEY (or GOOGLE_API_KEY) or OPENROUTER_API_KEY.";
+    }
+    return "Intent realtime disabled.";
+  }
+  if (provider === "openai_realtime") {
+    if (status && !status.openai) {
+      if (status.openrouter) {
+        return "Realtime provider openai_realtime requires OPENAI_API_KEY. OpenRouter websocket realtime is unsupported; use gemini_flash (OPENROUTER_API_KEY or GEMINI_API_KEY).";
+      }
+      return "Realtime provider openai_realtime requires OPENAI_API_KEY (or OPENAI_API_KEY_BACKUP).";
+    }
+    return "Intent realtime disabled.";
+  }
+  return "Intent realtime disabled.";
+}
+
+function realtimePortraitProviderForScope(scope = "intent") {
+  const provider = realtimeProviderForScope(scope);
+  if (provider === "gemini_flash") return "gemini";
+  return "openai";
+}
+
 function allowAlwaysOnVision() {
   if (intentModeActive()) return false;
   if (!state.alwaysOnVision?.enabled) return false;
   if (!getVisibleCanvasImages().length) return false;
   if (!state.runDir) return false;
   // Fail fast before dispatch if we know required keys are missing.
-  if (state.keyStatus) {
-    if (!state.keyStatus.openai) return false;
-  }
+  if (state.keyStatus && !realtimeScopeReady("canvas_context")) return false;
   return true;
 }
 
@@ -2691,15 +2832,86 @@ function intentAmbientRealtimePulseActive() {
   return Boolean(ambient.pending || ambient.rtState === "connecting");
 }
 
+function syncOpenAiRealtimePortraitBusyClasses() {
+  const primaryBusy = Boolean(
+    state.portrait?.busy || (openaiRealtimePortraitBoostActive && isOpenAiProvider(state.portrait?.provider))
+  );
+  const secondaryBusy = Boolean(
+    state.portrait2?.busy || (openaiRealtimePortraitBoostActive && isOpenAiProvider(state.portrait2?.provider))
+  );
+  if (els.agentSlotPrimary) els.agentSlotPrimary.classList.toggle("busy", primaryBusy);
+  if (els.agentSlotSecondary) els.agentSlotSecondary.classList.toggle("busy", secondaryBusy);
+}
+
+function setOpenAiRealtimePortraitBoost(active) {
+  const next = Boolean(active);
+  if (openaiRealtimePortraitBoostActive === next) return;
+  openaiRealtimePortraitBoostActive = next;
+  syncOpenAiRealtimePortraitBusyClasses();
+  refreshAgentPortraitVideos().catch(() => {});
+}
+
+function scheduleOpenAiRealtimePortraitCooldownCheck() {
+  if (openaiRealtimePortraitCooldownTimer) {
+    clearTimeout(openaiRealtimePortraitCooldownTimer);
+    openaiRealtimePortraitCooldownTimer = null;
+  }
+  if (openaiRealtimePortraitHotUntil <= 0) {
+    setOpenAiRealtimePortraitBoost(false);
+    return;
+  }
+  const msLeft = Math.max(0, openaiRealtimePortraitHotUntil - Date.now());
+  if (msLeft <= 0) {
+    openaiRealtimePortraitHotUntil = 0;
+    setOpenAiRealtimePortraitBoost(false);
+    return;
+  }
+  openaiRealtimePortraitCooldownTimer = setTimeout(() => {
+    openaiRealtimePortraitCooldownTimer = null;
+    if (Date.now() >= openaiRealtimePortraitHotUntil) {
+      openaiRealtimePortraitHotUntil = 0;
+      setOpenAiRealtimePortraitBoost(false);
+      return;
+    }
+    scheduleOpenAiRealtimePortraitCooldownCheck();
+  }, msLeft + 30);
+}
+
+function markOpenAiRealtimePortraitActivity({ extendMs = OPENAI_REALTIME_PORTRAIT_COOLDOWN_MS } = {}) {
+  const extend = Math.max(250, Number(extendMs) || OPENAI_REALTIME_PORTRAIT_COOLDOWN_MS);
+  const nextUntil = Date.now() + extend;
+  if (nextUntil > openaiRealtimePortraitHotUntil) {
+    openaiRealtimePortraitHotUntil = nextUntil;
+  }
+  setOpenAiRealtimePortraitBoost(true);
+  scheduleOpenAiRealtimePortraitCooldownCheck();
+}
+
 function syncIntentRealtimePortrait() {
-  // Intent Canvas uses OpenAI Realtime; when a request is in flight, show the OpenAI portrait "working" clip.
+  // Keep portrait provider aligned with the active realtime provider.
   // Keep this scoped to intent mode so we don't fight foreground action portraits elsewhere.
   const intent = state.intent;
   const active = Boolean(intent && intentModeActive() && (intent.pending || intent.rtState === "connecting"));
+  const intentRtProvider = realtimePortraitProviderForScope("intent");
+  if (
+    active &&
+    isOpenAiProvider(intentRtProvider) &&
+    Date.now() + 900 >= openaiRealtimePortraitHotUntil
+  ) {
+    markOpenAiRealtimePortraitActivity();
+  }
   if (active) {
-    if (!intentRealtimePortraitBusy || !state.portrait?.busy || String(state.portrait?.provider || "").toLowerCase() !== "openai") {
+    if (
+      !intentRealtimePortraitBusy ||
+      !state.portrait?.busy ||
+      String(state.portrait?.provider || "").toLowerCase() !== String(intentRtProvider)
+    ) {
       intentRealtimePortraitBusy = true;
-      portraitWorking("Intent Realtime", { providerOverride: "openai", clearDirector: false });
+      portraitWorking("Intent Realtime", {
+        providerOverride: intentRtProvider,
+        forceProvider: true,
+        clearDirector: false,
+      });
     }
     return;
   }
@@ -3843,7 +4055,7 @@ function allowAmbientIntentRealtime() {
   if (!getVisibleCanvasImages().length) return false;
   if (!state.runDir) return false;
   if (state.motherIdle?.pendingIntent && String(state.motherIdle.pendingIntentRealtimePath || "").trim()) return false;
-  if (state.keyStatus && !state.keyStatus.openai) return false;
+  if (state.keyStatus && !realtimeScopeReady("intent")) return false;
   return true;
 }
 
@@ -3895,11 +4107,10 @@ async function runAmbientIntentInferenceOnce({ reason = null } = {}) {
 
   await ensureRun();
   if (!allowAmbientIntentRealtime()) {
-    const msg =
-      state.keyStatus && !state.keyStatus.openai ? "Missing OPENAI_API_KEY." : "Intent realtime disabled.";
+    const msg = state.keyStatus ? realtimeScopeUnavailableMessage("intent") : "Intent realtime disabled.";
     applyAmbientIntentFallback("realtime_disabled", {
       message: msg,
-      hardDisable: Boolean(state.keyStatus && !state.keyStatus.openai),
+      hardDisable: Boolean(state.keyStatus && !realtimeScopeReady("intent")),
     });
     appendIntentTrace({
       kind: "ambient_inference_blocked",
@@ -4004,7 +4215,7 @@ function allowIntentRealtime() {
   const intent = state.intent;
   if (!intent) return false;
   // Fail fast before dispatch if we know required keys are missing.
-  if (state.keyStatus && !state.keyStatus.openai) return false;
+  if (state.keyStatus && !realtimeScopeReady("intent")) return false;
   return true;
 }
 
@@ -4117,7 +4328,7 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
     intent.pendingAt = 0;
     intent.pendingFrameId = null;
     intent.rtState = "failed";
-    intent.disabledReason = state.keyStatus && !state.keyStatus.openai ? "Missing OPENAI_API_KEY." : "Intent realtime disabled.";
+    intent.disabledReason = state.keyStatus ? realtimeScopeUnavailableMessage("intent") : "Intent realtime disabled.";
     intent.lastError = intent.disabledReason;
     intent.lastErrorAt = now;
     intent.uiHideSuggestion = false;
@@ -5118,7 +5329,7 @@ function inferIntentBranchFromVisionDescriptions() {
   bump("game_dev_assets", /\b(character sheet|character sheets)\b/i, 4);
   bump("game_dev_assets", /\b(concept art)\b/i, 4);
   bump("game_dev_assets", /\b(unreal|unity)\b/i, 2);
-  bump("game_dev_assets", /\b(terran|zerg|scv)\b/i, 4);
+  bump("game_dev_assets", /\b(faction|factions|rts|real[- ]?time strategy)\b/i, 4);
   bump("game_dev_assets", /\b(game|gamedev|mod)\b/i, 2);
 
   bump("streaming_content", /\b(instagram|twitch|youtube|tiktok)\b/i, 5);
@@ -6444,6 +6655,395 @@ function parseJsonSafe(raw) {
   }
 }
 
+function loadOpenRouterOnboardingProfile() {
+  const raw = localStorage.getItem(OPENROUTER_ONBOARDING_PROFILE_KEY);
+  const parsed = parseJsonSafe(raw);
+  if (!parsed || typeof parsed !== "object") return null;
+  return parsed;
+}
+
+function saveOpenRouterOnboardingProfile(profile) {
+  try {
+    localStorage.setItem(OPENROUTER_ONBOARDING_PROFILE_KEY, JSON.stringify(profile));
+  } catch {
+    // ignore
+  }
+}
+
+function markOpenRouterOnboardingCompleted(done = true) {
+  localStorage.setItem(OPENROUTER_ONBOARDING_COMPLETED_KEY, done ? "1" : "0");
+}
+
+function clearOpenRouterOnboardingProfile() {
+  localStorage.removeItem(OPENROUTER_ONBOARDING_PROFILE_KEY);
+  localStorage.removeItem(OPENROUTER_ONBOARDING_COMPLETED_KEY);
+}
+
+function formatOpenRouterOnboardingTimestamp(value) {
+  const at = new Date(value || 0);
+  if (!Number.isFinite(at.getTime())) return "unknown time";
+  return at.toLocaleString();
+}
+
+function renderOpenRouterOnboardingStatus() {
+  if (!els.openrouterOnboardingStatus) return;
+  const profile = loadOpenRouterOnboardingProfile();
+  const detected = Boolean(state?.keyStatus?.openrouter);
+  if (!profile) {
+    els.openrouterOnboardingStatus.textContent = detected
+      ? "OpenRouter key detected from environment."
+      : "Not started";
+    return;
+  }
+  const when = formatOpenRouterOnboardingTimestamp(profile.successAt || profile.completedAt || Date.now());
+  if (profile.success || detected) {
+    const masked = profile.keyMasked ? String(profile.keyMasked) : "saved";
+    const detection = detected ? "detected" : "not detected yet";
+    els.openrouterOnboardingStatus.textContent = `Connected (${masked})\nConfirmed ${when}\nKey status: ${detection}`;
+    return;
+  }
+  if (profile.skipped) {
+    els.openrouterOnboardingStatus.textContent = `Skipped ${when}\nRun setup anytime.`;
+    return;
+  }
+  els.openrouterOnboardingStatus.textContent = `Viewed ${when}\nRun setup to finish.`;
+}
+
+function renderOpenRouterOnboardingProgress(stepIndex) {
+  if (!els.openrouterOnboardingProgress) return;
+  const dotCount = 3;
+  els.openrouterOnboardingProgress.innerHTML = Array.from({ length: dotCount }, (_, idx) => {
+      const active = idx === stepIndex ? " is-active" : "";
+      const complete = idx < stepIndex ? " is-complete" : "";
+      return `
+        <div class="openrouter-onboarding-progress-dot${active}${complete}">
+          <span class="openrouter-onboarding-progress-dot-point" aria-hidden="true"></span>
+        </div>
+      `;
+    }).join("");
+}
+
+function buildOpenRouterOnboardingIntroHtml() {
+  return `
+    <section class="openrouter-onboarding-step openrouter-onboarding-step-intro">
+      <h3 class="openrouter-onboarding-intro-title">Brood works best with OpenRouter</h3>
+      <p class="openrouter-onboarding-intro-copy">
+        On the next screen, we will ask for your OPENROUTER_API_KEY, then confirm the key is connected.
+      </p>
+      <p class="openrouter-onboarding-intro-copy">
+        Next: paste your key and click Save key. Brood stores it in ~/.brood/.env.
+      </p>
+    </section>
+  `;
+}
+
+function buildOpenRouterOnboardingKeyHtml() {
+  const current = escapeHtml(openrouterOnboardingState.draft.apiKey || "");
+  const statusText = String(openrouterOnboardingState.statusMessage || "").trim();
+  const statusClass = openrouterOnboardingState.statusError
+    ? "openrouter-onboarding-form-status is-error"
+    : "openrouter-onboarding-form-status";
+  return `
+    <section class="openrouter-onboarding-step openrouter-onboarding-step-key">
+      <h3 class="openrouter-onboarding-intro-title">Connect your OpenRouter key</h3>
+      <p class="openrouter-onboarding-intro-copy">
+        Paste your OPENROUTER_API_KEY below. Click Continue to save and verify.
+      </p>
+      <label class="openrouter-onboarding-inline-label" for="openrouter-onboarding-key-input">OPENROUTER_API_KEY</label>
+      <input
+        id="openrouter-onboarding-key-input"
+        class="openrouter-onboarding-key-input"
+        type="password"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="sk-or-v1-..."
+        value="${current}"
+      />
+      <p class="openrouter-onboarding-intro-copy openrouter-onboarding-key-note">Saved to <code>~/.brood/.env</code> and applied for this app session.</p>
+      ${
+        statusText
+          ? `<div class="${statusClass}">${escapeHtml(statusText)}</div>`
+          : ""
+      }
+    </section>
+  `;
+}
+
+function buildOpenRouterOnboardingSuccessHtml() {
+  const profile = loadOpenRouterOnboardingProfile();
+  const when = formatOpenRouterOnboardingTimestamp(profile?.successAt || Date.now());
+  const masked = profile?.keyMasked ? String(profile.keyMasked) : "saved";
+  return `
+    <section class="openrouter-onboarding-step openrouter-onboarding-step-confirm">
+      <h3 class="openrouter-onboarding-intro-title">OpenRouter key confirmed</h3>
+      <p class="openrouter-onboarding-intro-copy">
+        Brood detected your OpenRouter key and setup is complete.
+      </p>
+      <p class="openrouter-onboarding-intro-copy openrouter-onboarding-key-note">Key: <code>${escapeHtml(masked)}</code></p>
+      <p class="openrouter-onboarding-intro-copy openrouter-onboarding-key-note">Confirmed: ${escapeHtml(when)}</p>
+      <p class="openrouter-onboarding-intro-copy openrouter-onboarding-key-note">
+        You can reopen this flow anytime from <strong>Settings → OpenRouter Onboarding</strong>.
+      </p>
+    </section>
+  `;
+}
+
+function renderOpenRouterOnboardingStep({ animate = false } = {}) {
+  if (!els.openrouterOnboardingModal || !els.openrouterOnboardingBody) return;
+  const stepIndex = Math.max(0, Math.min(2, Number(openrouterOnboardingState.stepIndex) || 0));
+  const centeredBodyLayout = stepIndex <= 2;
+  const bodyEl = els.openrouterOnboardingBody;
+
+  const renderBody = () => {
+    if (stepIndex === 0) {
+      bodyEl.innerHTML = buildOpenRouterOnboardingIntroHtml();
+    } else if (stepIndex === 1) {
+      bodyEl.innerHTML = buildOpenRouterOnboardingKeyHtml();
+    } else {
+      bodyEl.innerHTML = buildOpenRouterOnboardingSuccessHtml();
+    }
+  };
+
+  if (animate) {
+    if (openrouterOnboardingState.transitionTimer) {
+      clearTimeout(openrouterOnboardingState.transitionTimer);
+      openrouterOnboardingState.transitionTimer = null;
+    }
+    bodyEl.classList.remove("is-fading-out");
+    renderBody();
+    bodyEl.classList.remove("is-fading-in");
+    void bodyEl.offsetWidth;
+    bodyEl.classList.add("is-fading-in");
+    openrouterOnboardingState.transitionTimer = setTimeout(() => {
+      bodyEl.classList.remove("is-fading-in");
+      openrouterOnboardingState.transitionTimer = null;
+    }, 1260);
+  } else {
+    bodyEl.classList.remove("is-fading-out");
+    bodyEl.classList.remove("is-fading-in");
+    renderBody();
+  }
+  bodyEl.classList.toggle("is-intro-layout", centeredBodyLayout);
+
+  renderOpenRouterOnboardingProgress(stepIndex);
+
+  if (els.openrouterOnboardingBack) {
+    const hidden = stepIndex <= 0 || stepIndex >= 2;
+    const disabled = openrouterOnboardingState.submitting || hidden;
+    els.openrouterOnboardingBack.classList.toggle("openrouter-onboarding-footer-item-hidden", hidden);
+    els.openrouterOnboardingBack.disabled = disabled;
+    if (hidden) {
+      els.openrouterOnboardingBack.setAttribute("aria-hidden", "true");
+      els.openrouterOnboardingBack.setAttribute("tabindex", "-1");
+    } else {
+      els.openrouterOnboardingBack.removeAttribute("aria-hidden");
+      els.openrouterOnboardingBack.removeAttribute("tabindex");
+    }
+  }
+  if (els.openrouterOnboardingSkip) {
+    const hidden = stepIndex >= 2;
+    const disabled = openrouterOnboardingState.submitting;
+    const unavailable = hidden || disabled;
+    els.openrouterOnboardingSkip.classList.toggle("openrouter-onboarding-footer-item-hidden", hidden);
+    els.openrouterOnboardingSkip.classList.toggle("is-disabled", unavailable);
+    if (unavailable) {
+      els.openrouterOnboardingSkip.setAttribute("aria-hidden", hidden ? "true" : "false");
+      els.openrouterOnboardingSkip.setAttribute("aria-disabled", "true");
+      els.openrouterOnboardingSkip.setAttribute("tabindex", "-1");
+    } else {
+      els.openrouterOnboardingSkip.removeAttribute("aria-hidden");
+      els.openrouterOnboardingSkip.removeAttribute("aria-disabled");
+      els.openrouterOnboardingSkip.removeAttribute("tabindex");
+    }
+  }
+  if (els.openrouterOnboardingClose) {
+    els.openrouterOnboardingClose.textContent = stepIndex >= 2 ? "Close" : "Later";
+    els.openrouterOnboardingClose.disabled = openrouterOnboardingState.submitting;
+  }
+  const nextText = stepIndex === 0 ? "Continue" : stepIndex === 1 ? "Save key" : "Done";
+  const nextDisabled = openrouterOnboardingState.submitting;
+  if (els.openrouterOnboardingNext) {
+    els.openrouterOnboardingNext.textContent = nextText;
+    els.openrouterOnboardingNext.disabled = nextDisabled;
+  }
+}
+
+function closeOpenRouterOnboardingModal() {
+  if (openrouterOnboardingState.transitionTimer) {
+    clearTimeout(openrouterOnboardingState.transitionTimer);
+    openrouterOnboardingState.transitionTimer = null;
+  }
+  if (els.openrouterOnboardingMediaVideo) {
+    els.openrouterOnboardingMediaVideo.pause();
+  }
+  openrouterOnboardingState.open = false;
+  openrouterOnboardingState.submitting = false;
+  if (els.openrouterOnboardingModal) {
+    els.openrouterOnboardingModal.classList.add("hidden");
+  }
+}
+
+function playOpenRouterOnboardingMediaVideo({ restart = false } = {}) {
+  const videoEl = els.openrouterOnboardingMediaVideo;
+  if (!videoEl) return;
+  if (!videoEl.src) {
+    videoEl.src = OPENROUTER_ONBOARDING_SORA_VIDEO_SRC;
+  }
+  if (restart) {
+    try {
+      videoEl.currentTime = 0;
+    } catch {
+      // Ignore until metadata is available.
+    }
+  }
+  const playResult = videoEl.play();
+  if (playResult && typeof playResult.catch === "function") {
+    playResult.catch(() => {});
+  }
+}
+
+function saveOpenRouterOnboardingCompletion({
+  success = false,
+  skipped = false,
+  keyMasked = null,
+  envPath = null,
+} = {}) {
+  const prev = loadOpenRouterOnboardingProfile() || {};
+  const nowIso = new Date().toISOString();
+  const successFinal = Boolean(success || prev.success);
+  const profile = {
+    version: 1,
+    source: openrouterOnboardingState.source,
+    completedAt: nowIso,
+    success: successFinal,
+    skipped: Boolean(skipped) && !successFinal,
+    successAt: success ? nowIso : prev.successAt || null,
+    keyMasked: success ? keyMasked || prev.keyMasked || null : prev.keyMasked || null,
+    envPath: success ? envPath || prev.envPath || null : prev.envPath || null,
+  };
+  saveOpenRouterOnboardingProfile(profile);
+  markOpenRouterOnboardingCompleted(true);
+  renderOpenRouterOnboardingStatus();
+}
+
+function openOpenRouterOnboardingModal({ force = false, source = "first_run" } = {}) {
+  if (!els.openrouterOnboardingModal) return false;
+  const completed = localStorage.getItem(OPENROUTER_ONBOARDING_COMPLETED_KEY) === "1";
+  if (!force && completed) return false;
+  openrouterOnboardingState.open = true;
+  openrouterOnboardingState.stepIndex = 0;
+  openrouterOnboardingState.source = source;
+  openrouterOnboardingState.draft = defaultOpenRouterOnboardingDraft();
+  openrouterOnboardingState.submitting = false;
+  openrouterOnboardingState.statusMessage = "";
+  openrouterOnboardingState.statusError = false;
+  openrouterOnboardingState.keyMasked = null;
+  openrouterOnboardingState.envPath = null;
+  els.openrouterOnboardingModal.classList.remove("hidden");
+  playOpenRouterOnboardingMediaVideo({ restart: true });
+  renderOpenRouterOnboardingStep({ animate: false });
+  return true;
+}
+
+function skipOpenRouterOnboarding() {
+  saveOpenRouterOnboardingCompletion({ skipped: true });
+  closeOpenRouterOnboardingModal();
+}
+
+function handleOpenRouterOnboardingNextAction() {
+  if (!openrouterOnboardingState.open || openrouterOnboardingState.submitting) return;
+  if (openrouterOnboardingState.stepIndex === 0) {
+    openrouterOnboardingState.stepIndex = 1;
+    renderOpenRouterOnboardingStep({ animate: true });
+    return;
+  }
+  if (openrouterOnboardingState.stepIndex === 1) {
+    submitOpenRouterOnboardingKey().catch((err) => {
+      console.error(err);
+    });
+    return;
+  }
+  closeOpenRouterOnboardingModal();
+}
+
+async function restartEngineAfterOpenRouterKeySave() {
+  if (!state.runDir || !state.eventsPath) return true;
+  const waitDeadline = Date.now() + 12_000;
+  while (state.ptySpawning && Date.now() < waitDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 60));
+  }
+  if (state.ptySpawning) {
+    throw new Error("Engine restart still in progress. Please wait and retry.");
+  }
+  await spawnEngine();
+  if (!state.ptySpawned) {
+    throw new Error("OPENROUTER_API_KEY saved, but engine restart failed. Start a new run or relaunch.");
+  }
+  return true;
+}
+
+async function submitOpenRouterOnboardingKey() {
+  if (openrouterOnboardingState.submitting) return false;
+  const inputEl = document.getElementById("openrouter-onboarding-key-input");
+  const raw = inputEl ? String(inputEl.value || "") : String(openrouterOnboardingState.draft.apiKey || "");
+  const apiKey = raw.trim();
+  openrouterOnboardingState.draft.apiKey = apiKey;
+  if (!apiKey) {
+    openrouterOnboardingState.statusMessage = "Please paste your OPENROUTER_API_KEY.";
+    openrouterOnboardingState.statusError = true;
+    renderOpenRouterOnboardingStep({ animate: false });
+    return false;
+  }
+
+  openrouterOnboardingState.submitting = true;
+  openrouterOnboardingState.statusError = false;
+  openrouterOnboardingState.statusMessage = "Saving key and verifying detection…";
+  renderOpenRouterOnboardingStep({ animate: false });
+
+  try {
+    const result = await invoke("save_openrouter_api_key", { apiKey });
+    await refreshKeyStatus().catch(() => {});
+    if (!state?.keyStatus?.openrouter) {
+      throw new Error("OPENROUTER_API_KEY was saved but key detection did not confirm yet.");
+    }
+    openrouterOnboardingState.statusMessage = "Restarting engine to apply key…";
+    renderOpenRouterOnboardingStep({ animate: false });
+    await restartEngineAfterOpenRouterKeySave();
+    openrouterOnboardingState.keyMasked = result?.key_masked ? String(result.key_masked) : null;
+    openrouterOnboardingState.envPath = result?.env_path ? String(result.env_path) : null;
+    saveOpenRouterOnboardingCompletion({
+      success: true,
+      keyMasked: openrouterOnboardingState.keyMasked,
+      envPath: openrouterOnboardingState.envPath,
+    });
+    // Ensure the confirm step renders with interactive controls enabled.
+    openrouterOnboardingState.submitting = false;
+    openrouterOnboardingState.stepIndex = 2;
+    openrouterOnboardingState.statusMessage = "";
+    openrouterOnboardingState.statusError = false;
+    showToast("OpenRouter key connected.", "tip", 2200);
+    renderOpenRouterOnboardingStep({ animate: true });
+    return true;
+  } catch (err) {
+    const message = normalizeErrorMessage(err, "Could not save OPENROUTER_API_KEY.");
+    openrouterOnboardingState.statusMessage = message;
+    openrouterOnboardingState.statusError = true;
+    renderOpenRouterOnboardingStep({ animate: false });
+    return false;
+  } finally {
+    openrouterOnboardingState.submitting = false;
+    if (openrouterOnboardingState.stepIndex === 1 && openrouterOnboardingState.open) {
+      renderOpenRouterOnboardingStep({ animate: false });
+    }
+  }
+}
+
+function maybeAutoOpenOpenRouterOnboarding() {
+  const completed = localStorage.getItem(OPENROUTER_ONBOARDING_COMPLETED_KEY) === "1";
+  if (completed) return false;
+  return openOpenRouterOnboardingModal({ force: false, source: "first_run" });
+}
+
 function loadAestheticOnboardingProfile() {
   const raw = localStorage.getItem(AESTHETIC_ONBOARDING_PROFILE_KEY);
   const parsed = parseJsonSafe(raw);
@@ -6982,6 +7582,56 @@ function providerDisplay(provider) {
   return String(provider);
 }
 
+function formatPortraitModelLabel(model) {
+  const raw = String(model || "").trim();
+  if (!raw) return "";
+  const lower = raw.toLowerCase();
+  const byExact = {
+    "gemini-3-pro-image-preview": "Gem3Pro",
+    "gemini-2.5-flash-image": "Gem2.5F",
+    "imagen-4.0-ultra": "Img4Ult",
+    "imagen-4": "Imagen4",
+    "flux-2-max": "Flux2Mx",
+    "flux-2-flex": "Flux2Fx",
+    "flux-2-pro": "Flux2Pr",
+    "flux-2": "Flux2",
+    "gpt-image-1.5": "GImg1.5",
+    "gpt-image-1-mini": "GImg1Mn",
+    "gpt-image-1": "GImg1",
+    "gpt-5.2": "GPT5.2",
+    "gpt-5.1-codex-max": "GPT5.1C",
+    "claude-opus-4-5-20251101": "ClOp4.5",
+    "dryrun-text-1": "DryText",
+    "dryrun-image-1": "DryImg",
+  };
+  const MAX = 8;
+  function clampLabel(label) {
+    return String(label || "").slice(0, MAX);
+  }
+  if (byExact[lower]) return clampLabel(byExact[lower]);
+  if (lower.startsWith("gemini")) return "Gemini".slice(0, MAX);
+  if (lower.startsWith("gpt")) return "GPT".slice(0, MAX);
+  if (lower.startsWith("imagen")) return "Imagen".slice(0, MAX);
+  if (lower.startsWith("flux")) return "Flux".slice(0, MAX);
+  if (lower.startsWith("claude")) return "Claude".slice(0, MAX);
+  if (lower.startsWith("dryrun")) return "Dryrun".slice(0, MAX);
+  return clampLabel(raw);
+}
+
+function portraitTitleForSlot(slot, provider) {
+  const imageModel = String(settings.imageModel || "").trim();
+  const textModel = String(settings.textModel || "").trim();
+  const providerKey = String(provider || "").toLowerCase();
+  if (slot === "primary") {
+    if (imageModel) return formatPortraitModelLabel(imageModel);
+  } else {
+    if (textModel) return formatPortraitModelLabel(textModel);
+  }
+  if (imageModel && providerFromModel(imageModel) === providerKey) return formatPortraitModelLabel(imageModel);
+  if (textModel && providerFromModel(textModel) === providerKey) return formatPortraitModelLabel(textModel);
+  return providerDisplay(provider);
+}
+
 const PORTRAITS_DIR_LS_KEY = "brood.portraitsDir";
 const PORTRAITS_DIR_DISK_FILE = "portraits_dir.json";
 
@@ -7116,16 +7766,36 @@ async function pickPortraitsDir() {
 
 function portraitAgentFromProvider(provider) {
   const p = String(provider || "").toLowerCase();
-  // Requested swaps:
-  // - OpenAI uses Stability clips; Stability (SDXL) uses OpenAI clips.
-  // - Gemini uses Flux clips; Flux uses Gemini clips.
+  // Primary mapping is provider-native so labels and visuals stay intuitive.
+  if (p === "openai") return "openai";
+  if (p === "sdxl" || p === "stability") return "stability";
+  if (p === "gemini") return "gemini";
+  if (p === "imagen") return "imagen";
+  if (p === "flux") return "flux";
+  return null;
+}
+
+function portraitFallbackAgentFromProvider(provider) {
+  const p = String(provider || "").toLowerCase();
+  // Secondary fallback keeps compatibility with the older swapped portrait packs.
   if (p === "openai") return "stability";
   if (p === "sdxl" || p === "stability") return "openai";
   if (p === "gemini") return "flux";
-  if (p === "imagen") return "imagen";
   if (p === "flux") return "gemini";
-  if (p === "dryrun") return "dryrun";
-  return "dryrun";
+  return null;
+}
+
+function portraitClipPathForAgent(index, agent, clipState) {
+  if (!index || !agent) return null;
+  let clipPath = index?.[agent]?.[clipState] || null;
+  if (!clipPath && clipState === "working") clipPath = index?.[agent]?.idle || null;
+  return clipPath || null;
+}
+
+function portraitProviderForActiveKey(activeKeyField) {
+  if (activeKeyField === "activeKey1") return state?.portrait?.provider || null;
+  if (activeKeyField === "activeKey2") return state?.portrait2?.provider || null;
+  return null;
 }
 
 function looksLikePortraitClipName(name) {
@@ -7202,11 +7872,13 @@ async function resolvePortraitsDir() {
     const fromDisk = await loadPortraitsDirFromDisk();
     if (fromDisk && (!fromLs || String(fromDisk) !== String(fromLs).trim())) candidates.push(String(fromDisk).trim());
 
-    // Dev convenience: use repo-local tracked portraits first, then generated outputs.
+    // Dev convenience: use repo-local tracked portrait videos first, then generated outputs.
     try {
       const repoRoot = await invoke("get_repo_root");
       if (repoRoot) {
         // Tracked baseline portrait pack for fresh clones.
+        candidates.push(await join(repoRoot, "desktop", "src", "assets", "portraits", "videos"));
+        // Back-compat with older checkouts that stored videos directly under portraits/.
         candidates.push(await join(repoRoot, "desktop", "src", "assets", "portraits"));
         candidates.push(await join(repoRoot, "outputs", "sora_portraits"));
 
@@ -7215,6 +7887,7 @@ async function resolvePortraitsDir() {
         // in the main repo's `outputs/` (and are usually untracked), so prefer that if present.
         const mainRoot = await deriveMainRepoRootFromWorktree(repoRoot);
         if (mainRoot && mainRoot !== repoRoot) {
+          candidates.push(await join(mainRoot, "desktop", "src", "assets", "portraits", "videos"));
           candidates.push(await join(mainRoot, "desktop", "src", "assets", "portraits"));
           candidates.push(await join(mainRoot, "outputs", "sora_portraits"));
         }
@@ -7427,7 +8100,7 @@ function secondaryProviderFor(primaryProvider, index = null) {
   const preferred = [];
   if (textProvider) preferred.push(textProvider);
   // Sensible fallbacks if the text provider doesn't have clips.
-  preferred.push("gemini", "openai", "imagen", "flux", "sdxl", "dryrun");
+  preferred.push("gemini", "openai", "imagen", "flux", "sdxl");
   const ordered = Array.from(new Set(preferred.map((p) => String(p || "").toLowerCase()).filter(Boolean)));
   const candidates = ordered.filter((p) => p !== primary);
 
@@ -7444,12 +8117,17 @@ function secondaryProviderFor(primaryProvider, index = null) {
   // Even if we have no clips for any other provider, keep the secondary portrait
   // label different (the video loader will fall back to dryrun clips if needed).
   if (candidates.length) return candidates[0];
-  if (primary && primary !== "dryrun") return "dryrun";
   return "gemini";
 }
 
 async function refreshPortraitVideoSlot({ videoEl, provider, busy, activeKeyField }) {
   if (!videoEl) return;
+  const requestedProvider = String(provider || "").trim().toLowerCase();
+  const currentProvider = String(portraitProviderForActiveKey(activeKeyField) || "")
+    .trim()
+    .toLowerCase();
+  // Drop stale refreshes so older async calls cannot overwrite newer provider selections.
+  if (requestedProvider !== currentProvider) return;
   // Portraits are decorative UI; they should load even before a run/photo is active.
   const visible = Boolean(els.portraitDock) && !els.portraitDock.classList.contains("hidden");
   if (!visible) {
@@ -7462,13 +8140,19 @@ async function refreshPortraitVideoSlot({ videoEl, provider, busy, activeKeyFiel
   }
 
   const agent = portraitAgentFromProvider(provider);
-  const clipState = busy ? "working" : "idle";
+  const fallbackAgent = portraitFallbackAgentFromProvider(provider);
+  const openAiBoost = openaiRealtimePortraitBoostActive && isOpenAiProvider(provider);
+  const clipState = busy || openAiBoost ? "working" : "idle";
   const index = (await ensurePortraitIndex()) || {};
+  const currentProviderAfterIndex = String(portraitProviderForActiveKey(activeKeyField) || "")
+    .trim()
+    .toLowerCase();
+  if (requestedProvider !== currentProviderAfterIndex) return;
 
-  let clipPath = index?.[agent]?.[clipState] || null;
-  if (!clipPath && clipState === "working") clipPath = index?.[agent]?.idle || null;
-  if (!clipPath && agent !== "dryrun") {
-    clipPath = index?.dryrun?.[clipState] || index?.dryrun?.idle || null;
+  // Prefer provider-native clips, then legacy swapped clips. Never use dryrun clips.
+  let clipPath = portraitClipPathForAgent(index, agent, clipState);
+  if (!clipPath && fallbackAgent && fallbackAgent !== agent) {
+    clipPath = portraitClipPathForAgent(index, fallbackAgent, clipState);
   }
 
   if (!clipPath) {
@@ -7552,7 +8236,6 @@ function setPortrait({ title, provider, busy } = {}) {
   if (els.portraitDock) els.portraitDock.classList.remove("hidden");
   if (typeof busy === "boolean") {
     state.portrait.busy = busy;
-    if (els.agentSlotPrimary) els.agentSlotPrimary.classList.toggle("busy", busy);
   }
   if (provider !== undefined) {
     state.portrait.provider = provider;
@@ -7564,6 +8247,7 @@ function setPortrait({ title, provider, busy } = {}) {
     state.portrait.title = title;
     if (els.portraitTitle) els.portraitTitle.textContent = title || "";
   }
+  syncOpenAiRealtimePortraitBusyClasses();
   renderHudReadout();
   refreshAgentPortraitVideos().catch(() => {});
 }
@@ -7573,7 +8257,6 @@ function setPortrait2({ title, provider, busy } = {}) {
   if (els.portraitDock) els.portraitDock.classList.remove("hidden");
   if (typeof busy === "boolean") {
     state.portrait2.busy = busy;
-    if (els.agentSlotSecondary) els.agentSlotSecondary.classList.toggle("busy", busy);
   }
   if (provider !== undefined) {
     state.portrait2.provider = provider;
@@ -7585,6 +8268,7 @@ function setPortrait2({ title, provider, busy } = {}) {
     state.portrait2.title = title;
     if (els.portraitTitle2) els.portraitTitle2.textContent = title || "";
   }
+  syncOpenAiRealtimePortraitBusyClasses();
   renderHudReadout();
   refreshAgentPortraitVideos().catch(() => {});
 }
@@ -7607,41 +8291,45 @@ function updatePortraitIdle({ fromSettings = false } = {}) {
     visible: hasImage,
     busy: false,
     provider,
-    title: providerDisplay(provider),
+    title: portraitTitleForSlot("primary", provider),
   });
   setPortrait2({
     visible: hasImage,
     busy: false,
     provider: provider2,
-    title: providerDisplay(provider2),
+    title: portraitTitleForSlot("secondary", provider2),
   });
   renderHudReadout();
 }
 
-function portraitWorking(_actionLabel, { providerOverride = null, clearDirector = true } = {}) {
+function portraitWorking(_actionLabel, { providerOverride = null, forceProvider = false, clearDirector = true } = {}) {
   if (clearDirector && (state.lastDirectorText || state.lastDirectorMeta)) {
     state.lastDirectorText = null;
     state.lastDirectorMeta = null;
   }
-  const provider = providerOverride || providerFromModel(settings.imageModel);
+  // Keep portrait identities stable during normal actions. Realtime paths can force
+  // a provider switch (for example intent realtime OpenAI vs image-model Gemini).
+  const overrideProvider = String(providerOverride || "")
+    .trim()
+    .toLowerCase();
+  const providerDefault = providerFromModel(settings.imageModel) || overrideProvider || "gemini";
+  const provider = forceProvider && overrideProvider ? overrideProvider : state.portrait.provider || providerDefault;
   setPortrait({
     visible: Boolean(state.activeId),
     busy: true,
     provider,
-    title: providerDisplay(provider),
+    title: portraitTitleForSlot("primary", provider),
   });
   // Secondary portrait is display-only for now (idle loop).
   const provider2Existing = state.portrait2.provider;
-  const needsSecondaryRefresh =
-    !provider2Existing || String(provider2Existing).toLowerCase() === String(provider).toLowerCase();
-  const provider2 = needsSecondaryRefresh
+  const provider2 = forceProvider
     ? secondaryProviderFor(provider, state.portraitMedia.index)
-    : provider2Existing;
+    : provider2Existing || secondaryProviderFor(provider, state.portraitMedia.index);
   setPortrait2({
     visible: Boolean(state.activeId),
     busy: false,
     provider: provider2,
-    title: providerDisplay(provider2),
+    title: portraitTitleForSlot("secondary", provider2),
   });
   renderHudReadout();
 }
@@ -7654,10 +8342,35 @@ function renderKeyStatus(status) {
   }
   const lines = [];
   lines.push(`OpenAI: ${status.openai ? "ok" : "missing"}`);
+  lines.push(`OpenRouter: ${status.openrouter ? "ok" : "missing"}`);
   lines.push(`Gemini: ${status.gemini ? "ok" : "missing"}`);
   lines.push(`Imagen: ${status.imagen ? "ok" : "missing"}`);
   lines.push(`Flux: ${status.flux ? "ok" : "missing"}`);
   lines.push(`Anthropic: ${status.anthropic ? "ok" : "missing"}`);
+  if (status.realtime_provider_default) {
+    lines.push(
+      `Realtime(default): ${status.realtime_provider_default} ${status.realtime_ready ? "ready" : "missing keys"}`
+    );
+  }
+  if (status.realtime_provider_canvas_context) {
+    lines.push(
+      `Realtime(canvas): ${status.realtime_provider_canvas_context} ${
+        status.realtime_ready_canvas_context ? "ready" : "missing keys"
+      }`
+    );
+  }
+  if (status.realtime_provider_intent) {
+    lines.push(
+      `Realtime(intent): ${status.realtime_provider_intent} ${status.realtime_ready_intent ? "ready" : "missing keys"}`
+    );
+  }
+  if (status.realtime_provider_mother_intent) {
+    lines.push(
+      `Realtime(mother): ${status.realtime_provider_mother_intent} ${
+        status.realtime_ready_mother_intent ? "ready" : "missing keys"
+      }`
+    );
+  }
   els.keyStatus.textContent = lines.join("\n");
 }
 
@@ -7671,6 +8384,7 @@ async function refreshKeyStatus() {
     state.keyStatus = null;
     renderKeyStatus(null);
   } finally {
+    renderOpenRouterOnboardingStatus();
     updateAlwaysOnVisionReadout();
   }
 }
@@ -9332,7 +10046,10 @@ function motherV2ProposalBadgeIconSvg(kind = "target") {
 function motherV2IntentSourceKind(source = "") {
   const raw = String(source || "").trim().toLowerCase();
   if (!raw) return "";
-  if (raw.includes("realtime") || raw.includes("intent_rt")) return "realtime";
+  if (raw === "realtime") return "realtime";
+  if (realtimeSourceSupported(raw)) return "realtime";
+  if (raw.startsWith("openai_realtime") || raw.startsWith("gemini_flash")) return "realtime";
+  if (raw.includes("intent_rt") || raw.includes("realtime")) return "realtime";
   return "fallback";
 }
 
@@ -9424,7 +10141,7 @@ function renderMotherReadout() {
   motherV2SyncLayeredPanel();
   const next = buildMotherText();
   const aov = state.alwaysOnVision;
-  const isRealtime = String(aov?.lastMeta?.source || "") === "openai_realtime";
+  const isRealtime = realtimeSourceSupported(aov?.lastMeta?.source);
   const hasOutput = typeof aov?.lastText === "string" && aov.lastText.trim();
   const proposalIconsHtml = motherV2ProposalIconsHtml(state.motherIdle?.intent || null, { phase });
   const draftStatusHtml = motherV2DraftStatusHtml({ phase });
@@ -13241,7 +13958,7 @@ function motherV2IntentPayload() {
     ambient_intent: (ambientBranches.length || ambientModeHints.preferredMode)
       ? {
           source: "intent_rt",
-          model: state.intentAmbient?.iconState ? "openai_realtime" : null,
+          model: state.intentAmbient?.iconState ? realtimeProviderForScope("intent") : null,
           branches: ambientBranches,
           preferred_transformation_mode: ambientModeHints.preferredMode || null,
           transformation_mode_candidates: ambientModeHints.candidates,
@@ -22456,6 +23173,9 @@ async function handleEventLegacy(event) {
   } else if (eventType === DESKTOP_EVENT_TYPES.CANVAS_CONTEXT) {
     const text = event.text;
     const isPartial = Boolean(event.partial);
+    if (isOpenAiRealtimeSignal({ source: event.source, model: event.model })) {
+      markOpenAiRealtimePortraitActivity();
+    }
     if (!isPartial) {
       topMetricIngestRealtimeCostFromPayload(event, { render: true });
     }
@@ -22480,7 +23200,7 @@ async function handleEventLegacy(event) {
         partial: isPartial,
       };
       const src = String(event.source || "");
-      if (src === "openai_realtime") {
+      if (realtimeSourceSupported(src)) {
         aov.rtState = "ready";
         aov.disabledReason = null;
       }
@@ -22507,6 +23227,9 @@ async function handleEventLegacy(event) {
       renderQuickActions();
     }
   } else if (eventType === DESKTOP_EVENT_TYPES.CANVAS_CONTEXT_FAILED) {
+    if (isOpenAiRealtimeSignal({ source: event.source, model: event.model })) {
+      markOpenAiRealtimePortraitActivity();
+    }
     const aov = state.alwaysOnVision;
     if (aov) {
       aov.pending = false;
@@ -22521,7 +23244,7 @@ async function handleEventLegacy(event) {
         image_path: event.image_path || null,
       };
       const src = String(event.source || "");
-      if (event.fatal && src === "openai_realtime") {
+      if (event.fatal && realtimeSourceSupported(src)) {
         aov.enabled = false;
         aov.rtState = "failed";
         aov.disabledReason = event.error
@@ -22574,6 +23297,9 @@ async function handleEventLegacy(event) {
     );
     if (!intent && !ambient && !motherCanAcceptRealtime) return;
     const isPartial = Boolean(event.partial);
+    if (isOpenAiRealtimeSignal({ source: event.source, model: event.model })) {
+      markOpenAiRealtimePortraitActivity();
+    }
     if (!isPartial) {
       topMetricIngestRealtimeCostFromPayload(event, { render: true });
     }
@@ -22948,6 +23674,9 @@ async function handleEventLegacy(event) {
       resolveActiveMotherRealtimeFailureTarget();
     motherIdle = resolvedMotherIdle;
     if (!matchIntent && !matchAmbient && !matchMother) return;
+    if (isOpenAiRealtimeSignal({ source: event.source, model: event.model })) {
+      markOpenAiRealtimePortraitActivity();
+    }
 
     if (matchIntent && intent) {
       intent.pending = false;
@@ -23024,6 +23753,12 @@ async function handleEventLegacy(event) {
     const errLower = errRaw.toLowerCase();
     const hardDisable = Boolean(
       errLower.includes("missing openai_api_key") ||
+        errLower.includes("missing gemini_api_key") ||
+        errLower.includes("missing google_api_key") ||
+        errLower.includes("gemini_api_key (or google_api_key)") ||
+        errLower.includes("realtime provider 'openai_realtime'") ||
+        errLower.includes("realtime provider 'gemini_flash'") ||
+        errLower.includes("openrouter_api_key alone is insufficient") ||
         errLower.includes("missing dependency") ||
         errLower.includes("disabled (brood_intent_realtime_disabled=1") ||
         errLower.includes("realtime intent inference is disabled")
@@ -27319,12 +28054,101 @@ function installUi() {
       openAestheticOnboardingModal({ force: true, source: "settings" });
     });
   }
+  if (els.openrouterOnboardingOpen) {
+    els.openrouterOnboardingOpen.addEventListener("click", () => {
+      bumpInteraction();
+      if (els.settingsDrawer) els.settingsDrawer.classList.add("hidden");
+      openOpenRouterOnboardingModal({ force: true, source: "settings" });
+    });
+  }
+  if (els.openrouterOnboardingReset) {
+    els.openrouterOnboardingReset.addEventListener("click", () => {
+      bumpInteraction();
+      clearOpenRouterOnboardingProfile();
+      renderOpenRouterOnboardingStatus();
+      showToast("OpenRouter onboarding state cleared.", "tip", 2200);
+    });
+  }
   if (els.aestheticOnboardingClear) {
     els.aestheticOnboardingClear.addEventListener("click", () => {
       bumpInteraction();
       clearAestheticOnboardingProfile();
       renderAestheticOnboardingStatus();
       showToast("Aesthetic preference cleared.", "tip", 2200);
+    });
+  }
+  if (els.openrouterOnboardingBody) {
+    els.openrouterOnboardingBody.addEventListener("click", (event) => {
+      const btn = event?.target?.closest ? event.target.closest("[data-openrouter-action]") : null;
+      if (!btn || !els.openrouterOnboardingBody.contains(btn)) return;
+      const action = String(btn.dataset?.openrouterAction || "").trim();
+      if (action === "save") {
+        bumpInteraction();
+        submitOpenRouterOnboardingKey().catch((err) => {
+          console.error(err);
+        });
+      }
+    });
+    els.openrouterOnboardingBody.addEventListener("input", (event) => {
+      const target = event?.target;
+      if (!target || target.id !== "openrouter-onboarding-key-input") return;
+      openrouterOnboardingState.draft.apiKey = String(target.value || "");
+    });
+    els.openrouterOnboardingBody.addEventListener("keydown", (event) => {
+      const target = event?.target;
+      if (!target || target.id !== "openrouter-onboarding-key-input") return;
+      const key = String(event?.key || "");
+      if (key !== "Enter") return;
+      event.preventDefault();
+      bumpInteraction();
+      submitOpenRouterOnboardingKey().catch((err) => {
+        console.error(err);
+      });
+    });
+  }
+  if (els.openrouterOnboardingBack) {
+    els.openrouterOnboardingBack.addEventListener("click", () => {
+      bumpInteraction();
+      if (!openrouterOnboardingState.open || openrouterOnboardingState.stepIndex <= 0) return;
+      openrouterOnboardingState.stepIndex -= 1;
+      openrouterOnboardingState.statusMessage = "";
+      openrouterOnboardingState.statusError = false;
+      renderOpenRouterOnboardingStep({ animate: true });
+    });
+  }
+  if (els.openrouterOnboardingNext) {
+    els.openrouterOnboardingNext.addEventListener("click", () => {
+      bumpInteraction();
+      handleOpenRouterOnboardingNextAction();
+    });
+  }
+  if (els.openrouterOnboardingSkip) {
+    els.openrouterOnboardingSkip.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (openrouterOnboardingState.submitting) return;
+      bumpInteraction();
+      skipOpenRouterOnboarding();
+    });
+  }
+  if (els.openrouterOnboardingClose) {
+    els.openrouterOnboardingClose.addEventListener("click", () => {
+      bumpInteraction();
+      if (openrouterOnboardingState.stepIndex >= 2) {
+        closeOpenRouterOnboardingModal();
+      } else {
+        skipOpenRouterOnboarding();
+      }
+    });
+  }
+  if (els.openrouterOnboardingModal) {
+    els.openrouterOnboardingModal.addEventListener("pointerdown", (event) => {
+      if (event?.target !== els.openrouterOnboardingModal) return;
+      bumpInteraction();
+      if (openrouterOnboardingState.stepIndex >= 2) {
+        closeOpenRouterOnboardingModal();
+      } else {
+        skipOpenRouterOnboarding();
+      }
     });
   }
   if (els.aestheticOnboardingBody) {
@@ -27382,6 +28206,7 @@ function installUi() {
       skipAestheticOnboarding();
     });
   }
+  renderOpenRouterOnboardingStatus();
   renderAestheticOnboardingStatus();
 
   if (els.portraitsDirPick) {
@@ -28121,6 +28946,9 @@ async function boot() {
 
   // Auto-create a run for speed; users can always "Open Run" later.
   await createRun();
+  setTimeout(() => {
+    maybeAutoOpenOpenRouterOnboarding();
+  }, 140);
   await invoke("report_automation_frontend_ready", { ready: true }).catch((err) => {
     console.warn("desktop automation readiness handshake failed", err);
   });

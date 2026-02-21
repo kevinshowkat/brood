@@ -43,7 +43,7 @@ Spawn is the cold-start hook: Brood proves it understands the user's visual iden
 
 ## UI / Visual Requirements
 - Replace action-grid button `9` entirely.
-- "Spawn" keycap should feel egg-like (StarCraft hatchery energy) while staying visually consistent with:
+- "Spawn" keycap should feel organic and egg-like while staying visually consistent with:
   - Existing 90s yellow keycaps
   - Depressed-active tool behavior
 - No larvae visuals.

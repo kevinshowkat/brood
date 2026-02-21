@@ -4,7 +4,7 @@
 The baseline Always-On Vision feature extracts "Canvas Context" by making a fresh batch vision request for each
 snapshot. That works, but it adds latency and doesn't stream incremental context.
 
-This feature implements the "Option 2" design: a persistent OpenAI Realtime API session that ingests an
+This feature implements the "Option 2" design: a provider-routed realtime session that ingests an
 optimized canvas snapshot in the background and streams back Canvas Context continuously, without blocking
 foreground UX.
 
@@ -52,8 +52,11 @@ Slash commands:
   - Validates config (keys, kill switch, dependency), then starts a background thread.
 - `/canvas_context_rt <path>`
   - Enqueues a snapshot job for the background thread (non-blocking).
-  - The thread reads the image, sends `conversation.item.create` + `response.create` over a persistent
-    Realtime WebSocket session, and emits streaming `canvas_context` events as text deltas arrive.
+  - `openai_realtime` provider: uses a persistent Realtime WebSocket session and streams deltas.
+  - `gemini_flash` provider:
+    - prefers OpenRouter `responses` first (with `chat/completions` fallback) when `OPENROUTER_API_KEY` is present
+    - otherwise uses per-snapshot Gemini `generateContent` when `GEMINI_API_KEY`/`GOOGLE_API_KEY` is present
+    - emits finalized `canvas_context` payloads.
 - `/canvas_context_rt_stop`
   - Stops the background thread and closes the realtime session.
 
@@ -66,8 +69,16 @@ Threading:
 - `rust_engine/crates/brood-contracts/src/events.rs` uses a lock to keep `events.jsonl` append operations safe across threads.
 
 ## Config
-- `OPENAI_API_KEY` (or `OPENAI_API_KEY_BACKUP`) is required.
-- `BROOD_CANVAS_CONTEXT_REALTIME_MODEL` (default: `gpt-realtime-mini`)
+- `BROOD_REALTIME_PROVIDER` (default auto-routing):
+  - OpenAI key present -> `openai_realtime`
+  - otherwise OpenRouter/Gemini presence -> `gemini_flash`
+- `BROOD_CANVAS_CONTEXT_REALTIME_PROVIDER` to override canvas-context provider only.
+- Provider credentials:
+  - `openai_realtime`: `OPENAI_API_KEY` (or `OPENAI_API_KEY_BACKUP`)
+  - `gemini_flash`: `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) or `OPENROUTER_API_KEY`
+- `BROOD_CANVAS_CONTEXT_REALTIME_MODEL` (default by provider):
+  - OpenAI: `gpt-realtime-mini`
+  - Gemini: `gemini-3-flash-preview` (OpenRouter normalized to `google/gemini-3-flash-preview`)
 - `BROOD_CANVAS_CONTEXT_REALTIME_DISABLED=1` to hard-disable realtime canvas context.
 
 ## Manual Test
@@ -79,7 +90,7 @@ Threading:
    - Updates after canvas changes (within throttle).
    - No noticeable UI lag while using Abilities / queue.
    - Disabling the toggle stops updates.
-5. Inspect `events.jsonl` for `canvas_context` lines with `source=openai_realtime`.
+5. Inspect `events.jsonl` for `canvas_context` lines with `source=openai_realtime` or `source=gemini_flash`.
 
 ## Failure Modes
 - Missing key: engine emits `canvas_context_failed` with `fatal=true` and the desktop disables the loop.

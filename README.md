@@ -9,6 +9,13 @@ You steer outputs by arranging and combining images on a canvas, then applying a
 
 ## Live Workflow Highlights
 
+### OpenRouter-First Onboarding (Newly Supported)
+Brood now ships a first-run OpenRouter onboarding flow in-app. It guides users through key setup, stores `OPENROUTER_API_KEY` in `~/.brood/.env`, verifies connectivity, and unlocks OpenRouter-first runtime paths (including Gemini realtime intent/canvas routing).
+
+<p align="left">
+  <img src="media/features/readme/openrouter_onboarding.gif" alt="OpenRouter-first onboarding flow">
+</p>
+
 ### Realtime Canvas Proposals
 Mother watches your on-canvas edits (move/resize/select), infers what you are emphasizing, and proposes the next best transformation without requiring a typed prompt.
 
@@ -153,11 +160,30 @@ cargo run -p brood-cli -- recreate --reference path/to/image.png --out /tmp/broo
 ## API Keys
 
 - Copy `.env.example` to `.env` and fill provider keys.
-- Supported key families: OpenAI, Anthropic, Gemini/Google, Imagen/Vertex, Flux/BFL.
+- Supported key families: OpenAI, OpenRouter, Anthropic, Gemini/Google, Imagen/Vertex, Flux/BFL.
 - For OpenAI image models:
   - set `OPENAI_API_KEY` (or `OPENAI_API_KEY_BACKUP`)
   - use `/image_model gpt-image-1` in chat or `--image-model gpt-image-1` on CLI
   - optional: `OPENAI_IMAGE_USE_RESPONSES=1`, `OPENAI_IMAGE_STREAM=1`
+- Realtime intent/canvas provider routing:
+  - set `BROOD_REALTIME_PROVIDER` to `openai_realtime` or `gemini_flash`
+  - optional scoped overrides:
+    - `BROOD_CANVAS_CONTEXT_REALTIME_PROVIDER`
+    - `BROOD_INTENT_REALTIME_PROVIDER`
+    - `BROOD_MOTHER_INTENT_REALTIME_PROVIDER`
+  - default behavior:
+    - OpenAI key present -> `openai_realtime`
+    - otherwise, OpenRouter/Gemini presence -> `gemini_flash`
+  - OpenRouter-first setup for realtime intent/canvas:
+    - set `OPENROUTER_API_KEY` (sufficient for realtime via OpenRouter `responses` with chat fallback)
+    - if both OpenRouter and Gemini keys are present, realtime `gemini_flash` prefers OpenRouter transport
+    - to force direct Gemini transport, leave `OPENROUTER_API_KEY` unset and set `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+    - Brood normalizes common aliases to provider IDs (e.g., `gemini-3.0-flash` -> `google/gemini-3-flash-preview` on OpenRouter)
+  - if you force `openai_realtime`, you must provide `OPENAI_API_KEY` (or backup key)
+  - optional OpenRouter endpoint headers: `OPENROUTER_API_BASE`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_X_TITLE`
+- Flux provider auth:
+  - preferred: `BFL_API_KEY` or `FLUX_API_KEY` (native BFL endpoint)
+  - OpenRouter-first fallback: `OPENROUTER_API_KEY` (uses OpenRouter image generation path)
 
 ## Optional Configuration
 
