@@ -7757,12 +7757,12 @@ fn build_labeled_image_content(
 }
 
 fn description_realtime_instruction() -> &'static str {
-    "Describe the image as one short caption fragment (<=40 chars), not a full sentence. Use noun-phrase style like 'LeBron James holding basketball'. Do not use auxiliary verbs like is/are/was/were. Return only the caption."
+    "Describe the image as one short caption fragment (<=40 chars), not a full sentence. Use noun-phrase style like 'Runner holding umbrella'. Do not use auxiliary verbs like is/are/was/were. Return only the caption."
 }
 
 fn description_instruction(max_chars: usize) -> String {
     format!(
-        "Write one concise computer-vision caption fragment for the attached image (<= {max_chars} characters). Use noun-phrase style, not a full sentence. Avoid auxiliary verbs (is/are/was/were) and avoid leading articles when possible. If a person or character is confidently recognizable, use the proper name (example: 'Michael Jordan holding basketball'). Otherwise use a concrete visual subject plus one discriminator (action, garment, color, material, viewpoint, or composition cue). Do not infer sports team/franchise from jersey colors alone; only mention a team when text/logo is clearly readable. No hedging. No questions. No extra commentary. Output ONLY the caption."
+        "Write one concise computer-vision caption fragment for the attached image (<= {max_chars} characters). Use noun-phrase style, not a full sentence. Avoid auxiliary verbs (is/are/was/were) and avoid leading articles when possible. If a person or character is confidently recognizable, use the proper name (example: 'Alex Rivera holding basketball'). Otherwise use a concrete visual subject plus one discriminator (action, garment, color, material, viewpoint, or composition cue). Do not infer sports team/franchise from jersey colors alone; only mention a team when text/logo is clearly readable. No hedging. No questions. No extra commentary. Output ONLY the caption."
     )
 }
 
@@ -7973,7 +7973,7 @@ BEHAVIOR RULES
 - evidence_image_ids should reference CONTEXT_ENVELOPE_JSON.images[].id (0-3 ids).
 - image_descriptions labels must use neutral computer-vision caption style.
 - Keep labels short and concrete. `A photo of ...` is acceptable but not required.
-- If a person or character is confidently recognizable, use the proper name (for example: "Michael Jordan holding a basketball").
+- If a person or character is confidently recognizable, use the proper name (for example: "Alex Rivera holding a basketball").
 - Prefer identifiable names over generic role nouns; avoid labels like "basketball player holding ball" when a confident identity is available.
 - Do not infer team/franchise identity from jersey color alone; only mention a team when text/logo evidence is clearly visible.
 - If not identifiable by name, use a concrete visual subject + one discriminator (action, garment, color, material, viewpoint, or composition cue).
@@ -9174,19 +9174,19 @@ mod tests {
             "Basketball player portrait"
         );
         assert_eq!(
-            clean_description("image of Michael Jordan holding a basketball", 64),
-            "Michael Jordan holding basketball"
+            clean_description("image of Alex Rivera holding a basketball", 64),
+            "Alex Rivera holding basketball"
         );
         assert_eq!(
-            clean_description("LeBron James is holding a basketball.", 64),
-            "LeBron James holding basketball"
+            clean_description("Alex Rivera is holding a basketball.", 64),
+            "Alex Rivera holding basketball"
         );
         assert_eq!(
             clean_description(
-                "A basketball player in a yellow Lakers jersey is holding a ball.",
+                "A basketball player in a yellow jersey is holding a ball.",
                 64
             ),
-            "basketball player in yellow Lakers jersey holding ball"
+            "basketball player in yellow jersey holding ball"
         );
         assert_eq!(
             clean_description("Basketball player is in a yellow jersey.", 64),
