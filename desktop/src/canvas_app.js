@@ -1913,6 +1913,7 @@ async function ensureReceiptMeta(item) {
   if (getActiveImage()?.id === item.id) {
     renderHudReadout();
   }
+  requestRender();
 }
 
 async function ingestTopMetricsFromReceiptPath(receiptPath, { allowCostFallback = false, allowLatencyFallback = false } = {}) {
@@ -9870,6 +9871,9 @@ async function motherV2CommitSelectedDraft() {
               receiptPath: t.receiptPath ? String(t.receiptPath) : null,
               kind: t.kind ? String(t.kind) : null,
               source: t.source ? String(t.source) : null,
+              motherVersionId: t.motherVersionId ? String(t.motherVersionId) : null,
+              receiptMeta: t.receiptMeta && typeof t.receiptMeta === "object" ? { ...t.receiptMeta } : null,
+              receiptMetaChecked: Boolean(t.receiptMetaChecked),
             }
           : null;
       })()
@@ -10009,6 +10013,13 @@ async function motherV2UndoCommit() {
       const targetItem = state.imagesById.get(String(undo.targetId)) || null;
       if (targetItem) {
         targetItem.source = undo.before.source || null;
+        targetItem.motherVersionId = undo.before.motherVersionId ? String(undo.before.motherVersionId) : null;
+        targetItem.receiptMeta =
+          undo.before.receiptMeta && typeof undo.before.receiptMeta === "object"
+            ? { ...undo.before.receiptMeta }
+            : null;
+        targetItem.receiptMetaChecked = Boolean(undo.before.receiptMetaChecked);
+        targetItem.receiptMetaLoading = false;
       }
     }
   }
