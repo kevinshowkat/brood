@@ -5,7 +5,8 @@
 ## Overview
 
 - Expanded, inlined agent context: [`llms-full.txt`](llms-full.txt)
-- Expanded context file: [`llms-full.txt`](llms-full.txt)
+- Canonical repo conventions: [`AGENTS.md`](AGENTS.md)
+- Practical task examples: [`docs/agent_quickstart.md`](docs/agent_quickstart.md)
 
 ## Agent Intake (Preferred)
 
