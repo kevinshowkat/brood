@@ -1135,7 +1135,7 @@ const state = {
   lastStatusText: "Engine: idle",
   lastStatusError: false,
   fallbackToFullRead: false,
-  keyStatus: null, // { openai, gemini, imagen, flux, anthropic }
+  keyStatus: null, // { openai, openrouter, gemini, imagen, flux, anthropic, realtime_provider_*, realtime_ready_* }
   intent: {
     locked: true,
     lockedAt: 0,
@@ -1714,7 +1714,7 @@ function topMetricIngestRealtimeCostFromPayload(payload, { render = false } = {}
   if (!payload || typeof payload !== "object") return false;
   if (payload.partial) return false;
   const source = String(payload.source || "").trim().toLowerCase();
-  if (source !== "openai_realtime") return false;
+  if (!realtimeSourceSupported(source)) return false;
   const tokens = extractTokenUsage(payload);
   if (!tokens) return false;
   const estimate = estimateRealtimeTokenCostUsd({
@@ -2612,15 +2612,86 @@ function updateAlwaysOnVisionReadout() {
   renderMotherReadout();
 }
 
+function normalizeRealtimeProviderName(raw) {
+  const value = String(raw || "").trim().toLowerCase();
+  if (value === "openai" || value === "openai_realtime") return "openai_realtime";
+  if (value === "gemini" || value === "gemini_flash") return "gemini_flash";
+  return "";
+}
+
+function realtimeProviderForScope(scope = "intent") {
+  const status = state.keyStatus;
+  if (!status || typeof status !== "object") return "";
+  const key =
+    scope === "canvas_context"
+      ? "realtime_provider_canvas_context"
+      : scope === "mother_intent"
+      ? "realtime_provider_mother_intent"
+      : "realtime_provider_intent";
+  const scoped = normalizeRealtimeProviderName(status[key]);
+  if (scoped) return scoped;
+  const fallback = normalizeRealtimeProviderName(status.realtime_provider_default);
+  if (fallback) return fallback;
+  if (status.openai) return "openai_realtime";
+  if (status.openrouter || status.gemini) return "gemini_flash";
+  return "openai_realtime";
+}
+
+function realtimeScopeReady(scope = "intent") {
+  const status = state.keyStatus;
+  if (!status || typeof status !== "object") return true;
+  const key =
+    scope === "canvas_context"
+      ? "realtime_ready_canvas_context"
+      : scope === "mother_intent"
+      ? "realtime_ready_mother_intent"
+      : "realtime_ready_intent";
+  if (typeof status[key] === "boolean") return status[key];
+  const provider = realtimeProviderForScope(scope);
+  if (provider === "openai_realtime") return Boolean(status.openai);
+  if (provider === "gemini_flash") return Boolean(status.gemini);
+  return Boolean(status.openai || status.gemini);
+}
+
+function realtimeSourceSupported(source) {
+  const normalized = String(source || "").trim().toLowerCase();
+  return normalized === "openai_realtime" || normalized === "gemini_flash";
+}
+
+function realtimeScopeUnavailableMessage(scope = "intent") {
+  const status = state.keyStatus;
+  const provider = realtimeProviderForScope(scope);
+  if (provider === "gemini_flash") {
+    if (status && !status.gemini) {
+      return "Realtime provider gemini_flash requires GEMINI_API_KEY (or GOOGLE_API_KEY).";
+    }
+    return "Intent realtime disabled.";
+  }
+  if (provider === "openai_realtime") {
+    if (status && !status.openai) {
+      if (status.openrouter) {
+        return "Realtime provider openai_realtime requires OPENAI_API_KEY. OpenRouter websocket realtime is unsupported; use gemini_flash + GEMINI_API_KEY.";
+      }
+      return "Realtime provider openai_realtime requires OPENAI_API_KEY (or OPENAI_API_KEY_BACKUP).";
+    }
+    return "Intent realtime disabled.";
+  }
+  return "Intent realtime disabled.";
+}
+
+function realtimePortraitProviderForScope(scope = "intent") {
+  const provider = realtimeProviderForScope(scope);
+  if (provider === "gemini_flash") return "gemini";
+  return "openai";
+}
+
 function allowAlwaysOnVision() {
   if (intentModeActive()) return false;
   if (!state.alwaysOnVision?.enabled) return false;
   if (!getVisibleCanvasImages().length) return false;
   if (!state.runDir) return false;
   // Fail fast before dispatch if we know required keys are missing.
-  if (state.keyStatus) {
-    if (!state.keyStatus.openai) return false;
-  }
+  if (state.keyStatus && !realtimeScopeReady("canvas_context")) return false;
   return true;
 }
 
@@ -2692,14 +2763,19 @@ function intentAmbientRealtimePulseActive() {
 }
 
 function syncIntentRealtimePortrait() {
-  // Intent Canvas uses OpenAI Realtime; when a request is in flight, show the OpenAI portrait "working" clip.
+  // Keep portrait provider aligned with the active realtime provider.
   // Keep this scoped to intent mode so we don't fight foreground action portraits elsewhere.
   const intent = state.intent;
   const active = Boolean(intent && intentModeActive() && (intent.pending || intent.rtState === "connecting"));
+  const intentRtProvider = realtimePortraitProviderForScope("intent");
   if (active) {
-    if (!intentRealtimePortraitBusy || !state.portrait?.busy || String(state.portrait?.provider || "").toLowerCase() !== "openai") {
+    if (
+      !intentRealtimePortraitBusy ||
+      !state.portrait?.busy ||
+      String(state.portrait?.provider || "").toLowerCase() !== String(intentRtProvider)
+    ) {
       intentRealtimePortraitBusy = true;
-      portraitWorking("Intent Realtime", { providerOverride: "openai", clearDirector: false });
+      portraitWorking("Intent Realtime", { providerOverride: intentRtProvider, clearDirector: false });
     }
     return;
   }
@@ -3843,7 +3919,7 @@ function allowAmbientIntentRealtime() {
   if (!getVisibleCanvasImages().length) return false;
   if (!state.runDir) return false;
   if (state.motherIdle?.pendingIntent && String(state.motherIdle.pendingIntentRealtimePath || "").trim()) return false;
-  if (state.keyStatus && !state.keyStatus.openai) return false;
+  if (state.keyStatus && !realtimeScopeReady("intent")) return false;
   return true;
 }
 
@@ -3895,11 +3971,10 @@ async function runAmbientIntentInferenceOnce({ reason = null } = {}) {
 
   await ensureRun();
   if (!allowAmbientIntentRealtime()) {
-    const msg =
-      state.keyStatus && !state.keyStatus.openai ? "Missing OPENAI_API_KEY." : "Intent realtime disabled.";
+    const msg = state.keyStatus ? realtimeScopeUnavailableMessage("intent") : "Intent realtime disabled.";
     applyAmbientIntentFallback("realtime_disabled", {
       message: msg,
-      hardDisable: Boolean(state.keyStatus && !state.keyStatus.openai),
+      hardDisable: Boolean(state.keyStatus && !realtimeScopeReady("intent")),
     });
     appendIntentTrace({
       kind: "ambient_inference_blocked",
@@ -4004,7 +4079,7 @@ function allowIntentRealtime() {
   const intent = state.intent;
   if (!intent) return false;
   // Fail fast before dispatch if we know required keys are missing.
-  if (state.keyStatus && !state.keyStatus.openai) return false;
+  if (state.keyStatus && !realtimeScopeReady("intent")) return false;
   return true;
 }
 
@@ -4117,7 +4192,7 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
     intent.pendingAt = 0;
     intent.pendingFrameId = null;
     intent.rtState = "failed";
-    intent.disabledReason = state.keyStatus && !state.keyStatus.openai ? "Missing OPENAI_API_KEY." : "Intent realtime disabled.";
+    intent.disabledReason = state.keyStatus ? realtimeScopeUnavailableMessage("intent") : "Intent realtime disabled.";
     intent.lastError = intent.disabledReason;
     intent.lastErrorAt = now;
     intent.uiHideSuggestion = false;
@@ -7654,10 +7729,35 @@ function renderKeyStatus(status) {
   }
   const lines = [];
   lines.push(`OpenAI: ${status.openai ? "ok" : "missing"}`);
+  lines.push(`OpenRouter: ${status.openrouter ? "ok" : "missing"}`);
   lines.push(`Gemini: ${status.gemini ? "ok" : "missing"}`);
   lines.push(`Imagen: ${status.imagen ? "ok" : "missing"}`);
   lines.push(`Flux: ${status.flux ? "ok" : "missing"}`);
   lines.push(`Anthropic: ${status.anthropic ? "ok" : "missing"}`);
+  if (status.realtime_provider_default) {
+    lines.push(
+      `Realtime(default): ${status.realtime_provider_default} ${status.realtime_ready ? "ready" : "missing keys"}`
+    );
+  }
+  if (status.realtime_provider_canvas_context) {
+    lines.push(
+      `Realtime(canvas): ${status.realtime_provider_canvas_context} ${
+        status.realtime_ready_canvas_context ? "ready" : "missing keys"
+      }`
+    );
+  }
+  if (status.realtime_provider_intent) {
+    lines.push(
+      `Realtime(intent): ${status.realtime_provider_intent} ${status.realtime_ready_intent ? "ready" : "missing keys"}`
+    );
+  }
+  if (status.realtime_provider_mother_intent) {
+    lines.push(
+      `Realtime(mother): ${status.realtime_provider_mother_intent} ${
+        status.realtime_ready_mother_intent ? "ready" : "missing keys"
+      }`
+    );
+  }
   els.keyStatus.textContent = lines.join("\n");
 }
 
@@ -9424,7 +9524,7 @@ function renderMotherReadout() {
   motherV2SyncLayeredPanel();
   const next = buildMotherText();
   const aov = state.alwaysOnVision;
-  const isRealtime = String(aov?.lastMeta?.source || "") === "openai_realtime";
+  const isRealtime = realtimeSourceSupported(aov?.lastMeta?.source);
   const hasOutput = typeof aov?.lastText === "string" && aov.lastText.trim();
   const proposalIconsHtml = motherV2ProposalIconsHtml(state.motherIdle?.intent || null, { phase });
   const draftStatusHtml = motherV2DraftStatusHtml({ phase });
@@ -13241,7 +13341,7 @@ function motherV2IntentPayload() {
     ambient_intent: (ambientBranches.length || ambientModeHints.preferredMode)
       ? {
           source: "intent_rt",
-          model: state.intentAmbient?.iconState ? "openai_realtime" : null,
+          model: state.intentAmbient?.iconState ? realtimeProviderForScope("intent") : null,
           branches: ambientBranches,
           preferred_transformation_mode: ambientModeHints.preferredMode || null,
           transformation_mode_candidates: ambientModeHints.candidates,
@@ -22480,7 +22580,7 @@ async function handleEventLegacy(event) {
         partial: isPartial,
       };
       const src = String(event.source || "");
-      if (src === "openai_realtime") {
+      if (realtimeSourceSupported(src)) {
         aov.rtState = "ready";
         aov.disabledReason = null;
       }
@@ -22521,7 +22621,7 @@ async function handleEventLegacy(event) {
         image_path: event.image_path || null,
       };
       const src = String(event.source || "");
-      if (event.fatal && src === "openai_realtime") {
+      if (event.fatal && realtimeSourceSupported(src)) {
         aov.enabled = false;
         aov.rtState = "failed";
         aov.disabledReason = event.error
@@ -23024,6 +23124,12 @@ async function handleEventLegacy(event) {
     const errLower = errRaw.toLowerCase();
     const hardDisable = Boolean(
       errLower.includes("missing openai_api_key") ||
+        errLower.includes("missing gemini_api_key") ||
+        errLower.includes("missing google_api_key") ||
+        errLower.includes("gemini_api_key (or google_api_key)") ||
+        errLower.includes("realtime provider 'openai_realtime'") ||
+        errLower.includes("realtime provider 'gemini_flash'") ||
+        errLower.includes("openrouter_api_key alone is insufficient") ||
         errLower.includes("missing dependency") ||
         errLower.includes("disabled (brood_intent_realtime_disabled=1") ||
         errLower.includes("realtime intent inference is disabled")
