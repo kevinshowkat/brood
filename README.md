@@ -13,7 +13,7 @@ You steer outputs by arranging and combining images on a canvas, then applying a
 Brood now ships a first-run OpenRouter onboarding flow in-app. It guides users through key setup, stores `OPENROUTER_API_KEY` in `~/.brood/.env`, verifies connectivity, and unlocks OpenRouter-first runtime paths (including Gemini realtime intent/canvas routing).
 
 <p align="left">
-  <img src="media/features/readme/openrouter_onboarding.gif" alt="OpenRouter-first onboarding flow">
+  <img src="media/features/readme/openrouter_onboarding_v2.gif" alt="OpenRouter-first onboarding flow">
 </p>
 
 ### Realtime Canvas Proposals
