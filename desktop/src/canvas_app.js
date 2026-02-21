@@ -285,6 +285,8 @@ const SPARKLINE_GLYPHS = Object.freeze(["▁", "▂", "▃", "▄", "▅", "▆"
 // Per-1K-token estimates for realtime text calls (input/output priced separately).
 const REALTIME_TOKEN_PRICING_USD_PER_1K = Object.freeze({
   "gpt-realtime-mini": Object.freeze({ input: 0.0006, output: 0.0024 }),
+  "gpt-4o-mini": Object.freeze({ input: 0.00015, output: 0.0006 }),
+  "gemini-3-flash-preview": Object.freeze({ input: 0.0005, output: 0.003 }),
 });
 const REEL_PRESET = Object.freeze({
   width: 540,
@@ -1732,8 +1734,20 @@ function topMetricIngestTokensFromPayload(payload, { atMs = Date.now(), render =
 function topMetricRealtimePricingForModel(model) {
   const raw = String(model || "").trim().toLowerCase();
   if (!raw) return null;
-  if (raw.startsWith("gpt-realtime-mini")) return REALTIME_TOKEN_PRICING_USD_PER_1K["gpt-realtime-mini"];
-  if (raw.startsWith("gpt-4o-mini")) return REALTIME_TOKEN_PRICING_USD_PER_1K["gpt-realtime-mini"];
+  const normalized = raw
+    .replace(/^openai\//, "")
+    .replace(/^google\//, "")
+    .replace(/^openrouter\//, "");
+  if (normalized.startsWith("gpt-realtime-mini")) return REALTIME_TOKEN_PRICING_USD_PER_1K["gpt-realtime-mini"];
+  if (normalized.startsWith("gpt-4o-mini")) return REALTIME_TOKEN_PRICING_USD_PER_1K["gpt-4o-mini"];
+  if (
+    normalized.startsWith("gemini-3-flash-preview") ||
+    normalized.startsWith("gemini-3.0-flash") ||
+    normalized.startsWith("gemini-3-flash") ||
+    (normalized.startsWith("gemini-") && normalized.includes("flash"))
+  ) {
+    return REALTIME_TOKEN_PRICING_USD_PER_1K["gemini-3-flash-preview"];
+  }
   return null;
 }
 
@@ -1757,8 +1771,9 @@ function topMetricIngestRealtimeCostFromPayload(payload, { render = false } = {}
   if (!realtimeSourceSupported(source)) return false;
   const tokens = extractTokenUsage(payload);
   if (!tokens) return false;
+  const pricingModel = payload.provider_model || payload.model;
   const estimate = estimateRealtimeTokenCostUsd({
-    model: payload.model,
+    model: pricingModel,
     inputTokens: tokens.input_tokens,
     outputTokens: tokens.output_tokens,
   });

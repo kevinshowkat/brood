@@ -127,6 +127,66 @@ fn merge_dotenv_vars(target: &mut HashMap<String, String>, path: &Path) {
     }
 }
 
+fn format_dotenv_value(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let needs_quotes = trimmed
+        .chars()
+        .any(|ch| ch.is_whitespace() || matches!(ch, '#' | '"' | '\'' | '`' | '$'));
+    if !needs_quotes {
+        return trimmed.to_string();
+    }
+    let escaped = trimmed.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+fn upsert_dotenv_key(path: &Path, key: &str, value: &str) -> Result<(), String> {
+    let formatted = format_dotenv_value(value);
+    let mut lines: Vec<String> = if path.exists() {
+        std::fs::read_to_string(path)
+            .map_err(|e| e.to_string())?
+            .lines()
+            .map(str::to_string)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let mut replaced = false;
+    for line in lines.iter_mut() {
+        let trimmed = line.trim_start();
+        let without_export = trimmed
+            .strip_prefix("export ")
+            .map(str::trim_start)
+            .unwrap_or(trimmed);
+        let Some((line_key, _)) = without_export.split_once('=') else {
+            continue;
+        };
+        if line_key.trim() == key {
+            *line = format!("{key}={formatted}");
+            replaced = true;
+        }
+    }
+
+    if !replaced {
+        if !lines.is_empty()
+            && lines
+                .last()
+                .map(|line| !line.trim().is_empty())
+                .unwrap_or(false)
+        {
+            lines.push(String::new());
+        }
+        lines.push(format!("{key}={formatted}"));
+    }
+
+    let mut rendered = lines.join("\n");
+    rendered.push('\n');
+    std::fs::write(path, rendered).map_err(|e| e.to_string())
+}
+
 fn collect_brood_env_snapshot() -> HashMap<String, String> {
     let mut vars: HashMap<String, String> = std::env::vars().collect();
 
@@ -141,6 +201,46 @@ fn collect_brood_env_snapshot() -> HashMap<String, String> {
     }
 
     vars
+}
+
+#[tauri::command]
+fn save_openrouter_api_key(api_key: String) -> Result<serde_json::Value, String> {
+    let trimmed = api_key.trim();
+    if trimmed.is_empty() {
+        return Err("OPENROUTER_API_KEY cannot be empty.".to_string());
+    }
+
+    let home = tauri::api::path::home_dir().ok_or("No home dir")?;
+    let brood_dir = home.join(".brood");
+    std::fs::create_dir_all(&brood_dir).map_err(|e| e.to_string())?;
+    let env_path = brood_dir.join(".env");
+    upsert_dotenv_key(&env_path, "OPENROUTER_API_KEY", trimmed)?;
+    #[cfg(target_family = "unix")]
+    {
+        let _ = std::fs::set_permissions(&env_path, std::fs::Permissions::from_mode(0o600));
+    }
+    std::env::set_var("OPENROUTER_API_KEY", trimmed);
+
+    let head = trimmed.chars().take(6).collect::<String>();
+    let tail = trimmed
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    let masked = if trimmed.chars().count() <= 12 {
+        format!("{head}***")
+    } else {
+        format!("{head}…{tail}")
+    };
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "key_masked": masked,
+        "env_path": env_path.to_string_lossy().to_string(),
+    }))
 }
 
 #[derive(Debug, Clone)]
@@ -711,7 +811,7 @@ fn get_key_status() -> Result<serde_json::Value, String> {
     let openai = has("OPENAI_API_KEY") || has("OPENAI_API_KEY_BACKUP");
     let openrouter = has("OPENROUTER_API_KEY");
     let gemini = has("GEMINI_API_KEY") || has("GOOGLE_API_KEY");
-    let flux = has("BFL_API_KEY") || has("FLUX_API_KEY");
+    let flux = has("BFL_API_KEY") || has("FLUX_API_KEY") || openrouter;
     let imagen = has("IMAGEN_API_KEY")
         || has("GOOGLE_API_KEY")
         || has("IMAGEN_VERTEX_PROJECT")
@@ -767,7 +867,7 @@ fn get_key_status() -> Result<serde_json::Value, String> {
     let provider_ready = |provider: RealtimeProvider| -> bool {
         match provider {
             RealtimeProvider::OpenAiRealtime => openai,
-            RealtimeProvider::GeminiFlash => gemini,
+            RealtimeProvider::GeminiFlash => gemini || openrouter,
         }
     };
     let realtime_ready_canvas_context = provider_ready(canvas_provider);
@@ -790,7 +890,8 @@ fn get_key_status() -> Result<serde_json::Value, String> {
         "realtime_ready_intent": realtime_ready_intent,
         "realtime_ready_mother_intent": realtime_ready_mother_intent,
         "realtime_ready_openai": openai,
-        "realtime_ready_gemini": gemini,
+        "realtime_ready_gemini": gemini || openrouter,
+        "realtime_ready_openrouter": openrouter,
     }))
 }
 
@@ -1185,6 +1286,7 @@ fn main() {
             get_repo_root,
             export_run,
             get_key_status,
+            save_openrouter_api_key,
             get_pty_status,
             read_file_since,
         ])

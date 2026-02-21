@@ -2814,7 +2814,7 @@ fn default_realtime_model(provider: RealtimeProvider, mother: bool) -> &'static 
                 "gpt-realtime-mini"
             }
         }
-        RealtimeProvider::GeminiFlash => "gemini-2.0-flash",
+        RealtimeProvider::GeminiFlash => "gemini-3-flash-preview",
     }
 }
 
@@ -3075,7 +3075,7 @@ impl RealtimeSnapshotSession {
             RealtimeProvider::OpenAiRealtime => {
                 if openrouter_api_key().is_some() {
                     format!(
-                        "Realtime provider '{}' requires OPENAI_API_KEY (or OPENAI_API_KEY_BACKUP). OpenRouter does not support OpenAI realtime websocket for this flow. Set {}=gemini_flash and configure GEMINI_API_KEY (or GOOGLE_API_KEY), or provide OpenAI realtime credentials.",
+                        "Realtime provider '{}' requires OPENAI_API_KEY (or OPENAI_API_KEY_BACKUP). OpenRouter does not support OpenAI realtime websocket for this flow. Set {}=gemini_flash and configure OPENROUTER_API_KEY or GEMINI_API_KEY (or GOOGLE_API_KEY), or provide OpenAI realtime credentials.",
                         self.provider.as_str(),
                         self.kind.provider_env_key()
                     )
@@ -3083,14 +3083,7 @@ impl RealtimeSnapshotSession {
                     "Missing OPENAI_API_KEY (or OPENAI_API_KEY_BACKUP).".to_string()
                 }
             }
-            RealtimeProvider::GeminiFlash => {
-                if openrouter_api_key().is_some() {
-                    "Realtime provider 'gemini_flash' is selected, but GEMINI_API_KEY (or GOOGLE_API_KEY) is missing. OPENROUTER_API_KEY alone is insufficient for Brood realtime intent/canvas transport.".to_string()
-                } else {
-                    "Missing GEMINI_API_KEY (or GOOGLE_API_KEY) for realtime provider gemini_flash."
-                        .to_string()
-                }
-            }
+            RealtimeProvider::GeminiFlash => "Missing GEMINI_API_KEY (or GOOGLE_API_KEY) or OPENROUTER_API_KEY for realtime provider gemini_flash.".to_string(),
         }
     }
 
@@ -3098,13 +3091,17 @@ impl RealtimeSnapshotSession {
         if self.disabled {
             return (false, Some(self.kind.disabled_message().to_string()));
         }
-        let api_key = match self.provider {
-            RealtimeProvider::OpenAiRealtime => openai_api_key(),
-            RealtimeProvider::GeminiFlash => gemini_api_key(),
+        let (api_key, gemini_via_openrouter) = match self.provider {
+            RealtimeProvider::OpenAiRealtime => (openai_api_key(), false),
+            RealtimeProvider::GeminiFlash => resolve_gemini_flash_credentials(),
         };
         let Some(api_key) = api_key else {
             return (false, Some(self.missing_api_key_message()));
         };
+        if self.provider == RealtimeProvider::GeminiFlash {
+            self.model =
+                resolve_realtime_gemini_model_for_transport(&self.model, gemini_via_openrouter);
+        }
 
         self.cleanup_finished_worker();
         if self.worker_alive() {
@@ -3123,6 +3120,7 @@ impl RealtimeSnapshotSession {
             provider: self.provider,
             kind: self.kind,
             api_key,
+            gemini_via_openrouter,
             fatal_error: Arc::clone(&self.fatal_error),
             stop_flag: Arc::clone(&stop_flag),
         };
@@ -3220,6 +3218,97 @@ impl RealtimeSnapshotSession {
         self.sender = None;
         self.stop_flag = None;
     }
+}
+
+fn resolve_gemini_flash_credentials() -> (Option<String>, bool) {
+    if let Some(key) = openrouter_api_key() {
+        return (Some(key), true);
+    }
+    if let Some(key) = gemini_api_key() {
+        return (Some(key), false);
+    }
+    (None, false)
+}
+
+fn resolve_realtime_gemini_model_for_transport(raw: &str, via_openrouter: bool) -> String {
+    if via_openrouter {
+        sanitize_openrouter_gemini_model(raw, "google/gemini-3-flash-preview")
+    } else {
+        sanitize_gemini_generate_content_model(raw, "gemini-3-flash-preview")
+    }
+}
+
+fn sanitize_gemini_generate_content_model(raw: &str, default_model: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return default_model.to_string();
+    }
+
+    let mut cleaned = trimmed
+        .strip_prefix("models/")
+        .unwrap_or(trimmed)
+        .trim()
+        .to_string();
+    if let Some(stripped) = cleaned.strip_prefix("google/") {
+        cleaned = stripped.trim().to_string();
+    }
+    if cleaned.is_empty() {
+        return default_model.to_string();
+    }
+
+    match cleaned.to_ascii_lowercase().as_str() {
+        "gemini-3.0-flash" | "gemini-3-flash" => "gemini-3-flash-preview".to_string(),
+        "gemini-3.0-pro" | "gemini-3-pro" => "gemini-3-pro-preview".to_string(),
+        "gemini-2.0-flash" => "gemini-2.0-flash-001".to_string(),
+        "gemini-2.0-flash-lite" => "gemini-2.0-flash-lite-001".to_string(),
+        _ => cleaned,
+    }
+}
+
+fn sanitize_openrouter_gemini_model(raw: &str, default_model: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return default_model.to_string();
+    }
+    if trimmed.starts_with("google/") {
+        return trimmed.to_string();
+    }
+
+    let cleaned = sanitize_gemini_generate_content_model(trimmed, "gemini-3-flash-preview");
+    let lowered = cleaned.to_ascii_lowercase();
+    if cleaned.starts_with("google/") {
+        cleaned
+    } else if lowered.starts_with("gemini-") {
+        format!("google/{cleaned}")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn sanitize_openrouter_model(raw: &str, default_model: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return default_model.to_string();
+    }
+    if trimmed.contains('/') {
+        return trimmed.to_string();
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    if lowered.starts_with("gemini") {
+        return sanitize_openrouter_gemini_model(trimmed, "google/gemini-3-flash-preview");
+    }
+    if lowered.starts_with("gpt-")
+        || lowered.starts_with("o1")
+        || lowered.starts_with("o3")
+        || lowered.starts_with("o4")
+    {
+        return format!("openai/{trimmed}");
+    }
+    if lowered.starts_with("claude") {
+        return format!("anthropic/{trimmed}");
+    }
+    trimmed.to_string()
 }
 
 struct CanvasContextRealtimeSession {
@@ -3362,6 +3451,7 @@ struct RealtimeWorker {
     provider: RealtimeProvider,
     kind: RealtimeSessionKind,
     api_key: String,
+    gemini_via_openrouter: bool,
     fatal_error: Arc<Mutex<Option<String>>>,
     stop_flag: Arc<AtomicBool>,
 }
@@ -3715,6 +3805,9 @@ impl RealtimeWorker {
         &self,
         job: &RealtimeSnapshotJob,
     ) -> std::result::Result<(), RealtimeJobError> {
+        if self.gemini_via_openrouter {
+            return self.run_openrouter_gemini_job(job);
+        }
         let _submitted_at_ms = job.submitted_at_ms;
         let image_path = PathBuf::from(&job.image_path);
         let main_image_part = read_image_as_gemini_inline_part(&image_path).ok_or_else(|| {
@@ -3843,6 +3936,261 @@ impl RealtimeWorker {
 
         self.emit_stream_payload(&job.image_path, &cleaned, false, Some(response_meta));
         Ok(())
+    }
+
+    fn run_openrouter_gemini_job(
+        &self,
+        job: &RealtimeSnapshotJob,
+    ) -> std::result::Result<(), RealtimeJobError> {
+        let _submitted_at_ms = job.submitted_at_ms;
+        let image_path = PathBuf::from(&job.image_path);
+        let data_url = read_image_as_data_url(&image_path).ok_or_else(|| {
+            RealtimeJobError::terminal("failed to read image for realtime request")
+        })?;
+
+        let mut chat_content: Vec<Value> = Vec::new();
+        if let Some(context_text) = read_canvas_context_envelope(&image_path) {
+            chat_content.push(json!({ "type": "text", "text": context_text }));
+        }
+        if let Some(inline_instruction) = self.kind.per_request_input_text() {
+            chat_content.push(json!({ "type": "text", "text": inline_instruction }));
+        }
+
+        let context_refs = read_canvas_context_image_references(&image_path, 12);
+        if !context_refs.is_empty() {
+            let image_id_order = context_refs
+                .iter()
+                .map(|row| row.id.clone())
+                .collect::<Vec<String>>()
+                .join(", ");
+            chat_content.push(json!({
+                "type": "text",
+                "text": format!("IMAGE_ID_ORDER: {image_id_order}"),
+            }));
+            chat_content.push(json!({
+                "type": "text",
+                "text": "For image_descriptions, emit exactly one row per IMAGE_ID_ORDER id, preserve that order, and never swap labels across ids.",
+            }));
+        }
+        let reference_limit = match self.kind {
+            RealtimeSessionKind::IntentIcons { .. } => intent_realtime_reference_image_limit(),
+            RealtimeSessionKind::CanvasContext => 2,
+        };
+        for image_ref in context_refs.iter().take(reference_limit) {
+            if let Some(reference_data_url) = prepare_vision_image_data_url(&image_ref.path, 1024) {
+                chat_content.push(json!({
+                    "type": "text",
+                    "text": format!("SOURCE_IMAGE_REFERENCE {} (high-res):", image_ref.id),
+                }));
+                chat_content.push(json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": reference_data_url,
+                    }
+                }));
+            }
+        }
+        chat_content.push(json!({
+            "type": "image_url",
+            "image_url": {
+                "url": data_url,
+            }
+        }));
+
+        let (response, cleaned, response_meta) =
+            self.request_openrouter_gemini_realtime(&chat_content)?;
+        if cleaned.trim().is_empty() {
+            return Err(RealtimeJobError::terminal(
+                self.kind.empty_response_message(&response),
+            ));
+        }
+        self.emit_stream_payload(&job.image_path, &cleaned, false, Some(response_meta));
+        Ok(())
+    }
+
+    fn request_openrouter_gemini_realtime(
+        &self,
+        chat_content: &[Value],
+    ) -> std::result::Result<(Value, String, Map<String, Value>), RealtimeJobError> {
+        if let Some(responses_result) = self.try_openrouter_responses_realtime(chat_content)? {
+            return Ok(responses_result);
+        }
+        self.request_openrouter_chat_completion_realtime(chat_content)
+    }
+
+    fn try_openrouter_responses_realtime(
+        &self,
+        chat_content: &[Value],
+    ) -> std::result::Result<Option<(Value, String, Map<String, Value>)>, RealtimeJobError> {
+        let endpoint = format!("{}/responses", openrouter_api_base());
+        let input_content = openrouter_chat_content_to_responses_input(chat_content);
+        let request_model = sanitize_openrouter_model(&self.model, "google/gemini-3-flash-preview");
+        let payload = json!({
+            "model": request_model,
+            "instructions": self.kind.instruction(),
+            "input": [{
+                "role": "user",
+                "content": input_content,
+            }],
+            "modalities": ["text"],
+            "temperature": self.kind.temperature(),
+            "max_output_tokens": self.kind.max_output_tokens(),
+            "stream": false,
+        });
+        let client = HttpClient::builder()
+            .timeout(Duration::from_secs_f64(REALTIME_TIMEOUT_SECONDS))
+            .build()
+            .map_err(|err| {
+                RealtimeJobError::terminal(format!("failed to build realtime http client: {err}"))
+            })?;
+        let request = client
+            .post(&endpoint)
+            .bearer_auth(&self.api_key)
+            .header(CONTENT_TYPE, "application/json");
+        let response = apply_openrouter_request_headers(request)
+            .json(&payload)
+            .send()
+            .map_err(|err| {
+                if is_reqwest_realtime_transport_error(&err) {
+                    RealtimeJobError::transport(format!(
+                        "OpenRouter responses realtime request failed: {err}"
+                    ))
+                } else {
+                    RealtimeJobError::terminal(format!(
+                        "OpenRouter responses realtime request failed: {err}"
+                    ))
+                }
+            })?;
+        if !response.status().is_success() {
+            let code = response.status().as_u16();
+            let body = response.text().unwrap_or_default();
+            if should_fallback_openrouter_responses(code, &body) {
+                return Ok(None);
+            }
+            return Err(RealtimeJobError::terminal(format!(
+                "OpenRouter responses realtime request failed ({code}): {}",
+                truncate_chars(&body, 420, 360)
+            )));
+        }
+        let parsed: Value = response.json().map_err(|err| {
+            RealtimeJobError::terminal(format!(
+                "OpenRouter responses realtime decode failed: {err}"
+            ))
+        })?;
+        let (cleaned, mut response_meta) = resolve_streamed_response_text("", &parsed);
+        if cleaned.trim().is_empty() {
+            return Ok(None);
+        }
+        response_meta.insert(
+            "provider_transport".to_string(),
+            Value::String("openrouter_responses".to_string()),
+        );
+        if !response_meta.contains_key("response_status") {
+            response_meta.insert(
+                "response_status".to_string(),
+                Value::String("completed".to_string()),
+            );
+        }
+        response_meta.insert("provider_model".to_string(), Value::String(request_model));
+        Ok(Some((parsed, cleaned, response_meta)))
+    }
+
+    fn request_openrouter_chat_completion_realtime(
+        &self,
+        chat_content: &[Value],
+    ) -> std::result::Result<(Value, String, Map<String, Value>), RealtimeJobError> {
+        let endpoint = format!("{}/chat/completions", openrouter_api_base());
+        let request_model = sanitize_openrouter_model(&self.model, "google/gemini-3-flash-preview");
+        let payload = json!({
+            "model": request_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": self.kind.instruction(),
+                },
+                {
+                    "role": "user",
+                    "content": chat_content,
+                }
+            ],
+            "modalities": ["text"],
+            "temperature": self.kind.temperature(),
+            "max_tokens": self.kind.max_output_tokens(),
+            "stream": false,
+        });
+        let client = HttpClient::builder()
+            .timeout(Duration::from_secs_f64(REALTIME_TIMEOUT_SECONDS))
+            .build()
+            .map_err(|err| {
+                RealtimeJobError::terminal(format!("failed to build realtime http client: {err}"))
+            })?;
+        let request = client
+            .post(&endpoint)
+            .bearer_auth(&self.api_key)
+            .header(CONTENT_TYPE, "application/json");
+        let response = apply_openrouter_request_headers(request)
+            .json(&payload)
+            .send()
+            .map_err(|err| {
+                if is_reqwest_realtime_transport_error(&err) {
+                    RealtimeJobError::transport(format!(
+                        "OpenRouter chat realtime request failed: {err}"
+                    ))
+                } else {
+                    RealtimeJobError::terminal(format!(
+                        "OpenRouter chat realtime request failed: {err}"
+                    ))
+                }
+            })?;
+        if !response.status().is_success() {
+            let code = response.status().as_u16();
+            let body = response.text().unwrap_or_default();
+            return Err(RealtimeJobError::terminal(format!(
+                "OpenRouter chat realtime request failed ({code}): {}",
+                truncate_chars(&body, 420, 360)
+            )));
+        }
+        let parsed: Value = response.json().map_err(|err| {
+            RealtimeJobError::terminal(format!("OpenRouter chat realtime decode failed: {err}"))
+        })?;
+        let cleaned = extract_openrouter_chat_output_text(&parsed)
+            .trim()
+            .to_string();
+        if cleaned.trim().is_empty() {
+            return Err(RealtimeJobError::terminal(
+                self.kind.empty_response_message(&parsed),
+            ));
+        }
+
+        let mut response_meta = Map::new();
+        let (input_tokens, output_tokens) = extract_token_usage_pair(&parsed);
+        if let Some(value) = input_tokens {
+            response_meta.insert("input_tokens".to_string(), Value::Number(value.into()));
+        }
+        if let Some(value) = output_tokens {
+            response_meta.insert("output_tokens".to_string(), Value::Number(value.into()));
+        }
+        if let Some(value) = parsed
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            response_meta.insert("response_id".to_string(), Value::String(value.to_string()));
+        }
+        response_meta.insert(
+            "response_status".to_string(),
+            Value::String("completed".to_string()),
+        );
+        if let Some(reason) = extract_openrouter_chat_finish_reason(&parsed) {
+            response_meta.insert("response_status_reason".to_string(), Value::String(reason));
+        }
+        response_meta.insert(
+            "provider_transport".to_string(),
+            Value::String("openrouter_chat_completions".to_string()),
+        );
+        response_meta.insert("provider_model".to_string(), Value::String(request_model));
+        Ok((parsed, cleaned, response_meta))
     }
 
     fn fail_fatal(&self, image_path: Option<&str>, message: String) {
@@ -6434,6 +6782,32 @@ fn gemini_api_base() -> String {
         .to_string()
 }
 
+fn openrouter_api_base() -> String {
+    let raw = first_non_empty_env(&["OPENROUTER_API_BASE", "OPENROUTER_BASE_URL"])
+        .unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string());
+    let mut base = raw.trim().trim_end_matches('/').to_string();
+    if let Ok(parsed) = reqwest::Url::parse(&base) {
+        if parsed.path().trim().is_empty() || parsed.path() == "/" {
+            base = format!("{base}/api/v1");
+        }
+    }
+    base.trim_end_matches('/').to_string()
+}
+
+fn apply_openrouter_request_headers(
+    mut request: reqwest::blocking::RequestBuilder,
+) -> reqwest::blocking::RequestBuilder {
+    if let Some(referer) =
+        first_non_empty_env(&["OPENROUTER_HTTP_REFERER", "BROOD_OPENROUTER_HTTP_REFERER"])
+    {
+        request = request.header("HTTP-Referer", referer);
+    }
+    if let Some(title) = first_non_empty_env(&["OPENROUTER_X_TITLE", "BROOD_OPENROUTER_X_TITLE"]) {
+        request = request.header("X-Title", title);
+    }
+    request
+}
+
 fn sanitize_openai_responses_model(raw: &str, default_model: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -6451,37 +6825,103 @@ fn openai_vision_request(
     max_output_tokens: u64,
     timeout: Duration,
 ) -> Option<(String, Option<i64>, Option<i64>, String)> {
-    let api_key = openai_api_key()?;
     let request_model = sanitize_openai_responses_model(model, "gpt-4o-mini");
-    let endpoint = format!("{}/responses", openai_api_base());
-    let payload = json!({
-        "model": request_model,
+    let client = HttpClient::builder().timeout(timeout).build().ok()?;
+    if let Some(api_key) = openai_api_key() {
+        let endpoint = format!("{}/responses", openai_api_base());
+        let payload = json!({
+            "model": request_model,
+            "input": [{
+                "role": "user",
+                "content": content,
+            }],
+            "max_output_tokens": max_output_tokens,
+        });
+        let response = client
+            .post(endpoint)
+            .bearer_auth(api_key)
+            .header(CONTENT_TYPE, "application/json")
+            .json(&payload)
+            .send()
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let parsed: Value = response.json().ok()?;
+        let text = extract_openai_output_text(&parsed);
+        if text.trim().is_empty() {
+            return None;
+        }
+        let (input_tokens, output_tokens) = extract_token_usage_pair(&parsed);
+        return Some((text, input_tokens, output_tokens, request_model));
+    }
+
+    let openrouter_key = openrouter_api_key()?;
+    let openrouter_base = openrouter_api_base();
+    let openrouter_model = sanitize_openrouter_model(&request_model, "openai/gpt-4o-mini");
+    let responses_endpoint = format!("{openrouter_base}/responses");
+    let responses_payload = json!({
+        "model": openrouter_model,
         "input": [{
             "role": "user",
             "content": content,
         }],
+        "modalities": ["text"],
         "max_output_tokens": max_output_tokens,
+        "stream": false,
     });
-
-    let client = HttpClient::builder().timeout(timeout).build().ok()?;
-    let response = client
-        .post(endpoint)
-        .bearer_auth(api_key)
-        .header(CONTENT_TYPE, "application/json")
-        .json(&payload)
+    let responses_request = client
+        .post(&responses_endpoint)
+        .bearer_auth(&openrouter_key)
+        .header(CONTENT_TYPE, "application/json");
+    let responses_response = apply_openrouter_request_headers(responses_request)
+        .json(&responses_payload)
         .send()
         .ok()?;
-    if !response.status().is_success() {
-        return None;
+    if responses_response.status().is_success() {
+        let parsed: Value = responses_response.json().ok()?;
+        let text = extract_openai_output_text(&parsed);
+        if !text.trim().is_empty() {
+            let (input_tokens, output_tokens) = extract_token_usage_pair(&parsed);
+            return Some((text, input_tokens, output_tokens, openrouter_model));
+        }
+    } else {
+        let code = responses_response.status().as_u16();
+        let body = responses_response.text().ok()?;
+        if !should_fallback_openrouter_responses(code, &body) {
+            return None;
+        }
     }
 
-    let parsed: Value = response.json().ok()?;
-    let text = extract_openai_output_text(&parsed);
+    let chat_endpoint = format!("{openrouter_base}/chat/completions");
+    let chat_payload = json!({
+        "model": openrouter_model,
+        "messages": [{
+            "role": "user",
+            "content": openrouter_responses_content_to_chat_content(&content),
+        }],
+        "modalities": ["text"],
+        "max_tokens": max_output_tokens,
+        "stream": false,
+    });
+    let chat_request = client
+        .post(&chat_endpoint)
+        .bearer_auth(openrouter_key)
+        .header(CONTENT_TYPE, "application/json");
+    let chat_response = apply_openrouter_request_headers(chat_request)
+        .json(&chat_payload)
+        .send()
+        .ok()?;
+    if !chat_response.status().is_success() {
+        return None;
+    }
+    let parsed: Value = chat_response.json().ok()?;
+    let text = extract_openrouter_chat_output_text(&parsed);
     if text.trim().is_empty() {
         return None;
     }
     let (input_tokens, output_tokens) = extract_token_usage_pair(&parsed);
-    Some((text, input_tokens, output_tokens, request_model))
+    Some((text, input_tokens, output_tokens, openrouter_model))
 }
 
 fn prepare_vision_image_data_url(path: &Path, max_dim: u32) -> Option<String> {
@@ -6593,6 +7033,204 @@ fn extract_openai_output_text(response: &Value) -> String {
     }
 
     parts.join("\n").trim().to_string()
+}
+
+fn openrouter_chat_content_to_responses_input(chat_content: &[Value]) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for item in chat_content {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let kind = obj
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if kind == "text" {
+            if let Some(text) = obj
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                out.push(json!({
+                    "type": "input_text",
+                    "text": text,
+                }));
+            }
+            continue;
+        }
+        if kind == "image_url" {
+            let image_url = obj
+                .get("image_url")
+                .and_then(|value| {
+                    value
+                        .as_object()
+                        .and_then(|row| row.get("url"))
+                        .and_then(Value::as_str)
+                        .or_else(|| value.as_str())
+                })
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if let Some(url) = image_url {
+                out.push(json!({
+                    "type": "input_image",
+                    "image_url": url,
+                }));
+            }
+        }
+    }
+    out
+}
+
+fn openrouter_responses_content_to_chat_content(content: &[Value]) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for item in content {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let kind = obj
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if kind == "input_text" {
+            if let Some(text) = obj
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                out.push(json!({
+                    "type": "text",
+                    "text": text,
+                }));
+            }
+            continue;
+        }
+        if kind == "input_image" {
+            let image_url = obj
+                .get("image_url")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    obj.get("image_url")
+                        .and_then(Value::as_object)
+                        .and_then(|row| row.get("url"))
+                        .and_then(Value::as_str)
+                })
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if let Some(url) = image_url {
+                out.push(json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": url,
+                    }
+                }));
+            }
+        }
+    }
+    out
+}
+
+fn extract_openrouter_chat_output_text(response: &Value) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for choice in response
+        .get("choices")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let Some(message) = choice.get("message").and_then(Value::as_object) else {
+            continue;
+        };
+        if let Some(content) = message.get("content") {
+            match content {
+                Value::String(text) => {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        parts.push(trimmed.to_string());
+                    }
+                }
+                Value::Array(rows) => {
+                    for row in rows {
+                        let Some(obj) = row.as_object() else {
+                            continue;
+                        };
+                        let kind = obj
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .unwrap_or_default()
+                            .to_ascii_lowercase();
+                        if !matches!(kind.as_str(), "text" | "output_text") {
+                            continue;
+                        }
+                        if let Some(text) = obj
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                        {
+                            parts.push(text.to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(refusal) = message
+            .get("refusal")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            parts.push(refusal.to_string());
+        }
+    }
+    let joined = parts.join("\n").trim().to_string();
+    if !joined.is_empty() {
+        joined
+    } else {
+        extract_openai_output_text(response)
+    }
+}
+
+fn extract_openrouter_chat_finish_reason(response: &Value) -> Option<String> {
+    response
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(Value::as_object)
+        .and_then(|row| row.get("finish_reason").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn should_fallback_openrouter_responses(status_code: u16, body: &str) -> bool {
+    if matches!(status_code, 404 | 405 | 415 | 501) {
+        return true;
+    }
+    if matches!(status_code, 400 | 422) {
+        return body_indicates_openrouter_responses_unavailable(body);
+    }
+    false
+}
+
+fn body_indicates_openrouter_responses_unavailable(body: &str) -> bool {
+    let lowered = body.to_ascii_lowercase();
+    if !lowered.contains("response") {
+        return false;
+    }
+    lowered.contains("unsupported")
+        || lowered.contains("not supported")
+        || lowered.contains("not found")
+        || lowered.contains("unknown")
+        || lowered.contains("unavailable")
+        || lowered.contains("does not exist")
 }
 
 fn value_to_nonnegative_i64(value: &Value) -> Option<i64> {
@@ -8406,10 +9044,14 @@ fn json_object(value: Value) -> Map<String, Value> {
 mod tests {
     use super::{
         active_image_for_edit_prompt, build_realtime_websocket_request, clean_description,
-        description_realtime_instruction, extract_gemini_finish_reason, extract_gemini_output_text,
-        extract_gemini_token_usage_pair, intent_icons_instruction,
+        default_realtime_model, description_realtime_instruction, extract_gemini_finish_reason,
+        extract_gemini_output_text, extract_gemini_token_usage_pair,
+        extract_openrouter_chat_output_text, intent_icons_instruction,
         intent_realtime_reference_image_limit, is_anyhow_realtime_transport_error,
-        is_edit_style_prompt, resolve_streamed_response_text, RealtimeJobError,
+        is_edit_style_prompt, openrouter_chat_content_to_responses_input,
+        openrouter_responses_content_to_chat_content, resolve_streamed_response_text,
+        sanitize_gemini_generate_content_model, sanitize_openrouter_gemini_model,
+        sanitize_openrouter_model, should_fallback_openrouter_responses, RealtimeJobError,
         RealtimeJobErrorKind, RealtimeProvider, RealtimeSessionKind, REALTIME_BETA_HEADER_VALUE,
         REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX,
     };
@@ -8553,6 +9195,75 @@ mod tests {
     }
 
     #[test]
+    fn gemini_realtime_default_model_is_gemini_three_flash_preview() {
+        assert_eq!(
+            default_realtime_model(RealtimeProvider::GeminiFlash, false),
+            "gemini-3-flash-preview"
+        );
+        assert_eq!(
+            default_realtime_model(RealtimeProvider::GeminiFlash, true),
+            "gemini-3-flash-preview"
+        );
+    }
+
+    #[test]
+    fn openrouter_gemini_model_normalization_maps_aliases() {
+        assert_eq!(
+            sanitize_openrouter_gemini_model("gemini-3.0-flash", "google/gemini-3-flash-preview"),
+            "google/gemini-3-flash-preview"
+        );
+        assert_eq!(
+            sanitize_openrouter_gemini_model("gemini-2.0-flash", "google/gemini-3-flash-preview"),
+            "google/gemini-2.0-flash-001"
+        );
+        assert_eq!(
+            sanitize_openrouter_gemini_model(
+                "google/gemini-2.5-flash",
+                "google/gemini-3-flash-preview"
+            ),
+            "google/gemini-2.5-flash"
+        );
+    }
+
+    #[test]
+    fn openrouter_model_normalization_maps_openai_and_gemini_aliases() {
+        assert_eq!(
+            sanitize_openrouter_model("gpt-4o-mini", "openai/gpt-4o-mini"),
+            "openai/gpt-4o-mini"
+        );
+        assert_eq!(
+            sanitize_openrouter_model("gemini-3.0-flash", "google/gemini-3-flash-preview"),
+            "google/gemini-3-flash-preview"
+        );
+        assert_eq!(
+            sanitize_openrouter_model("openrouter/auto", "openrouter/auto"),
+            "openrouter/auto"
+        );
+    }
+
+    #[test]
+    fn gemini_generate_content_model_normalization_strips_prefix_and_aliases() {
+        assert_eq!(
+            sanitize_gemini_generate_content_model(
+                "google/gemini-3-flash-preview",
+                "gemini-3-flash-preview"
+            ),
+            "gemini-3-flash-preview"
+        );
+        assert_eq!(
+            sanitize_gemini_generate_content_model("gemini-3.0-flash", "gemini-3-flash-preview"),
+            "gemini-3-flash-preview"
+        );
+        assert_eq!(
+            sanitize_gemini_generate_content_model(
+                "models/gemini-2.0-flash",
+                "gemini-3-flash-preview"
+            ),
+            "gemini-2.0-flash-001"
+        );
+    }
+
+    #[test]
     fn resolve_streamed_response_text_includes_usage_tokens_in_meta() {
         let response = json!({
             "id": "resp_test",
@@ -8593,6 +9304,79 @@ mod tests {
             extract_gemini_finish_reason(&response),
             Some("STOP".to_string())
         );
+    }
+
+    #[test]
+    fn openrouter_chat_content_maps_to_responses_input_shapes() {
+        let chat_content = vec![
+            json!({"type": "text", "text": "hello"}),
+            json!({"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}),
+        ];
+        let mapped = openrouter_chat_content_to_responses_input(&chat_content);
+        assert_eq!(mapped.len(), 2);
+        assert_eq!(mapped[0], json!({"type": "input_text", "text": "hello"}));
+        assert_eq!(
+            mapped[1],
+            json!({"type": "input_image", "image_url": "data:image/png;base64,AAAA"})
+        );
+    }
+
+    #[test]
+    fn openrouter_responses_content_maps_back_to_chat_shapes() {
+        let responses_content = vec![
+            json!({"type": "input_text", "text": "hello"}),
+            json!({"type": "input_image", "image_url": "data:image/png;base64,AAAA"}),
+        ];
+        let mapped = openrouter_responses_content_to_chat_content(&responses_content);
+        assert_eq!(mapped.len(), 2);
+        assert_eq!(mapped[0], json!({"type": "text", "text": "hello"}));
+        assert_eq!(
+            mapped[1],
+            json!({"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}})
+        );
+    }
+
+    #[test]
+    fn openrouter_chat_output_extractor_supports_string_and_chunked_content() {
+        let chunked = json!({
+            "choices": [{
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "line one"},
+                        {"type": "text", "text": "line two"}
+                    ]
+                }
+            }]
+        });
+        assert_eq!(
+            extract_openrouter_chat_output_text(&chunked),
+            "line one\nline two"
+        );
+
+        let string_content = json!({
+            "choices": [{
+                "message": {
+                    "content": "single-line"
+                }
+            }]
+        });
+        assert_eq!(
+            extract_openrouter_chat_output_text(&string_content),
+            "single-line"
+        );
+    }
+
+    #[test]
+    fn openrouter_responses_fallback_only_triggers_for_unsupported_shapes() {
+        assert!(should_fallback_openrouter_responses(
+            404,
+            "Not Found: /responses route"
+        ));
+        assert!(should_fallback_openrouter_responses(
+            400,
+            "responses API is not supported for this model"
+        ));
+        assert!(!should_fallback_openrouter_responses(401, "unauthorized"));
     }
 
     #[test]

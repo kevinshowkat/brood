@@ -39,9 +39,11 @@ npm-debug.log*
 !desktop/src/assets/mother/mother_idle.mirrored.mp4
 !desktop/src/assets/mother/mother_working.mp4
 !desktop/src/assets/mother/mother_realtime.mp4
-!desktop/src/assets/mother/mother_working_sora-2_720x1280_12s_20260210_160837_v05.mp4
+!desktop/src/assets/mother/mother_takeover.mp4
 # Built-in provider portrait videos (required for fresh-clone local dev UX).
-!desktop/src/assets/portraits/*.mp4
+!desktop/src/assets/portraits/videos/*.mp4
+# Built-in onboarding videos (required UI assets for first-run onboarding UX).
+!desktop/src/assets/onboarding/videos/*.mp4
 
 # Generated artifacts
 outputs/

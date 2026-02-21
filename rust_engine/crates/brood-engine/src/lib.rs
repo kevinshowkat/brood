@@ -2374,6 +2374,15 @@ impl FluxProvider {
         false
     }
 
+    fn should_fallback_openrouter_responses_decode_error(err: &anyhow::Error) -> bool {
+        if is_retryable_transport_error(err) {
+            return true;
+        }
+        let lowered = error_chain_text(err, 480).to_ascii_lowercase();
+        lowered.contains("response body read failed")
+            || lowered.contains("returned invalid json payload")
+    }
+
     fn extract_openrouter_chat_finish_reason(payload: &Value) -> Option<String> {
         payload
             .get("choices")
@@ -2517,6 +2526,7 @@ impl FluxProvider {
         api_key: &str,
         request_timeout: f64,
         download_timeout: f64,
+        warnings: &mut Vec<String>,
     ) -> Result<(String, Value, Value, Vec<ImageBytes>)> {
         let base = Self::openrouter_api_base();
         let responses_endpoint = format!("{base}/responses");
@@ -2552,17 +2562,31 @@ impl FluxProvider {
                 format!("OpenRouter responses request failed ({responses_endpoint})")
             })?;
         if responses_response.status().is_success() {
-            let response_payload =
-                response_json_or_error("OpenRouter responses", responses_response)?;
-            let images =
-                self.extract_openrouter_generated_images(&response_payload, download_timeout)?;
-            if !images.is_empty() {
-                return Ok((
-                    "openrouter_responses".to_string(),
-                    responses_payload,
-                    response_payload,
-                    images,
-                ));
+            match response_json_or_error("OpenRouter responses", responses_response) {
+                Ok(response_payload) => {
+                    let images = self
+                        .extract_openrouter_generated_images(&response_payload, download_timeout)?;
+                    if !images.is_empty() {
+                        return Ok((
+                            "openrouter_responses".to_string(),
+                            responses_payload,
+                            response_payload,
+                            images,
+                        ));
+                    }
+                }
+                Err(err) => {
+                    if !Self::should_fallback_openrouter_responses_decode_error(&err) {
+                        return Err(err);
+                    }
+                    push_unique_warning(
+                        warnings,
+                        format!(
+                            "OpenRouter responses payload decode failed; falling back to chat/completions ({})",
+                            truncate_text(&error_chain_text(&err, 220), 220)
+                        ),
+                    );
+                }
             }
         } else {
             let code = responses_response.status().as_u16();
@@ -2697,6 +2721,7 @@ impl FluxProvider {
                     api_key,
                     request_timeout,
                     download_timeout,
+                    &mut warnings,
                 ) {
                     Ok(tuple) => {
                         generated = Some(tuple);
@@ -5615,6 +5640,24 @@ mod tests {
         assert!(candidates_imagen
             .iter()
             .any(|value| value == "google/imagen-4.0-ultra-generate-001"));
+    }
+
+    #[test]
+    fn openrouter_responses_decode_failures_fall_back_to_chat() {
+        let body_read_error =
+            anyhow::anyhow!("OpenRouter responses response body read failed: connection closed");
+        assert!(FluxProvider::should_fallback_openrouter_responses_decode_error(&body_read_error));
+
+        let invalid_json_error = anyhow::anyhow!(
+            "OpenRouter responses returned invalid JSON payload: EOF while parsing"
+        );
+        assert!(
+            FluxProvider::should_fallback_openrouter_responses_decode_error(&invalid_json_error)
+        );
+
+        let hard_auth_error =
+            anyhow::anyhow!("OpenRouter responses request failed (401): unauthorized");
+        assert!(!FluxProvider::should_fallback_openrouter_responses_decode_error(&hard_auth_error));
     }
 
     #[test]

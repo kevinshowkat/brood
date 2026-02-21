@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap");
 
 :root {
   --bg: #070a0f;
@@ -6487,9 +6487,15 @@ button.ghost:hover {
 }
 
 .drawer-body {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+  overscroll-behavior: contain;
 }
 
 .field {
@@ -6532,6 +6538,667 @@ button.ghost:hover {
   max-height: 180px;
   overflow: auto;
   line-height: 1.4;
+}
+
+.openrouter-onboarding-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 125;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: clamp(14px, 2.8vw, 40px);
+  background:
+    radial-gradient(980px 520px at 70% 12%, rgba(255, 124, 43, 0.19), transparent 62%),
+    radial-gradient(700px 460px at 18% 6%, rgba(92, 218, 255, 0.15), transparent 64%),
+    rgba(3, 7, 12, 0.48);
+  backdrop-filter: blur(3px);
+}
+
+.openrouter-onboarding-shell {
+  width: min(1120px, calc(100vw - 64px));
+  max-height: min(92vh, 960px);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 147, 58, 0.36);
+  padding: 14px;
+  background:
+    radial-gradient(560px 220px at 16% 0%, rgba(67, 224, 255, 0.18), transparent 68%),
+    radial-gradient(560px 220px at 86% 0%, rgba(255, 141, 49, 0.16), transparent 68%),
+    linear-gradient(180deg, rgba(8, 12, 18, 0.97), rgba(4, 7, 11, 0.97));
+  box-shadow:
+    0 0 0 1px rgba(255, 140, 42, 0.12),
+    0 42px 110px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+  font-family: "Inter", "Space Grotesk", sans-serif;
+}
+
+.openrouter-onboarding-shell button,
+.openrouter-onboarding-shell input,
+.openrouter-onboarding-shell label,
+.openrouter-onboarding-shell p,
+.openrouter-onboarding-shell li,
+.openrouter-onboarding-shell h3,
+.openrouter-onboarding-shell div,
+.openrouter-onboarding-shell span {
+  font-family: "Inter", "Space Grotesk", sans-serif;
+}
+
+.openrouter-onboarding-shell code {
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.openrouter-onboarding-shell button {
+  border: 1px solid rgba(98, 121, 154, 0.72);
+  border-radius: 13px;
+  padding: 9px 15px;
+  background: linear-gradient(180deg, rgba(34, 48, 66, 0.9), rgba(22, 31, 45, 0.9));
+  color: rgba(236, 244, 252, 0.96);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1.1;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 10px 24px rgba(0, 0, 0, 0.28);
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    transform 120ms ease,
+    box-shadow 140ms ease;
+}
+
+.openrouter-onboarding-shell button:hover:not(:disabled) {
+  border-color: rgba(255, 170, 94, 0.8);
+  background: linear-gradient(180deg, rgba(48, 66, 90, 0.92), rgba(29, 40, 58, 0.92));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 13px 30px rgba(0, 0, 0, 0.32);
+}
+
+.openrouter-onboarding-shell button:active:not(:disabled) {
+  transform: translateY(1px) scale(0.995);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 8px 18px rgba(0, 0, 0, 0.3);
+}
+
+.openrouter-onboarding-shell button:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.openrouter-onboarding-shell button.ghost {
+  border-color: rgba(77, 98, 126, 0.7);
+  background: rgba(19, 28, 40, 0.72);
+  color: rgba(212, 224, 238, 0.92);
+}
+
+.openrouter-onboarding-shell button.ghost:hover:not(:disabled) {
+  border-color: rgba(125, 209, 255, 0.78);
+  background: rgba(28, 40, 58, 0.86);
+  color: rgba(238, 246, 255, 0.98);
+}
+
+.openrouter-onboarding-layout {
+  display: flex;
+  align-items: stretch;
+  gap: 14px;
+  min-height: min(70vh, 760px);
+  height: min(70vh, 760px);
+}
+
+.openrouter-onboarding-main {
+  flex: 1;
+  height: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 24px 44px;
+  row-gap: 12px;
+  overflow: hidden;
+}
+
+.openrouter-onboarding-header {
+  display: none;
+}
+
+.openrouter-onboarding-header-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.openrouter-onboarding-title {
+  font-size: clamp(27px, 3.2vw, 36px);
+  font-weight: 650;
+  line-height: 1.1;
+  letter-spacing: 0.01em;
+}
+
+.openrouter-onboarding-subtitle {
+  margin-top: 4px;
+  color: rgba(230, 237, 243, 0.64);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.openrouter-onboarding-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+  padding-top: 2px;
+  min-height: 22px;
+  width: 78px;
+  margin: 0 auto;
+}
+
+.openrouter-onboarding-progress-dot {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 18px;
+}
+
+.openrouter-onboarding-progress-dot-point {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(66, 82, 104, 0.9);
+  background: rgba(16, 24, 35, 0.9);
+  transition: border-color 140ms ease, background 140ms ease, outline-color 140ms ease;
+}
+
+.openrouter-onboarding-progress-dot.is-complete .openrouter-onboarding-progress-dot-point {
+  border-color: rgba(144, 58, 30, 0.82);
+  background: rgba(109, 40, 21, 0.88);
+}
+
+.openrouter-onboarding-progress-dot.is-active .openrouter-onboarding-progress-dot-point {
+  border-color: rgba(173, 66, 30, 0.95);
+  background: rgba(156, 54, 24, 0.92);
+  outline: 3px solid rgba(156, 54, 24, 0.2);
+  outline-offset: 2px;
+}
+
+.openrouter-onboarding-body {
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  padding-right: 2px;
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.openrouter-onboarding-body.is-intro-layout {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.openrouter-onboarding-body.is-fading-out {
+  opacity: 0;
+  transform: translateY(7px);
+}
+
+.openrouter-onboarding-body.is-fading-in {
+  animation: openrouterOnboardingFadeIn 1200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes openrouterOnboardingFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-22px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.openrouter-onboarding-step {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.openrouter-onboarding-step-intro {
+  width: min(740px, 100%);
+  margin: 0 auto;
+  align-items: flex-start;
+  text-align: left;
+  gap: 14px;
+}
+
+.openrouter-onboarding-intro-title {
+  margin: 0;
+  font-size: clamp(28px, 3.1vw, 40px);
+  line-height: 1.08;
+  letter-spacing: 0.01em;
+}
+
+.openrouter-onboarding-intro-copy {
+  margin: 0;
+  max-width: 54ch;
+  color: rgba(230, 237, 243, 0.84);
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+.openrouter-onboarding-step-key,
+.openrouter-onboarding-step-confirm {
+  width: min(740px, 100%);
+  margin: 0 auto;
+  align-items: flex-start;
+  text-align: left;
+  gap: 12px;
+}
+
+.openrouter-onboarding-step-title {
+  margin: 0;
+  font-size: clamp(26px, 2.8vw, 34px);
+  line-height: 1.1;
+  letter-spacing: 0.01em;
+}
+
+.openrouter-onboarding-step-copy {
+  margin: 0;
+  max-width: 56ch;
+  color: rgba(230, 237, 243, 0.84);
+  font-size: 15px;
+  line-height: 1.42;
+}
+
+.openrouter-onboarding-step-note {
+  margin: 0;
+  color: rgba(230, 237, 243, 0.72);
+  font-size: 13px;
+  line-height: 1.42;
+}
+
+.openrouter-onboarding-key-note {
+  font-size: 13px;
+  color: rgba(230, 237, 243, 0.72);
+}
+
+.openrouter-onboarding-inline-label {
+  margin-top: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(230, 237, 243, 0.7);
+}
+
+.openrouter-onboarding-key-input {
+  width: 100%;
+  border-radius: 13px;
+  border: 1px solid rgba(59, 75, 99, 0.92);
+  padding: 12px 13px;
+  background: rgba(16, 24, 35, 0.82);
+  color: rgba(240, 246, 252, 0.95);
+  font-size: 14px;
+}
+
+.openrouter-onboarding-key-input:focus {
+  outline: none;
+  border-color: rgba(173, 66, 30, 0.9);
+  box-shadow: 0 0 0 1px rgba(173, 66, 30, 0.24);
+}
+
+.openrouter-onboarding-badge-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.openrouter-onboarding-badge {
+  border: 1px solid rgba(255, 151, 64, 0.48);
+  background: rgba(255, 151, 64, 0.14);
+  color: rgba(255, 222, 189, 0.95);
+  border-radius: 999px;
+  padding: 5px 11px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.openrouter-onboarding-hero {
+  border: 1px solid rgba(64, 79, 104, 0.88);
+  border-radius: 16px;
+  padding: 16px;
+  background:
+    linear-gradient(120deg, rgba(23, 33, 48, 0.8), rgba(13, 18, 27, 0.8)),
+    linear-gradient(180deg, rgba(255, 151, 64, 0.12), rgba(84, 214, 255, 0.08));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.openrouter-onboarding-hero-title {
+  margin: 0;
+  font-size: clamp(24px, 2.6vw, 30px);
+  line-height: 1.14;
+}
+
+.openrouter-onboarding-hero-subtitle {
+  margin-top: 8px;
+  margin-bottom: 0;
+  color: rgba(230, 237, 243, 0.78);
+  line-height: 1.4;
+}
+
+.openrouter-onboarding-checklist {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  color: rgba(230, 237, 243, 0.86);
+  line-height: 1.45;
+}
+
+.openrouter-onboarding-next-card {
+  border: 1px solid rgba(64, 79, 104, 0.88);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: rgba(13, 18, 27, 0.7);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(230, 237, 243, 0.82);
+}
+
+.openrouter-onboarding-form {
+  border: 1px solid rgba(64, 79, 104, 0.9);
+  border-radius: 16px;
+  padding: 16px;
+  background: rgba(10, 14, 21, 0.84);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.openrouter-onboarding-form-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(230, 237, 243, 0.74);
+}
+
+.openrouter-onboarding-form input[type="password"],
+.openrouter-onboarding-form input[type="text"] {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(59, 75, 99, 0.92);
+  padding: 11px 12px;
+  background: rgba(16, 24, 35, 0.82);
+  color: rgba(240, 246, 252, 0.95);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 13px;
+}
+
+.openrouter-onboarding-form input[type="password"]:focus,
+.openrouter-onboarding-form input[type="text"]:focus {
+  outline: none;
+  border-color: rgba(255, 153, 66, 0.9);
+  box-shadow: 0 0 0 1px rgba(255, 153, 66, 0.25);
+}
+
+.openrouter-onboarding-form-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.openrouter-onboarding-form-note {
+  margin: 0;
+  color: rgba(230, 237, 243, 0.68);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.openrouter-onboarding-form-status {
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(16, 24, 35, 0.7);
+  border: 1px solid rgba(59, 75, 99, 0.76);
+  color: rgba(230, 237, 243, 0.84);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.openrouter-onboarding-form-status.is-error {
+  border-color: rgba(255, 107, 132, 0.7);
+  background: rgba(62, 11, 20, 0.4);
+  color: rgba(255, 193, 204, 0.98);
+}
+
+.openrouter-onboarding-success {
+  width: 100%;
+  border: 1px solid rgba(64, 79, 104, 0.88);
+  border-radius: 14px;
+  background: rgba(11, 17, 25, 0.72);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.openrouter-onboarding-success-title {
+  margin: 0;
+  font-size: 25px;
+  line-height: 1.2;
+  color: rgba(188, 255, 213, 0.98);
+}
+
+.openrouter-onboarding-success p {
+  margin: 0;
+  line-height: 1.45;
+  color: rgba(221, 244, 231, 0.88);
+}
+
+.openrouter-onboarding-confirm-row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  color: rgba(230, 237, 243, 0.86);
+  font-size: 13px;
+  line-height: 1.4;
+  flex-wrap: wrap;
+}
+
+.openrouter-onboarding-confirm-label {
+  min-width: 74px;
+  color: rgba(230, 237, 243, 0.62);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+}
+
+.openrouter-onboarding-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 16px;
+  min-height: 44px;
+}
+
+.openrouter-onboarding-footer-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  min-width: 180px;
+}
+
+#openrouter-onboarding-back {
+  min-width: 68px;
+}
+
+.openrouter-onboarding-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  justify-self: end;
+}
+
+.openrouter-onboarding-skip-link {
+  color: rgba(128, 151, 176, 0.86);
+  min-width: 92px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 140ms ease, opacity 140ms ease;
+}
+
+.openrouter-onboarding-skip-link:hover {
+  color: rgba(168, 193, 220, 0.95);
+}
+
+.openrouter-onboarding-skip-link:focus-visible {
+  outline: 1px solid rgba(125, 209, 255, 0.66);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.openrouter-onboarding-skip-link.is-disabled {
+  opacity: 0.46;
+  cursor: default;
+  pointer-events: none;
+}
+
+.openrouter-onboarding-footer-item-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+#openrouter-onboarding-next {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  width: 164px;
+  min-width: 148px;
+  padding-inline: 26px;
+  border-color: rgba(173, 66, 30, 0.94);
+  background: linear-gradient(180deg, rgba(194, 84, 36, 0.96), rgba(138, 46, 20, 0.94));
+  color: rgba(255, 236, 216, 0.95);
+  text-shadow: 0 1px 0 rgba(60, 18, 9, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 211, 186, 0.24),
+    0 6px 14px rgba(118, 35, 17, 0.28);
+}
+
+#openrouter-onboarding-next:hover:not(:disabled) {
+  border-color: rgba(201, 92, 46, 0.98);
+  background: linear-gradient(180deg, rgba(211, 98, 48, 0.98), rgba(151, 55, 24, 0.96));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 219, 194, 0.3),
+    0 7px 16px rgba(118, 35, 17, 0.34);
+}
+
+#openrouter-onboarding-next::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-160%);
+  background: linear-gradient(
+    112deg,
+    rgba(255, 255, 255, 0) 36%,
+    rgba(255, 246, 233, 0.95) 48%,
+    rgba(255, 216, 184, 0.62) 52%,
+    rgba(255, 255, 255, 0) 66%
+  );
+  mix-blend-mode: screen;
+  opacity: 0.9;
+  pointer-events: none;
+  will-change: transform;
+  animation: openrouterButtonGlint 6s cubic-bezier(0.35, 0, 0.2, 1) infinite;
+}
+
+#openrouter-onboarding-next:active:not(:disabled) {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 206, 174, 0.26),
+    0 4px 10px rgba(102, 30, 14, 0.28);
+}
+
+@keyframes openrouterButtonGlint {
+  0% {
+    transform: translateX(-160%);
+  }
+  58% {
+    transform: translateX(160%);
+  }
+  100% {
+    transform: translateX(160%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #openrouter-onboarding-next::after {
+    animation: openrouterButtonGlint 12s linear infinite;
+  }
+}
+
+.openrouter-onboarding-media {
+  width: min(36vw, 356px);
+  min-width: 244px;
+  display: flex;
+}
+
+.openrouter-onboarding-media-frame {
+  width: 100%;
+  border: 1px solid rgba(255, 151, 64, 0.34);
+  border-radius: 16px;
+  padding: 12px;
+  background:
+    radial-gradient(320px 140px at 55% 0%, rgba(255, 151, 64, 0.14), transparent 68%),
+    linear-gradient(160deg, rgba(18, 28, 40, 0.82), rgba(9, 14, 20, 0.82));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.openrouter-onboarding-media-badge {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: rgba(255, 214, 178, 0.9);
+}
+
+.openrouter-onboarding-media-slot {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(85, 104, 131, 0.88);
+  background:
+    radial-gradient(160px 240px at 50% 34%, rgba(255, 145, 42, 0.22), transparent 68%),
+    linear-gradient(180deg, rgba(13, 21, 31, 0.92), rgba(7, 11, 18, 0.92));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.openrouter-onboarding-media-video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.openrouter-onboarding-media-copy {
+  margin: 0;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  color: rgba(230, 237, 243, 0.72);
 }
 
 .aesthetic-onboarding-modal {
@@ -7030,6 +7697,19 @@ button.ghost:hover {
     width: min(720px, 96vw);
   }
 
+  .openrouter-onboarding-shell {
+    width: min(980px, 97vw);
+  }
+
+  .openrouter-onboarding-layout {
+    gap: 10px;
+  }
+
+  .openrouter-onboarding-media {
+    width: min(32vw, 286px);
+    min-width: 210px;
+  }
+
   .aesthetic-choice-grid,
   .aesthetic-option-grid {
     grid-template-columns: 1fr;
@@ -7039,8 +7719,16 @@ button.ghost:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .openrouter-onboarding-progress {
+    gap: 10px;
+  }
+
   .aesthetic-onboarding-body {
     min-height: 360px;
+  }
+
+  .openrouter-onboarding-body {
+    min-height: 320px;
   }
 }
 
@@ -7085,6 +7773,48 @@ button.ghost:hover {
   .action-grid {
     margin: 0 auto;
     border-radius: 14px;
+  }
+
+  .openrouter-onboarding-modal {
+    justify-content: center;
+    padding: 10px;
+  }
+
+  .openrouter-onboarding-shell {
+    width: min(96vw, 720px);
+  }
+
+  .openrouter-onboarding-layout {
+    flex-direction: column;
+    min-height: auto;
+    height: auto;
+  }
+
+  .openrouter-onboarding-media {
+    display: none;
+  }
+
+  .openrouter-onboarding-body {
+    min-height: 280px;
+  }
+
+  .openrouter-onboarding-footer {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .openrouter-onboarding-footer-actions {
+    width: auto;
+    justify-content: flex-end;
+    justify-self: end;
+  }
+
+  .openrouter-onboarding-progress {
+    justify-content: center;
+    width: auto;
+  }
+
+  .openrouter-onboarding-progress-dot {
+    min-width: 0;
   }
 
   .mother-overlay {

@@ -53,8 +53,10 @@ Slash commands:
 - `/canvas_context_rt <path>`
   - Enqueues a snapshot job for the background thread (non-blocking).
   - `openai_realtime` provider: uses a persistent Realtime WebSocket session and streams deltas.
-  - `gemini_flash` provider: uses per-snapshot Gemini `generateContent` requests and emits finalized
-    `canvas_context` payloads.
+  - `gemini_flash` provider:
+    - prefers OpenRouter `responses` first (with `chat/completions` fallback) when `OPENROUTER_API_KEY` is present
+    - otherwise uses per-snapshot Gemini `generateContent` when `GEMINI_API_KEY`/`GOOGLE_API_KEY` is present
+    - emits finalized `canvas_context` payloads.
 - `/canvas_context_rt_stop`
   - Stops the background thread and closes the realtime session.
 
@@ -73,10 +75,10 @@ Threading:
 - `BROOD_CANVAS_CONTEXT_REALTIME_PROVIDER` to override canvas-context provider only.
 - Provider credentials:
   - `openai_realtime`: `OPENAI_API_KEY` (or `OPENAI_API_KEY_BACKUP`)
-  - `gemini_flash`: `GEMINI_API_KEY` (or `GOOGLE_API_KEY`)
+  - `gemini_flash`: `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) or `OPENROUTER_API_KEY`
 - `BROOD_CANVAS_CONTEXT_REALTIME_MODEL` (default by provider):
   - OpenAI: `gpt-realtime-mini`
-  - Gemini: `gemini-2.0-flash`
+  - Gemini: `gemini-3-flash-preview` (OpenRouter normalized to `google/gemini-3-flash-preview`)
 - `BROOD_CANVAS_CONTEXT_REALTIME_DISABLED=1` to hard-disable realtime canvas context.
 
 ## Manual Test
