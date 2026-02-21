@@ -194,6 +194,12 @@ Pricing/latency override file:
 - `llms-full.txt` expanded inlined context
 - `agent-intake.json` optional Agent Intake Protocol (AIP) contract
 
+## Parallel Agent Worktrees
+
+- If multiple Codex/LLM agents are running at the same time, develop each feature in its own git worktree.
+- Do not run concurrent agents in the same worktree/branch.
+- Example: `git worktree add ../brood-my-feature -b feature/my-feature`
+
 ## License
 
 Apache License 2.0. See `LICENSE`.
