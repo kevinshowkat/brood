@@ -1,7 +1,7 @@
 # Brood: Promptless Canvas for Creative Mutation
 
 <p align="left">
-  <img src="media/features/readme/main_value_prop.gif" alt="Brood main value demo">
+  <img src="media/features/readme/main_value_prop_v17_labels_20260221.gif" alt="Brood main value demo">
 </p>
 
 Brood is a reference-first AI image generation and editing desktop for developers.
@@ -20,21 +20,27 @@ Brood now ships a first-run OpenRouter onboarding flow in-app. It guides users t
 Mother watches your on-canvas edits (move/resize/select), infers what you are emphasizing, and proposes the next best transformation without requiring a typed prompt.
 
 <p align="left">
-  <img src="media/features/readme/realtime_canvas_proposals.gif" alt="Realtime canvas proposals">
+  <a href="media/features/readme/realtime_canvas_proposals.gif">
+    <img src="media/features/readme/realtime_canvas_proposals_thumb.png" alt="Realtime canvas proposals (click to view GIF)">
+  </a>
 </p>
 
 ### Top Panel Telemetry Metrics
 The top panel shows four live chips users can read at a glance: `TOK` (30m in/out token sparklines + API calls), `COST` (estimated session spend), `QUEUE` (pending/running actions + queue trend), and `AVG` (rolling render time), each heat-coded from cool to hot.
 
 <p align="left">
-  <img src="media/features/readme/top_panel_telemetry.gif" alt="Top panel telemetry metrics">
+  <a href="media/features/readme/top_panel_telemetry.gif">
+    <img src="media/features/readme/top_panel_telemetry_thumb.png" alt="Top panel telemetry metrics (click to view GIF)">
+  </a>
 </p>
 
 ### Proposal Drafting
 Mother (Brood's realtime proposal copilot) enters a drafting phase, assembles proposal context from the canvas state, then renders a candidate you can confirm, reject, or iterate.
 
 <p align="left">
-  <img src="media/features/readme/proposal_drafting.gif" alt="Mother proposal drafting">
+  <a href="media/features/readme/proposal_drafting.gif">
+    <img src="media/features/readme/proposal_drafting_thumb.png" alt="Mother proposal drafting (click to view GIF)">
+  </a>
 </p>
 
 ## Status
