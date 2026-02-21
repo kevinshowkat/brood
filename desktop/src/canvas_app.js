@@ -950,6 +950,8 @@ const state = {
   },
   effectTokenDrag: null, // { tokenId, sourceImageId, targetImageId, moved, x, y }
   effectTokenApplyLocks: new Map(), // tokenId -> { dispatchId, targetImageId, queued, startedAt }
+  motherOverlayUiHits: [], // [{ kind, targetId?, rect: {x,y,w,h} }]
+  motherResultDetailsOpenId: null, // imageId currently showing provenance popover
   wheelMenu: {
     open: false,
     hideTimer: null,
@@ -1044,6 +1046,7 @@ const state = {
     hoverDraftId: null,
     commitMutationInFlight: false,
     roleGlyphHits: [], // [{ role, imageId, rect }]
+    offerDetailsOpen: false,
     roleGlyphDrag: null, // { role, imageId, startX, startY, moved }
     advancedOpen: false,
     optionReveal: false,
@@ -9843,7 +9846,15 @@ async function motherV2CommitSelectedDraft() {
       }).catch(() => false);
       if (!ok) throw new Error("Mother commit failed to replace target.");
       const targetItem = state.imagesById.get(targetId) || null;
-      if (targetItem) targetItem.source = MOTHER_GENERATED_SOURCE;
+      if (targetItem) {
+        targetItem.source = MOTHER_GENERATED_SOURCE;
+        targetItem.motherVersionId = draft.versionId ? String(draft.versionId) : null;
+        if (draft.receiptMeta && typeof draft.receiptMeta === "object") {
+          targetItem.receiptMeta = { ...draft.receiptMeta };
+          targetItem.receiptMetaChecked = true;
+          targetItem.receiptMetaLoading = false;
+        }
+      }
       committedImageId = String(targetId);
       commitUndo = {
         mode: "replace",
@@ -9877,6 +9888,10 @@ async function motherV2CommitSelectedDraft() {
           label: basename(draft.path),
           timelineAction: "Mother Suggestion",
           timelineParents: [],
+          motherVersionId: draft.versionId ? String(draft.versionId) : null,
+          receiptMeta: draft.receiptMeta && typeof draft.receiptMeta === "object" ? { ...draft.receiptMeta } : null,
+          receiptMetaChecked: Boolean(draft.receiptMeta),
+          receiptMetaLoading: false,
         },
         { select: false }
       );
@@ -11629,6 +11644,7 @@ function motherV2ClearIntentAndDrafts({ removeFiles = false } = {}) {
   idle.drafts = [];
   idle.selectedDraftId = null;
   idle.hoverDraftId = null;
+  idle.offerDetailsOpen = false;
   idle.pendingVisionImageIds = [];
   clearTimeout(idle.pendingVisionRetryTimer);
   idle.pendingVisionRetryTimer = null;
@@ -14878,8 +14894,17 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
     versionId: incomingVersionId,
     actionVersion: Number(idle.actionVersion) || 0,
     createdAt: Date.now(),
+    receiptMeta: null,
     img: null,
   };
+  if (draft.receiptPath) {
+    try {
+      const payload = JSON.parse(await readTextFile(draft.receiptPath));
+      draft.receiptMeta = extractReceiptMeta(payload);
+    } catch {
+      draft.receiptMeta = null;
+    }
+  }
   try {
     draft.img = await loadImage(draft.path);
   } catch {
@@ -19328,6 +19353,9 @@ function addImage(item, { select = false } = {}) {
 async function removeImageFromCanvas(imageId) {
   const id = String(imageId || "");
   if (!id) return false;
+  if (state.motherResultDetailsOpenId === id) {
+    state.motherResultDetailsOpenId = null;
+  }
   const item = state.imagesById.get(id) || null;
   if (!item) return false;
   recordUserEvent("image_remove", {
@@ -23149,6 +23177,7 @@ function hitTestEffectToken(ptCanvas) {
 }
 
 function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
+  state.motherOverlayUiHits = [];
   const items = state.images || [];
   const nowMs = performance.now ? performance.now() : Date.now();
   for (const item of items) {
@@ -23373,6 +23402,23 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     }
   }
 
+  if (activeRect && activeItem && isMotherGeneratedImageItem(activeItem)) {
+    const ax = activeRect.x * ms + mox;
+    const ay = activeRect.y * ms + moy;
+    const aw = activeRect.w * ms;
+    const ah = activeRect.h * ms;
+    const activeId = String(activeItem.id || "").trim();
+    motherRenderDetailsBadgeAndPopover(octx, {
+      anchorRect: { x: ax, y: ay, w: aw, h: ah },
+      dpr,
+      open: Boolean(activeId && state.motherResultDetailsOpenId === activeId),
+      details: motherV2ImageRunDetails(activeItem),
+      toggleKind: "mother_result_details_toggle",
+      panelKind: "mother_result_details_panel",
+      targetId: activeId,
+    });
+  }
+
   renderMotherRoleGlyphs(octx, { ms, mox, moy });
 
   // Triplet insights overlays (Extract the Rule / Odd One Out).
@@ -23448,6 +23494,214 @@ function motherV2RoleImageIds(roleKey) {
   return motherV2RoleIds(roleKey).filter((id) => state.imagesById.has(id));
 }
 
+function motherV2ReceiptFallbackRunId(receiptPath = "") {
+  const path = String(receiptPath || "").trim();
+  if (!path) return "";
+  const match = path.match(/receipt[^/]*-([a-z0-9_-]+)\.json$/i);
+  return match ? String(match[1] || "").trim() : "";
+}
+
+function motherV2FormatCostDeltaUsd(costUsd = null) {
+  const value = Number(costUsd);
+  if (!Number.isFinite(value)) return "n/a";
+  const abs = Math.abs(value);
+  const precision = abs < 1 ? 3 : 2;
+  return `+$${value.toFixed(precision)}`;
+}
+
+function motherV2ProposalRunDetails(draft = null) {
+  const idle = state.motherIdle || null;
+  const meta = draft?.receiptMeta && typeof draft.receiptMeta === "object" ? draft.receiptMeta : null;
+  const providerKey = String(meta?.provider || "").trim() || providerFromModel(idle?.lastDispatchModel || settings.imageModel);
+  const model = String(meta?.model || idle?.lastDispatchModel || "").trim() || "unknown";
+  const runId = String(
+    draft?.versionId ||
+      idle?.generatedVersionId ||
+      motherV2ReceiptFallbackRunId(draft?.receiptPath)
+  ).trim();
+  const costUsd = Number.isFinite(Number(meta?.cost_total_usd)) ? Number(meta.cost_total_usd) : null;
+  return {
+    provider: providerDisplay(providerKey || "unknown"),
+    model,
+    runId: runId || "n/a",
+    costLabel: motherV2FormatCostDeltaUsd(costUsd),
+  };
+}
+
+function motherV2ImageRunDetails(item = null) {
+  if (!item) return null;
+  if (item.receiptPath && !item.receiptMetaChecked && !item.receiptMetaLoading) {
+    ensureReceiptMeta(item).catch(() => {});
+  }
+  const meta = item.receiptMeta && typeof item.receiptMeta === "object" ? item.receiptMeta : null;
+  const providerKey = String(meta?.provider || "").trim() || providerFromModel(settings.imageModel);
+  const model = String(meta?.model || "").trim() || "unknown";
+  const runId = String(
+    item.motherVersionId ||
+      item.versionId ||
+      motherV2ReceiptFallbackRunId(item.receiptPath)
+  ).trim();
+  const costUsd = Number.isFinite(Number(meta?.cost_total_usd)) ? Number(meta.cost_total_usd) : null;
+  return {
+    provider: providerDisplay(providerKey || "unknown"),
+    model,
+    runId: runId || "n/a",
+    costLabel: motherV2FormatCostDeltaUsd(costUsd),
+  };
+}
+
+function motherPushOverlayUiHit(hit = null) {
+  if (!hit?.rect) return;
+  if (!Array.isArray(state.motherOverlayUiHits)) state.motherOverlayUiHits = [];
+  state.motherOverlayUiHits.push(hit);
+}
+
+function hitTestMotherOverlayUi(ptCanvas) {
+  if (!ptCanvas) return null;
+  const hits = Array.isArray(state.motherOverlayUiHits) ? state.motherOverlayUiHits : [];
+  for (let i = hits.length - 1; i >= 0; i -= 1) {
+    const hit = hits[i];
+    const rect = hit?.rect;
+    if (!rect) continue;
+    const x0 = Number(rect.x) || 0;
+    const y0 = Number(rect.y) || 0;
+    const w = Number(rect.w) || 0;
+    const h = Number(rect.h) || 0;
+    if (ptCanvas.x >= x0 && ptCanvas.x <= x0 + w && ptCanvas.y >= y0 && ptCanvas.y <= y0 + h) return hit;
+  }
+  return null;
+}
+
+function motherCloseOverlayDetails() {
+  if (state.motherIdle) state.motherIdle.offerDetailsOpen = false;
+  state.motherResultDetailsOpenId = null;
+}
+
+function motherToggleOverlayDetails(hit = null) {
+  const kind = String(hit?.kind || "").trim();
+  const targetId = String(hit?.targetId || "").trim();
+  if (kind === "mother_offer_details_toggle") {
+    if (state.motherIdle) state.motherIdle.offerDetailsOpen = !Boolean(state.motherIdle.offerDetailsOpen);
+    state.motherResultDetailsOpenId = null;
+    return true;
+  }
+  if (kind === "mother_result_details_toggle") {
+    state.motherResultDetailsOpenId = state.motherResultDetailsOpenId === targetId ? null : targetId;
+    if (state.motherIdle) state.motherIdle.offerDetailsOpen = false;
+    return true;
+  }
+  if (kind === "mother_offer_details_panel" || kind === "mother_result_details_panel") {
+    return true;
+  }
+  return false;
+}
+
+function motherRenderDetailsBadgeAndPopover(
+  octx,
+  {
+    anchorRect = null,
+    dpr = 1,
+    open = false,
+    details = null,
+    toggleKind = "mother_offer_details_toggle",
+    panelKind = "mother_offer_details_panel",
+    targetId = null,
+  } = {}
+) {
+  if (!octx || !anchorRect) return;
+  const canvasW = Number(octx.canvas?.width) || 0;
+  const canvasH = Number(octx.canvas?.height) || 0;
+  if (canvasW <= 0 || canvasH <= 0) return;
+
+  const pad = Math.max(6, Math.round(7 * dpr));
+  const badgeSize = Math.max(16, Math.round(18 * dpr));
+  const badgeX = clamp(
+    Math.round((Number(anchorRect.x) || 0) + (Number(anchorRect.w) || 0) - badgeSize - pad),
+    pad,
+    Math.max(pad, canvasW - badgeSize - pad)
+  );
+  const badgeY = clamp(
+    Math.round((Number(anchorRect.y) || 0) + pad),
+    pad,
+    Math.max(pad, canvasH - badgeSize - pad)
+  );
+
+  octx.save();
+  octx.shadowColor = "rgba(0, 0, 0, 0.5)";
+  octx.shadowBlur = Math.round(10 * dpr);
+  _drawRoundedRect(octx, badgeX, badgeY, badgeSize, badgeSize, Math.max(4, Math.round(5 * dpr)));
+  octx.fillStyle = open ? "rgba(10, 32, 24, 0.92)" : "rgba(8, 10, 14, 0.86)";
+  octx.fill();
+  octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+  octx.strokeStyle = open ? "rgba(122, 238, 178, 0.88)" : "rgba(160, 188, 220, 0.66)";
+  octx.stroke();
+  octx.fillStyle = open ? "rgba(170, 255, 214, 0.98)" : "rgba(226, 235, 246, 0.96)";
+  octx.font = `${Math.max(9, Math.round(11 * dpr))}px IBM Plex Mono`;
+  octx.textAlign = "center";
+  octx.textBaseline = "middle";
+  octx.fillText("i", badgeX + badgeSize * 0.5, badgeY + badgeSize * 0.55);
+  octx.restore();
+  motherPushOverlayUiHit({
+    kind: toggleKind,
+    targetId: targetId || null,
+    rect: { x: badgeX, y: badgeY, w: badgeSize, h: badgeSize },
+  });
+
+  if (!open) return;
+  const detail = details && typeof details === "object" ? details : null;
+  const rows = [
+    `Provider: ${detail?.provider || "Unknown"}`,
+    `Model: ${clampText(detail?.model || "unknown", 28)}`,
+    `Run ID: ${clampText(detail?.runId || "n/a", 28)}`,
+    `Cost: ${detail?.costLabel || "n/a"}`,
+  ];
+
+  octx.save();
+  const fontPx = Math.max(8, Math.round(9 * dpr));
+  const lineH = Math.max(11, Math.round(12 * dpr));
+  const rowGap = Math.max(2, Math.round(3 * dpr));
+  const panelPadX = Math.max(7, Math.round(8 * dpr));
+  const panelPadY = Math.max(6, Math.round(7 * dpr));
+  octx.font = `${fontPx}px IBM Plex Mono`;
+  let maxLineW = 0;
+  for (const row of rows) {
+    maxLineW = Math.max(maxLineW, Math.ceil(octx.measureText(String(row)).width));
+  }
+  const panelW = Math.max(Math.round(150 * dpr), maxLineW + panelPadX * 2);
+  const panelH = panelPadY * 2 + rows.length * lineH + Math.max(0, rows.length - 1) * rowGap;
+  let panelX = Math.round(badgeX + badgeSize - panelW);
+  panelX = clamp(panelX, pad, Math.max(pad, canvasW - panelW - pad));
+  let panelY = Math.round(badgeY - panelH - Math.max(5, Math.round(6 * dpr)));
+  if (panelY < pad) {
+    panelY = Math.round(badgeY + badgeSize + Math.max(5, Math.round(6 * dpr)));
+  }
+  panelY = clamp(panelY, pad, Math.max(pad, canvasH - panelH - pad));
+
+  octx.shadowColor = "rgba(0, 0, 0, 0.56)";
+  octx.shadowBlur = Math.round(14 * dpr);
+  _drawRoundedRect(octx, panelX, panelY, panelW, panelH, Math.max(6, Math.round(7 * dpr)));
+  octx.fillStyle = "rgba(6, 10, 14, 0.94)";
+  octx.fill();
+  octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+  octx.strokeStyle = "rgba(122, 238, 178, 0.54)";
+  octx.stroke();
+
+  octx.fillStyle = "rgba(214, 255, 232, 0.96)";
+  octx.textAlign = "left";
+  octx.textBaseline = "top";
+  let textY = panelY + panelPadY;
+  for (const row of rows) {
+    octx.fillText(String(row), panelX + panelPadX, textY);
+    textY += lineH + rowGap;
+  }
+  octx.restore();
+  motherPushOverlayUiHit({
+    kind: panelKind,
+    targetId: targetId || null,
+    rect: { x: panelX, y: panelY, w: panelW, h: panelH },
+  });
+}
+
 function hitTestMotherRoleGlyph(ptCanvas) {
   const idle = state.motherIdle;
   if (!idle || !ptCanvas) return null;
@@ -23465,7 +23719,7 @@ function hitTestMotherRoleGlyph(ptCanvas) {
   return null;
 }
 
-function renderMotherDraftKeyboardHints(octx, rectPx, { dpr = 1 } = {}) {
+function renderMotherDraftKeyboardHints(octx, rectPx, { dpr = 1, details = null } = {}) {
   if (!octx || !rectPx || isReelSizeLocked()) return;
   const hints = [
     { key: "V", label: "DEPLOY" },
@@ -23539,12 +23793,27 @@ function renderMotherDraftKeyboardHints(octx, rectPx, { dpr = 1 } = {}) {
     cx += chip.width + gap;
   }
   octx.restore();
+
+  const idle = state.motherIdle || null;
+  const detailsOpen = Boolean(idle?.offerDetailsOpen);
+  motherRenderDetailsBadgeAndPopover(octx, {
+    anchorRect: { x, y, w: totalW, h: chipH },
+    dpr,
+    open: detailsOpen,
+    details,
+    toggleKind: "mother_offer_details_toggle",
+    panelKind: "mother_offer_details_panel",
+    targetId: "proposal",
+  });
 }
 
 function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
   const idle = state.motherIdle;
   if (!idle) return;
   const phase = idle.phase || motherIdleInitialState();
+  if (phase !== MOTHER_IDLE_STATES.OFFERING) {
+    idle.offerDetailsOpen = false;
+  }
   if (!(phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING || phase === MOTHER_IDLE_STATES.OFFERING)) {
     idle.roleGlyphHits = [];
     return;
@@ -23685,7 +23954,10 @@ function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
       octx.strokeRect(Math.round(px.x - 3), Math.round(px.y - 3), Math.round(px.w + 6), Math.round(px.h + 6));
       octx.setLineDash([]);
       octx.restore();
-      renderMotherDraftKeyboardHints(octx, px, { dpr });
+      renderMotherDraftKeyboardHints(octx, px, {
+        dpr,
+        details: motherV2ProposalRunDetails(draft),
+      });
     }
   }
 
@@ -25166,10 +25438,21 @@ function installCanvasHandlers() {
             reelTouchPulseFromCanvasPoint(p, { down: event.button === 0, lingerMs: REEL_TOUCH_TAP_VISIBLE_MS });
             requestRender();
           }
-	      const pCss = canvasCssPointFromEvent(event);
+          const pCss = canvasCssPointFromEvent(event);
           rememberPromptGenerateHoverCss(pCss);
           const intentActive = intentModeActive();
           const wheelModifier = Boolean(event.metaKey || event.ctrlKey);
+          const motherOverlayHit = hitTestMotherOverlayUi(p);
+          if (motherOverlayHit && event.button === 0) {
+            bumpInteraction({ semantic: false });
+            if (motherToggleOverlayDetails(motherOverlayHit)) {
+              requestRender();
+              return;
+            }
+          }
+          if (event.button === 0 && (state.motherIdle?.offerDetailsOpen || state.motherResultDetailsOpenId)) {
+            motherCloseOverlayDetails();
+          }
           const motherRoleHit = motherV2InInteractivePhase() && motherV2IsAdvancedVisible() ? hitTestMotherRoleGlyph(p) : null;
 
           if (motherRoleHit && event.button === 0) {
@@ -25582,6 +25865,11 @@ function installCanvasHandlers() {
     }
 
     if (!state.pointer.active) {
+      const motherOverlayHit = hitTestMotherOverlayUi(p);
+      if (motherOverlayHit) {
+        setOverlayCursor("pointer");
+        return;
+      }
       const roleHit = motherV2InInteractivePhase() && motherV2IsAdvancedVisible() ? hitTestMotherRoleGlyph(p) : null;
       if (roleHit) {
         setOverlayCursor("pointer");
@@ -27217,6 +27505,11 @@ function installUi() {
     const hasModifier = Boolean(event?.metaKey || event?.ctrlKey || event?.altKey);
 
 		    if (key === "escape") {
+		      if (state.motherIdle?.offerDetailsOpen || state.motherResultDetailsOpenId) {
+		        motherCloseOverlayDetails();
+		        requestRender();
+		        return;
+		      }
 		      if (aestheticOnboardingState.open) {
 		        skipAestheticOnboarding();
 		        return;
