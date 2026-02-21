@@ -8,6 +8,46 @@ const here = dirname(fileURLToPath(import.meta.url));
 const appPath = join(here, "..", "src", "canvas_app.js");
 const app = readFileSync(appPath, "utf8");
 
+function extractFunctionSource(pattern, label) {
+  const match = app.match(pattern);
+  assert.ok(match, `${label} function not found`);
+  return match[0].replace(/\n\nfunction\s+[\s\S]*$/, "").trim();
+}
+
+function loadPromptBenchmarkAutoHarness() {
+  const normalizeModeSource = extractFunctionSource(
+    /function normalizePromptStrategyMode\(raw\) \{[\s\S]*?\n\}\n\nfunction loadPromptBenchmarkTrials/,
+    "normalizePromptStrategyMode"
+  );
+  const normalizeStrategySource = extractFunctionSource(
+    /function normalizePromptBenchmarkStrategy\(raw\) \{[\s\S]*?\n\}\n\nfunction normalizePromptBenchmarkModel/,
+    "normalizePromptBenchmarkStrategy"
+  );
+  const normalizeModelSource = extractFunctionSource(
+    /function normalizePromptBenchmarkModel\(raw\) \{[\s\S]*?\n\}\n\nfunction promptBenchmarkHydrateState/,
+    "normalizePromptBenchmarkModel"
+  );
+  const autoSource = extractFunctionSource(
+    /function promptBenchmarkAutoStrategyForModel\(model = "", \{ fallback = "tail", minTrials = 4 \} = \{\}\) \{[\s\S]*?\n\}\n\nfunction promptBenchmarkRegisterDispatch/,
+    "promptBenchmarkAutoStrategyForModel"
+  );
+  return new Function(`
+    let state = { promptBenchmark: { trials: [] } };
+    ${normalizeModeSource}
+    ${normalizeStrategySource}
+    ${normalizeModelSource}
+    ${autoSource}
+    return {
+      setState(next) {
+        state = next;
+      },
+      resolve(model, options) {
+        return promptBenchmarkAutoStrategyForModel(model, options);
+      },
+    };
+  `)();
+}
+
 test("Mother prompt composer supports MUST tail and optional full repeat", () => {
   const fnMatch = app.match(
     /function motherV2BuildPromptComposerResult\(compiled = \{\}\) \{[\s\S]*?\n\}\n\nfunction motherV2PromptLineFromCompiled/
@@ -15,12 +55,47 @@ test("Mother prompt composer supports MUST tail and optional full repeat", () =>
   assert.ok(fnMatch, "motherV2BuildPromptComposerResult function not found");
   const fnText = fnMatch[0];
 
-  assert.match(fnText, /const strategyMode = normalizePromptStrategyMode\(settings\.promptStrategyMode\)/);
+  assert.match(fnText, /const configuredMode = normalizePromptStrategyMode\(settings\.promptStrategyMode\)/);
+  assert.match(fnText, /configuredMode === "auto"/);
+  assert.match(fnText, /promptBenchmarkAutoStrategyForModel\(/);
+  assert.match(fnText, /const strategyMode = configuredMode === "auto" \? resolvedAuto\?\.strategy \|\| "tail" : configuredMode/);
+  assert.match(fnText, /if \(negative\) lines\.push\(`Avoid: \$\{negative\}`\);/);
   assert.match(fnText, /if \(strategyMode === "tail" && constraints\.length\) \{/);
   assert.match(fnText, /lines\.push\(`MUST: \$\{constraints\.join\("; "\)\}`\)/);
   assert.match(fnText, /if \(repeatFull && rawPrompt\) \{/);
   assert.match(fnText, /rawPrompt = `\$\{rawPrompt\}\\n\$\{rawPrompt\}`/);
   assert.match(fnText, /strategy: repeatFull \? "repeat" : strategyMode/);
+});
+
+test("Prompt benchmark exposes auto strategy resolver for model-scoped selection", () => {
+  const fnMatch = app.match(
+    /function promptBenchmarkAutoStrategyForModel\(model = "", \{ fallback = "tail", minTrials = 4 \} = \{\}\) \{[\s\S]*?\n\}\n\nfunction promptBenchmarkRegisterDispatch/
+  );
+  assert.ok(fnMatch, "promptBenchmarkAutoStrategyForModel function not found");
+  const fnText = fnMatch[0];
+
+  assert.match(fnText, /const byStrategy = new Map\(\[\s*\["tail", \[\]\],\s*\["baseline", \[\]\],\s*\]\)/);
+  assert.match(fnText, /const smoothedSuccess = \(success \+ 1\) \/ \(attempts \+ 2\)/);
+  assert.match(fnText, /reason: "insufficient_data"/);
+  assert.match(fnText, /reason: "benchmark"/);
+});
+
+test("Auto strategy ranking treats zero-cost benchmark rows as valid cost data", () => {
+  const harness = loadPromptBenchmarkAutoHarness();
+  harness.setState({
+    promptBenchmark: {
+      trials: [
+        { strategy: "tail", model: "gemini-3-pro-image-preview", status: "success", latencyS: 2.0, costUsd: 1.0 },
+        { strategy: "tail", model: "gemini-3-pro-image-preview", status: "success", latencyS: 2.0, costUsd: 1.0 },
+        { strategy: "baseline", model: "gemini-3-pro-image-preview", status: "success", latencyS: 2.0, costUsd: 0.0 },
+        { strategy: "baseline", model: "gemini-3-pro-image-preview", status: "success", latencyS: 2.0, costUsd: 0.0 },
+      ],
+    },
+  });
+
+  const result = harness.resolve("gemini-3-pro-image-preview", { fallback: "tail", minTrials: 4 });
+  assert.equal(result.reason, "benchmark");
+  assert.equal(result.strategy, "baseline");
 });
 
 test("Mother dispatch registers benchmark trial and records dispatch failure", () => {

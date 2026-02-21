@@ -3290,11 +3290,11 @@ fn sanitize_openrouter_gemini_model(raw: &str, default_model: &str) -> String {
     if trimmed.is_empty() {
         return default_model.to_string();
     }
-    if trimmed.starts_with("google/") {
-        return trimmed.to_string();
-    }
-
-    let cleaned = sanitize_gemini_generate_content_model(trimmed, "gemini-3-flash-preview");
+    let source = trimmed
+        .strip_prefix("google/")
+        .map(str::trim)
+        .unwrap_or(trimmed);
+    let cleaned = sanitize_gemini_generate_content_model(source, "gemini-3-flash-preview");
     let lowered = cleaned.to_ascii_lowercase();
     if cleaned.starts_with("google/") {
         cleaned
@@ -3310,11 +3310,13 @@ fn sanitize_openrouter_model(raw: &str, default_model: &str) -> String {
     if trimmed.is_empty() {
         return default_model.to_string();
     }
+    let lowered = trimmed.to_ascii_lowercase();
     if trimmed.contains('/') {
+        if lowered.starts_with("google/gemini") {
+            return sanitize_openrouter_gemini_model(trimmed, "google/gemini-3-flash-preview");
+        }
         return trimmed.to_string();
     }
-
-    let lowered = trimmed.to_ascii_lowercase();
     if lowered.starts_with("gemini") {
         return sanitize_openrouter_gemini_model(trimmed, "google/gemini-3-flash-preview");
     }
@@ -6295,6 +6297,7 @@ fn mother_generate_request_from_payload(
 }
 
 fn pseudo_random_seed() -> i64 {
+    const MAX_SEED: u64 = 2_147_483_647;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     let now_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -6302,7 +6305,7 @@ fn pseudo_random_seed() -> i64 {
         .unwrap_or(0);
     now_nanos.hash(&mut hasher);
     let raw = hasher.finish();
-    (raw as i64).unsigned_abs().min(2_147_483_647) as i64
+    ((raw % MAX_SEED) + 1) as i64
 }
 
 #[derive(Debug, Clone)]
@@ -9122,6 +9125,7 @@ mod tests {
         resolve_streamed_response_text, sanitize_gemini_generate_content_model,
         sanitize_openrouter_gemini_model, sanitize_openrouter_model,
         should_fallback_openrouter_responses, vision_description_model_candidates_for,
+        pseudo_random_seed,
         RealtimeJobError, RealtimeJobErrorKind, RealtimeProvider, RealtimeSessionKind,
         REALTIME_BETA_HEADER_VALUE, REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX,
     };
@@ -9129,6 +9133,24 @@ mod tests {
     use std::io;
     use std::time::{SystemTime, UNIX_EPOCH};
     use std::{env, fs};
+
+    #[test]
+    fn pseudo_random_seed_stays_in_range_and_is_not_pinned_to_max() {
+        const MAX_SEED: i64 = 2_147_483_647;
+        let mut saw_non_max = false;
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..32 {
+            let seed = pseudo_random_seed();
+            assert!((1..=MAX_SEED).contains(&seed), "seed out of range: {seed}");
+            if seed != MAX_SEED {
+                saw_non_max = true;
+            }
+            seen.insert(seed);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(saw_non_max, "seed generator should not be pinned to MAX_SEED");
+        assert!(seen.len() > 1, "seed generator should vary across calls");
+    }
 
     #[test]
     fn realtime_ws_request_includes_upgrade_headers() {
@@ -9311,6 +9333,13 @@ mod tests {
             "google/gemini-3-flash-preview"
         );
         assert_eq!(
+            sanitize_openrouter_gemini_model(
+                "google/gemini-3.0-flash",
+                "google/gemini-3-flash-preview"
+            ),
+            "google/gemini-3-flash-preview"
+        );
+        assert_eq!(
             sanitize_openrouter_gemini_model("gemini-2.0-flash", "google/gemini-3-flash-preview"),
             "google/gemini-2.0-flash-001"
         );
@@ -9331,6 +9360,10 @@ mod tests {
         );
         assert_eq!(
             sanitize_openrouter_model("gemini-3.0-flash", "google/gemini-3-flash-preview"),
+            "google/gemini-3-flash-preview"
+        );
+        assert_eq!(
+            sanitize_openrouter_model("google/gemini-3.0-flash", "google/gemini-3-flash-preview"),
             "google/gemini-3-flash-preview"
         );
         assert_eq!(

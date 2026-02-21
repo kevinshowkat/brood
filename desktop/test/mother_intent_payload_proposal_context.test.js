@@ -32,5 +32,13 @@ test("Mother proposal_context builder includes interaction staleness and compact
   assert.match(fnText, /\bfocus_score\b/);
   assert.match(fnText, /\bgeometry_score\b/);
   assert.match(fnText, /\bgeometry_trace\b/);
+  assert.match(fnText, /\bconst shotTypeHints = motherV2ShotTypeHints\(/);
+  assert.match(fnText, /\bpreferred_shot_type:\s*shotTypeHints\.primary_shot_type\b/);
+  assert.match(fnText, /\balternate_shot_type:\s*shotTypeHints\.alternate_shot_type\b/);
+  assert.match(fnText, /\bpreferred_lighting_profile:\s*shotTypeHints\.primary_lighting_profile\b/);
+  assert.match(fnText, /\balternate_lighting_profile:\s*shotTypeHints\.alternate_lighting_profile\b/);
+  assert.match(fnText, /\bpreferred_lens_guidance:\s*shotTypeHints\.primary_lens_guidance\b/);
+  assert.match(fnText, /\balternate_lens_guidance:\s*shotTypeHints\.alternate_lens_guidance\b/);
+  assert.match(fnText, /\bshot_type_hints:\s*shotTypeHints\b/);
   assert.match(fnText, /\brelations:\s*relations\.slice\(/);
 });

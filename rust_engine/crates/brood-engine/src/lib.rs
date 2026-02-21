@@ -2383,6 +2383,23 @@ impl FluxProvider {
             || lowered.contains("returned invalid json payload")
     }
 
+    fn openrouter_transport_retry_count(request: &ProviderGenerateRequest) -> usize {
+        let retries_value = request
+            .provider_options
+            .get("transport_retries")
+            .or_else(|| request.provider_options.get("request_retries"));
+        value_as_f64(retries_value, 2.0, 0.0, 4.0).round() as usize
+    }
+
+    fn openrouter_retry_backoff_seconds(request: &ProviderGenerateRequest) -> f64 {
+        value_as_f64(
+            request.provider_options.get("retry_backoff"),
+            1.0,
+            0.1,
+            10.0,
+        )
+    }
+
     fn extract_openrouter_chat_finish_reason(payload: &Value) -> Option<String> {
         payload
             .get("choices")
@@ -2519,6 +2536,7 @@ impl FluxProvider {
 
     fn request_openrouter_image_generation(
         &self,
+        request: &ProviderGenerateRequest,
         model: &str,
         input_content: &[Value],
         seed: Option<i64>,
@@ -2528,6 +2546,8 @@ impl FluxProvider {
         download_timeout: f64,
         warnings: &mut Vec<String>,
     ) -> Result<(String, Value, Value, Vec<ImageBytes>)> {
+        let max_retries = Self::openrouter_transport_retry_count(request);
+        let retry_backoff_s = Self::openrouter_retry_backoff_seconds(request);
         let base = Self::openrouter_api_base();
         let responses_endpoint = format!("{base}/responses");
         let responses_payload = {
@@ -2548,54 +2568,103 @@ impl FluxProvider {
             }
             Value::Object(payload)
         };
-        let responses_request = self
-            .http
-            .post(&responses_endpoint)
-            .bearer_auth(api_key)
-            .header("accept", "application/json")
-            .header(CONTENT_TYPE, "application/json")
-            .timeout(Duration::from_secs_f64(request_timeout));
-        let responses_response = Self::apply_openrouter_request_headers(responses_request)
-            .json(&responses_payload)
-            .send()
-            .with_context(|| {
-                format!("OpenRouter responses request failed ({responses_endpoint})")
-            })?;
-        if responses_response.status().is_success() {
-            match response_json_or_error("OpenRouter responses", responses_response) {
-                Ok(response_payload) => {
-                    let images = self
-                        .extract_openrouter_generated_images(&response_payload, download_timeout)?;
-                    if !images.is_empty() {
-                        return Ok((
-                            "openrouter_responses".to_string(),
-                            responses_payload,
-                            response_payload,
-                            images,
-                        ));
-                    }
-                }
-                Err(err) => {
-                    if !Self::should_fallback_openrouter_responses_decode_error(&err) {
+        for attempt in 0..=max_retries {
+            let responses_request = self
+                .http
+                .post(&responses_endpoint)
+                .bearer_auth(api_key)
+                .header("accept", "application/json")
+                .header(CONTENT_TYPE, "application/json")
+                .timeout(Duration::from_secs_f64(request_timeout));
+            let responses_response = match Self::apply_openrouter_request_headers(responses_request)
+                .json(&responses_payload)
+                .send()
+            {
+                Ok(response) => response,
+                Err(raw) => {
+                    let err = anyhow::Error::new(raw).context(format!(
+                        "OpenRouter responses request failed ({responses_endpoint})"
+                    ));
+                    if !is_retryable_transport_error(&err) {
                         return Err(err);
+                    }
+                    if attempt < max_retries {
+                        push_unique_warning(
+                            warnings,
+                            format!(
+                                "OpenRouter responses transport retry {}/{} after transient request failure.",
+                                attempt + 1,
+                                max_retries
+                            ),
+                        );
+                        let delay_s = retry_backoff_s * (attempt as f64 + 1.0);
+                        thread::sleep(Duration::from_secs_f64(delay_s));
+                        continue;
                     }
                     push_unique_warning(
                         warnings,
                         format!(
-                            "OpenRouter responses payload decode failed; falling back to chat/completions ({})",
+                            "OpenRouter responses transport failed after retries; falling back to chat/completions ({})",
                             truncate_text(&error_chain_text(&err, 220), 220)
                         ),
                     );
+                    break;
                 }
-            }
-        } else {
-            let code = responses_response.status().as_u16();
-            let body = responses_response.text().unwrap_or_default();
-            if !Self::should_fallback_openrouter_responses(code, &body) {
-                bail!(
-                    "OpenRouter responses request failed ({code}): {}",
-                    truncate_text(&body, 512)
-                );
+            };
+            if responses_response.status().is_success() {
+                match response_json_or_error("OpenRouter responses", responses_response) {
+                    Ok(response_payload) => {
+                        let images = self.extract_openrouter_generated_images(
+                            &response_payload,
+                            download_timeout,
+                        )?;
+                        if !images.is_empty() {
+                            return Ok((
+                                "openrouter_responses".to_string(),
+                                responses_payload,
+                                response_payload,
+                                images,
+                            ));
+                        }
+                        break;
+                    }
+                    Err(err) => {
+                        if !Self::should_fallback_openrouter_responses_decode_error(&err) {
+                            return Err(err);
+                        }
+                        if is_retryable_transport_error(&err) && attempt < max_retries {
+                            push_unique_warning(
+                                warnings,
+                                format!(
+                                    "OpenRouter responses decode retry {}/{} after transient body failure.",
+                                    attempt + 1,
+                                    max_retries
+                                ),
+                            );
+                            let delay_s = retry_backoff_s * (attempt as f64 + 1.0);
+                            thread::sleep(Duration::from_secs_f64(delay_s));
+                            continue;
+                        }
+                        push_unique_warning(
+                            warnings,
+                            format!(
+                                "OpenRouter responses payload decode failed; falling back to chat/completions ({})",
+                                truncate_text(&error_chain_text(&err, 220), 220)
+                            ),
+                        );
+                        break;
+                    }
+                }
+            } else {
+                let code = responses_response.status().as_u16();
+                let body = responses_response.text().unwrap_or_default();
+                if !Self::should_fallback_openrouter_responses(code, &body) {
+                    bail!(
+                        "OpenRouter responses request failed ({code}): {}",
+                        truncate_text(&body, 512)
+                    );
+                }
+                break;
             }
         }
 
@@ -2661,33 +2730,77 @@ impl FluxProvider {
             }
             Value::Object(payload)
         };
-        let chat_request = self
-            .http
-            .post(&chat_endpoint)
-            .bearer_auth(api_key)
-            .header("accept", "application/json")
-            .header(CONTENT_TYPE, "application/json")
-            .timeout(Duration::from_secs_f64(request_timeout));
-        let chat_response = Self::apply_openrouter_request_headers(chat_request)
-            .json(&chat_payload)
-            .send()
-            .with_context(|| format!("OpenRouter chat request failed ({chat_endpoint})"))?;
-        let chat_payload_response = response_json_or_error("OpenRouter chat", chat_response)?;
-        let images =
-            self.extract_openrouter_generated_images(&chat_payload_response, download_timeout)?;
-        if images.is_empty() {
-            let finish = Self::extract_openrouter_chat_finish_reason(&chat_payload_response)
-                .unwrap_or_else(|| "unknown".to_string());
-            bail!(
-                "OpenRouter chat image response returned no image payload (finish_reason={finish})"
-            );
+        for attempt in 0..=max_retries {
+            let chat_request = self
+                .http
+                .post(&chat_endpoint)
+                .bearer_auth(api_key)
+                .header("accept", "application/json")
+                .header(CONTENT_TYPE, "application/json")
+                .timeout(Duration::from_secs_f64(request_timeout));
+            let chat_response = match Self::apply_openrouter_request_headers(chat_request)
+                .json(&chat_payload)
+                .send()
+            {
+                Ok(response) => response,
+                Err(raw) => {
+                    let err = anyhow::Error::new(raw)
+                        .context(format!("OpenRouter chat request failed ({chat_endpoint})"));
+                    if is_retryable_transport_error(&err) && attempt < max_retries {
+                        push_unique_warning(
+                            warnings,
+                            format!(
+                                "OpenRouter chat transport retry {}/{} after transient request failure.",
+                                attempt + 1,
+                                max_retries
+                            ),
+                        );
+                        let delay_s = retry_backoff_s * (attempt as f64 + 1.0);
+                        thread::sleep(Duration::from_secs_f64(delay_s));
+                        continue;
+                    }
+                    return Err(err);
+                }
+            };
+            let chat_payload_response =
+                match response_json_or_error("OpenRouter chat", chat_response) {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        if Self::should_fallback_openrouter_responses_decode_error(&err)
+                            && attempt < max_retries
+                        {
+                            push_unique_warning(
+                                warnings,
+                                format!(
+                                "OpenRouter chat decode retry {}/{} after transient body failure.",
+                                attempt + 1,
+                                max_retries
+                            ),
+                            );
+                            let delay_s = retry_backoff_s * (attempt as f64 + 1.0);
+                            thread::sleep(Duration::from_secs_f64(delay_s));
+                            continue;
+                        }
+                        return Err(err);
+                    }
+                };
+            let images =
+                self.extract_openrouter_generated_images(&chat_payload_response, download_timeout)?;
+            if images.is_empty() {
+                let finish = Self::extract_openrouter_chat_finish_reason(&chat_payload_response)
+                    .unwrap_or_else(|| "unknown".to_string());
+                bail!(
+                    "OpenRouter chat image response returned no image payload (finish_reason={finish})"
+                );
+            }
+            return Ok((
+                "openrouter_chat_completions".to_string(),
+                chat_payload,
+                chat_payload_response,
+                images,
+            ));
         }
-        Ok((
-            "openrouter_chat_completions".to_string(),
-            chat_payload,
-            chat_payload_response,
-            images,
-        ))
+        unreachable!("OpenRouter chat retry loop should always return a response or error")
     }
 
     fn generate_via_openrouter(
@@ -2714,6 +2827,7 @@ impl FluxProvider {
             let mut generated: Option<(String, Value, Value, Vec<ImageBytes>)> = None;
             for model in &candidates {
                 match self.request_openrouter_image_generation(
+                    request,
                     model,
                     &input_content,
                     seed,

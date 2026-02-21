@@ -238,6 +238,98 @@ const MOTHER_V2_PROPOSAL_BY_MODE = Object.freeze({
   romanticize: "Soften the scene into intimate emotional warmth.",
   alienate: "Shift the familiar into a precise uncanny atmosphere.",
 });
+const MOTHER_V2_SHOT_HINTS_BY_MODE = Object.freeze({
+  amplify: Object.freeze({
+    primary: "close-up detail shot",
+    alternate: "dynamic medium tracking shot",
+    rationale: "amplify tactile detail and motion energy",
+    lighting_profile: "high-contrast practical key with crisp specular highlights",
+    alternate_lighting_profile: "kinetic mixed-source edge lighting",
+    lens_guidance: "50-85mm detail-forward close perspective",
+    alternate_lens_guidance: "35mm dynamic medium tracking perspective",
+  }),
+  transcend: Object.freeze({
+    primary: "elevated wide atmospheric shot",
+    alternate: "overhead drift shot",
+    rationale: "lift the scene into a sculptural, airy frame",
+    lighting_profile: "volumetric skylight diffusion with soft glow rolloff",
+    alternate_lighting_profile: "cool dawn haze with gentle top-light wrap",
+    lens_guidance: "24-35mm elevated wide perspective",
+    alternate_lens_guidance: "35mm overhead float perspective",
+  }),
+  destabilize: Object.freeze({
+    primary: "dutch-angle medium shot",
+    alternate: "off-axis close-up shot",
+    rationale: "heighten controlled visual tension",
+    lighting_profile: "hard cross-lighting with unstable shadow breaks",
+    alternate_lighting_profile: "staccato practical contrast with uneven falloff",
+    lens_guidance: "28-40mm skewed medium perspective",
+    alternate_lens_guidance: "50mm off-axis close perspective",
+  }),
+  purify: Object.freeze({
+    primary: "centered minimal medium shot",
+    alternate: "soft overhead shot",
+    rationale: "reduce clutter and preserve calm geometry",
+    lighting_profile: "high-key soft diffusion with restrained contrast",
+    alternate_lighting_profile: "clean top-light wash with minimal shadow noise",
+    lens_guidance: "40-50mm neutral medium perspective",
+    alternate_lens_guidance: "35mm soft overhead perspective",
+  }),
+  hybridize: Object.freeze({
+    primary: "balanced medium fusion shot",
+    alternate: "wide integrated scene shot",
+    rationale: "merge references into one coherent world",
+    lighting_profile: "balanced cinematic key/fill with coherent directionality",
+    alternate_lighting_profile: "soft directional fill with shared ambient bounce",
+    lens_guidance: "35-50mm balanced fusion perspective",
+    alternate_lens_guidance: "24-35mm integrated wide perspective",
+  }),
+  mythologize: Object.freeze({
+    primary: "low-angle hero shot",
+    alternate: "epic wide establishing shot",
+    rationale: "create mythic scale and reverence",
+    lighting_profile: "high-contrast directional key with rim backlight and atmospheric haze",
+    alternate_lighting_profile: "golden-hour edge light with deep sculpted shadows",
+    lens_guidance: "24-35mm low-angle heroic perspective",
+    alternate_lens_guidance: "24mm epic establishing perspective",
+  }),
+  monumentalize: Object.freeze({
+    primary: "low-angle wide hero shot",
+    alternate: "symmetrical frontal hero shot",
+    rationale: "emphasize monumentality and presence",
+    lighting_profile: "architectural hard key with stately shadow geometry",
+    alternate_lighting_profile: "broad frontal key with monumental silhouette separation",
+    lens_guidance: "24-32mm low-angle monumental perspective",
+    alternate_lens_guidance: "35-50mm symmetrical frontal perspective",
+  }),
+  fracture: Object.freeze({
+    primary: "oblique fragmented close-up shot",
+    alternate: "split-perspective medium shot",
+    rationale: "intentionally break form while preserving intent",
+    lighting_profile: "broken directional light with deliberate contrast discontinuities",
+    alternate_lighting_profile: "multi-source edge lighting with fractured shadow planes",
+    lens_guidance: "50-85mm oblique detail perspective",
+    alternate_lens_guidance: "35-50mm split-perspective framing",
+  }),
+  romanticize: Object.freeze({
+    primary: "intimate medium close-up shot",
+    alternate: "soft backlit wide shot",
+    rationale: "push emotional warmth and tenderness",
+    lighting_profile: "warm soft key with gentle halation and lifted shadows",
+    alternate_lighting_profile: "backlit golden diffusion with subtle bloom",
+    lens_guidance: "50-85mm intimate portrait perspective",
+    alternate_lens_guidance: "35mm soft backlit wide perspective",
+  }),
+  alienate: Object.freeze({
+    primary: "detached wide observational shot",
+    alternate: "telephoto compressed shot",
+    rationale: "introduce precise emotional distance",
+    lighting_profile: "cool controlled contrast with sparse practical pools",
+    alternate_lighting_profile: "flat ambient light with isolated hard accents",
+    lens_guidance: "24-35mm detached observational perspective",
+    alternate_lens_guidance: "85-135mm compressed observational perspective",
+  }),
+});
 const MOTHER_V2_OPERATION_TYPE_BY_MODE = Object.freeze({
   amplify: "dna_apply",
   hybridize: "hybridize",
@@ -459,6 +551,7 @@ localStorage.removeItem("brood.emergencyCompatFallback");
 
 function normalizePromptStrategyMode(raw) {
   const value = String(raw || "").trim().toLowerCase();
+  if (value === "auto") return "auto";
   if (value === "baseline") return "baseline";
   return "tail";
 }
@@ -593,6 +686,22 @@ function promptBenchmarkRenderReadout() {
   if (!els.promptBenchmarkReadout) return;
   const bench = state.promptBenchmark;
   const trials = Array.isArray(bench?.trials) ? bench.trials : [];
+  const currentModel = normalizePromptBenchmarkModel(settings?.imageModel);
+  const configuredMode = normalizePromptStrategyMode(settings?.promptStrategyMode || "tail");
+  if (configuredMode === "auto") {
+    const auto = promptBenchmarkAutoStrategyForModel(currentModel, { fallback: "tail" });
+    const reason =
+      auto.reason === "insufficient_data"
+        ? `insufficient data (${auto.totalAttempts})`
+        : auto.reason === "no_model_data"
+          ? "no model data"
+          : `benchmark (${auto.totalAttempts})`;
+    const summaryLine = `Auto active: ${auto.strategy} for ${currentModel} (${reason})`;
+    if (!trials.length) {
+      els.promptBenchmarkReadout.textContent = `${summaryLine}\nNo benchmark data yet`;
+      return;
+    }
+  }
   if (!trials.length) {
     els.promptBenchmarkReadout.textContent = "No benchmark data yet";
     return;
@@ -617,6 +726,16 @@ function promptBenchmarkRenderReadout() {
   }
 
   const lines = [];
+  if (configuredMode === "auto") {
+    const auto = promptBenchmarkAutoStrategyForModel(currentModel, { fallback: "tail" });
+    const reason =
+      auto.reason === "insufficient_data"
+        ? `insufficient data (${auto.totalAttempts})`
+        : auto.reason === "no_model_data"
+          ? "no model data"
+          : `benchmark (${auto.totalAttempts})`;
+    lines.push(`Auto active: ${auto.strategy} for ${currentModel} (${reason})`);
+  }
   lines.push(`Total trials: ${trials.length}`);
   const orderedModels = Array.from(modelRows.entries()).sort((a, b) => {
     const totalA = Number(a?.[1]?.total) || 0;
@@ -651,6 +770,104 @@ function promptBenchmarkRenderReadout() {
     }
   }
   els.promptBenchmarkReadout.textContent = lines.join("\n");
+}
+
+function promptBenchmarkAutoStrategyForModel(model = "", { fallback = "tail", minTrials = 4 } = {}) {
+  const fallbackMode = normalizePromptStrategyMode(fallback) === "baseline" ? "baseline" : "tail";
+  const modelKey = normalizePromptBenchmarkModel(model);
+  const bench = state.promptBenchmark;
+  if (!bench || typeof bench !== "object") {
+    return {
+      strategy: fallbackMode,
+      reason: "no_benchmark_state",
+      totalAttempts: 0,
+    };
+  }
+  const sourceRows = Array.isArray(bench.trials) ? bench.trials : [];
+  const rows = sourceRows.filter((row) => {
+    const rowModel = normalizePromptBenchmarkModel(row?.model);
+    if (rowModel !== modelKey) return false;
+    const strategy = normalizePromptBenchmarkStrategy(row?.strategy);
+    return strategy === "tail" || strategy === "baseline";
+  });
+  if (!rows.length) {
+    return {
+      strategy: fallbackMode,
+      reason: "no_model_data",
+      totalAttempts: 0,
+    };
+  }
+  const byStrategy = new Map([
+    ["tail", []],
+    ["baseline", []],
+  ]);
+  for (const row of rows) {
+    const strategy = normalizePromptBenchmarkStrategy(row?.strategy);
+    if (!byStrategy.has(strategy)) continue;
+    byStrategy.get(strategy).push(row);
+  }
+  const totalAttempts = rows.length;
+  if (totalAttempts < Math.max(2, Number(minTrials) || 4)) {
+    return {
+      strategy: fallbackMode,
+      reason: "insufficient_data",
+      totalAttempts,
+    };
+  }
+
+  const summarize = (list = []) => {
+    const attempts = list.length;
+    const success = list.filter((row) => String(row?.status || "").trim().toLowerCase() === "success").length;
+    const smoothedSuccess = (success + 1) / (attempts + 2); // Beta(1,1) prior
+    const latencyRows = list
+      .map((row) => Number(row?.latencyS))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    const costRows = list
+      .map((row) => Number(row?.costUsd))
+      .filter((value) => Number.isFinite(value) && value >= 0);
+    const avgLatency = latencyRows.length
+      ? latencyRows.reduce((sum, value) => sum + value, 0) / latencyRows.length
+      : null;
+    const avgCost = costRows.length
+      ? costRows.reduce((sum, value) => sum + value, 0) / costRows.length
+      : null;
+    return { attempts, success, smoothedSuccess, avgLatency, avgCost };
+  };
+
+  const ranked = ["tail", "baseline"]
+    .map((strategy) => ({
+      strategy,
+      metrics: summarize(byStrategy.get(strategy)),
+    }))
+    .filter((row) => row.metrics.attempts > 0)
+    .sort((a, b) => {
+      const aMetrics = a.metrics;
+      const bMetrics = b.metrics;
+      if (bMetrics.smoothedSuccess !== aMetrics.smoothedSuccess) {
+        return bMetrics.smoothedSuccess - aMetrics.smoothedSuccess;
+      }
+      const aLatency = Number.isFinite(aMetrics.avgLatency) ? aMetrics.avgLatency : Number.POSITIVE_INFINITY;
+      const bLatency = Number.isFinite(bMetrics.avgLatency) ? bMetrics.avgLatency : Number.POSITIVE_INFINITY;
+      if (aLatency !== bLatency) return aLatency - bLatency;
+      const aCost = Number.isFinite(aMetrics.avgCost) ? aMetrics.avgCost : Number.POSITIVE_INFINITY;
+      const bCost = Number.isFinite(bMetrics.avgCost) ? bMetrics.avgCost : Number.POSITIVE_INFINITY;
+      if (aCost !== bCost) return aCost - bCost;
+      if (bMetrics.attempts !== aMetrics.attempts) return bMetrics.attempts - aMetrics.attempts;
+      return a.strategy.localeCompare(b.strategy);
+    });
+
+  if (!ranked.length) {
+    return {
+      strategy: fallbackMode,
+      reason: "no_ranked_data",
+      totalAttempts,
+    };
+  }
+  return {
+    strategy: ranked[0].strategy,
+    reason: "benchmark",
+    totalAttempts,
+  };
 }
 
 function promptBenchmarkRegisterDispatch({ strategy = "tail", model = "unknown", promptChars = 0, constraintCount = 0 } = {}) {
@@ -854,7 +1071,7 @@ const settings = {
     if (!migrated) localStorage.setItem(IMAGE_MODEL_DEFAULT_MIGRATION_KEY, "1");
     return storedRaw;
   })(),
-  promptStrategyMode: normalizePromptStrategyMode(localStorage.getItem(PROMPT_STRATEGY_MODE_KEY) || "tail"),
+  promptStrategyMode: normalizePromptStrategyMode(localStorage.getItem(PROMPT_STRATEGY_MODE_KEY) || "auto"),
   promptRepeatFull: localStorage.getItem(PROMPT_REPEAT_FULL_KEY) === "1",
 };
 
@@ -1946,6 +2163,8 @@ function extractReceiptMeta(payload) {
   const cost_total_usd = typeof result?.cost_total_usd === "number" ? result.cost_total_usd : null;
   const latency_per_image_s = typeof result?.latency_per_image_s === "number" ? result.latency_per_image_s : null;
   const tokens = extractTokenUsage(payload);
+  const prompt_api_payload = extractReceiptPromptApiPayload(payload);
+  const creative_cues = extractReceiptCreativeCues(payload);
   return {
     provider,
     model,
@@ -1954,7 +2173,201 @@ function extractReceiptMeta(payload) {
     latency_per_image_s,
     input_tokens: tokens?.input_tokens ?? null,
     output_tokens: tokens?.output_tokens ?? null,
+    prompt_api_payload,
+    creative_cues,
   };
+}
+
+function extractReceiptCreativeCues(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const request = payload?.request && typeof payload.request === "object" ? payload.request : null;
+  const metadata = request?.metadata && typeof request.metadata === "object" ? request.metadata : null;
+  if (!metadata) return null;
+  const geminiPacket = metadata?.gemini_context_packet && typeof metadata.gemini_context_packet === "object"
+    ? metadata.gemini_context_packet
+    : null;
+  const modelContextEnvelopes = metadata?.model_context_envelopes && typeof metadata.model_context_envelopes === "object"
+    ? metadata.model_context_envelopes
+    : null;
+  const firstEnvelope = modelContextEnvelopes
+    ? Object.values(modelContextEnvelopes).find((entry) => entry && typeof entry === "object") || null
+    : null;
+  const firstText = (...values) => {
+    for (const value of values) {
+      const text = String(value || "").trim();
+      if (text) return text;
+    }
+    return null;
+  };
+  const shotType = firstText(
+    geminiPacket?.proposal_lock?.shot_type,
+    geminiPacket?.camera?.shot_type,
+    geminiPacket?.shot_type_hints?.primary_shot_type,
+    firstEnvelope?.shot_type,
+    firstEnvelope?.camera?.shot_type,
+    firstEnvelope?.shot_type_hints?.primary_shot_type
+  );
+  const alternateShotType = firstText(
+    geminiPacket?.proposal_lock?.alternate_shot_type,
+    geminiPacket?.camera?.alternate_shot_type,
+    geminiPacket?.shot_type_hints?.alternate_shot_type,
+    firstEnvelope?.alternate_shot_type,
+    firstEnvelope?.camera?.alternate_shot_type,
+    firstEnvelope?.shot_type_hints?.alternate_shot_type
+  );
+  const lightingProfile = firstText(
+    geminiPacket?.proposal_lock?.lighting_profile,
+    geminiPacket?.lighting?.profile,
+    geminiPacket?.style?.lighting_profile,
+    geminiPacket?.shot_type_hints?.primary_lighting_profile,
+    firstEnvelope?.lighting_profile,
+    firstEnvelope?.lighting?.profile,
+    firstEnvelope?.shot_type_hints?.primary_lighting_profile
+  );
+  const alternateLightingProfile = firstText(
+    geminiPacket?.proposal_lock?.alternate_lighting_profile,
+    geminiPacket?.lighting?.alternate_profile,
+    geminiPacket?.shot_type_hints?.alternate_lighting_profile,
+    firstEnvelope?.alternate_lighting_profile,
+    firstEnvelope?.lighting?.alternate_profile,
+    firstEnvelope?.shot_type_hints?.alternate_lighting_profile
+  );
+  const lensGuidance = firstText(
+    geminiPacket?.proposal_lock?.lens_guidance,
+    geminiPacket?.camera?.lens_guidance,
+    geminiPacket?.style?.lens_guidance,
+    geminiPacket?.shot_type_hints?.primary_lens_guidance,
+    firstEnvelope?.lens_guidance,
+    firstEnvelope?.camera?.lens_guidance,
+    firstEnvelope?.shot_type_hints?.primary_lens_guidance
+  );
+  const alternateLensGuidance = firstText(
+    geminiPacket?.proposal_lock?.alternate_lens_guidance,
+    geminiPacket?.camera?.alternate_lens_guidance,
+    geminiPacket?.shot_type_hints?.alternate_lens_guidance,
+    firstEnvelope?.alternate_lens_guidance,
+    firstEnvelope?.camera?.alternate_lens_guidance,
+    firstEnvelope?.shot_type_hints?.alternate_lens_guidance
+  );
+  if (
+    !shotType &&
+    !alternateShotType &&
+    !lightingProfile &&
+    !alternateLightingProfile &&
+    !lensGuidance &&
+    !alternateLensGuidance
+  ) {
+    return null;
+  }
+  return {
+    shot_type: shotType,
+    alternate_shot_type: alternateShotType,
+    lighting_profile: lightingProfile,
+    alternate_lighting_profile: alternateLightingProfile,
+    lens_guidance: lensGuidance,
+    alternate_lens_guidance: alternateLensGuidance,
+  };
+}
+
+function extractReceiptPromptApiPayload(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const providerRequest = payload?.provider_request && typeof payload.provider_request === "object"
+    ? payload.provider_request
+    : null;
+  const request = payload?.request && typeof payload.request === "object" ? payload.request : null;
+  const resolved = payload?.resolved && typeof payload.resolved === "object" ? payload.resolved : null;
+  const providerPayload = providerRequest?.payload && typeof providerRequest.payload === "object"
+    ? providerRequest.payload
+    : null;
+  const transport = String(providerPayload?.transport || providerRequest?.transport || "").trim() || null;
+  const endpoint = String(providerRequest?.endpoint || "").trim() || null;
+  const envelopePayload =
+    providerPayload?.payload && typeof providerPayload.payload === "object"
+      ? providerPayload.payload
+      : providerPayload;
+  const model =
+    String(
+      envelopePayload?.model ||
+        resolved?.model ||
+        request?.model ||
+        ""
+    ).trim() || null;
+
+  const sanitizePromptContent = (value, keyHint = "") => {
+    if (value === null || value === undefined) return value;
+    if (typeof value === "string") {
+      const lowerKey = String(keyHint || "").toLowerCase();
+      if (value.startsWith("data:image/")) {
+        const mediaType = value.slice(5, value.indexOf(";base64,") > 0 ? value.indexOf(";base64,") : 20);
+        return `<omitted ${mediaType || "image"} data URI>`;
+      }
+      if (
+        lowerKey === "image_url" ||
+        lowerKey === "image" ||
+        lowerKey === "b64_json" ||
+        lowerKey === "data" ||
+        lowerKey === "inline_data" ||
+        lowerKey === "inlinedata"
+      ) {
+        if (value.length > 72) return `<omitted binary-like string (${value.length} chars)>`;
+      }
+      if (value.length > 900) return `${value.slice(0, 897)}...`;
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value.map((entry) => sanitizePromptContent(entry, keyHint));
+    }
+    if (typeof value === "object") {
+      const out = {};
+      for (const [key, raw] of Object.entries(value)) {
+        const lowerKey = String(key || "").toLowerCase();
+        if (
+          lowerKey === "image_url" ||
+          lowerKey === "image" ||
+          lowerKey === "inline_data" ||
+          lowerKey === "inlinedata" ||
+          lowerKey === "b64_json" ||
+          lowerKey === "bytes_base64"
+        ) {
+          if (typeof raw === "string" && raw) {
+            out[key] = sanitizePromptContent(raw, lowerKey);
+            continue;
+          }
+          if (raw && typeof raw === "object") {
+            out[key] = "<omitted image payload>";
+            continue;
+          }
+        }
+        out[key] = sanitizePromptContent(raw, key);
+      }
+      return out;
+    }
+    return value;
+  };
+
+  const promptPayload = {};
+  if (transport) promptPayload.transport = transport;
+  if (endpoint) promptPayload.endpoint = endpoint;
+  if (model) promptPayload.model = model;
+
+  if (Array.isArray(envelopePayload?.input) && envelopePayload.input.length) {
+    promptPayload.input = sanitizePromptContent(envelopePayload.input, "input");
+  } else if (Array.isArray(envelopePayload?.messages) && envelopePayload.messages.length) {
+    promptPayload.messages = sanitizePromptContent(envelopePayload.messages, "messages");
+  } else if (Array.isArray(envelopePayload?.contents) && envelopePayload.contents.length) {
+    promptPayload.contents = sanitizePromptContent(envelopePayload.contents, "contents");
+  }
+
+  const promptText = String(
+    envelopePayload?.prompt ||
+      request?.prompt ||
+      resolved?.prompt ||
+      ""
+  ).trim();
+  if (promptText) promptPayload.prompt = promptText;
+
+  if (!Object.keys(promptPayload).length) return null;
+  return promptPayload;
 }
 
 async function ensureReceiptMeta(item) {
@@ -11137,6 +11550,106 @@ function motherV2ProposalSentence(intent) {
   return MOTHER_V2_PROPOSAL_BY_MODE[mode] || MOTHER_V2_PROPOSAL_BY_MODE[MOTHER_V2_DEFAULT_TRANSFORMATION_MODE];
 }
 
+function motherV2ShotTypeHintForMode(rawMode = "") {
+  const mode = motherV2NormalizeTransformationMode(rawMode || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE);
+  const preset = MOTHER_V2_SHOT_HINTS_BY_MODE[mode];
+  if (preset && typeof preset === "object") return { mode, ...preset };
+  return {
+    mode,
+    primary: "balanced medium shot",
+    alternate: "wide establishing shot",
+    rationale: "preserve coherence while keeping visual variety",
+    lighting_profile: "balanced cinematic key/fill with coherent directionality",
+    alternate_lighting_profile: "soft directional fill with shared ambient bounce",
+    lens_guidance: "35-50mm balanced medium perspective",
+    alternate_lens_guidance: "24-35mm wide establishing perspective",
+  };
+}
+
+function motherV2ShotTypeHints({ preferredMode = "", candidateModes = [] } = {}) {
+  const primaryMode = motherV2NormalizeTransformationMode(preferredMode || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE);
+  const modes = [];
+  const pushMode = (rawMode) => {
+    const mode = motherV2MaybeTransformationMode(rawMode);
+    if (!mode) return;
+    if (!modes.includes(mode)) modes.push(mode);
+  };
+  pushMode(primaryMode);
+  for (const entry of Array.isArray(candidateModes) ? candidateModes : []) {
+    if (entry && typeof entry === "object") {
+      pushMode(entry.mode || entry.transformation_mode);
+    } else {
+      pushMode(entry);
+    }
+  }
+  const primaryPreset = motherV2ShotTypeHintForMode(primaryMode);
+  const alternateMode = modes.find((mode) => mode !== primaryMode) || null;
+  let alternateShotType = "";
+  if (alternateMode) {
+    alternateShotType = String(motherV2ShotTypeHintForMode(alternateMode)?.primary || "").trim();
+  }
+  if (!alternateShotType) {
+    alternateShotType = String(primaryPreset?.alternate || "").trim();
+  }
+  if (alternateShotType && alternateShotType.toLowerCase() === String(primaryPreset?.primary || "").toLowerCase()) {
+    alternateShotType = "";
+  }
+  const primaryLightingProfile = String(primaryPreset?.lighting_profile || "balanced cinematic key/fill with coherent directionality").trim();
+  let alternateLightingProfile = "";
+  if (alternateMode) {
+    alternateLightingProfile = String(motherV2ShotTypeHintForMode(alternateMode)?.lighting_profile || "").trim();
+  }
+  if (!alternateLightingProfile) {
+    alternateLightingProfile = String(primaryPreset?.alternate_lighting_profile || "").trim();
+  }
+  if (
+    alternateLightingProfile &&
+    alternateLightingProfile.toLowerCase() === primaryLightingProfile.toLowerCase()
+  ) {
+    alternateLightingProfile = "";
+  }
+  const primaryLensGuidance = String(primaryPreset?.lens_guidance || "35-50mm balanced medium perspective").trim();
+  let alternateLensGuidance = "";
+  if (alternateMode) {
+    alternateLensGuidance = String(motherV2ShotTypeHintForMode(alternateMode)?.lens_guidance || "").trim();
+  }
+  if (!alternateLensGuidance) {
+    alternateLensGuidance = String(primaryPreset?.alternate_lens_guidance || "").trim();
+  }
+  if (
+    alternateLensGuidance &&
+    alternateLensGuidance.toLowerCase() === primaryLensGuidance.toLowerCase()
+  ) {
+    alternateLensGuidance = "";
+  }
+  const primaryShotType = String(primaryPreset?.primary || "balanced medium shot").trim();
+  const shotInstruction = alternateShotType
+    ? `Prefer ${primaryShotType}. If composition coherence or emphasis weakens, try ${alternateShotType}.`
+    : `Prefer ${primaryShotType}.`;
+  const lightingInstruction = alternateLightingProfile
+    ? `Light with ${primaryLightingProfile}. If mood or subject separation is weak, try ${alternateLightingProfile}.`
+    : `Light with ${primaryLightingProfile}.`;
+  const lensInstruction = alternateLensGuidance
+    ? `Lens guidance: ${primaryLensGuidance} (fallback ${alternateLensGuidance}).`
+    : `Lens guidance: ${primaryLensGuidance}.`;
+  const instruction = `${shotInstruction} ${lightingInstruction} ${lensInstruction}`;
+  return {
+    primary_mode: primaryMode,
+    primary_shot_type: primaryShotType,
+    alternate_mode: alternateMode,
+    alternate_shot_type: alternateShotType || null,
+    primary_lighting_profile: primaryLightingProfile,
+    alternate_lighting_profile: alternateLightingProfile || null,
+    primary_lens_guidance: primaryLensGuidance,
+    alternate_lens_guidance: alternateLensGuidance || null,
+    rationale: String(primaryPreset?.rationale || "").trim() || null,
+    shot_instruction: shotInstruction,
+    lighting_instruction: lightingInstruction,
+    lens_instruction: lensInstruction,
+    instruction,
+  };
+}
+
 function motherV2EnsureProposalCandidates(intentPayload = null) {
   const intent = intentPayload && typeof intentPayload === "object" ? intentPayload : null;
   if (!intent) return intent;
@@ -13405,12 +13918,23 @@ function motherV2IntentFromRealtimeIcons(iconState = null, payload = {}) {
   const actionVersion = Number(payload.action_version) || 0;
   const frameId = String(icons?.frame_id || "").trim();
   const branchId = String(topBranch?.branch_id || "").trim();
+  const shotTypeHints = motherV2ShotTypeHints({
+    preferredMode: transformationMode,
+    candidateModes: transformationModeCandidates,
+  });
   return {
     intent_id: frameId ? `intent-rt-${frameId}` : `intent-rt-${actionVersion}-${Math.random().toString(16).slice(2, 7)}`,
     summary,
     creative_directive: MOTHER_CREATIVE_DIRECTIVE,
     transformation_mode: transformationMode,
     transformation_mode_candidates: transformationModeCandidates,
+    shot_type: shotTypeHints.primary_shot_type,
+    alternate_shot_type: shotTypeHints.alternate_shot_type,
+    lighting_profile: shotTypeHints.primary_lighting_profile,
+    alternate_lighting_profile: shotTypeHints.alternate_lighting_profile,
+    lens_guidance: shotTypeHints.primary_lens_guidance,
+    alternate_lens_guidance: shotTypeHints.alternate_lens_guidance,
+    shot_type_hints: shotTypeHints,
     target_ids: targetIds.slice(0, 3),
     reference_ids: referenceIds.slice(0, 3),
     placement_policy: placementPolicy,
@@ -13440,6 +13964,10 @@ function motherV2CompilePromptLocal(payload = {}) {
   const transformationMode = motherV2NormalizeTransformationMode(
     payload.transformation_mode || intent.transformation_mode || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE
   );
+  const shotTypeHints = motherV2ShotTypeHints({
+    preferredMode: transformationMode,
+    candidateModes: Array.isArray(intent.transformation_mode_candidates) ? intent.transformation_mode_candidates : [],
+  });
   const roles = intent.roles && typeof intent.roles === "object" ? intent.roles : {};
   const subjectIds = Array.isArray(roles.subject) ? roles.subject.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 2) : [];
   const modelIds = Array.isArray(roles.model) ? roles.model.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 2) : [];
@@ -13484,6 +14012,11 @@ function motherV2CompilePromptLocal(payload = {}) {
     multiImageRules.push("Keep one coherent camera framing and focal hierarchy.");
   }
   const positiveLines = [
+    `Transformation mode: ${transformationMode}.`,
+    `Shot type guidance: ${shotTypeHints.shot_instruction}`,
+    `Lighting guidance: ${shotTypeHints.lighting_instruction}`,
+    shotTypeHints.lens_instruction,
+    `Creative directive: ${creativeDirective}.`,
     `Intent summary: ${summary}.`,
     `Role anchors: ${roleText}.`,
   ];
@@ -13494,12 +14027,17 @@ function motherV2CompilePromptLocal(payload = {}) {
   positiveLines.push("Produce coherent composition, emotional resonance, and production-grade lighting.");
   positiveLines.push("No text overlays, words, letters, logos-as-text, or watermarks.");
   positiveLines.push("Create one production-ready concept image.");
-  positiveLines.push(`Creative directive: ${creativeDirective}.`);
-  positiveLines.push(`Transformation mode: ${transformationMode}.`);
   return {
     action_version: Number(payload.action_version) || 0,
     creative_directive: creativeDirective,
     transformation_mode: transformationMode,
+    shot_type: shotTypeHints.primary_shot_type,
+    alternate_shot_type: shotTypeHints.alternate_shot_type,
+    lighting_profile: shotTypeHints.primary_lighting_profile,
+    alternate_lighting_profile: shotTypeHints.alternate_lighting_profile,
+    lens_guidance: shotTypeHints.primary_lens_guidance,
+    alternate_lens_guidance: shotTypeHints.alternate_lens_guidance,
+    shot_type_hints: shotTypeHints,
     positive_prompt: positiveLines.join(" "),
     negative_prompt: `No collage split-screen. No text overlays. No watermark. No ghosted human overlays. No icon-overpaint artifacts. No low-detail artifacts. ${
       hasHumanInputs ? "No unintended extra faces." : "No extra humans/faces unless present in inputs."
@@ -13612,7 +14150,13 @@ function motherV2CanvasContextSummaryHint() {
   return clampText(normalized, 240);
 }
 
-function motherV2BuildProposalContextForIntentPayload({ images = [], selectedIds = [], activeId = null } = {}) {
+function motherV2BuildProposalContextForIntentPayload({
+  images = [],
+  selectedIds = [],
+  activeId = null,
+  preferredTransformationMode = "",
+  transformationModeCandidates = [],
+} = {}) {
   const sourceImages = Array.isArray(images) ? images : [];
   if (!sourceImages.length) return null;
 
@@ -13900,6 +14444,10 @@ function motherV2BuildProposalContextForIntentPayload({ images = [], selectedIds
   relations.sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0));
   const relationLimit = rows.length <= 4 ? 4 : 6;
 
+  const shotTypeHints = motherV2ShotTypeHints({
+    preferredMode: preferredTransformationMode || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE,
+    candidateModes: transformationModeCandidates,
+  });
   const overallConfidence = round4(clamp01(0.6 * interactionConfidence + 0.4 * geometryConfidence));
   return {
     schema: "brood.mother.proposal_context.v1",
@@ -13927,6 +14475,13 @@ function motherV2BuildProposalContextForIntentPayload({ images = [], selectedIds
       position_tier: row.position_tier,
       geometry_trace: row.geometry_trace,
     })),
+    preferred_shot_type: shotTypeHints.primary_shot_type,
+    alternate_shot_type: shotTypeHints.alternate_shot_type,
+    preferred_lighting_profile: shotTypeHints.primary_lighting_profile,
+    alternate_lighting_profile: shotTypeHints.alternate_lighting_profile,
+    preferred_lens_guidance: shotTypeHints.primary_lens_guidance,
+    alternate_lens_guidance: shotTypeHints.alternate_lens_guidance,
+    shot_type_hints: shotTypeHints,
     relations: relations.slice(0, relationLimit),
   };
 }
@@ -13940,6 +14495,7 @@ function motherV2IntentPayload() {
   const activeId = getVisibleActiveId();
   const ambientBranches = motherV2AmbientIntentHints(3);
   const ambientModeHints = motherV2AmbientTransformationModeHints();
+  const preferredTransformationMode = motherV2PreferredTransformationModeHint();
   const canvasSummary = motherV2CanvasContextSummaryHint();
   const images = motherIdleBaseImageItems().map((item) => {
     const rect = state.freeformRects.get(item.id) || null;
@@ -13965,19 +14521,25 @@ function motherV2IntentPayload() {
             h: Math.max(0, Number(rect.h) || 0) / canvasCssH,
           }
         : null,
-    };
+      };
   });
+  const proposalModeCandidates = [
+    ...(Array.isArray(idle?.intent?.transformation_mode_candidates) ? idle.intent.transformation_mode_candidates : []),
+    ...(Array.isArray(ambientModeHints?.candidates) ? ambientModeHints.candidates : []),
+  ];
   const proposalContext = motherV2BuildProposalContextForIntentPayload({
     images,
     selectedIds,
     activeId,
+    preferredTransformationMode,
+    transformationModeCandidates: proposalModeCandidates,
   });
   return {
     schema: "brood.mother.intent_infer.v1",
     action_version: Number(idle?.actionVersion) || 0,
     creative_directive: MOTHER_CREATIVE_DIRECTIVE,
     creative_directive_instruction: MOTHER_CREATIVE_DIRECTIVE_SENTENCE,
-    preferred_transformation_mode: motherV2PreferredTransformationModeHint(),
+    preferred_transformation_mode: preferredTransformationMode,
     intensity: clamp(Number(idle?.intensity) || 62, 0, 100),
     active_id: activeId ? String(activeId) : null,
     selected_ids: selectedIds,
@@ -14457,7 +15019,12 @@ function motherV2BuildPromptComposerResult(compiled = {}) {
   }
   const negative = String(compiled?.negative_prompt || "").trim();
   const constraints = motherV2ExtractPromptConstraints(compiled).slice(0, 8);
-  const strategyMode = normalizePromptStrategyMode(settings.promptStrategyMode);
+  const configuredMode = normalizePromptStrategyMode(settings.promptStrategyMode);
+  const resolvedAuto =
+    configuredMode === "auto"
+      ? promptBenchmarkAutoStrategyForModel(state.motherIdle?.lastDispatchModel || settings.imageModel, { fallback: "tail" })
+      : null;
+  const strategyMode = configuredMode === "auto" ? resolvedAuto?.strategy || "tail" : configuredMode;
   const repeatFull = Boolean(settings.promptRepeatFull);
   const lines = [];
   if (positive) lines.push(positive);
@@ -14751,6 +15318,13 @@ function motherV2BuildNonGeminiModelContextEnvelope({
   const transformationMode = motherV2NormalizeTransformationMode(
     proposalLock.transformation_mode || intent.transformation_mode || compiled?.transformation_mode || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE
   );
+  const shotTypeHints = motherV2ShotTypeHints({
+    preferredMode: transformationMode,
+    candidateModes:
+      proposalLock.transformation_mode_candidates ||
+      intent.transformation_mode_candidates ||
+      [],
+  });
   const layout = String(
     proposalLock.placement_policy || intent.placement_policy || compiled?.generation_params?.layout_hint || "adjacent"
   ).trim() || "adjacent";
@@ -14861,6 +15435,12 @@ function motherV2BuildNonGeminiModelContextEnvelope({
     goal,
     creative_directive: creativeDirective,
     transformation_mode: transformationMode,
+    shot_type: shotTypeHints.primary_shot_type,
+    alternate_shot_type: shotTypeHints.alternate_shot_type,
+    lighting_profile: shotTypeHints.primary_lighting_profile,
+    alternate_lighting_profile: shotTypeHints.alternate_lighting_profile,
+    lens_guidance: shotTypeHints.primary_lens_guidance,
+    alternate_lens_guidance: shotTypeHints.alternate_lens_guidance,
     layout,
     source_image_ids: sourceImageIds.slice(0, 8),
     target_ids: targetIds.slice(0, 4),
@@ -15057,6 +15637,24 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
   const transformationMode = motherV2NormalizeTransformationMode(
     intent.transformation_mode || compiled?.transformation_mode || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE
   );
+  const transformationModeCandidatesRaw = Array.isArray(intent.transformation_mode_candidates)
+    ? intent.transformation_mode_candidates
+    : [];
+  const transformationModeCandidates = [];
+  const pushModeCandidate = (rawMode) => {
+    const mode = motherV2MaybeTransformationMode(rawMode);
+    if (!mode) return;
+    if (!transformationModeCandidates.includes(mode)) transformationModeCandidates.push(mode);
+  };
+  pushModeCandidate(transformationMode);
+  for (const entry of transformationModeCandidatesRaw) {
+    if (entry && typeof entry === "object") pushModeCandidate(entry.mode || entry.transformation_mode);
+    else pushModeCandidate(entry);
+  }
+  const shotTypeHints = motherV2ShotTypeHints({
+    preferredMode: transformationMode,
+    candidateModes: transformationModeCandidates,
+  });
   const placementPolicy = String(
     intent.placement_policy ||
       compiled?.generation_params?.layout_hint ||
@@ -15536,11 +16134,32 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
     style: {
       creative_directive: creativeDirective || MOTHER_CREATIVE_DIRECTIVE,
       optimization_target: "stunningly awe-inspiring and joyous + novel",
+      shot_type: shotTypeHints.primary_shot_type,
+      lighting_profile: shotTypeHints.primary_lighting_profile,
+      lens_guidance: shotTypeHints.primary_lens_guidance,
     },
     prompt_preview: clampText(String(promptLine || ""), 320),
+    shot_type_hints: shotTypeHints,
+    camera: {
+      shot_type: shotTypeHints.primary_shot_type,
+      alternate_shot_type: shotTypeHints.alternate_shot_type,
+      lens_guidance: shotTypeHints.primary_lens_guidance,
+      alternate_lens_guidance: shotTypeHints.alternate_lens_guidance,
+    },
+    lighting: {
+      profile: shotTypeHints.primary_lighting_profile,
+      alternate_profile: shotTypeHints.alternate_lighting_profile,
+    },
     proposal_lock: {
       transformation_mode: transformationMode,
+      transformation_mode_candidates: transformationModeCandidates,
       placement_policy: placementPolicy,
+      shot_type: shotTypeHints.primary_shot_type,
+      alternate_shot_type: shotTypeHints.alternate_shot_type,
+      lighting_profile: shotTypeHints.primary_lighting_profile,
+      alternate_lighting_profile: shotTypeHints.alternate_lighting_profile,
+      lens_guidance: shotTypeHints.primary_lens_guidance,
+      alternate_lens_guidance: shotTypeHints.alternate_lens_guidance,
       active_id: activeId,
       selected_ids: selectedIds,
       target_ids: targetIds,
@@ -15686,13 +16305,14 @@ async function motherV2DispatchCompiledPrompt(compiled = {}) {
   clearTimeout(idle.pendingPromptCompileTimeout);
   idle.pendingPromptCompileTimeout = null;
   idle.promptMotionProfile = motherV2PromptMotionProfileFromCompiled(compiled);
+  const selectedModel = motherPreferredGenerationModel();
+  idle.lastDispatchModel = selectedModel;
   const promptComposer = motherV2BuildPromptComposerResult(compiled);
   const promptLine = promptComposer.line;
   if (!promptLine) {
     motherIdleHandleGenerationFailed("Mother prompt compile produced an empty prompt.");
     return false;
   }
-  const selectedModel = motherPreferredGenerationModel();
   motherIdleResetDispatchCorrelation({ rememberPendingVersion: true });
   idle.dispatchTimeoutExtensions = 0;
   idle.cancelArtifactUntil = 0;
@@ -15700,7 +16320,6 @@ async function motherV2DispatchCompiledPrompt(compiled = {}) {
   idle.pendingGeneration = true;
   idle.pendingDispatchToken = Date.now();
   idle.pendingPromptLine = promptLine;
-  idle.lastDispatchModel = selectedModel;
   state.pendingMotherDraft = {
     sourceIds: motherV2RoleContextIds(),
     startedAt: Date.now(),
@@ -24530,7 +25149,47 @@ function motherV2ImageRunDetails(item = null) {
     model,
     runId: runId || "n/a",
     costLabel: motherV2FormatCostDeltaUsd(costUsd),
+    creativeCues: meta?.creative_cues && typeof meta.creative_cues === "object" ? meta.creative_cues : null,
+    promptApiPayload: meta?.prompt_api_payload && typeof meta.prompt_api_payload === "object" ? meta.prompt_api_payload : null,
   };
+}
+
+function motherV2PromptPayloadDetailRows(promptApiPayload = null, { maxChars = 3200, maxLines = 18, lineChars = 92 } = {}) {
+  if (!promptApiPayload || typeof promptApiPayload !== "object") return [];
+  let text = "";
+  try {
+    text = JSON.stringify(promptApiPayload, null, 2);
+  } catch {
+    text = "";
+  }
+  if (!text) return [];
+  let clipped = false;
+  if (text.length > maxChars) {
+    text = `${text.slice(0, Math.max(0, maxChars - 3))}...`;
+    clipped = true;
+  }
+  const rawRows = [];
+  for (const line of String(text).split("\n")) {
+    const safe = String(line || "");
+    if (safe.length <= lineChars) {
+      rawRows.push(safe);
+      continue;
+    }
+    for (let i = 0; i < safe.length; i += lineChars) {
+      rawRows.push(safe.slice(i, i + lineChars));
+    }
+  }
+  const rows = [];
+  rows.push("Prompt Payload JSON:");
+  for (const row of rawRows) {
+    rows.push(`  ${row}`);
+    if (rows.length >= maxLines) {
+      clipped = true;
+      break;
+    }
+  }
+  if (clipped) rows.push("  ... (truncated)");
+  return rows;
 }
 
 function motherPushOverlayUiHit(hit = null) {
@@ -24638,6 +25297,15 @@ function motherRenderDetailsBadgeAndPopover(
     `Run ID: ${clampText(detail?.runId || "n/a", 28)}`,
     `Cost: ${detail?.costLabel || "n/a"}`,
   ];
+  const cues = detail?.creativeCues && typeof detail.creativeCues === "object" ? detail.creativeCues : null;
+  if (cues?.shot_type) rows.push(`Shot: ${clampText(cues.shot_type, 52)}`);
+  if (cues?.alternate_shot_type) rows.push(`Alt Shot: ${clampText(cues.alternate_shot_type, 52)}`);
+  if (cues?.lighting_profile) rows.push(`Lighting: ${clampText(cues.lighting_profile, 52)}`);
+  if (cues?.alternate_lighting_profile) rows.push(`Alt Light: ${clampText(cues.alternate_lighting_profile, 52)}`);
+  if (cues?.lens_guidance) rows.push(`Lens: ${clampText(cues.lens_guidance, 52)}`);
+  if (cues?.alternate_lens_guidance) rows.push(`Alt Lens: ${clampText(cues.alternate_lens_guidance, 52)}`);
+  const promptPayloadRows = motherV2PromptPayloadDetailRows(detail?.promptApiPayload || null);
+  if (promptPayloadRows.length) rows.push(...promptPayloadRows);
 
   octx.save();
   const fontPx = Math.max(8, Math.round(9 * dpr));
