@@ -275,6 +275,10 @@ const TOP_METRICS_THRESHOLDS = Object.freeze({
   avg_render_s: { cool_max: 8, warm_max: 18 },
 });
 const SPARKLINE_GLYPHS = Object.freeze(["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]);
+// Per-1K-token estimates for realtime text calls (input/output priced separately).
+const REALTIME_TOKEN_PRICING_USD_PER_1K = Object.freeze({
+  "gpt-realtime-mini": Object.freeze({ input: 0.0006, output: 0.0024 }),
+});
 const REEL_PRESET = Object.freeze({
   width: 540,
   height: 960,
@@ -1675,6 +1679,45 @@ function topMetricIngestTokensFromPayload(payload, { atMs = Date.now(), render =
     outputTokens: tokens.output_tokens,
     atMs,
   });
+  if (render) renderSessionApiCallsReadout();
+  return true;
+}
+
+function topMetricRealtimePricingForModel(model) {
+  const raw = String(model || "").trim().toLowerCase();
+  if (!raw) return null;
+  if (raw.startsWith("gpt-realtime-mini")) return REALTIME_TOKEN_PRICING_USD_PER_1K["gpt-realtime-mini"];
+  if (raw.startsWith("gpt-4o-mini")) return REALTIME_TOKEN_PRICING_USD_PER_1K["gpt-realtime-mini"];
+  return null;
+}
+
+function estimateRealtimeTokenCostUsd({ model = "", inputTokens = 0, outputTokens = 0 } = {}) {
+  const pricing = topMetricRealtimePricingForModel(model);
+  if (!pricing) return null;
+  const input = Math.max(0, Number(inputTokens) || 0);
+  const output = Math.max(0, Number(outputTokens) || 0);
+  if (!input && !output) return null;
+  const inputCost = (input / 1000) * (Number(pricing.input) || 0);
+  const outputCost = (output / 1000) * (Number(pricing.output) || 0);
+  const total = inputCost + outputCost;
+  if (!Number.isFinite(total) || total <= 0) return null;
+  return total;
+}
+
+function topMetricIngestRealtimeCostFromPayload(payload, { render = false } = {}) {
+  if (!payload || typeof payload !== "object") return false;
+  if (payload.partial) return false;
+  const source = String(payload.source || "").trim().toLowerCase();
+  if (source !== "openai_realtime") return false;
+  const tokens = extractTokenUsage(payload);
+  if (!tokens) return false;
+  const estimate = estimateRealtimeTokenCostUsd({
+    model: payload.model,
+    inputTokens: tokens.input_tokens,
+    outputTokens: tokens.output_tokens,
+  });
+  if (!(Number.isFinite(estimate) && estimate > 0)) return false;
+  topMetricIngestCost(estimate);
   if (render) renderSessionApiCallsReadout();
   return true;
 }
@@ -22241,6 +22284,9 @@ async function handleEventLegacy(event) {
   } else if (eventType === DESKTOP_EVENT_TYPES.CANVAS_CONTEXT) {
     const text = event.text;
     const isPartial = Boolean(event.partial);
+    if (!isPartial) {
+      topMetricIngestRealtimeCostFromPayload(event, { render: true });
+    }
     const aov = state.alwaysOnVision;
     if (aov) {
       if (isPartial) {
@@ -22356,6 +22402,9 @@ async function handleEventLegacy(event) {
     );
     if (!intent && !ambient && !motherCanAcceptRealtime) return;
     const isPartial = Boolean(event.partial);
+    if (!isPartial) {
+      topMetricIngestRealtimeCostFromPayload(event, { render: true });
+    }
     const text = event.text;
     const path = event.image_path ? String(event.image_path) : "";
     if (!path) return;
