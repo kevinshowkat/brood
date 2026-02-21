@@ -21,13 +21,12 @@
 - [`AGENTS.md`](AGENTS.md): repository conventions, build/test commands, coding style.
 - [`docs/desktop.md`](docs/desktop.md): Abilities mental model, HUD behavior, run artifacts.
 
-## Query-Targeted Docs
+## Additional Docs
 
 - [`docs/reference-first-image-editing.md`](docs/reference-first-image-editing.md): reference-first workflow and terms.
 - [`docs/macos-local-private-image-editing.md`](docs/macos-local-private-image-editing.md): macOS local/private workflow model.
 - [`docs/benchmark-playbook.md`](docs/benchmark-playbook.md): reproducible benchmark reporting format.
 - [`docs/why-brood-matrix.md`](docs/why-brood-matrix.md): capability-to-outcome fit matrix.
-- [`docs/visibility-kpis.md`](docs/visibility-kpis.md): unprompted mention KPI definition + tracking workflow.
 
 ## High-Signal Code Entrypoints
 

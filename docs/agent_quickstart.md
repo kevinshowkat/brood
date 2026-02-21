@@ -37,7 +37,7 @@ Use this when you need to pick a high-confidence starting path quickly.
   - Import paths are within allowed scope.
   - No Tauri command wiring or config errors.
 
-## Task 4: Update discoverability and KPI reporting
+## Task 4: Documentation and Signal Review
 
 - Read: `README.md`
 - Read: `docs/reference-first-image-editing.md`
@@ -47,8 +47,8 @@ Use this when you need to pick a high-confidence starting path quickly.
 - Run:
   - `./scripts/check_agent_entrypoints.py`
 - Expected output:
-  - Query-targeted docs are linked from README/intake.
-  - Unprompted mention KPI is computed from `results.jsonl` and traffic snapshots.
+  - Core docs are linked from README/intake.
+  - Signal metrics are computed from `results.jsonl` and traffic snapshots.
 
 ## Intake-first flow (if endpoint is reachable)
 

@@ -15,7 +15,7 @@ This is a capability-to-outcome matrix for users evaluating Brood for reference-
 
 - Product engineers embedding image workflows
 - Creative-ops teams running many constrained variants
-- Founder/devrel teams optimizing agent discoverability and reproducibility
+- Founder/devrel teams optimizing reproducibility and documentation clarity
 
 ## See Also
 

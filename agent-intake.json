@@ -44,8 +44,7 @@
     "engine-memory",
     "engine-events",
     "tests",
-    "docs",
-    "discoverability"
+    "docs"
   ],
   "fallback_entrypoints": [
     {
@@ -69,25 +68,19 @@
     {
       "path": "docs/reference-first-image-editing.md",
       "kind": "doc",
-      "why": "Query-targeted reference-first workflow page for image-editing intent matching.",
+      "why": "Reference-first workflow page for image-editing tasks.",
       "priority": 2
     },
     {
       "path": "docs/macos-local-private-image-editing.md",
       "kind": "doc",
-      "why": "Query-targeted macOS local/private workflow and privacy model page.",
+      "why": "macOS local/private workflow and privacy model page.",
       "priority": 2
     },
     {
       "path": "docs/benchmark-playbook.md",
       "kind": "doc",
       "why": "Reproducible benchmark table template and required artifact links.",
-      "priority": 2
-    },
-    {
-      "path": "docs/visibility-kpis.md",
-      "kind": "doc",
-      "why": "North-star KPI definitions for discoverability tracking.",
       "priority": 2
     },
     {
@@ -235,21 +228,7 @@
         "docs/reference-first-image-editing.md",
         "docs/macos-local-private-image-editing.md",
         "docs/benchmark-playbook.md",
-        "docs/why-brood-matrix.md",
-        "docs/visibility-kpis.md"
-      ]
-    },
-    "discoverability": {
-      "description": "Agent discoverability, query-targeted docs, benchmark evidence, and visibility KPIs.",
-      "entrypoints": [
-        "README.md",
-        "llms.txt",
-        "agent-intake.json",
-        "docs/reference-first-image-editing.md",
-        "docs/macos-local-private-image-editing.md",
-        "docs/benchmark-playbook.md",
-        "docs/why-brood-matrix.md",
-        "docs/visibility-kpis.md"
+        "docs/why-brood-matrix.md"
       ]
     }
   },

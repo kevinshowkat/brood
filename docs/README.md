@@ -6,7 +6,7 @@
 - `docs/macos-local-private-image-editing.md`: macOS local-first and privacy-oriented deployment model.
 - `docs/benchmark-playbook.md`: reproducible benchmark table + artifact-linking template.
 - `docs/why-brood-matrix.md`: capability-to-outcome matrix for evaluating Brood fit.
-- `docs/visibility-kpis.md`: weekly KPI framework for unprompted mention tracking.
+- `docs/visibility-kpis.md`: weekly repository signal metrics and review cadence.
 - `docs/realtime_canvas_intent_generation_flow.md`: end-to-end diagram for realtime canvas context, intent proposal, and generation event flow.
 - `docs/realtime_canvas_user_benefits_story.md`: simplified, slide-ready product narrative (with one-slide visual, value chain, and circular benefit loop).
 - `docs/assets/diagrams/realtime_canvas_intent_generation_flow/`: pre-rendered SVG/PNG exports for sharing the realtime flow diagrams.
@@ -14,10 +14,5 @@
 - `docs/features/effect-token-runtime/README.md`: Pixi extraction runtime + DNA/Soul effect-token lifecycle and drag/drop pipeline.
 - `docs/visual_prompting_v0.md`: visual prompt serialization (`visual_prompt.json`) and mark/layout semantics.
 - `docs/aesthetic.md`: planned aesthetic-capture workflow (not implemented).
-- `docs/prds/target_user_agentic_harness_v0.md`: proposed agentic loop that simulates real target-user behavior.
-- `docs/target_user_harness.schema.json`: config schema for target-user simulation runs.
-- `docs/target_user_harness.scenarios.sample.json`: benchmark scenarios mapped to core target-user profiles.
-- `docs/target_user_panel_prompt.md`: default panel prompt for screenshot reaction simulation.
 - `docs/param_forge_reference.md`: Param Forge compatibility notes (historical reference context).
 - `docs/skills/`: Action Grid skill contracts (requirements + intended effect).
-- `docs/prds/`: product/UX specs and drafts (not all implemented).

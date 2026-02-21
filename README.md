@@ -8,13 +8,13 @@ Brood is a promptless, reference-first AI image generation and editing desktop f
 Use existing brand/reference images to generate high-quality creative variants quickly without prompt engineering.
 Brood is local-first on macOS: run artifacts stay on your machine under `~/brood_runs/run-*`.
 
-## High-Intent Pages
+## Key Docs
 
 - Reference-first workflow: `docs/reference-first-image-editing.md`
 - macOS local/private model: `docs/macos-local-private-image-editing.md`
 - Reproducible benchmark template: `docs/benchmark-playbook.md`
 - Capability-to-outcome matrix: `docs/why-brood-matrix.md`
-- Agent entrypoints: `llms.txt`
+- Technical entrypoints: `llms.txt`
 
 ## Live Workflow Highlights
 
