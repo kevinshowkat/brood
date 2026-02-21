@@ -87,6 +87,25 @@ test("parse intent icons: trailing commas are tolerated", () => {
   assert.match(parsed.strategy, /trailing_commas_removed/);
 });
 
+test("parse intent icons: transformation mode candidates rank by awe_joy_score then confidence", () => {
+  const payload = {
+    ...baseIntentPayload(),
+    transformation_mode: null,
+    transformation_mode_candidates: [
+      { mode: "hybridize", awe_joy_score: 42, confidence: 0.98 },
+      { mode: "transcend", awe_joy_score: 90, confidence: 0.62 },
+      { mode: "amplify", awe_joy_score: 90, confidence: 0.91 },
+    ],
+  };
+  const parsed = parseIntentIconsJsonDetailed(JSON.stringify(payload));
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(
+    parsed.value.transformation_mode_candidates.map((entry) => entry.mode),
+    ["amplify", "transcend", "hybridize"]
+  );
+  assert.equal(parsed.value.transformation_mode, "amplify");
+});
+
 test("parse intent icons: real truncated payload shape is classified as truncated_json", () => {
   const truncatedFromRunLog =
     '{\n  "frame_id": "mother-intent-a0-1771156098794-a00",\n  "schema": "brood.intent_icons",\n  "schema_version": 1,\n  "intent_icons": [{"icon_id":"IMAGE_GENERATION","confidence":0.9,"position_hint":"primary"}],\n  "branches": [{"branch_id":"content_engine","confidence":0.7,"icons":["CONTENT_ENGINE"],"lane_position":"left"}],\n  "checkpoint": {\n    "icons';

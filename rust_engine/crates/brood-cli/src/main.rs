@@ -5193,6 +5193,39 @@ fn build_intent_icons_payload(snapshot_path: &Path, mother: bool) -> Value {
         .to_ascii_lowercase();
     let preferred_branch = infer_branch_from_text(&haystack);
     let transformation_mode = infer_transformation_mode_from_text(&haystack);
+    let all_transformation_modes = [
+        "amplify",
+        "transcend",
+        "destabilize",
+        "purify",
+        "hybridize",
+        "mythologize",
+        "monumentalize",
+        "fracture",
+        "romanticize",
+        "alienate",
+    ];
+    let mut ordered_modes: Vec<String> = Vec::new();
+    ordered_modes.push(transformation_mode.clone());
+    for mode in all_transformation_modes {
+        if ordered_modes.iter().any(|existing| existing == mode) {
+            continue;
+        }
+        ordered_modes.push(mode.to_string());
+    }
+    let mut transformation_mode_candidates: Vec<Value> = Vec::new();
+    for (idx, mode) in ordered_modes.iter().enumerate() {
+        if !mother && idx >= 3 {
+            break;
+        }
+        let awe_joy_score = (74.0 - (idx as f64 * 4.5)).max(30.0);
+        let confidence = ((awe_joy_score / 100.0) * 0.95).clamp(0.2, 0.95);
+        transformation_mode_candidates.push(json!({
+            "mode": mode,
+            "awe_joy_score": ((awe_joy_score * 10.0).round() / 10.0),
+            "confidence": ((confidence * 100.0).round() / 100.0),
+        }));
+    }
     let branches = fallback_intent_branches(&preferred_branch, &evidence_ids);
     let checkpoint_branch = branches
         .first()
@@ -5221,11 +5254,7 @@ fn build_intent_icons_payload(snapshot_path: &Path, mother: bool) -> Value {
             "applies_to": checkpoint_branch,
         },
         "transformation_mode": transformation_mode,
-        "transformation_mode_candidates": [
-            { "mode": transformation_mode, "confidence": 0.74 },
-            { "mode": "hybridize", "confidence": 0.62 },
-            { "mode": "amplify", "confidence": 0.55 },
-        ],
+        "transformation_mode_candidates": transformation_mode_candidates,
         "image_descriptions": image_descriptions,
     })
 }
@@ -5431,7 +5460,7 @@ fn infer_structured_intent_payload_via_provider(
     let instruction = format!(
         "You are Brood's Mother intent inference engine.\nReturn JSON only (no markdown).\n\
 Given PAYLOAD_JSON, infer one intent object with this exact schema:\n\
-{{\n  \"intent_id\": \"string\",\n  \"summary\": \"string\",\n  \"creative_directive\": \"stunningly awe-inspiring and joyous\",\n  \"transformation_mode\": \"amplify|transcend|destabilize|purify|hybridize|mythologize|monumentalize|fracture|romanticize|alienate\",\n  \"target_ids\": [\"id\"],\n  \"reference_ids\": [\"id\"],\n  \"placement_policy\": \"adjacent|grid|replace\",\n  \"confidence\": 0.0,\n  \"roles\": {{ \"subject\": [\"id\"], \"model\": [\"id\"], \"mediator\": [\"id\"], \"object\": [\"id\"] }},\n  \"alternatives\": [{{\"placement_policy\":\"adjacent\"}}, {{\"placement_policy\":\"grid\"}}]\n}}\n\
+{{\n  \"intent_id\": \"string\",\n  \"summary\": \"string\",\n  \"creative_directive\": \"stunningly awe-inspiring and tearfully joyous\",\n  \"transformation_mode\": \"amplify|transcend|destabilize|purify|hybridize|mythologize|monumentalize|fracture|romanticize|alienate\",\n  \"target_ids\": [\"id\"],\n  \"reference_ids\": [\"id\"],\n  \"placement_policy\": \"adjacent|grid|replace\",\n  \"confidence\": 0.0,\n  \"roles\": {{ \"subject\": [\"id\"], \"model\": [\"id\"], \"mediator\": [\"id\"], \"object\": [\"id\"] }},\n  \"alternatives\": [{{\"placement_policy\":\"adjacent\"}}, {{\"placement_policy\":\"grid\"}}]\n}}\n\
 Rules:\n- Use only image IDs from this allowlist: [{}].\n\
 - Keep confidence between 0.2 and 0.99.\n\
 - Prefer concise summary language.\n\
@@ -5461,7 +5490,7 @@ fn normalize_provider_intent_payload(
         .unwrap_or_else(|| "Fuse references into one coherent composition.".to_string());
     let creative_directive = value_as_non_empty_string(candidate.get("creative_directive"))
         .or_else(|| value_as_non_empty_string(fallback_obj.get("creative_directive")))
-        .unwrap_or_else(|| "stunningly awe-inspiring and joyous".to_string());
+        .unwrap_or_else(|| "stunningly awe-inspiring and tearfully joyous".to_string());
     let transformation_mode = normalize_transformation_mode(
         candidate
             .get("transformation_mode")
@@ -5684,7 +5713,7 @@ fn infer_structured_intent_payload(payload: &Map<String, Value>) -> Value {
     json!({
         "intent_id": format!("intent-{action_version}"),
         "summary": summary,
-        "creative_directive": "stunningly awe-inspiring and joyous",
+        "creative_directive": "stunningly awe-inspiring and tearfully joyous",
         "transformation_mode": transformation_mode,
         "target_ids": target_ids,
         "reference_ids": reference_ids,
@@ -5767,7 +5796,7 @@ fn compile_mother_prompt_payload(payload: &Map<String, Value>) -> Value {
         .unwrap_or_else(|| "Fuse references into one coherent composition.".to_string());
     let creative_directive = value_as_non_empty_string(payload.get("creative_directive"))
         .or_else(|| value_as_non_empty_string(intent.get("creative_directive")))
-        .unwrap_or_else(|| "stunningly awe-inspiring and joyous".to_string());
+        .unwrap_or_else(|| "stunningly awe-inspiring and tearfully joyous".to_string());
     let transformation_mode = normalize_transformation_mode(
         payload
             .get("transformation_mode")
@@ -5992,7 +6021,7 @@ fn normalize_provider_compiled_payload(
     let creative_directive = value_as_non_empty_string(candidate.get("creative_directive"))
         .map(|value| clamp_text(&value, 220))
         .or_else(|| value_as_non_empty_string(fallback_obj.get("creative_directive")))
-        .unwrap_or_else(|| "stunningly awe-inspiring and joyous".to_string());
+        .unwrap_or_else(|| "stunningly awe-inspiring and tearfully joyous".to_string());
     let transformation_mode = normalize_transformation_mode(
         candidate
             .get("transformation_mode")
@@ -6178,6 +6207,31 @@ fn mother_generate_request_from_payload(
         if let Some(person_generation) = generation_params.get("person_generation").cloned() {
             provider_options.insert("person_generation".to_string(), person_generation);
         }
+    }
+    if let Some(transport_retries) = generation_params
+        .get("transport_retries")
+        .and_then(Value::as_u64)
+    {
+        provider_options.insert(
+            "transport_retries".to_string(),
+            Value::Number(transport_retries.into()),
+        );
+    }
+    if let Some(request_retries) = generation_params
+        .get("request_retries")
+        .and_then(Value::as_u64)
+    {
+        provider_options.insert(
+            "request_retries".to_string(),
+            Value::Number(request_retries.into()),
+        );
+    }
+    if let Some(retry_backoff) = generation_params
+        .get("retry_backoff")
+        .and_then(Value::as_f64)
+        .and_then(serde_json::Number::from_f64)
+    {
+        provider_options.insert("retry_backoff".to_string(), Value::Number(retry_backoff));
     }
     if provider_options.is_empty() {
         settings.remove("provider_options");
@@ -7930,7 +7984,7 @@ Choose exactly one primary mode from this enum:
 - fracture: Introduce intentional fracture and expressive disruption.
 - romanticize: Infuse the composition with intimate emotional warmth.
 - alienate: Reframe the scene with uncanny, otherworldly distance.
-Also provide 1-3 ranked alternatives with confidences.
+Also provide ranked alternatives with awe_joy_score and confidence.
 
 OUTPUT FORMAT (STRICT JSON)
 {
@@ -7941,6 +7995,7 @@ OUTPUT FORMAT (STRICT JSON)
   "transformation_mode_candidates": [
     {
       "mode": "<one mode from enum>",
+      "awe_joy_score": 0.0,
       "confidence": 0.0
     }
   ],
@@ -7987,7 +8042,11 @@ BEHAVIOR RULES
 - Preserve CONTEXT_ENVELOPE_JSON.images[] id order in image_descriptions.
 - Never swap labels across image_id values.
 - transformation_mode must be one of the 10 enum values above.
-- transformation_mode_candidates should include the primary mode and be sorted by confidence DESC.
+- transformation_mode_candidates should include the primary mode.
+- In Mother mode, transformation_mode_candidates must include all 10 enum modes exactly once.
+- transformation_mode_candidates[].awe_joy_score must be in [0.0, 100.0] and represent predicted intensity of "stunningly awe-inspiring and tearfully joyous".
+- transformation_mode_candidates[].confidence must be in [0.0, 1.0] and represent certainty in that awe_joy_score.
+- Sort transformation_mode_candidates by awe_joy_score DESC (tie-break confidence DESC).
 - Include branches[].confidence in [0.0, 1.0] and sort branches by confidence DESC.
 - checkpoint.applies_to should match the highest-confidence branch_id.
 - evidence_image_ids should reference CONTEXT_ENVELOPE_JSON.images[].id (0-3 ids).
@@ -8015,7 +8074,7 @@ SAFETY
 Return JSON only."#;
     if mother {
         return format!(
-            "MODE\nYou are in Mother proposal mode for Brood.\nOptimization target: stunningly awe-inspiring and joyous + novel.\nYou must maximize visual wow while preserving coherence and subject identity.\n\nMOTHER CONTEXT RULES\n- CONTEXT_ENVELOPE_JSON.mother_context is authoritative when present.\n- Treat mother_context.creative_directive and mother_context.optimization_target as hard steering.\n- Prefer transformation modes that are novel relative to mother_context.recent_rejected_modes_for_context.\n- Avoid repeating mother_context.last_accepted_mode unless confidence improvement is substantial.\n- Use mother_context.selected_ids and mother_context.active_id to prioritize evidence_image_ids.\n- Use images[].origin to balance uploaded references with mother-generated continuity.\n- For 2+ images, prefer coherent fusion over collage and preserve a single camera/lighting world.\n- Keep anti-artifact behavior conservative: avoid ghosting, duplication, and interface residue.\n\nReturn the same strict JSON schema contract as the default intent engine.\n\n{}",
+            "You are ranking image proposals for Brood.\nPrimary target: outputs most likely to feel \"stunningly awe-inspiring and tearfully joyous.\"\nMaximize visual wow and emotional impact.\n\nRULES\n- CONTEXT_ENVELOPE_JSON.mother_context is authoritative when present.\n- Treat mother_context.creative_directive and mother_context.optimization_target as hard steering.\n- branches[].confidence must estimate likelihood that a generated image will feel \"stunningly awe-inspiring and tearfully joyous.\"\n- transformation_mode_candidates must include all 10 transformation enum modes exactly once.\n- transformation_mode_candidates[].awe_joy_score (0-100) must estimate intensity of \"stunningly awe-inspiring and tearfully joyous.\"\n- transformation_mode_candidates[].confidence (0-1) must estimate certainty in that awe_joy_score.\n- Sort branches by confidence DESC.\n- Sort transformation_mode_candidates by awe_joy_score DESC (tie-break confidence DESC).\n- Prefer transformation modes that are novel relative to mother_context.recent_rejected_modes_for_context.\n- Avoid repeating mother_context.last_accepted_mode unless confidence improvement is substantial.\n- Use mother_context.selected_ids and mother_context.active_id to prioritize evidence_image_ids.\n- Use mother_context.preferred_shot_type, mother_context.preferred_lighting_profile, and mother_context.preferred_lens_guidance as ranking cues for image-impacting proposal quality.\n- When mother_context.shot_type_hints or candidate shot/lighting/lens fields are present, use them to validate and adjust ranking strength per mode.\n- Use images[].origin to balance uploaded references with mother-generated continuity.\n- For 2+ images, prefer bold fusion over collage and allow stylized camera/lighting choices when impact improves.\n- Keep anti-artifact behavior conservative: avoid ghosting, duplication, and interface residue.\n\nReturn the same strict JSON schema contract as the default intent engine.\n\n{}",
             base
         );
     }
@@ -9121,13 +9180,13 @@ mod tests {
         extract_openrouter_chat_output_text, intent_icons_instruction,
         intent_realtime_reference_image_limit, is_anyhow_realtime_transport_error,
         is_edit_style_prompt, openrouter_chat_content_to_responses_input,
-        openrouter_responses_content_to_chat_content, resolve_realtime_gemini_model_for_transport,
-        resolve_streamed_response_text, sanitize_gemini_generate_content_model,
-        sanitize_openrouter_gemini_model, sanitize_openrouter_model,
-        should_fallback_openrouter_responses, vision_description_model_candidates_for,
-        pseudo_random_seed,
-        RealtimeJobError, RealtimeJobErrorKind, RealtimeProvider, RealtimeSessionKind,
-        REALTIME_BETA_HEADER_VALUE, REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX,
+        openrouter_responses_content_to_chat_content, pseudo_random_seed,
+        resolve_realtime_gemini_model_for_transport, resolve_streamed_response_text,
+        sanitize_gemini_generate_content_model, sanitize_openrouter_gemini_model,
+        sanitize_openrouter_model, should_fallback_openrouter_responses,
+        vision_description_model_candidates_for, RealtimeJobError, RealtimeJobErrorKind,
+        RealtimeProvider, RealtimeSessionKind, REALTIME_BETA_HEADER_VALUE,
+        REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX,
     };
     use serde_json::json;
     use std::io;
@@ -9148,7 +9207,10 @@ mod tests {
             seen.insert(seed);
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        assert!(saw_non_max, "seed generator should not be pinned to MAX_SEED");
+        assert!(
+            saw_non_max,
+            "seed generator should not be pinned to MAX_SEED"
+        );
         assert!(seen.len() > 1, "seed generator should vary across calls");
     }
 

@@ -11,6 +11,7 @@
 - `docs/why-brood-matrix.md`: capability-to-outcome matrix for evaluating Brood fit.
 - `docs/visibility-kpis.md`: weekly repository signal metrics and review cadence.
 - `docs/realtime_canvas_intent_generation_flow.md`: end-to-end diagram for realtime canvas context, intent proposal, and generation event flow.
+- `docs/prompt-diet-prd-internal.md`: internal PRD for image-first prompt simplification (move fallback policy from prompt prose into intent/envelope + runtime).
 - `docs/realtime_canvas_user_benefits_story.md`: simplified, slide-ready product narrative (with one-slide visual, value chain, and circular benefit loop).
 - `docs/assets/diagrams/realtime_canvas_intent_generation_flow/`: pre-rendered SVG/PNG exports for sharing the realtime flow diagrams.
 - `docs/assets/diagrams/realtime_canvas_user_benefits_story/`: pre-rendered SVG/PNG exports for the user-benefit value-chain and flywheel visuals.

@@ -2260,6 +2260,27 @@ impl FluxProvider {
         best.to_string()
     }
 
+    fn openrouter_supports_image_size(model: &str) -> bool {
+        let normalized = model.trim().to_ascii_lowercase();
+        normalized.contains("gemini") || normalized.contains("imagen")
+    }
+
+    fn openrouter_image_size_hint(request: &ProviderGenerateRequest) -> String {
+        let from_options = request
+            .provider_options
+            .get("image_size")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_uppercase);
+        if let Some(value) = from_options {
+            if value == "1K" || value == "2K" || value == "4K" {
+                return value;
+            }
+        }
+        GeminiProvider::resolve_image_size_hint(&request.size)
+    }
+
     fn flux_input_to_openrouter_image_url(value: &str) -> Result<String> {
         let trimmed = value.trim();
         if trimmed.is_empty() {
@@ -2551,6 +2572,15 @@ impl FluxProvider {
         let base = Self::openrouter_api_base();
         let responses_endpoint = format!("{base}/responses");
         let responses_payload = {
+            let mut image_config = map_object(json!({
+                "aspect_ratio": aspect_ratio,
+            }));
+            if Self::openrouter_supports_image_size(model) {
+                image_config.insert(
+                    "image_size".to_string(),
+                    Value::String(Self::openrouter_image_size_hint(request)),
+                );
+            }
             let mut payload = map_object(json!({
                 "model": model,
                 "input": [{
@@ -2559,9 +2589,7 @@ impl FluxProvider {
                 }],
                 "modalities": ["text", "image"],
                 "stream": false,
-                "image_config": {
-                    "aspect_ratio": aspect_ratio,
-                },
+                "image_config": image_config,
             }));
             if let Some(seed_value) = seed {
                 payload.insert("seed".to_string(), Value::Number(seed_value.into()));
@@ -2713,6 +2741,15 @@ impl FluxProvider {
             }
         }
         let chat_payload = {
+            let mut image_config = map_object(json!({
+                "aspect_ratio": aspect_ratio,
+            }));
+            if Self::openrouter_supports_image_size(model) {
+                image_config.insert(
+                    "image_size".to_string(),
+                    Value::String(Self::openrouter_image_size_hint(request)),
+                );
+            }
             let mut payload = map_object(json!({
                 "model": model,
                 "messages": [{
@@ -2721,9 +2758,7 @@ impl FluxProvider {
                 }],
                 "modalities": ["text", "image"],
                 "stream": false,
-                "image_config": {
-                    "aspect_ratio": aspect_ratio,
-                },
+                "image_config": image_config,
             }));
             if let Some(seed_value) = seed {
                 payload.insert("seed".to_string(), Value::Number(seed_value.into()));

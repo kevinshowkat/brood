@@ -173,11 +173,19 @@ const AESTHETIC_DIRECTION_OPTIONS = Object.freeze([
 ]);
 const MOTHER_SUGGESTION_LOG_FILENAME = "mother_suggestions.jsonl";
 const MOTHER_TRACE_FILENAME = "mother_trace.jsonl";
-const MOTHER_V2_WATCH_IDLE_MS = 800;
-const MOTHER_V2_INTENT_IDLE_MS = 1500;
-const MOTHER_V2_MULTI_UPLOAD_WATCH_IDLE_MS = 400;
-const MOTHER_V2_MULTI_UPLOAD_INTENT_IDLE_MS = 900;
+const MOTHER_V2_WATCH_IDLE_MS = 520;
+const MOTHER_V2_INTENT_IDLE_MS = 900;
+const MOTHER_V2_MULTI_UPLOAD_WATCH_IDLE_MS = 240;
+const MOTHER_V2_MULTI_UPLOAD_INTENT_IDLE_MS = 520;
 const MOTHER_V2_MULTI_UPLOAD_IDLE_BOOST_WINDOW_MS = 20_000;
+const MOTHER_V2_UPLOAD_SETTLE_MS = 520;
+const MOTHER_V2_UPLOAD_PREFETCH_WINDOW_MS = 120_000;
+const MOTHER_V2_SPECULATIVE_PREFETCH_DELAY_MS = 40;
+const MOTHER_V2_LIVE_PROPOSAL_REFRESH_DEBOUNCE_MS = 170;
+const MOTHER_V2_LIVE_PROPOSAL_REFRESH_MIN_INTERVAL_MS = 550;
+const MOTHER_V2_PROMPT_COMPILE_FALLBACK_MS = 520;
+const MOTHER_V2_INTENT_TARGET_IMAGE_LIMIT = 2;
+const MOTHER_V2_INTENT_REFERENCE_IMAGE_LIMIT = 1;
 const MOTHER_SELECTION_SEMANTIC_DRAG_PX = 10;
 const MOTHER_V2_COOLDOWN_AFTER_COMMIT_MS = 2000;
 const MOTHER_V2_COOLDOWN_AFTER_REJECT_MS = 1200;
@@ -188,7 +196,15 @@ const MOTHER_V2_INTENT_RT_TIMEOUT_DEFER_GRACE_MS = 250;
 const MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_MAX = 2;
 const MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_DELAY_MS = 220;
 const MOTHER_V2_INTENT_LATE_REALTIME_UPGRADE_MS = 12000;
+const MOTHER_V2_INTENT_CONTEXT_REF_RETRY_MAX = 0;
+const MOTHER_V2_INTENT_CONTEXT_REF_RETRY_DELAY_MS = 220;
 const MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL = 2;
+const MOTHER_V2_UPLOAD_FAST_INTENT_SNAPSHOT_WAIT_MS = 50;
+const MOTHER_V2_UPLOAD_FAST_INTENT_SNAPSHOT_MAX_DIM_PX = 560;
+const MOTHER_V2_UPLOAD_VISION_DEFER_MS = 1800;
+const MOTHER_V2_DISPATCH_TRANSFORM_EXPORT_LIMIT = 4;
+const MOTHER_V2_DISPATCH_TRANSFORM_EXPORT_MAX_DIM_PX = 1500;
+const MOTHER_V2_DISPATCH_TRANSFORM_EXPORT_MIN_DIM_PX = 420;
 const MOTHER_V2_ROLE_KEYS = Object.freeze(["subject", "model", "mediator", "object"]);
 const MOTHER_V2_ROLE_LABEL = Object.freeze({
   subject: "SUBJECT",
@@ -211,8 +227,64 @@ const MOTHER_V2_ROLE_GLYPH = Object.freeze({
 const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator?.platform || "");
 // Use a more intuitive hold key for Mother option/hints reveal on macOS.
 const MOTHER_OPTION_REVEAL_HOLD_KEY = IS_MAC ? "h" : "i";
-const MOTHER_CREATIVE_DIRECTIVE = "stunningly awe-inspiring and joyous";
-const MOTHER_CREATIVE_DIRECTIVE_SENTENCE = `Create outputs that are ${MOTHER_CREATIVE_DIRECTIVE}.`;
+const MOTHER_MOOD_PROFILE_KEY = "brood.motherMood.v1";
+const MOTHER_MOOD_PLACEHOLDER_EMOJI = "☺";
+const MOTHER_CREATIVE_DIRECTIVE_BASE = "stunningly awe-inspiring";
+const MOTHER_CREATIVE_DIRECTIVE_MOOD_PREFIX = "";
+const MOTHER_MOOD_OPTIONS = Object.freeze({
+  joyous: Object.freeze({ emoji: "😄", label: "Joyous", directive: "joyous" }),
+  nefarious: Object.freeze({ emoji: "😈", label: "Nefarious", directive: "nefarious" }),
+  somber: Object.freeze({ emoji: "😔", label: "Somber", directive: "somber" }),
+  angry: Object.freeze({ emoji: "😡", label: "Angry", directive: "angry" }),
+});
+function motherNormalizeMood(raw = "") {
+  const key = String(raw || "")
+    .trim()
+    .toLowerCase();
+  return Object.prototype.hasOwnProperty.call(MOTHER_MOOD_OPTIONS, key) ? key : "";
+}
+
+function motherMoodConfig(raw = null) {
+  const key = motherNormalizeMood(raw);
+  return key ? MOTHER_MOOD_OPTIONS[key] || null : null;
+}
+
+function loadMotherMoodPreference() {
+  try {
+    return motherNormalizeMood(localStorage.getItem(MOTHER_MOOD_PROFILE_KEY) || "") || null;
+  } catch {
+    return null;
+  }
+}
+
+function saveMotherMoodPreference(mood = null) {
+  try {
+    const key = motherNormalizeMood(mood);
+    if (!key) {
+      localStorage.removeItem(MOTHER_MOOD_PROFILE_KEY);
+      return;
+    }
+    localStorage.setItem(MOTHER_MOOD_PROFILE_KEY, key);
+  } catch {
+    // ignore localStorage failures
+  }
+}
+
+function motherCurrentCreativeDirective() {
+  const mood = motherMoodConfig(state?.motherMood)?.directive || "";
+  if (!mood) return MOTHER_CREATIVE_DIRECTIVE_BASE;
+  const prefix = String(MOTHER_CREATIVE_DIRECTIVE_MOOD_PREFIX || "").trim();
+  if (!prefix) return `${MOTHER_CREATIVE_DIRECTIVE_BASE} and ${mood}`;
+  return `${MOTHER_CREATIVE_DIRECTIVE_BASE} and ${prefix} ${mood}`;
+}
+
+function motherCurrentOptimizationTarget() {
+  return motherCurrentCreativeDirective();
+}
+
+function motherCurrentCreativeDirectiveSentence() {
+  return `Create outputs that are ${motherCurrentCreativeDirective()}.`;
+}
 const MOTHER_V2_TRANSFORMATION_MODES = Object.freeze([
   "amplify",
   "transcend",
@@ -514,6 +586,9 @@ const els = {
   motherAbilityIcon: document.getElementById("mother-ability-icon"),
   motherConfirm: document.getElementById("mother-confirm"),
   motherStop: document.getElementById("mother-stop"),
+  canvasMoodStatus: document.getElementById("canvas-mood-status"),
+  motherMoodToggle: document.getElementById("mother-mood-toggle"),
+  motherMoodMenu: document.getElementById("mother-mood-menu"),
   actionGrid: document.getElementById("action-grid"),
   imageMenu: document.getElementById("image-menu"),
   motherWheelMenu: document.getElementById("mother-wheel-menu"),
@@ -1167,6 +1242,7 @@ const state = {
   actionQueue: [],
   actionQueueActive: null, // { id, label, key, priority, enqueuedAt, source } | null
   actionQueueRunning: false,
+  motherMood: loadMotherMoodPreference(),
   actionQueueStats: {
     replacedByKey: 0,
     droppedOverflow: 0,
@@ -1186,11 +1262,18 @@ const state = {
   tool: "pan",
   pointer: {
     active: false,
-    kind: null, // POINTER_KINDS.FREEFORM_MOVE | POINTER_KINDS.FREEFORM_RESIZE | POINTER_KINDS.FREEFORM_IMPORT | POINTER_KINDS.FREEFORM_WHEEL | POINTER_KINDS.MOTHER_ROLE_DRAG | POINTER_KINDS.EFFECT_TOKEN_DRAG
+    kind: null, // POINTER_KINDS.FREEFORM_MOVE | POINTER_KINDS.FREEFORM_RESIZE | POINTER_KINDS.FREEFORM_ROTATE | POINTER_KINDS.FREEFORM_SKEW | POINTER_KINDS.FREEFORM_IMPORT | POINTER_KINDS.FREEFORM_WHEEL | POINTER_KINDS.MOTHER_ROLE_DRAG | POINTER_KINDS.EFFECT_TOKEN_DRAG
     imageId: null,
     role: null,
     corner: null, // "nw"|"ne"|"sw"|"se"
     startRectCss: null, // { x, y, w, h }
+    transformHandleEdge: null, // "left" | "right"
+    transformPivotX: 0,
+    transformPivotY: 0,
+    transformAnchorWidthPx: 0,
+    transformStartAngleRad: 0,
+    transformStartRotateDeg: 0,
+    transformStartSkewXDeg: 0,
     startX: 0,
     startY: 0,
     lastX: 0,
@@ -1214,6 +1297,7 @@ const state = {
   effectTokenDrag: null, // { tokenId, sourceImageId, targetImageId, moved, x, y }
   effectTokenApplyLocks: new Map(), // tokenId -> { dispatchId, targetImageId, queued, startedAt }
   motherOverlayUiHits: [], // [{ kind, targetId?, rect: {x,y,w,h} }]
+  activeImageTransformUiHits: [], // [{ kind, edge?, cursor?, targetId, rect: {x,y,w,h} }]
   motherResultDetailsOpenId: null, // imageId currently showing provenance popover
   wheelMenu: {
     open: false,
@@ -1282,6 +1366,11 @@ const state = {
     pendingActionVersion: 0,
     cooldownUntil: 0,
     multiUploadIdleBoostUntil: 0,
+    lastUploadCompletedAt: 0,
+    lastSpeculativePrefetchUploadAt: 0,
+    speculativePrefetchTimer: null,
+    speculativePrefetchInFlight: false,
+    speculativePrefetchReadyMode: null,
     pendingIntent: false,
     pendingIntentRequestId: null,
     pendingIntentTransportRetryCount: 0,
@@ -1292,11 +1381,17 @@ const state = {
     pendingIntentPayload: null,
     pendingIntentTimeout: null,
     pendingPromptCompile: false,
+    pendingPromptCompileSpeculative: false,
     pendingPromptCompilePath: null,
     pendingPromptCompileTimeout: null,
     pendingVisionImageIds: [],
     pendingVisionRetryTimer: null,
     pendingGeneration: false,
+    pendingDispatchSpeculative: false,
+    pendingDispatchProposalMode: null,
+    liveProposalRefreshTimer: null,
+    liveProposalUpdating: false,
+    lastLiveProposalRefreshAt: 0,
     pendingFollowupAfterCooldown: false,
     pendingFollowupReason: null,
     lastRejectedProposal: null, // { contextSig, imageSetSig, mode, summary, at_ms } | null
@@ -1614,6 +1709,7 @@ const INTENT_INFERENCE_THROTTLE_MS = 900;
 const INTENT_INFERENCE_TIMEOUT_MS = 15_000;
 const INTENT_SNAPSHOT_LOAD_TIMEOUT_MS = 900;
 const INTENT_SNAPSHOT_FAST_LOAD_TIMEOUT_MS = 260;
+const INTENT_AMBIENT_IMPORT_DELAY_MS = 1200;
 const INTENT_PERSIST_FILENAME = "intent_state.json";
 const INTENT_LOCKED_FILENAME = "intent_locked.json";
 const INTENT_TRACE_FILENAME = "intent_trace.jsonl";
@@ -2563,6 +2659,7 @@ const DESCRIBE_TIMEOUT_MS = 30000;
 const DESCRIBE_MAX_IN_FLIGHT = 3;
 const UPLOAD_DESCRIBE_PRIORITY_BURST = 3;
 const VISION_FALLBACK_REFRESH_MIN_MS = 20000;
+const motherDispatchTransformExportCache = new Map(); // signature -> exported image path
 let describeQueue = [];
 let describeQueued = new Set(); // path strings
 let describeForceRefresh = new Set(); // path strings queued to refresh existing labels
@@ -2931,7 +3028,7 @@ const ALWAYS_ON_VISION_IDLE_MS = 1200;
 const ALWAYS_ON_VISION_URGENT_IDLE_MS = 180;
 const ALWAYS_ON_VISION_URGENT_THROTTLE_MS = 700;
 const ALWAYS_ON_VISION_TIMEOUT_MS = 45000;
-const ALWAYS_ON_VISION_URGENT_DIRTY_REASONS = new Set(["aov_enable", "image_add", "image_replace"]);
+const ALWAYS_ON_VISION_URGENT_DIRTY_REASONS = new Set(["aov_enable", "image_replace"]);
 
 let alwaysOnVisionTimer = null;
 let alwaysOnVisionTimeout = null;
@@ -4896,8 +4993,9 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
   return true;
 }
 
-async function waitForIntentImagesLoaded({ timeoutMs = 900 } = {}) {
-  const items = getVisibleCanvasImages().filter((it) => it?.path).slice(0, 6);
+async function waitForIntentImagesLoaded({ timeoutMs = 900, maxImages = 6 } = {}) {
+  const loadLimit = Math.max(1, Math.round(Number(maxImages) || 6));
+  const items = getVisibleCanvasImages().filter((it) => it?.path).slice(0, loadLimit);
   for (const item of items) ensureCanvasImageLoaded(item);
   const deadline = Date.now() + Math.max(60, Number(timeoutMs) || 900);
   while (Date.now() < deadline) {
@@ -4981,21 +5079,51 @@ function buildMotherRealtimeContextEnvelope({ motherContextPayload = null, image
     : [];
   const ambientModes = Array.isArray(ambient?.transformation_mode_candidates)
     ? ambient.transformation_mode_candidates
+        .map((entry, idx) => motherV2NormalizeModeCandidate(entry, { idx }))
+        .filter(Boolean)
+        .sort(motherV2CompareModeCandidates)
         .map((entry) => {
-          if (!entry || typeof entry !== "object") return null;
-          const mode = motherV2MaybeTransformationMode(entry.mode || entry.transformation_mode);
-          if (!mode) return null;
+          const preset = motherV2ShotTypeHintForMode(entry.mode);
           return {
-            mode,
-            confidence:
-              typeof entry.confidence === "number" && Number.isFinite(entry.confidence)
-                ? clamp(Number(entry.confidence) || 0, 0, 1)
-                : null,
+            mode: entry.mode,
+            awe_joy_score: typeof entry.awe_joy_score === "number" ? entry.awe_joy_score : null,
+            confidence: typeof entry.confidence === "number" ? entry.confidence : null,
+            shot_type: String(preset?.primary || "").trim() || null,
+            lighting_profile: String(preset?.lighting_profile || "").trim() || null,
+            lens_guidance: String(preset?.lens_guidance || "").trim() || null,
           };
         })
-        .filter(Boolean)
-        .slice(0, 3)
+        .slice(0, MOTHER_V2_TRANSFORMATION_MODES.length)
     : [];
+  const proposalContext = payload?.proposal_context && typeof payload.proposal_context === "object"
+    ? payload.proposal_context
+    : null;
+  const preferredModeForHints =
+    motherV2MaybeTransformationMode(payload?.preferred_transformation_mode) ||
+    motherV2MaybeTransformationMode(ambient?.preferred_transformation_mode) ||
+    ambientModes[0]?.mode ||
+    MOTHER_V2_DEFAULT_TRANSFORMATION_MODE;
+  const fallbackShotTypeHints = motherV2ShotTypeHints({
+    preferredMode: preferredModeForHints,
+    candidateModes: ambientModes,
+  });
+  const rawShotTypeHints = proposalContext?.shot_type_hints && typeof proposalContext.shot_type_hints === "object"
+    ? proposalContext.shot_type_hints
+    : fallbackShotTypeHints;
+  const shotTypeHints = {
+    primary_shot_type:
+      clampText(String(rawShotTypeHints?.primary_shot_type || fallbackShotTypeHints.primary_shot_type || "").trim(), 96) || null,
+    alternate_shot_type:
+      clampText(String(rawShotTypeHints?.alternate_shot_type || fallbackShotTypeHints.alternate_shot_type || "").trim(), 96) || null,
+    primary_lighting_profile:
+      clampText(String(rawShotTypeHints?.primary_lighting_profile || fallbackShotTypeHints.primary_lighting_profile || "").trim(), 140) || null,
+    alternate_lighting_profile:
+      clampText(String(rawShotTypeHints?.alternate_lighting_profile || fallbackShotTypeHints.alternate_lighting_profile || "").trim(), 140) || null,
+    primary_lens_guidance:
+      clampText(String(rawShotTypeHints?.primary_lens_guidance || fallbackShotTypeHints.primary_lens_guidance || "").trim(), 140) || null,
+    alternate_lens_guidance:
+      clampText(String(rawShotTypeHints?.alternate_lens_guidance || fallbackShotTypeHints.alternate_lens_guidance || "").trim(), 140) || null,
+  };
   const compactImages = (Array.isArray(payload?.images) ? payload.images : [])
     .map((image) => {
       if (!image || typeof image !== "object") return null;
@@ -5026,12 +5154,25 @@ function buildMotherRealtimeContextEnvelope({ motherContextPayload = null, image
     .slice(0, 10);
   return {
     schema: "brood.mother.realtime_context.v1",
-    optimization_target: "stunningly awe-inspiring and joyous + novel",
-    optimization_hint: "Optimize proposals for stunningly awe-inspiring and joyous + novel while preserving identity and coherence.",
+    optimization_target: motherCurrentOptimizationTarget(),
+    optimization_hint: `Optimize proposals for ${motherCurrentOptimizationTarget()} with bold, surprising recombinations.`,
     action_version: Number(payload?.action_version) || Number(idle?.actionVersion) || 0,
-    creative_directive: String(payload?.creative_directive || MOTHER_CREATIVE_DIRECTIVE || "").trim(),
+    creative_directive: String(payload?.creative_directive || motherCurrentCreativeDirective() || "").trim(),
     preferred_transformation_mode: motherV2MaybeTransformationMode(payload?.preferred_transformation_mode) || null,
     intensity: clamp(Number(payload?.intensity) || Number(idle?.intensity) || 62, 0, 100),
+    preferred_shot_type:
+      clampText(String(proposalContext?.preferred_shot_type || shotTypeHints.primary_shot_type || "").trim(), 96) || null,
+    alternate_shot_type:
+      clampText(String(proposalContext?.alternate_shot_type || shotTypeHints.alternate_shot_type || "").trim(), 96) || null,
+    preferred_lighting_profile:
+      clampText(String(proposalContext?.preferred_lighting_profile || shotTypeHints.primary_lighting_profile || "").trim(), 140) || null,
+    alternate_lighting_profile:
+      clampText(String(proposalContext?.alternate_lighting_profile || shotTypeHints.alternate_lighting_profile || "").trim(), 140) || null,
+    preferred_lens_guidance:
+      clampText(String(proposalContext?.preferred_lens_guidance || shotTypeHints.primary_lens_guidance || "").trim(), 140) || null,
+    alternate_lens_guidance:
+      clampText(String(proposalContext?.alternate_lens_guidance || shotTypeHints.alternate_lens_guidance || "").trim(), 140) || null,
+    shot_type_hints: shotTypeHints,
     active_id: activeId,
     selected_ids: selectedIds,
     canvas_context_summary: payload?.canvas_context_summary ? clampText(String(payload.canvas_context_summary || ""), 240) : null,
@@ -5154,6 +5295,90 @@ async function writeIntentContextEnvelope(snapshotPath, frameId, { motherContext
   const envelope = buildIntentContextEnvelope(frameId, { motherContextPayload });
   await writeTextFile(ctxPath, JSON.stringify(envelope));
   return ctxPath;
+}
+
+function motherV2RequiredIntentReferenceCount(payload = null) {
+  const images = Array.isArray(payload?.images) ? payload.images : [];
+  const uniquePaths = Array.from(
+    new Set(
+      images
+        .map((image) => String(image?.path || "").trim())
+        .filter(Boolean)
+    )
+  );
+  if (!uniquePaths.length) return 0;
+  if (uniquePaths.length === 1) return 1;
+  return Math.min(MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL, uniquePaths.length);
+}
+
+async function motherV2CountValidIntentContextReferences(snapshotPath = "") {
+  const ctxPath = _canvasContextSidecarPath(snapshotPath);
+  if (!ctxPath) return { count: 0, ctxPath: null };
+  const raw = await readTextFile(ctxPath).catch(() => "");
+  if (!raw) return { count: 0, ctxPath };
+  let parsed = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { count: 0, ctxPath };
+  }
+  const rows = Array.isArray(parsed?.images) ? parsed.images : [];
+  const snapshotPathNorm = String(snapshotPath || "").trim();
+  const seen = new Set();
+  let count = 0;
+  for (const row of rows) {
+    const pathText = String(row?.path || "").trim();
+    if (!pathText || pathText === snapshotPathNorm || seen.has(pathText)) continue;
+    seen.add(pathText);
+    const ok = await exists(pathText).catch(() => false);
+    if (!ok) continue;
+    count += 1;
+  }
+  return { count, ctxPath };
+}
+
+async function motherV2WriteIntentContextEnvelopeWithRefRetry(
+  snapshotPath,
+  frameId,
+  payload,
+  { requestId = null, actionVersion = 0 } = {}
+) {
+  const requiredRefs = motherV2RequiredIntentReferenceCount(payload);
+  let ctxPath = null;
+  let availableRefs = 0;
+  for (let attempt = 0; attempt <= MOTHER_V2_INTENT_CONTEXT_REF_RETRY_MAX; attempt += 1) {
+    ctxPath = await writeIntentContextEnvelope(snapshotPath, frameId, { motherContextPayload: payload }).catch(() => null);
+    const inspected = await motherV2CountValidIntentContextReferences(snapshotPath).catch(() => ({ count: 0, ctxPath: null }));
+    availableRefs = Math.max(0, Number(inspected?.count) || 0);
+    if (ctxPath && availableRefs >= requiredRefs) {
+      return {
+        ok: true,
+        ctxPath,
+        requiredRefs,
+        availableRefs,
+        attempts: attempt + 1,
+      };
+    }
+    if (attempt < MOTHER_V2_INTENT_CONTEXT_REF_RETRY_MAX) {
+      await new Promise((resolve) => setTimeout(resolve, MOTHER_V2_INTENT_CONTEXT_REF_RETRY_DELAY_MS));
+    }
+  }
+  appendMotherTraceLog({
+    kind: "intent_context_refs_unavailable",
+    actionVersion: Number(actionVersion) || 0,
+    request_id: requestId ? String(requestId) : null,
+    snapshot_path: snapshotPath ? String(snapshotPath) : null,
+    required_refs: requiredRefs,
+    available_refs: availableRefs,
+    retry_max: MOTHER_V2_INTENT_CONTEXT_REF_RETRY_MAX,
+  }).catch(() => {});
+  return {
+    ok: false,
+    ctxPath: null,
+    requiredRefs,
+    availableRefs,
+    attempts: MOTHER_V2_INTENT_CONTEXT_REF_RETRY_MAX + 1,
+  };
 }
 
 function buildFallbackIntentIconState(frameId, { reason = null } = {}) {
@@ -8742,6 +8967,52 @@ function updatePortraitIdle({ fromSettings = false } = {}) {
   renderHudReadout();
 }
 
+function motherMoodMenuIsOpen() {
+  if (!els.motherMoodMenu) return false;
+  return !els.motherMoodMenu.classList.contains("hidden");
+}
+
+function setMotherMoodMenuOpen(open) {
+  if (!els.motherMoodMenu) return;
+  const next = Boolean(open);
+  els.motherMoodMenu.classList.toggle("hidden", !next);
+  if (els.canvasMoodStatus) els.canvasMoodStatus.classList.toggle("is-open", next);
+  if (els.motherMoodToggle) {
+    els.motherMoodToggle.setAttribute("aria-expanded", next ? "true" : "false");
+  }
+}
+
+function renderMotherMoodStatus() {
+  const selectedMood = motherNormalizeMood(state.motherMood || "");
+  const config = selectedMood ? motherMoodConfig(selectedMood) : null;
+  if (els.motherMoodToggle) {
+    els.motherMoodToggle.textContent = config?.emoji || MOTHER_MOOD_PLACEHOLDER_EMOJI;
+    const title = config ? `Mood: ${config.label}` : "Mood status (unset)";
+    els.motherMoodToggle.title = title;
+    els.motherMoodToggle.setAttribute("aria-label", config ? `Mood: ${config.label}` : "Set mood");
+    els.motherMoodToggle.dataset.empty = config ? "false" : "true";
+  }
+  if (els.motherMoodMenu) {
+    const options = els.motherMoodMenu.querySelectorAll("button[data-mood]");
+    for (const option of options) {
+      const mood = motherNormalizeMood(option?.dataset?.mood || "");
+      const active = Boolean(selectedMood && mood && mood === selectedMood);
+      option.classList.toggle("is-active", active);
+      option.setAttribute("aria-checked", active ? "true" : "false");
+    }
+  }
+}
+
+function setMotherMood(moodRaw = "") {
+  const mood = motherNormalizeMood(moodRaw);
+  state.motherMood = mood || null;
+  saveMotherMoodPreference(state.motherMood);
+  if (state.motherIdle?.intent && typeof state.motherIdle.intent === "object") {
+    state.motherIdle.intent.creative_directive = motherCurrentCreativeDirective();
+  }
+  renderMotherMoodStatus();
+}
+
 function portraitWorking(_actionLabel, { providerOverride = null, forceProvider = false, clearDirector = true } = {}) {
   if (clearDirector && (state.lastDirectorText || state.lastDirectorMeta)) {
     state.lastDirectorText = null;
@@ -8951,9 +9222,12 @@ let motherGlitchTimer = null;
 let motherReadoutFadeTimer = null;
 let motherPhaseCardExitTimer = null;
 let motherPhaseCardExitInFlight = false;
+let motherRolePreviewSankeyRaf = 0;
+let motherRolePreviewSankeyBendEpochMs = 0;
 let wheelForcePanHeld = false;
 const REEL_PRESET_MARGIN_PX = 24;
 let reelPresetWindowResizeAttached = false;
+const MOTHER_V2_SANKEY_BEND_CYCLE_MS = 2200;
 
 function getReelScaleForViewport() {
   const appWidth = Math.max(1, window.innerWidth - REEL_PRESET_MARGIN_PX);
@@ -9348,11 +9622,13 @@ function motherV2RolePreviewEntries() {
   for (const item of getVisibleCanvasImages()) {
     pushOrderedId(item?.id);
   }
+  const activeId = String(getVisibleActiveId() || "").trim();
 
   const entries = [];
   for (const imageId of orderedIds) {
     const rect = state.freeformRects.get(imageId) || null;
     if (!rect) continue;
+    const rectTransform = readFreeformRectTransform(rect);
     const roleCandidate = String(roleByImageId.get(imageId) || "")
       .trim()
       .toLowerCase();
@@ -9367,12 +9643,17 @@ function motherV2RolePreviewEntries() {
       roleLabel,
       accentKey,
       accent,
+      isActive: Boolean(activeId && imageId === activeId),
       imageLabel: clampText(motherV2ImageLabelById(imageId), 28),
       rect: {
         x: Math.round(Number(rect.x) || 0),
         y: Math.round(Number(rect.y) || 0),
         w: Math.max(1, Math.round(Number(rect.w) || 1)),
         h: Math.max(1, Math.round(Number(rect.h) || 1)),
+      },
+      transform: {
+        rotateDeg: rectTransform.rotateDeg,
+        skewXDeg: rectTransform.skewXDeg,
       },
     });
   }
@@ -9395,12 +9676,17 @@ function motherV2RolePreviewSignature(
   for (const entry of Array.isArray(entries) ? entries : []) {
     if (!entry) continue;
     const rect = entry.rect || {};
+    const transform = entry.transform || {};
+    const rotateDeg = Number(transform.rotateDeg);
+    const skewXDeg = Number(transform.skewXDeg);
     parts.push(
       `${entry.imageId}:${entry.roleKey}:${entry.accentKey || ""}:${Math.round(Number(rect.x) || 0)},${Math.round(
         Number(rect.y) || 0
       )},${Math.round(
         Number(rect.w) || 0
-      )},${Math.round(Number(rect.h) || 0)}`
+      )},${Math.round(Number(rect.h) || 0)}:${Number.isFinite(rotateDeg) ? rotateDeg.toFixed(2) : "0.00"},${
+        Number.isFinite(skewXDeg) ? skewXDeg.toFixed(2) : "0.00"
+      }`
     );
   }
   return parts.join("|");
@@ -9992,6 +10278,183 @@ function motherV2RolePreviewViewportHtml(projection, { canvasCssW = 0, canvasCss
   return "";
 }
 
+function motherV2SankeyBendAmountForMode(mode = "", nowMs = performance.now()) {
+  if (motherV2NormalizeTransformationMode(mode) !== "hybridize") return 0;
+  const now = Number(nowMs);
+  if (!Number.isFinite(now)) return 0;
+  if (!(motherRolePreviewSankeyBendEpochMs > 0)) {
+    motherRolePreviewSankeyBendEpochMs = now;
+  }
+  const cycleMs = Math.max(400, Number(MOTHER_V2_SANKEY_BEND_CYCLE_MS) || 2200);
+  const t = ((now - motherRolePreviewSankeyBendEpochMs) % cycleMs + cycleMs) % cycleMs / cycleMs;
+  const wave = Math.sin(Math.PI * t);
+  return clamp(wave * wave, 0, 1);
+}
+
+function motherV2BuildSankeyPrismFromEdgePair({
+  sourceTop = null,
+  sourceBottom = null,
+  targetTop = null,
+  targetBottom = null,
+  surfaceW = 0,
+  surfaceH = 0,
+  laneOffset = 0,
+  bendAmount = 0,
+} = {}) {
+  const toPt = (p) => ({
+    x: Number(p?.x),
+    y: Number(p?.y),
+  });
+  const st = toPt(sourceTop);
+  const sb = toPt(sourceBottom);
+  const tt = toPt(targetTop);
+  const tb = toPt(targetBottom);
+  if (![st.x, st.y, sb.x, sb.y, tt.x, tt.y, tb.x, tb.y].every(Number.isFinite)) return null;
+  const scx = (st.x + sb.x) * 0.5;
+  const scy = (st.y + sb.y) * 0.5;
+  const tcx = (tt.x + tb.x) * 0.5;
+  const tcy = (tt.y + tb.y) * 0.5;
+  const laneDx = tcx - scx;
+  const laneDy = tcy - scy;
+  const laneLen = Math.hypot(laneDx, laneDy);
+  const minCurveLen = clamp(Math.min(Math.max(1, Number(surfaceW) || 1), Math.max(1, Number(surfaceH) || 1)) * 0.2, 26, 68);
+  const dirX = laneLen > 0.001 ? laneDx : 10;
+  const dirY = laneLen > 0.001 ? laneDy : 0;
+  const dirLen = Math.hypot(dirX, dirY);
+  const ux = dirX / Math.max(0.0001, dirLen);
+  const uy = dirY / Math.max(0.0001, dirLen);
+  const nx = -uy;
+  const ny = ux;
+  const effectiveLen = Math.max(laneLen, minCurveLen);
+  const bendNorm = clamp(Number(bendAmount) || 0, 0, 1);
+  const bendBase = clamp(effectiveLen * 0.14, 7, 34);
+  const laneBend = (Number(laneOffset) || 0) * 0.72;
+  const bend1 = (bendBase + laneBend) * bendNorm;
+  const bend2 = -(bendBase - laneBend) * bendNorm;
+
+  const spine0 = { x: scx, y: scy };
+  const spine1 = {
+    x: scx + ux * (effectiveLen * 0.34) + nx * bend1,
+    y: scy + uy * (effectiveLen * 0.34) + ny * bend1,
+  };
+  const spine2 = {
+    x: tcx - ux * (effectiveLen * 0.30) + nx * bend2,
+    y: tcy - uy * (effectiveLen * 0.30) + ny * bend2,
+  };
+  const spine3 = { x: tcx, y: tcy };
+
+  const normalizeVec = (x, y, fallbackX = 1, fallbackY = 0) => {
+    const len = Math.hypot(x, y);
+    if (len > 0.0001) return { x: x / len, y: y / len };
+    const fallbackLen = Math.hypot(fallbackX, fallbackY);
+    if (fallbackLen > 0.0001) return { x: fallbackX / fallbackLen, y: fallbackY / fallbackLen };
+    return { x: 1, y: 0 };
+  };
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const cubicPoint = (p0, p1, p2, p3, t) => {
+    const u = 1 - t;
+    const uu = u * u;
+    const tt2 = t * t;
+    return {
+      x: p0.x * uu * u + 3 * p1.x * uu * t + 3 * p2.x * u * tt2 + p3.x * tt2 * t,
+      y: p0.y * uu * u + 3 * p1.y * uu * t + 3 * p2.y * u * tt2 + p3.y * tt2 * t,
+    };
+  };
+  const cubicTangent = (p0, p1, p2, p3, t) => {
+    const u = 1 - t;
+    return {
+      x: 3 * u * u * (p1.x - p0.x) + 6 * u * t * (p2.x - p1.x) + 3 * t * t * (p3.x - p2.x),
+      y: 3 * u * u * (p1.y - p0.y) + 6 * u * t * (p2.y - p1.y) + 3 * t * t * (p3.y - p2.y),
+    };
+  };
+  const lit = (p) => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
+
+  const widthStartVec = { x: sb.x - st.x, y: sb.y - st.y };
+  const widthEndVec = { x: tb.x - tt.x, y: tb.y - tt.y };
+  const widthStart = Math.max(1, Math.hypot(widthStartVec.x, widthStartVec.y));
+  const widthEnd = Math.max(1, Math.hypot(widthEndVec.x, widthEndVec.y));
+  const widthStartDir = normalizeVec(widthStartVec.x, widthStartVec.y, nx, ny);
+  const widthEndDir = normalizeVec(widthEndVec.x, widthEndVec.y, widthStartDir.x, widthStartDir.y);
+
+  const sampleCount = Math.max(6, Math.round(clamp(effectiveLen / 24, 6, 18)));
+  const frontTop = [];
+  const frontBottom = [];
+  const backTop = [];
+  const backBottom = [];
+
+  for (let i = 0; i <= sampleCount; i += 1) {
+    const t = i / sampleCount;
+    const center = cubicPoint(spine0, spine1, spine2, spine3, t);
+    const tangent = cubicTangent(spine0, spine1, spine2, spine3, t);
+    const tangentDir = normalizeVec(tangent.x, tangent.y, ux, uy);
+    const localNormal = { x: -tangentDir.y, y: tangentDir.x };
+    const widthBlend = normalizeVec(
+      lerp(widthStartDir.x, widthEndDir.x, t),
+      lerp(widthStartDir.y, widthEndDir.y, t),
+      localNormal.x,
+      localNormal.y
+    );
+    const width = lerp(widthStart, widthEnd, t);
+    const halfWidth = width * 0.5;
+
+    const top = {
+      x: center.x - widthBlend.x * halfWidth,
+      y: center.y - widthBlend.y * halfWidth,
+    };
+    const bottom = {
+      x: center.x + widthBlend.x * halfWidth,
+      y: center.y + widthBlend.y * halfWidth,
+    };
+
+    const depth = clamp(width * 0.18, 1.2, 8);
+    const depthSeed = {
+      x: tangentDir.x * 0.42 + localNormal.x * 0.58,
+      y: tangentDir.y * 0.42 + localNormal.y * 0.58,
+    };
+    const depthOrtho = {
+      x: depthSeed.x - widthBlend.x * (depthSeed.x * widthBlend.x + depthSeed.y * widthBlend.y),
+      y: depthSeed.y - widthBlend.y * (depthSeed.x * widthBlend.x + depthSeed.y * widthBlend.y),
+    };
+    const depthDir = normalizeVec(depthOrtho.x, depthOrtho.y, tangentDir.x, tangentDir.y);
+
+    const topBack = {
+      x: top.x - depthDir.x * depth,
+      y: top.y - depthDir.y * depth,
+    };
+    const bottomBack = {
+      x: bottom.x - depthDir.x * depth,
+      y: bottom.y - depthDir.y * depth,
+    };
+
+    frontTop.push(top);
+    frontBottom.push(bottom);
+    backTop.push(topBack);
+    backBottom.push(bottomBack);
+  }
+
+  const buildRibbonLoop = (a, b) => {
+    if (!Array.isArray(a) || !Array.isArray(b) || !a.length || !b.length) return "";
+    const path = [`M ${lit(a[0])}`];
+    for (let i = 1; i < a.length; i += 1) path.push(`L ${lit(a[i])}`);
+    for (let i = b.length - 1; i >= 0; i -= 1) path.push(`L ${lit(b[i])}`);
+    path.push("Z");
+    return path.join(" ");
+  };
+
+  const endIdx = frontTop.length - 1;
+  const frontD = buildRibbonLoop(frontTop, frontBottom);
+  const topFaceD = buildRibbonLoop(backTop, frontTop);
+  const sideFaceD =
+    endIdx > 0
+      ? `M ${lit(frontTop[endIdx])} L ${lit(backTop[endIdx])} L ${lit(backBottom[endIdx])} L ${lit(frontBottom[endIdx])} Z`
+      : "";
+  return {
+    frontD,
+    topFaceD,
+    sideFaceD,
+  };
+}
+
 function motherV2RolePreviewHtml(
   entries,
   projection,
@@ -10194,6 +10657,143 @@ function motherV2RolePreviewHtml(
     mergeRect = { x, y, w: targetW, h: targetH };
   }
 
+  const activeRec =
+    projectedEntries.find((it) => Boolean(it?.entry?.isActive)) ||
+    subjectRec ||
+    modelRec ||
+    projectedEntries[0] ||
+    null;
+  const previewRectCorners = (rec) => {
+    if (!rec?.projected) return [];
+    const projected = rec.projected;
+    const baseTransform = readFreeformRectTransform(rec?.entry?.transform || null);
+    const points = transformedRectPolygonPoints({
+      x: Number(projected.x) || 0,
+      y: Number(projected.y) || 0,
+      w: Math.max(1, Number(projected.w) || 1),
+      h: Math.max(1, Number(projected.h) || 1),
+      rotateDeg: baseTransform.rotateDeg,
+      skewXDeg: baseTransform.skewXDeg,
+    });
+    if (Array.isArray(points) && points.length === 4) return points;
+    const x = Number(projected.x) || 0;
+    const y = Number(projected.y) || 0;
+    const w = Math.max(1, Number(projected.w) || 1);
+    const h = Math.max(1, Number(projected.h) || 1);
+    return [
+      { x, y },
+      { x: x + w, y },
+      { x: x + w, y: y + h },
+      { x, y: y + h },
+    ];
+  };
+  const activeCorners = activeRec ? previewRectCorners(activeRec) : [];
+  const flowGradients = [];
+  const flowStreams = [];
+  const sankeyBendAmount = motherV2SankeyBendAmountForMode(modeKey, performance.now());
+  if (activeRec && projectedEntries.length > 1) {
+    let flowIdx = 0;
+    const targetId = String(
+      activeRec?.entry?.imageId || activeRec?.entry?.imagePath || activeRec?.entry?.imageLabel || "__active__"
+    ).trim();
+    const midpoint = (a, b) => ({
+      x: ((Number(a?.x) || 0) + (Number(b?.x) || 0)) * 0.5,
+      y: ((Number(a?.y) || 0) + (Number(b?.y) || 0)) * 0.5,
+    });
+    for (const rec of projectedEntries) {
+      if (!rec || rec === activeRec) continue;
+      const sourceCorners = previewRectCorners(rec);
+      if (!Array.isArray(sourceCorners) || sourceCorners.length !== 4 || activeCorners.length !== 4) continue;
+      const sourceLaneOffset =
+        (flowIdx - Math.max(0, projectedEntries.length - 2) * 0.5) * 4.6;
+      const sourceId = String(
+        rec?.entry?.imageId || rec?.entry?.imagePath || rec?.entry?.imageLabel || `source-${flowIdx}`
+      ).trim();
+      const sourceTop = midpoint(sourceCorners[0], sourceCorners[1]);
+      const sourceBottom = midpoint(sourceCorners[3], sourceCorners[2]);
+      const targetTop = midpoint(activeCorners[0], activeCorners[1]);
+      const targetBottom = midpoint(activeCorners[3], activeCorners[2]);
+      if (
+        !Number.isFinite(sourceTop.x) ||
+        !Number.isFinite(sourceTop.y) ||
+        !Number.isFinite(sourceBottom.x) ||
+        !Number.isFinite(sourceBottom.y) ||
+        !Number.isFinite(targetTop.x) ||
+        !Number.isFinite(targetTop.y) ||
+        !Number.isFinite(targetBottom.x) ||
+        !Number.isFinite(targetBottom.y)
+      ) {
+        continue;
+      }
+      const prismGeom = motherV2BuildSankeyPrismFromEdgePair({
+        sourceTop,
+        sourceBottom,
+        targetTop,
+        targetBottom,
+        surfaceW: maxSurfaceW,
+        surfaceH: maxSurfaceH,
+        laneOffset: sourceLaneOffset,
+        bendAmount: sankeyBendAmount,
+      });
+      if (!prismGeom) continue;
+      const gradIdCore = `mother-flow-g-${flowIdx}-core`;
+      const gradIdTop = `mother-flow-g-${flowIdx}-top`;
+      const gradIdSide = `mother-flow-g-${flowIdx}-side`;
+      flowGradients.push(
+        `<linearGradient id="${escapeHtml(
+          gradIdCore
+        )}" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${maxSurfaceW.toFixed(
+          2
+        )}" y2="0"><stop offset="0%" stop-color="#2563eb" stop-opacity="0.96"/><stop offset="100%" stop-color="#ef4444" stop-opacity="0.96"/></linearGradient>`
+      );
+      flowGradients.push(
+        `<linearGradient id="${escapeHtml(
+          gradIdTop
+        )}" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${maxSurfaceW.toFixed(
+          2
+        )}" y2="0"><stop offset="0%" stop-color="#2563eb" stop-opacity="0.9"/><stop offset="100%" stop-color="#ef4444" stop-opacity="0.9"/></linearGradient>`
+      );
+      flowGradients.push(
+        `<linearGradient id="${escapeHtml(
+          gradIdSide
+        )}" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${maxSurfaceW.toFixed(
+          2
+        )}" y2="0"><stop offset="0%" stop-color="#2563eb" stop-opacity="0.82"/><stop offset="100%" stop-color="#ef4444" stop-opacity="0.82"/></linearGradient>`
+      );
+      const streamKey = `s-${flowIdx}`;
+      const streamHtml = `<g class="mother-role-preview-sankey-stream" data-stream-key="${escapeHtml(
+        streamKey
+      )}" data-source-id="${escapeHtml(sourceId)}" data-target-id="${escapeHtml(
+        targetId
+      )}" data-lane-offset="${sourceLaneOffset.toFixed(
+        3
+      )}"><path class="mother-role-preview-sankey-ribbon is-core" data-stream-role="core" d="${escapeHtml(
+        prismGeom.frontD
+      )}" fill="url(#${escapeHtml(
+        gradIdCore
+      )})"></path><path class="mother-role-preview-sankey-ribbon is-top" data-stream-role="top" d="${escapeHtml(
+        prismGeom.topFaceD
+      )}" fill="url(#${escapeHtml(
+        gradIdTop
+      )})"></path><path class="mother-role-preview-sankey-ribbon is-side" data-stream-role="side" d="${escapeHtml(
+        prismGeom.sideFaceD
+      )}" fill="url(#${escapeHtml(
+        gradIdSide
+      )})"></path></g>`;
+      flowStreams.push(streamHtml);
+      flowIdx += 1;
+    }
+  }
+  const flowHtml =
+    activeRec && flowStreams.length
+      ? `<div class="mother-role-preview-flow" aria-hidden="true"><svg class="mother-role-preview-sankey" viewBox="0 0 ${Math.max(
+          1,
+          Math.round(maxSurfaceW)
+        )} ${Math.max(1, Math.round(maxSurfaceH))}" preserveAspectRatio="none"><defs>${flowGradients.join(
+          ""
+        )}</defs>${flowStreams.join("")}</svg></div>`
+      : "";
+
   const rects = [];
   for (let i = 0; i < projectedEntries.length; i += 1) {
     const rec = projectedEntries[i];
@@ -10236,21 +10836,192 @@ function motherV2RolePreviewHtml(
       entry.accentKey || motherV2PaletteKeyByImageId(entry.imageId) || entry.imageId || entry.imagePath || entry.imageLabel || ""
     );
     const accent = String(entry.accent || googleBrandRectColorForKey(accentKey, 0.94));
+    const entryTransform = readFreeformRectTransform(entry.transform || null);
+    const outerStyle = `left:${projected.x}px;top:${projected.y}px;width:${projected.w}px;height:${projected.h}px;z-index:${
+      20 + i
+    };--mother-role-accent:${escapeHtml(accent)};--mother-role-base-rot:${escapeHtml(
+      `${entryTransform.rotateDeg}deg`
+    )};--mother-role-base-skew:${escapeHtml(`${entryTransform.skewXDeg}deg`)}`;
+    const coreStyle = `--mother-role-stagger:${(i % 8) * 90}ms;--mother-role-mode-ms:${escapeHtml(
+      `${Math.max(420, Number(profile.speedMs) || 3000)}ms`
+    )};--mother-role-pre-mx:${escapeHtml(`${profile.preMx}px`)};--mother-role-pre-my:${escapeHtml(
+      `${profile.preMy}px`
+    )};--mother-role-pre-scale:${escapeHtml(String(profile.preScale))};--mother-role-pre-resize-x:${escapeHtml(
+      String(profile.preResizeX)
+    )};--mother-role-pre-resize-y:${escapeHtml(String(profile.preResizeY))};--mother-role-pre-rot:${escapeHtml(
+      `${profile.preRot}deg`
+    )};--mother-role-pre-sat:${escapeHtml(String(profile.preSat))};--mother-role-pre-bright:${escapeHtml(
+      String(profile.preBright)
+    )};--mother-role-pre-alpha:${escapeHtml(String(profile.preAlpha))};--mother-role-mx:${escapeHtml(
+      `${profile.mx}px`
+    )};--mother-role-my:${escapeHtml(`${profile.my}px`)};--mother-role-scale:${escapeHtml(
+      String(profile.scale)
+    )};--mother-role-resize-x:${escapeHtml(String(profile.resizeX))};--mother-role-resize-y:${escapeHtml(
+      String(profile.resizeY)
+    )};--mother-role-rot:${escapeHtml(`${profile.rot}deg`)};--mother-role-sat:${escapeHtml(
+      String(profile.sat)
+    )};--mother-role-bright:${escapeHtml(String(profile.bright))};--mother-role-alpha:${escapeHtml(
+      String(profile.alpha)
+    )};--mother-role-jitter-ax:${escapeHtml(`${profile.jitterAx}px`)};--mother-role-jitter-ay:${escapeHtml(
+      `${profile.jitterAy}px`
+    )}`;
     rects.push(`
       <div
         class="mother-role-preview-rect${roleClass}"
+        data-image-id="${escapeHtml(String(entry.imageId || entry.imagePath || entry.imageLabel || ""))}"
         data-anim="${escapeHtml(animKind)}"
-        style="left:${projected.x}px;top:${projected.y}px;width:${projected.w}px;height:${projected.h}px;z-index:${20 + i};--mother-role-accent:${escapeHtml(accent)};--mother-role-stagger:${(i % 8) * 90}ms;--mother-role-mode-ms:${escapeHtml(`${Math.max(420, Number(profile.speedMs) || 3000)}ms`)};--mother-role-pre-mx:${escapeHtml(`${profile.preMx}px`)};--mother-role-pre-my:${escapeHtml(`${profile.preMy}px`)};--mother-role-pre-scale:${escapeHtml(String(profile.preScale))};--mother-role-pre-resize-x:${escapeHtml(String(profile.preResizeX))};--mother-role-pre-resize-y:${escapeHtml(String(profile.preResizeY))};--mother-role-pre-rot:${escapeHtml(`${profile.preRot}deg`)};--mother-role-pre-sat:${escapeHtml(String(profile.preSat))};--mother-role-pre-bright:${escapeHtml(String(profile.preBright))};--mother-role-pre-alpha:${escapeHtml(String(profile.preAlpha))};--mother-role-mx:${escapeHtml(`${profile.mx}px`)};--mother-role-my:${escapeHtml(`${profile.my}px`)};--mother-role-scale:${escapeHtml(String(profile.scale))};--mother-role-resize-x:${escapeHtml(String(profile.resizeX))};--mother-role-resize-y:${escapeHtml(String(profile.resizeY))};--mother-role-rot:${escapeHtml(`${profile.rot}deg`)};--mother-role-sat:${escapeHtml(String(profile.sat))};--mother-role-bright:${escapeHtml(String(profile.bright))};--mother-role-alpha:${escapeHtml(String(profile.alpha))};--mother-role-jitter-ax:${escapeHtml(`${profile.jitterAx}px`)};--mother-role-jitter-ay:${escapeHtml(`${profile.jitterAy}px`)}"
+        style="${outerStyle}"
         title="${escapeHtml(title)}"
         aria-label="${escapeHtml(title)}"
-      ></div>
+      >
+        <div class="mother-role-preview-rect-core" aria-hidden="true" style="${coreStyle}">
+          <span class="mother-role-preview-corner" data-corner="0" aria-hidden="true"></span>
+          <span class="mother-role-preview-corner" data-corner="1" aria-hidden="true"></span>
+          <span class="mother-role-preview-corner" data-corner="2" aria-hidden="true"></span>
+          <span class="mother-role-preview-corner" data-corner="3" aria-hidden="true"></span>
+        </div>
+      </div>
     `);
   }
   const mergeCore = mergeRect
     ? `<div class="mother-role-preview-merge-core" style="left:${Math.round(mergeRect.x)}px;top:${Math.round(mergeRect.y)}px;width:${Math.max(1, Math.round(mergeRect.w))}px;height:${Math.max(1, Math.round(mergeRect.h))}px;--mother-role-accent:${escapeHtml(modeAccent)};"></div>`
     : "";
   const viewport = motherV2RolePreviewViewportHtml(projection, { canvasCssW, canvasCssH });
-  return `<div class="mother-role-preview-surface">${rects.join("")}${mergeCore}${viewport}</div>`;
+  return `<div class="mother-role-preview-surface">${flowHtml}${rects.join("")}${mergeCore}${viewport}</div>`;
+}
+
+function motherV2RolePreviewCornerPoint(marker, surfaceRect) {
+  if (!marker || !surfaceRect) return null;
+  const rect = marker.getBoundingClientRect();
+  return {
+    x: rect.left + rect.width * 0.5 - surfaceRect.left,
+    y: rect.top + rect.height * 0.5 - surfaceRect.top,
+  };
+}
+
+function motherV2RolePreviewBuildCornerMap(root) {
+  if (!root) return null;
+  const surface = root.querySelector(".mother-role-preview-surface");
+  if (!surface) return null;
+  const surfaceRect = surface.getBoundingClientRect();
+  const surfaceW = Math.max(1, surfaceRect.width);
+  const surfaceH = Math.max(1, surfaceRect.height);
+  const rectEls = root.querySelectorAll(".mother-role-preview-rect[data-image-id]");
+  const byId = new Map();
+  for (const rectEl of rectEls) {
+    const imageId = String(rectEl?.dataset?.imageId || "").trim();
+    if (!imageId) continue;
+    const points = [];
+    for (let i = 0; i < 4; i += 1) {
+      const marker = rectEl.querySelector(`.mother-role-preview-corner[data-corner="${i}"]`);
+      const pt = motherV2RolePreviewCornerPoint(marker, surfaceRect);
+      if (!pt) break;
+      points.push(pt);
+    }
+    if (points.length !== 4) {
+      const rr = rectEl.getBoundingClientRect();
+      const x = rr.left - surfaceRect.left;
+      const y = rr.top - surfaceRect.top;
+      const w = Math.max(1, rr.width);
+      const h = Math.max(1, rr.height);
+      points.length = 0;
+      points.push(
+        { x, y },
+        { x: x + w, y },
+        { x: x + w, y: y + h },
+        { x, y: y + h }
+      );
+    }
+    const center = points.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
+    byId.set(imageId, {
+      corners: points,
+      cx: center.x / 4,
+      cy: center.y / 4,
+    });
+  }
+  return {
+    byId,
+    surfaceW,
+    surfaceH,
+  };
+}
+
+function motherV2SyncRolePreviewSankeyStreams(root) {
+  if (!root) return;
+  const streams = root.querySelectorAll(".mother-role-preview-sankey-stream");
+  if (!streams.length) return;
+  const cornerMap = motherV2RolePreviewBuildCornerMap(root);
+  if (!cornerMap) return;
+  const { byId, surfaceW, surfaceH } = cornerMap;
+  const modeKey = String(root.getAttribute("data-mode") || "").trim().toLowerCase();
+  const bendAmount = motherV2SankeyBendAmountForMode(modeKey, performance.now());
+  const midpoint = (a, b) => ({
+    x: ((Number(a?.x) || 0) + (Number(b?.x) || 0)) * 0.5,
+    y: ((Number(a?.y) || 0) + (Number(b?.y) || 0)) * 0.5,
+  });
+  for (const stream of streams) {
+    const sourceId = String(stream?.dataset?.sourceId || "").trim();
+    const targetId = String(stream?.dataset?.targetId || "").trim();
+    const source = sourceId ? byId.get(sourceId) : null;
+    const target = targetId ? byId.get(targetId) : null;
+    if (!source || !target) continue;
+    if (!Array.isArray(source?.corners) || source.corners.length !== 4) continue;
+    if (!Array.isArray(target?.corners) || target.corners.length !== 4) continue;
+    const sourceTop = midpoint(source.corners[0], source.corners[1]);
+    const sourceBottom = midpoint(source.corners[3], source.corners[2]);
+    const targetTop = midpoint(target.corners[0], target.corners[1]);
+    const targetBottom = midpoint(target.corners[3], target.corners[2]);
+    const laneOffset = Number(stream?.dataset?.laneOffset) || 0;
+    const prismGeom = motherV2BuildSankeyPrismFromEdgePair({
+      sourceTop,
+      sourceBottom,
+      targetTop,
+      targetBottom,
+      surfaceW,
+      surfaceH,
+      laneOffset,
+      bendAmount,
+    });
+    if (!prismGeom) continue;
+    const setPathD = (role, d) => {
+      const path = stream.querySelector(`path[data-stream-role="${role}"]`);
+      if (!path || typeof d !== "string" || !d) return;
+      path.setAttribute("d", d);
+    };
+    setPathD("core", prismGeom.frontD);
+    setPathD("top", prismGeom.topFaceD);
+    setPathD("side", prismGeom.sideFaceD);
+  }
+}
+
+function motherV2StopRolePreviewSankeyTicker() {
+  if (motherRolePreviewSankeyRaf) cancelAnimationFrame(motherRolePreviewSankeyRaf);
+  motherRolePreviewSankeyRaf = 0;
+  motherRolePreviewSankeyBendEpochMs = 0;
+}
+
+function motherV2RolePreviewSankeyTick() {
+  motherRolePreviewSankeyRaf = 0;
+  const root = els.motherRolePreview;
+  if (!root || root.classList.contains("hidden")) return;
+  motherV2SyncRolePreviewSankeyStreams(root);
+  if (root.getAttribute("data-motion") === "paused") return;
+  motherRolePreviewSankeyRaf = requestAnimationFrame(motherV2RolePreviewSankeyTick);
+}
+
+function motherV2StartRolePreviewSankeyTicker() {
+  const root = els.motherRolePreview;
+  if (!root || root.classList.contains("hidden")) return;
+  if (!(motherRolePreviewSankeyBendEpochMs > 0)) {
+    motherRolePreviewSankeyBendEpochMs = performance.now();
+  }
+  motherV2SyncRolePreviewSankeyStreams(root);
+  if (root.getAttribute("data-motion") === "paused") {
+    motherV2StopRolePreviewSankeyTicker();
+    return;
+  }
+  if (motherRolePreviewSankeyRaf) return;
+  motherRolePreviewSankeyRaf = requestAnimationFrame(motherV2RolePreviewSankeyTick);
 }
 
 function renderMotherRolePreview() {
@@ -10258,6 +11029,7 @@ function renderMotherRolePreview() {
   if (!root) return;
   const phase = state.motherIdle?.phase || motherIdleInitialState();
   if (phase === MOTHER_IDLE_STATES.DRAFTING || phase === MOTHER_IDLE_STATES.COOLDOWN) {
+    motherV2StopRolePreviewSankeyTicker();
     root.innerHTML = "";
     root.dataset.previewSig = "";
     root.classList.add("hidden");
@@ -10265,6 +11037,7 @@ function renderMotherRolePreview() {
   }
   const hasProposalImageSet = motherV2HasProposalImageSet();
   if (!hasProposalImageSet) {
+    motherV2StopRolePreviewSankeyTicker();
     root.innerHTML = "";
     root.dataset.previewSig = "";
     root.classList.add("hidden");
@@ -10317,6 +11090,7 @@ function renderMotherRolePreview() {
   if (!sig) return;
   if (root.dataset.previewSig === sig) {
     motherV2SyncRolePreviewViewport(root, projection, { canvasCssW, canvasCssH });
+    motherV2StartRolePreviewSankeyTicker();
     return;
   }
 
@@ -10329,6 +11103,7 @@ function renderMotherRolePreview() {
     promptMotion,
   });
   if (!html) {
+    motherV2StopRolePreviewSankeyTicker();
     root.innerHTML = "";
     root.dataset.previewSig = "";
     return;
@@ -10336,6 +11111,7 @@ function renderMotherRolePreview() {
   root.innerHTML = html;
   root.dataset.previewSig = sig;
   motherV2SyncRolePreviewViewport(root, projection, { canvasCssW, canvasCssH });
+  motherV2StartRolePreviewSankeyTicker();
 }
 
 function buildMotherText() {
@@ -10409,12 +11185,20 @@ function motherV2StatusText() {
   const idle = state.motherIdle || null;
   const phase = idle?.phase || motherIdleInitialState();
   const canPropose = motherIdleHasArmedCanvas();
+  if (
+    (phase === MOTHER_IDLE_STATES.OBSERVING || phase === MOTHER_IDLE_STATES.WATCHING) &&
+    idle?.liveProposalUpdating &&
+    motherV2CanUseLiveProposalRefresh(idle)
+  ) {
+    return "Updating proposal";
+  }
   if (!canPropose && (phase === MOTHER_IDLE_STATES.WATCHING || phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING)) {
     return "Observing";
   }
   if (phase === MOTHER_IDLE_STATES.OBSERVING) return "Observing";
   if (phase === MOTHER_IDLE_STATES.WATCHING) return "Watching";
   if (phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
+    if (idle?.liveProposalUpdating) return "Updating proposal";
     if (Array.isArray(idle?.pendingVisionImageIds) && idle.pendingVisionImageIds.length) return "Proposing";
     if (idle?.pendingIntent) return "Proposing";
     if (idle?.intent && typeof idle.intent === "object") return "Proposed";
@@ -10555,7 +11339,7 @@ function motherV2PhaseCardKind(phase = null) {
   if (statePhase === MOTHER_IDLE_STATES.COOLDOWN) return "cooldown";
   if (statePhase === MOTHER_IDLE_STATES.OFFERING) return "ready";
   if (statePhase !== MOTHER_IDLE_STATES.DRAFTING) return "";
-  return state.motherIdle?.pendingPromptCompile ? "braiding" : "drafting";
+  return "drafting";
 }
 
 function renderMotherReadout() {
@@ -11138,6 +11922,10 @@ async function motherV2CommitSelectedDraft() {
     deployed: Number(idle.telemetry?.deployed) || 0,
     intent_id: intent.intent_id || null,
     placement_policy: policy,
+    optimization_target: motherCurrentOptimizationTarget(),
+    proposal_mode: motherV2NormalizeTransformationMode(intent?.transformation_mode),
+    proposal_candidates: motherV2ProposalCandidateSummary(intent, { limit: 5 }),
+    proposal_confidence: Number(intent?.confidence) || 0,
   }).catch(() => {});
   // Prevent immediate auto-reproposal loops right after deploy.
   idle.blockedUntilUserInteraction = true;
@@ -11243,6 +12031,10 @@ function motherV2RejectOrDismiss({ queueFollowup = false } = {}) {
     rejected: Number(idle.telemetry?.rejected) || 0,
     phase,
     queue_followup: shouldQueueFollowup,
+    optimization_target: motherCurrentOptimizationTarget(),
+    proposal_mode: motherV2NormalizeTransformationMode(currentIntent?.transformation_mode),
+    proposal_candidates: motherV2ProposalCandidateSummary(currentIntent, { limit: 5 }),
+    proposal_confidence: Number(currentIntent?.confidence) || 0,
   }).catch(() => {});
 
   if (phase === MOTHER_IDLE_STATES.DRAFTING) {
@@ -11274,6 +12066,18 @@ async function startMotherTakeover() {
       showToast("Finish dragging before confirming.", "tip", 1600);
       return;
     }
+    const hasPrefetchedDraft = motherV2CurrentProposalHasPrefetchedDraft();
+    const awaitingMatchingSpeculative = motherV2InFlightSpeculativeMatchesCurrentProposal();
+    const staleSpeculativeDispatchInFlight = Boolean(
+      idle.pendingDispatchSpeculative &&
+      motherV2DispatchInFlight(idle) &&
+      !awaitingMatchingSpeculative
+    );
+    const awaitingSpeculativeCompile = Boolean(
+      idle.pendingPromptCompile &&
+      idle.pendingPromptCompileSpeculative &&
+      (Number(idle.pendingActionVersion) || 0) === (Number(idle.actionVersion) || 0)
+    );
     idle.telemetry.accepted = (Number(idle.telemetry?.accepted) || 0) + 1;
     appendMotherTraceLog({
       kind: "accepted",
@@ -11281,8 +12085,30 @@ async function startMotherTakeover() {
       actionVersion: Number(idle.actionVersion) || 0,
       accepted: Number(idle.telemetry?.accepted) || 0,
       intent_id: idle.intent?.intent_id || null,
+      optimization_target: motherCurrentOptimizationTarget(),
+      proposal_mode: motherV2NormalizeTransformationMode(idle.intent?.transformation_mode),
+      proposal_candidates: motherV2ProposalCandidateSummary(idle.intent, { limit: 5 }),
+      proposal_confidence: Number(idle.intent?.confidence) || 0,
     }).catch(() => {});
+    if (hasPrefetchedDraft) {
+      motherIdleTransitionTo(MOTHER_IDLE_EVENTS.CONFIRM);
+      motherIdleTransitionTo(MOTHER_IDLE_EVENTS.DRAFT_READY);
+      setStatus("Mother: proposal ready.");
+      renderMotherReadout();
+      requestRender();
+      return;
+    }
+    if (staleSpeculativeDispatchInFlight) {
+      motherV2CancelInFlight({ reason: "confirm_stale_speculative_dispatch" });
+    }
     motherIdleTransitionTo(MOTHER_IDLE_EVENTS.CONFIRM);
+    if (awaitingMatchingSpeculative || awaitingSpeculativeCompile) {
+      idle.pendingDispatchSpeculative = false;
+      idle.pendingPromptCompileSpeculative = false;
+      setStatus("Mother: drafting…");
+      renderMotherReadout();
+      return;
+    }
     motherIdleDispatchGeneration().catch(() => {});
     renderMotherReadout();
     return;
@@ -11401,6 +12227,51 @@ function motherV2MaybeTransformationMode(rawMode) {
   const mode = String(rawMode || "").trim().toLowerCase();
   if (MOTHER_V2_TRANSFORMATION_MODES.includes(mode)) return mode;
   return null;
+}
+
+function motherV2NormalizeAweJoyScore(rawScore, rawConfidence = null) {
+  if (typeof rawScore === "number" && Number.isFinite(rawScore)) {
+    return clamp(Number(rawScore) || 0, 0, 100);
+  }
+  if (typeof rawConfidence === "number" && Number.isFinite(rawConfidence)) {
+    return clamp((Number(rawConfidence) || 0) * 100, 0, 100);
+  }
+  return null;
+}
+
+function motherV2NormalizeModeCandidate(rawEntry = null, { fallbackMode = null, idx = 0 } = {}) {
+  const entry = rawEntry && typeof rawEntry === "object" ? rawEntry : {};
+  const mode = motherV2MaybeTransformationMode(
+    entry.mode ||
+      entry.transformation_mode ||
+      (typeof rawEntry === "string" ? rawEntry : null) ||
+      fallbackMode
+  );
+  if (!mode) return null;
+  const confidence =
+    typeof entry.confidence === "number" && Number.isFinite(entry.confidence)
+      ? clamp(Number(entry.confidence) || 0, 0, 1)
+      : null;
+  const aweJoyScore = motherV2NormalizeAweJoyScore(entry.awe_joy_score, confidence);
+  return {
+    mode,
+    awe_joy_score: aweJoyScore,
+    confidence,
+    _idx: Number.isFinite(Number(idx)) ? Number(idx) : Number.MAX_SAFE_INTEGER,
+  };
+}
+
+function motherV2CompareModeCandidates(a, b) {
+  const as = typeof a?.awe_joy_score === "number" ? a.awe_joy_score : -1;
+  const bs = typeof b?.awe_joy_score === "number" ? b.awe_joy_score : -1;
+  if (bs !== as) return bs - as;
+  const ac = typeof a?.confidence === "number" ? a.confidence : -1;
+  const bc = typeof b?.confidence === "number" ? b.confidence : -1;
+  if (bc !== ac) return bc - ac;
+  const ai = Number.isFinite(Number(a?._idx)) ? Number(a._idx) : Number.MAX_SAFE_INTEGER;
+  const bi = Number.isFinite(Number(b?._idx)) ? Number(b._idx) : Number.MAX_SAFE_INTEGER;
+  if (ai !== bi) return ai - bi;
+  return String(a?.mode || "").localeCompare(String(b?.mode || ""));
 }
 
 function motherV2CurrentTransformationMode() {
@@ -11545,7 +12416,7 @@ function motherV2ProposalSentence(intent) {
       pushMany(roles.mediator);
       pushMany(roles.object);
     }
-    if (uniqueIds.size >= 3) return "Fuse all references into one coherent visual world.";
+    if (uniqueIds.size >= 3) return "Fuse all references into one striking visual world.";
   }
   return MOTHER_V2_PROPOSAL_BY_MODE[mode] || MOTHER_V2_PROPOSAL_BY_MODE[MOTHER_V2_DEFAULT_TRANSFORMATION_MODE];
 }
@@ -11558,7 +12429,7 @@ function motherV2ShotTypeHintForMode(rawMode = "") {
     mode,
     primary: "balanced medium shot",
     alternate: "wide establishing shot",
-    rationale: "preserve coherence while keeping visual variety",
+    rationale: "maintain clarity while keeping visual variety",
     lighting_profile: "balanced cinematic key/fill with coherent directionality",
     alternate_lighting_profile: "soft directional fill with shared ambient bounce",
     lens_guidance: "35-50mm balanced medium perspective",
@@ -11624,7 +12495,7 @@ function motherV2ShotTypeHints({ preferredMode = "", candidateModes = [] } = {})
   }
   const primaryShotType = String(primaryPreset?.primary || "balanced medium shot").trim();
   const shotInstruction = alternateShotType
-    ? `Prefer ${primaryShotType}. If composition coherence or emphasis weakens, try ${alternateShotType}.`
+    ? `Prefer ${primaryShotType}. If composition clarity or emphasis weakens, try ${alternateShotType}.`
     : `Prefer ${primaryShotType}.`;
   const lightingInstruction = alternateLightingProfile
     ? `Light with ${primaryLightingProfile}. If mood or subject separation is weak, try ${alternateLightingProfile}.`
@@ -11654,27 +12525,81 @@ function motherV2EnsureProposalCandidates(intentPayload = null) {
   const intent = intentPayload && typeof intentPayload === "object" ? intentPayload : null;
   if (!intent) return intent;
   const modes = [];
-  const pushMode = (rawMode) => {
-    const mode = motherV2MaybeTransformationMode(rawMode);
-    if (!mode) return;
-    if (!modes.includes(mode)) modes.push(mode);
+  const confidenceByMode = new Map();
+  const aweJoyScoreByMode = new Map();
+  const firstIdxByMode = new Map();
+  let modeIndex = 0;
+  const pushMode = (rawMode, rawConfidence = null, rawAweJoyScore = null, { prepend = false } = {}) => {
+    const normalized = motherV2NormalizeModeCandidate(
+      {
+        mode: rawMode,
+        confidence: rawConfidence,
+        awe_joy_score: rawAweJoyScore,
+      },
+      { idx: modeIndex }
+    );
+    modeIndex += 1;
+    if (!normalized) return;
+    const { mode, confidence, awe_joy_score: aweJoyScore, _idx: firstIdx } = normalized;
+    if (!firstIdxByMode.has(mode)) firstIdxByMode.set(mode, firstIdx);
+    const existingIdx = modes.indexOf(mode);
+    if (existingIdx < 0) {
+      if (prepend) modes.unshift(mode);
+      else modes.push(mode);
+      confidenceByMode.set(mode, confidence);
+      aweJoyScoreByMode.set(mode, aweJoyScore);
+      return;
+    }
+    if (prepend && existingIdx > 0) {
+      modes.splice(existingIdx, 1);
+      modes.unshift(mode);
+    }
+    if (typeof confidence === "number") {
+      const prior = confidenceByMode.get(mode);
+      if (!(typeof prior === "number") || confidence > prior) {
+        confidenceByMode.set(mode, confidence);
+      }
+    }
+    if (typeof aweJoyScore === "number") {
+      const prior = aweJoyScoreByMode.get(mode);
+      if (!(typeof prior === "number") || aweJoyScore > prior) {
+        aweJoyScoreByMode.set(mode, aweJoyScore);
+      }
+    }
   };
   for (const entry of Array.isArray(intent.transformation_mode_candidates) ? intent.transformation_mode_candidates : []) {
-    pushMode(entry?.mode || entry?.transformation_mode);
+    pushMode(entry?.mode || entry?.transformation_mode, entry?.confidence, entry?.awe_joy_score);
   }
   const current = motherV2MaybeTransformationMode(intent.transformation_mode);
-  if (current && !modes.includes(current)) modes.unshift(current);
+  if (current) pushMode(current, null, null, { prepend: true });
   const baseMode = current || modes[0] || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE;
   const baseIdx = Math.max(0, MOTHER_V2_TRANSFORMATION_MODES.indexOf(baseMode));
-  for (let offset = 0; offset < MOTHER_V2_TRANSFORMATION_MODES.length && modes.length < 3; offset += 1) {
+  for (let offset = 0; offset < MOTHER_V2_TRANSFORMATION_MODES.length && modes.length < MOTHER_V2_TRANSFORMATION_MODES.length; offset += 1) {
     const idx = (baseIdx + offset) % MOTHER_V2_TRANSFORMATION_MODES.length;
     const candidate = MOTHER_V2_TRANSFORMATION_MODES[idx];
-    if (!candidate || modes.includes(candidate)) continue;
-    modes.push(candidate);
+    if (!candidate) continue;
+    pushMode(candidate);
   }
+  modes.sort((a, b) =>
+    motherV2CompareModeCandidates(
+      {
+        mode: a,
+        awe_joy_score: typeof aweJoyScoreByMode.get(a) === "number" ? aweJoyScoreByMode.get(a) : null,
+        confidence: typeof confidenceByMode.get(a) === "number" ? confidenceByMode.get(a) : null,
+        _idx: Number(firstIdxByMode.get(a) ?? Number.MAX_SAFE_INTEGER),
+      },
+      {
+        mode: b,
+        awe_joy_score: typeof aweJoyScoreByMode.get(b) === "number" ? aweJoyScoreByMode.get(b) : null,
+        confidence: typeof confidenceByMode.get(b) === "number" ? confidenceByMode.get(b) : null,
+        _idx: Number(firstIdxByMode.get(b) ?? Number.MAX_SAFE_INTEGER),
+      }
+    )
+  );
   intent.transformation_mode_candidates = modes.map((mode) => ({
     mode,
-    confidence: null,
+    awe_joy_score: typeof aweJoyScoreByMode.get(mode) === "number" ? aweJoyScoreByMode.get(mode) : null,
+    confidence: typeof confidenceByMode.get(mode) === "number" ? confidenceByMode.get(mode) : null,
   }));
   if (!motherV2MaybeTransformationMode(intent.transformation_mode) && modes.length) {
     intent.transformation_mode = modes[0];
@@ -11699,6 +12624,54 @@ function motherV2ProposalModes(intentPayload = null) {
   if (current && !modes.includes(current)) modes.unshift(current);
   if (!modes.length) modes.push(current || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE);
   return modes;
+}
+
+function motherV2ProposalCandidateSummary(intentPayload = null, { limit = 4 } = {}) {
+  const intent = intentPayload && typeof intentPayload === "object" ? intentPayload : null;
+  if (!intent) return [];
+  const candidates = [];
+  const pushCandidate = (rawMode, rawConfidence = null, rawAweJoyScore = null, { prepend = false } = {}) => {
+    const normalized = motherV2NormalizeModeCandidate({
+      mode: rawMode,
+      confidence: rawConfidence,
+      awe_joy_score: rawAweJoyScore,
+    }, { idx: candidates.length });
+    if (!normalized) return;
+    const { mode, confidence, awe_joy_score: aweJoyScore } = normalized;
+    const existing = candidates.find((entry) => entry.mode === mode) || null;
+    if (!existing) {
+      if (prepend) candidates.unshift({ mode, awe_joy_score: aweJoyScore, confidence });
+      else candidates.push({ mode, awe_joy_score: aweJoyScore, confidence });
+      return;
+    }
+    if (prepend) {
+      const idx = candidates.findIndex((entry) => entry.mode === mode);
+      if (idx > 0) {
+        const [entry] = candidates.splice(idx, 1);
+        candidates.unshift(entry);
+      }
+    }
+    if (typeof confidence === "number") {
+      if (!(typeof existing.confidence === "number") || confidence > existing.confidence) {
+        existing.confidence = confidence;
+      }
+    }
+    if (typeof aweJoyScore === "number") {
+      if (!(typeof existing.awe_joy_score === "number") || aweJoyScore > existing.awe_joy_score) {
+        existing.awe_joy_score = aweJoyScore;
+      }
+    }
+  };
+  for (const entry of Array.isArray(intent.transformation_mode_candidates) ? intent.transformation_mode_candidates : []) {
+    pushCandidate(entry?.mode || entry?.transformation_mode, entry?.confidence, entry?.awe_joy_score);
+  }
+  pushCandidate(intent.transformation_mode, null, null, { prepend: true });
+  const maxItems = Math.max(1, Math.floor(Number(limit) || 4));
+  return candidates.slice(0, maxItems).map((entry) => ({
+    mode: entry.mode,
+    awe_joy_score: typeof entry.awe_joy_score === "number" ? entry.awe_joy_score : null,
+    confidence: typeof entry.confidence === "number" ? entry.confidence : null,
+  }));
 }
 
 function motherV2ProposalIconAccent(mode) {
@@ -11834,14 +12807,10 @@ function motherV2DraftStatusHtml({ phase = null } = {}) {
     const icon = motherV2DraftStatusIconSvg("ready");
     return `<div class="mother-phase-icons is-draft-card" aria-label="${escapeHtml(tooltip)}"><span class="mother-phase-icon is-ready is-draft-card" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}" style="--phase-accent:${escapeHtml(accent)}">${icon}</span><span class="mother-phase-label is-draft-card" style="--phase-accent:${escapeHtml(accent)}">${escapeHtml(label)}</span></div>`;
   }
-  const idle = state.motherIdle || null;
-  const isBraiding = Boolean(idle?.pendingPromptCompile);
-  const iconKind = isBraiding ? "braiding" : "drafting";
-  const accent = isBraiding ? "rgba(143, 222, 255, 0.95)" : "rgba(145, 238, 184, 0.95)";
-  const tooltip = isBraiding
-    ? "Mother is braiding intent into form."
-    : "Mother is drafting now. No canvas mutation until deploy.";
-  const label = isBraiding ? "BRAIDING" : "DRAFTING";
+  const iconKind = "drafting";
+  const accent = "rgba(145, 238, 184, 0.95)";
+  const tooltip = "Mother is drafting now. No canvas mutation until deploy.";
+  const label = "DRAFTING";
   const icon = motherV2DraftStatusIconSvg(iconKind);
   return `<div class="mother-phase-icons is-draft-card" aria-label="${escapeHtml(tooltip)}"><span class="mother-phase-icon is-${escapeHtml(iconKind)} is-draft-card" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}" style="--phase-accent:${escapeHtml(accent)}">${icon}</span><span class="mother-phase-label is-draft-card" style="--phase-accent:${escapeHtml(accent)}">${escapeHtml(label)}</span></div>`;
 }
@@ -11863,6 +12832,29 @@ function motherV2CycleProposal(step = 1) {
     ...idle.intent,
     transformation_mode: nextMode,
   });
+  const currentDraft = motherV2CurrentDraft();
+  const draftMode = motherV2CurrentDraftMode(currentDraft);
+  if (currentDraft && draftMode && draftMode !== nextMode) {
+    for (const draft of Array.isArray(idle.drafts) ? idle.drafts : []) {
+      if (draft?.path) removeFile(String(draft.path)).catch(() => {});
+      if (draft?.receiptPath) removeFile(String(draft.receiptPath)).catch(() => {});
+    }
+    idle.drafts = [];
+    idle.selectedDraftId = null;
+    idle.hoverDraftId = null;
+    idle.speculativePrefetchReadyMode = null;
+  }
+  const pendingMode = motherV2NormalizeTransformationMode(idle.pendingDispatchProposalMode);
+  if (idle.pendingPromptCompile && idle.pendingPromptCompileSpeculative) {
+    idle.pendingPromptCompile = false;
+    idle.pendingPromptCompileSpeculative = false;
+    idle.pendingPromptCompilePath = null;
+    clearTimeout(idle.pendingPromptCompileTimeout);
+    idle.pendingPromptCompileTimeout = null;
+  }
+  if (idle.pendingDispatchSpeculative && idle.pendingDispatchToken && pendingMode && pendingMode !== nextMode) {
+    motherV2CancelInFlight({ reason: "proposal_cycle_speculative_mismatch" });
+  }
   motherV2RevealHints({ engaged: true, ms: 1900 });
   renderMotherReadout();
   requestRender();
@@ -11923,9 +12915,15 @@ function motherV2IntentRequiredImageIds() {
   const rankedIds = motherV2RankImageIdsByProminence(images);
   const activeId = String(getVisibleActiveId() || "").trim();
 
-  const targetIds = selected.length ? selected.slice(0, 3) : activeId ? [activeId] : rankedIds.slice(0, 1);
+  const targetIds = selected.length
+    ? selected.slice(0, Math.max(1, Number(MOTHER_V2_INTENT_TARGET_IMAGE_LIMIT) || 2))
+    : activeId
+      ? [activeId]
+      : rankedIds.slice(0, 1);
   const targetSet = new Set(targetIds);
-  const referenceIds = rankedIds.filter((id) => !targetSet.has(id)).slice(0, 3);
+  const referenceIds = rankedIds
+    .filter((id) => !targetSet.has(id))
+    .slice(0, Math.max(0, Number(MOTHER_V2_INTENT_REFERENCE_IMAGE_LIMIT) || 1));
   const out = [];
   for (const id of [...targetIds, ...referenceIds]) {
     if (!id) continue;
@@ -12882,6 +13880,15 @@ function motherV2InCooldown() {
   return idle.phase === MOTHER_IDLE_STATES.COOLDOWN && now < (Number(idle.cooldownUntil) || 0);
 }
 
+function motherV2CurrentIntentMode(intentPayload = null) {
+  const intent = intentPayload && typeof intentPayload === "object"
+    ? intentPayload
+    : state.motherIdle?.intent && typeof state.motherIdle.intent === "object"
+      ? state.motherIdle.intent
+      : null;
+  return motherV2NormalizeTransformationMode(intent?.transformation_mode);
+}
+
 function motherV2CurrentDraft() {
   const idle = state.motherIdle;
   if (!idle) return null;
@@ -12893,6 +13900,274 @@ function motherV2CurrentDraft() {
     if (match) return match;
   }
   return drafts[0] || null;
+}
+
+function motherV2CurrentDraftMode(draft = null) {
+  const entry = draft && typeof draft === "object" ? draft : motherV2CurrentDraft();
+  if (!entry) return null;
+  const rawMode = entry.proposalMode || entry.transformation_mode || null;
+  return rawMode ? motherV2NormalizeTransformationMode(rawMode) : null;
+}
+
+function motherV2DispatchInFlight(idle = state.motherIdle) {
+  if (!idle) return false;
+  if (!idle.pendingDispatchToken) return false;
+  if (idle.phase === MOTHER_IDLE_STATES.DRAFTING) return true;
+  if (idle.phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING && idle.pendingDispatchSpeculative) return true;
+  return false;
+}
+
+function motherV2UploadSettleDueAtMs() {
+  const idle = state.motherIdle;
+  if (!idle) return 0;
+  const lastUploadAt = Number(idle.lastUploadCompletedAt) || 0;
+  if (!lastUploadAt) return 0;
+  return lastUploadAt + MOTHER_V2_UPLOAD_SETTLE_MS;
+}
+
+function motherV2UploadSettleRemainingMs(nowMs = Date.now()) {
+  const dueAt = motherV2UploadSettleDueAtMs();
+  if (!dueAt) return 0;
+  return Math.max(0, dueAt - (Number(nowMs) || Date.now()));
+}
+
+function motherV2CurrentProposalHasPrefetchedDraft() {
+  const idle = state.motherIdle;
+  if (!idle) return false;
+  const draft = motherV2CurrentDraft();
+  if (!draft) return false;
+  const currentMode = motherV2CurrentIntentMode(idle.intent);
+  const draftMode = motherV2CurrentDraftMode(draft);
+  if (!draftMode || draftMode !== currentMode) return false;
+  if ((Number(draft.actionVersion) || 0) !== (Number(idle.actionVersion) || 0)) return false;
+  return true;
+}
+
+function motherV2InFlightSpeculativeMatchesCurrentProposal() {
+  const idle = state.motherIdle;
+  if (!idle) return false;
+  if (!idle.pendingDispatchSpeculative) return false;
+  if (!motherV2DispatchInFlight(idle)) return false;
+  if ((Number(idle.pendingActionVersion) || 0) !== (Number(idle.actionVersion) || 0)) return false;
+  const pendingMode = motherV2NormalizeTransformationMode(idle.pendingDispatchProposalMode);
+  const currentMode = motherV2CurrentIntentMode(idle.intent);
+  return Boolean(pendingMode && currentMode && pendingMode === currentMode);
+}
+
+function motherV2ClearSpeculativePrefetchTimer() {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  clearTimeout(idle.speculativePrefetchTimer);
+  idle.speculativePrefetchTimer = null;
+}
+
+function motherV2ClearLiveProposalRefreshTimer() {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  clearTimeout(idle.liveProposalRefreshTimer);
+  idle.liveProposalRefreshTimer = null;
+}
+
+function motherV2CanUseLiveProposalRefresh(idle = state.motherIdle) {
+  if (!idle) return false;
+  if (!motherV2HasProposalImageSet()) return false;
+  if (!idle.intent || !motherV2HasRealProposalPayload(idle.intent)) return false;
+  return true;
+}
+
+function motherV2ScheduleLiveProposalRefresh({
+  reason = "interaction",
+  delayMs = MOTHER_V2_LIVE_PROPOSAL_REFRESH_DEBOUNCE_MS,
+} = {}) {
+  const idle = state.motherIdle;
+  if (!idle) return false;
+  if (!motherV2CanUseLiveProposalRefresh(idle)) return false;
+  motherV2ClearLiveProposalRefreshTimer();
+  if (!idle.liveProposalUpdating) {
+    idle.liveProposalUpdating = true;
+    renderMotherReadout();
+  }
+  const delay = Math.max(80, Number(delayMs) || MOTHER_V2_LIVE_PROPOSAL_REFRESH_DEBOUNCE_MS);
+  idle.liveProposalRefreshTimer = setTimeout(() => {
+    const current = state.motherIdle;
+    if (!current) return;
+    current.liveProposalRefreshTimer = null;
+    if (!motherV2CanUseLiveProposalRefresh(current)) {
+      current.liveProposalUpdating = false;
+      renderMotherReadout();
+      return;
+    }
+    if (motherV2InCooldown()) {
+      current.liveProposalUpdating = false;
+      renderMotherReadout();
+      return;
+    }
+    if (state.pointer.active) {
+      motherV2ScheduleLiveProposalRefresh({
+        reason: "pointer_active",
+        delayMs: MOTHER_V2_LIVE_PROPOSAL_REFRESH_DEBOUNCE_MS,
+      });
+      return;
+    }
+    if (current.pendingIntent || current.pendingPromptCompile || current.pendingGeneration || current.pendingDispatchToken) {
+      return;
+    }
+    const now = Date.now();
+    const lastRefreshAt = Number(current.lastLiveProposalRefreshAt) || 0;
+    if (lastRefreshAt > 0) {
+      const sinceMs = Math.max(0, now - lastRefreshAt);
+      if (sinceMs < MOTHER_V2_LIVE_PROPOSAL_REFRESH_MIN_INTERVAL_MS) {
+        motherV2ScheduleLiveProposalRefresh({
+          reason: "rate_limited",
+          delayMs: MOTHER_V2_LIVE_PROPOSAL_REFRESH_MIN_INTERVAL_MS - sinceMs,
+        });
+        return;
+      }
+    }
+    if (current.phase === MOTHER_IDLE_STATES.OBSERVING) {
+      motherIdleTransitionTo(MOTHER_IDLE_EVENTS.IDLE_WINDOW_ELAPSED);
+    }
+    if (current.phase === MOTHER_IDLE_STATES.WATCHING) {
+      motherIdleTransitionTo(MOTHER_IDLE_EVENTS.IDLE_WINDOW_ELAPSED);
+    }
+    if (current.phase !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
+      current.liveProposalUpdating = false;
+      renderMotherReadout();
+      return;
+    }
+    current.lastLiveProposalRefreshAt = now;
+    appendMotherTraceLog({
+      kind: "live_proposal_refresh_started",
+      traceId: current.telemetry?.traceId || null,
+      actionVersion: Number(current.actionVersion) || 0,
+      reason: String(reason || "interaction"),
+      proposal_mode: motherV2CurrentIntentMode(current.intent),
+    }).catch(() => {});
+    motherV2RequestIntentInference()
+      .then((started) => {
+        if (started) return;
+        const latest = state.motherIdle;
+        if (!latest) return;
+        latest.liveProposalUpdating = false;
+        appendMotherTraceLog({
+          kind: "live_proposal_refresh_skipped",
+          traceId: latest.telemetry?.traceId || null,
+          actionVersion: Number(latest.actionVersion) || 0,
+          reason: "request_not_started",
+        }).catch(() => {});
+        renderMotherReadout();
+      })
+      .catch(() => {
+        const latest = state.motherIdle;
+        if (!latest) return;
+        latest.liveProposalUpdating = false;
+        renderMotherReadout();
+      });
+  }, delay);
+  return true;
+}
+
+function motherV2SpeculativePrefetchGate(nowMs = Date.now()) {
+  const idle = state.motherIdle;
+  if (!idle) return { ok: false, reason: "no_idle", retryAfterMs: 0 };
+  if (idle.phase !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
+    return { ok: false, reason: "phase_not_intent", retryAfterMs: 0 };
+  }
+  if (!idle.intent || !motherV2HasRealProposalPayload(idle.intent)) {
+    return { ok: false, reason: "missing_proposal_payload", retryAfterMs: 0 };
+  }
+  if (state.pointer.active) return { ok: false, reason: "pointer_active", retryAfterMs: 200 };
+  if (motherV2InCooldown()) return { ok: false, reason: "cooldown", retryAfterMs: 0 };
+  if (idle.liveProposalUpdating || idle.liveProposalRefreshTimer) {
+    return { ok: false, reason: "live_refresh_active", retryAfterMs: 220 };
+  }
+  if (idle.pendingIntent || idle.pendingPromptCompile || idle.pendingGeneration || idle.pendingDispatchToken) {
+    return { ok: false, reason: "dispatch_busy", retryAfterMs: 180 };
+  }
+  const lastUploadAt = Number(idle.lastUploadCompletedAt) || 0;
+  if (!lastUploadAt) return { ok: false, reason: "no_upload_signal", retryAfterMs: 0 };
+  if (lastUploadAt <= (Number(idle.lastSpeculativePrefetchUploadAt) || 0)) {
+    return { ok: false, reason: "upload_already_prefetched", retryAfterMs: 0 };
+  }
+  const now = Number(nowMs) || Date.now();
+  const settledAt = lastUploadAt + MOTHER_V2_UPLOAD_SETTLE_MS;
+  if (now < settledAt) {
+    return { ok: false, reason: "upload_not_settled", retryAfterMs: Math.max(25, settledAt - now) };
+  }
+  if (now > lastUploadAt + MOTHER_V2_UPLOAD_PREFETCH_WINDOW_MS) {
+    return { ok: false, reason: "upload_window_elapsed", retryAfterMs: 0 };
+  }
+  if (motherV2CurrentProposalHasPrefetchedDraft()) {
+    return { ok: false, reason: "prefetched_draft_already_ready", retryAfterMs: 0 };
+  }
+  return { ok: true, reason: null, retryAfterMs: 0 };
+}
+
+function motherV2CanRunSpeculativePrefetch(nowMs = Date.now()) {
+  return motherV2SpeculativePrefetchGate(nowMs).ok;
+}
+
+function motherV2LogSpeculativePrefetchSkipped(reason = "unknown", { trigger = "intent_inferred" } = {}) {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  appendMotherTraceLog({
+    kind: "speculative_prefetch_skipped",
+    traceId: idle.telemetry?.traceId || null,
+    actionVersion: Number(idle.actionVersion) || 0,
+    trigger: String(trigger || "intent_inferred"),
+    reason: String(reason || "unknown"),
+    proposal_mode: motherV2CurrentIntentMode(idle.intent),
+    upload_age_ms: Math.max(0, Date.now() - (Number(idle.lastUploadCompletedAt) || 0)),
+  }).catch(() => {});
+}
+
+function motherV2ScheduleSpeculativePrefetch({ reason = "intent_inferred", delayMs = MOTHER_V2_SPECULATIVE_PREFETCH_DELAY_MS } = {}) {
+  const idle = state.motherIdle;
+  if (!idle) return false;
+  motherV2ClearSpeculativePrefetchTimer();
+  const gate = motherV2SpeculativePrefetchGate();
+  if (!gate.ok) {
+    if (gate.reason === "upload_not_settled") {
+      const retryDelay = Math.max(25, Number(gate.retryAfterMs) || 25);
+      idle.speculativePrefetchTimer = setTimeout(() => {
+        const current = state.motherIdle;
+        if (!current) return;
+        current.speculativePrefetchTimer = null;
+        motherV2ScheduleSpeculativePrefetch({ reason: "upload_settle_retry", delayMs: 0 });
+      }, retryDelay);
+      return true;
+    }
+    motherV2LogSpeculativePrefetchSkipped(gate.reason, { trigger: reason });
+    return false;
+  }
+  const delay = Math.max(0, Number(delayMs) || 0);
+  idle.speculativePrefetchTimer = setTimeout(() => {
+    const current = state.motherIdle;
+    if (!current) return;
+    current.speculativePrefetchTimer = null;
+    const callbackGate = motherV2SpeculativePrefetchGate();
+    if (!callbackGate.ok) {
+      motherV2LogSpeculativePrefetchSkipped(callbackGate.reason, { trigger: `${reason}:timer` });
+      return;
+    }
+    motherIdleDispatchGeneration()
+      .then((started) => {
+        if (!started) {
+          motherV2LogSpeculativePrefetchSkipped("dispatch_not_started", { trigger: reason });
+          return;
+        }
+        current.lastSpeculativePrefetchUploadAt = Number(current.lastUploadCompletedAt) || 0;
+        appendMotherTraceLog({
+          kind: "speculative_prefetch_started",
+          traceId: current.telemetry?.traceId || null,
+          actionVersion: Number(current.actionVersion) || 0,
+          reason: String(reason || "intent_inferred"),
+          proposal_mode: motherV2CurrentIntentMode(current.intent),
+        }).catch(() => {});
+      })
+      .catch(() => {});
+  }, delay);
+  return true;
 }
 
 function motherV2RoleIds(roleKey) {
@@ -12932,11 +14207,19 @@ function motherV2ResetInteractionState() {
   idle.pendingIntentRealtimePath = null;
   idle.pendingIntentPath = null;
   idle.pendingIntentPayload = null;
+  idle.pendingDispatchSpeculative = false;
+  idle.pendingDispatchProposalMode = null;
   idle.pendingPromptCompilePath = null;
+  idle.pendingPromptCompileSpeculative = false;
   clearTimeout(idle.pendingIntentTimeout);
   idle.pendingIntentTimeout = null;
   clearTimeout(idle.pendingPromptCompileTimeout);
   idle.pendingPromptCompileTimeout = null;
+  motherV2ClearSpeculativePrefetchTimer();
+  motherV2ClearLiveProposalRefreshTimer();
+  idle.liveProposalUpdating = false;
+  idle.speculativePrefetchInFlight = false;
+  idle.speculativePrefetchReadyMode = null;
   clearTimeout(idle.pendingVisionRetryTimer);
   idle.pendingVisionRetryTimer = null;
   clearMotherIdleDispatchTimeout();
@@ -12952,7 +14235,7 @@ function motherV2ClearGlyphs() {
   idle.roleGlyphDrag = null;
 }
 
-function motherV2ClearIntentAndDrafts({ removeFiles = false } = {}) {
+function motherV2ClearDraftsOnly({ removeFiles = false } = {}) {
   const idle = state.motherIdle;
   if (!idle) return;
   const drafts = Array.isArray(idle.drafts) ? idle.drafts.slice() : [];
@@ -12962,11 +14245,21 @@ function motherV2ClearIntentAndDrafts({ removeFiles = false } = {}) {
       if (draft?.receiptPath) removeFile(String(draft.receiptPath)).catch(() => {});
     }
   }
-  idle.intent = null;
-  idle.roles = { subject: [], model: [], mediator: [], object: [] };
   idle.drafts = [];
   idle.selectedDraftId = null;
   idle.hoverDraftId = null;
+  idle.speculativePrefetchReadyMode = null;
+}
+
+function motherV2ClearIntentAndDrafts({ removeFiles = false } = {}) {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  motherV2ClearDraftsOnly({ removeFiles });
+  motherV2ClearLiveProposalRefreshTimer();
+  idle.liveProposalUpdating = false;
+  idle.lastLiveProposalRefreshAt = 0;
+  idle.intent = null;
+  idle.roles = { subject: [], model: [], mediator: [], object: [] };
   idle.offerDetailsOpen = false;
   idle.pendingVisionImageIds = [];
   clearTimeout(idle.pendingVisionRetryTimer);
@@ -12977,6 +14270,12 @@ function motherV2ClearIntentAndDrafts({ removeFiles = false } = {}) {
   idle.pendingIntentUpgradeUntil = 0;
   idle.pendingIntentRealtimePath = null;
   idle.pendingIntentPath = null;
+  idle.pendingDispatchSpeculative = false;
+  idle.pendingDispatchProposalMode = null;
+  idle.pendingPromptCompileSpeculative = false;
+  motherV2ClearSpeculativePrefetchTimer();
+  idle.speculativePrefetchInFlight = false;
+  idle.speculativePrefetchReadyMode = null;
   idle.promptMotionProfile = null;
   state.pendingMotherDraft = null;
   idle.hintVisibleUntil = 0;
@@ -13199,8 +14498,7 @@ function motherIdleDispatchVersionMatches(versionId) {
 function motherIdleTrackVersionCreated(event = {}) {
   const idle = state.motherIdle;
   if (!idle) return;
-  if (idle.phase !== MOTHER_IDLE_STATES.GENERATION_DISPATCHED) return;
-  if (!idle.pendingDispatchToken) return;
+  if (!motherV2DispatchInFlight(idle)) return;
   const versionId = motherEventVersionId(event);
   if (!versionId) return;
   if (!idle.pendingVersionId) {
@@ -13355,6 +14653,16 @@ function resetMotherIdleAndWheelState() {
     state.motherIdle.pendingActionVersion = 0;
     state.motherIdle.cooldownUntil = 0;
     state.motherIdle.multiUploadIdleBoostUntil = 0;
+    state.motherIdle.lastUploadCompletedAt = 0;
+    state.motherIdle.lastSpeculativePrefetchUploadAt = 0;
+    clearTimeout(state.motherIdle.speculativePrefetchTimer);
+    state.motherIdle.speculativePrefetchTimer = null;
+    state.motherIdle.speculativePrefetchInFlight = false;
+    state.motherIdle.speculativePrefetchReadyMode = null;
+    clearTimeout(state.motherIdle.liveProposalRefreshTimer);
+    state.motherIdle.liveProposalRefreshTimer = null;
+    state.motherIdle.liveProposalUpdating = false;
+    state.motherIdle.lastLiveProposalRefreshAt = 0;
     state.motherIdle.pendingIntent = false;
     state.motherIdle.pendingIntentRequestId = null;
     state.motherIdle.pendingIntentTransportRetryCount = 0;
@@ -13364,11 +14672,14 @@ function resetMotherIdleAndWheelState() {
     state.motherIdle.pendingIntentPath = null;
     state.motherIdle.pendingIntentPayload = null;
     state.motherIdle.pendingPromptCompile = false;
+    state.motherIdle.pendingPromptCompileSpeculative = false;
     state.motherIdle.pendingPromptCompilePath = null;
     state.motherIdle.pendingVisionImageIds = [];
     clearTimeout(state.motherIdle.pendingVisionRetryTimer);
     state.motherIdle.pendingVisionRetryTimer = null;
     state.motherIdle.pendingGeneration = false;
+    state.motherIdle.pendingDispatchSpeculative = false;
+    state.motherIdle.pendingDispatchProposalMode = null;
     state.motherIdle.pendingFollowupAfterCooldown = false;
     state.motherIdle.pendingFollowupReason = null;
     state.motherIdle.lastRejectedProposal = null;
@@ -13789,6 +15100,11 @@ function motherV2HasHumanSignal(hints = []) {
   return /(person|people|human|face|portrait|selfie|woman|man|child)/i.test(text);
 }
 
+function motherV2HasPhotorealSignal(hints = []) {
+  const text = (Array.isArray(hints) ? hints : []).join(" ").toLowerCase();
+  return /\b(photo|photoreal|photorealistic|realistic|dslr|35mm|cinematic|film\s+still|bokeh|natural\s+light)\b/i.test(text);
+}
+
 function motherV2RankImageIdsByProminence(images = []) {
   const ranked = [];
   for (let idx = 0; idx < (Array.isArray(images) ? images.length : 0); idx += 1) {
@@ -13858,45 +15174,66 @@ function motherV2IntentFromRealtimeIcons(iconState = null, payload = {}) {
   for (const id of rankedIds) pushRef(id);
   for (const id of imageIds) pushRef(id);
 
-  const transformationMode = motherV2NormalizeTransformationMode(
-    icons?.transformation_mode ||
-      (Array.isArray(icons?.transformation_mode_candidates) ? icons.transformation_mode_candidates[0]?.mode : null) ||
-      payload.preferred_transformation_mode
-  );
   const transformationModeCandidates = [];
-  const pushModeCandidate = (rawMode, rawConfidence = null) => {
-    const mode = motherV2MaybeTransformationMode(rawMode);
-    if (!mode) return;
-    const confidence =
-      typeof rawConfidence === "number" && Number.isFinite(rawConfidence)
-        ? clamp(Number(rawConfidence) || 0, 0, 1)
-        : null;
-    const existing = transformationModeCandidates.find((entry) => entry.mode === mode) || null;
+  const pushModeCandidate = (rawMode, rawConfidence = null, rawAweJoyScore = null, { idx = null } = {}) => {
+    const normalized = motherV2NormalizeModeCandidate(
+      {
+        mode: rawMode,
+        confidence: rawConfidence,
+        awe_joy_score: rawAweJoyScore,
+      },
+      { idx: idx === null ? transformationModeCandidates.length : idx }
+    );
+    if (!normalized) return;
+    const existing = transformationModeCandidates.find((entry) => entry.mode === normalized.mode) || null;
     if (!existing) {
-      transformationModeCandidates.push({ mode, confidence });
+      transformationModeCandidates.push(normalized);
       return;
     }
-    if (typeof confidence === "number") {
+    if (typeof normalized.confidence === "number") {
       const prior = typeof existing.confidence === "number" ? existing.confidence : -1;
-      if (confidence > prior) existing.confidence = confidence;
+      if (normalized.confidence > prior) existing.confidence = normalized.confidence;
     }
+    if (typeof normalized.awe_joy_score === "number") {
+      const prior = typeof existing.awe_joy_score === "number" ? existing.awe_joy_score : -1;
+      if (normalized.awe_joy_score > prior) existing.awe_joy_score = normalized.awe_joy_score;
+    }
+    const priorIdx = Number.isFinite(Number(existing._idx)) ? Number(existing._idx) : Number.MAX_SAFE_INTEGER;
+    const nextIdx = Number.isFinite(Number(normalized._idx)) ? Number(normalized._idx) : Number.MAX_SAFE_INTEGER;
+    existing._idx = Math.min(priorIdx, nextIdx);
   };
-  pushModeCandidate(transformationMode, null);
+  const explicitModeHint = motherV2MaybeTransformationMode(
+    icons?.transformation_mode || payload.preferred_transformation_mode
+  );
+  if (explicitModeHint) pushModeCandidate(explicitModeHint, null, null, { idx: 0 });
+  let modeCandidateIdx = explicitModeHint ? 1 : 0;
   for (const candidate of Array.isArray(icons?.transformation_mode_candidates) ? icons.transformation_mode_candidates : []) {
-    pushModeCandidate(candidate?.mode || candidate?.transformation_mode, candidate?.confidence);
+    pushModeCandidate(candidate?.mode || candidate?.transformation_mode, candidate?.confidence, candidate?.awe_joy_score, {
+      idx: modeCandidateIdx,
+    });
+    modeCandidateIdx += 1;
   }
-  transformationModeCandidates.sort((a, b) => {
-    const ac = typeof a.confidence === "number" ? a.confidence : -1;
-    const bc = typeof b.confidence === "number" ? b.confidence : -1;
-    return bc - ac;
-  });
+  if (!transformationModeCandidates.length) {
+    pushModeCandidate(payload.preferred_transformation_mode, null, null, { idx: modeCandidateIdx });
+  }
+  transformationModeCandidates.sort(motherV2CompareModeCandidates);
+  const transformationMode = motherV2NormalizeTransformationMode(
+    transformationModeCandidates[0]?.mode || explicitModeHint || payload.preferred_transformation_mode
+  );
+  pushModeCandidate(transformationMode, null, null, { idx: modeCandidateIdx + 1 });
+  transformationModeCandidates.sort(motherV2CompareModeCandidates);
+  const rankedTransformationModeCandidates = transformationModeCandidates.map((entry) => ({
+    mode: entry.mode,
+    awe_joy_score: typeof entry.awe_joy_score === "number" ? entry.awe_joy_score : null,
+    confidence: typeof entry.confidence === "number" ? entry.confidence : null,
+  }));
 
   const summary = motherV2ProposalSentence({ transformation_mode: transformationMode });
   const confidence = clamp(
     typeof topBranch?.confidence === "number" && Number.isFinite(topBranch.confidence)
       ? Number(topBranch.confidence)
-      : transformationModeCandidates.length && typeof transformationModeCandidates[0].confidence === "number"
-        ? Number(transformationModeCandidates[0].confidence)
+      : rankedTransformationModeCandidates.length && typeof rankedTransformationModeCandidates[0].confidence === "number"
+        ? Number(rankedTransformationModeCandidates[0].confidence)
         : targetIds.length
           ? 0.78
           : 0.62,
@@ -13920,14 +15257,14 @@ function motherV2IntentFromRealtimeIcons(iconState = null, payload = {}) {
   const branchId = String(topBranch?.branch_id || "").trim();
   const shotTypeHints = motherV2ShotTypeHints({
     preferredMode: transformationMode,
-    candidateModes: transformationModeCandidates,
+    candidateModes: rankedTransformationModeCandidates,
   });
   return {
     intent_id: frameId ? `intent-rt-${frameId}` : `intent-rt-${actionVersion}-${Math.random().toString(16).slice(2, 7)}`,
     summary,
-    creative_directive: MOTHER_CREATIVE_DIRECTIVE,
+    creative_directive: motherCurrentCreativeDirective(),
     transformation_mode: transformationMode,
-    transformation_mode_candidates: transformationModeCandidates,
+    transformation_mode_candidates: rankedTransformationModeCandidates,
     shot_type: shotTypeHints.primary_shot_type,
     alternate_shot_type: shotTypeHints.alternate_shot_type,
     lighting_profile: shotTypeHints.primary_lighting_profile,
@@ -13960,7 +15297,7 @@ function motherV2CompilePromptLocal(payload = {}) {
     String(intent.summary || intent.label || "").trim() ||
     MOTHER_V2_PROPOSAL_BY_MODE[MOTHER_V2_DEFAULT_TRANSFORMATION_MODE];
   const creativeDirective =
-    String(payload.creative_directive || intent.creative_directive || "").trim() || MOTHER_CREATIVE_DIRECTIVE;
+    String(payload.creative_directive || intent.creative_directive || "").trim() || motherCurrentCreativeDirective();
   const transformationMode = motherV2NormalizeTransformationMode(
     payload.transformation_mode || intent.transformation_mode || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE
   );
@@ -13977,13 +15314,60 @@ function motherV2CompilePromptLocal(payload = {}) {
   }).join("; ");
   const targetIds = Array.isArray(intent.target_ids) ? intent.target_ids.map((v) => String(v || "").trim()).filter(Boolean) : [];
   const referenceIds = Array.isArray(intent.reference_ids) ? intent.reference_ids.map((v) => String(v || "").trim()).filter(Boolean) : [];
+  const activeId = String(payload.active_id || getVisibleActiveId() || "").trim();
   const contextIds = [];
   for (const id of [...targetIds, ...referenceIds]) {
     if (id && !contextIds.includes(id)) contextIds.push(id);
   }
+  const imageRows = Array.isArray(payload.images) ? payload.images : [];
+  const imageById = new Map(
+    imageRows
+      .map((entry) => [String(entry?.id || "").trim(), entry])
+      .filter(([id]) => Boolean(id))
+  );
+  const parseTransformLock = (rawTransform = null) => {
+    if (!rawTransform || typeof rawTransform !== "object") return null;
+    const rotateDeg = Number(rawTransform.rotate_deg);
+    const skewXDeg = Number(rawTransform.skew_x_deg);
+    const userResized = Boolean(rawTransform.user_resized);
+    return {
+      rotateDeg: Number.isFinite(rotateDeg) ? normalizeFreeformRotateDeg(rotateDeg) : 0,
+      skewXDeg: Number.isFinite(skewXDeg) ? normalizeFreeformSkewDeg(skewXDeg) : 0,
+      userResized,
+    };
+  };
+  const transformById = new Map(
+    imageRows
+      .map((entry) => {
+        const imageId = String(entry?.id || "").trim();
+        if (!imageId) return null;
+        const transform = parseTransformLock(entry?.transform);
+        return transform ? [imageId, transform] : null;
+      })
+      .filter(Boolean)
+  );
+  const activeAnchorId = activeId || targetIds[0] || contextIds[0] || "";
+  const activeAnchorImage = activeAnchorId ? imageById.get(activeAnchorId) || null : null;
+  const activeAnchorHints = activeAnchorImage
+    ? [
+        String(activeAnchorImage?.vision_desc || "").trim(),
+        String(activeAnchorImage?.file || "").trim(),
+      ].filter(Boolean)
+    : [];
+  const activeAnchorPhotoreal = motherV2HasPhotorealSignal(activeAnchorHints);
   const multiImage = contextIds.length > 1;
   const imageHints = motherV2ImageHints(payload.images || []);
   const hasHumanInputs = motherV2HasHumanSignal(imageHints);
+  const activeAnchorTransform = activeAnchorId ? transformById.get(activeAnchorId) || null : null;
+  const transformLockedIds = contextIds
+    .map((id) => ({ id, transform: transformById.get(id) || null }))
+    .filter((entry) => {
+      const transform = entry?.transform;
+      if (!transform) return false;
+      if (transform.userResized) return true;
+      return Math.abs(Number(transform.rotateDeg) || 0) > 0.2 || Math.abs(Number(transform.skewXDeg) || 0) > 0.2;
+    })
+    .slice(0, 3);
   const allowDoubleExposure = ["destabilize", "fracture", "alienate"].includes(transformationMode);
   const constraints = [
     "No unintended ghosted human overlays.",
@@ -13991,25 +15375,37 @@ function motherV2CompilePromptLocal(payload = {}) {
       ? "Allow intentional double-exposure only when it clearly supports the chosen transformation mode."
       : "No accidental double-exposure artifacts.",
     "No icon-overpaint artifacts.",
-    "Preserve source-object integrity where role anchors imply continuity.",
+    "Keep role-anchor cues readable when continuity matters.",
   ];
+  if (activeAnchorId) {
+    constraints.push(
+      `Preserve active image ${activeAnchorId} identity, framing, and scene continuity as the primary edit anchor.`
+    );
+    constraints.push("Apply proposal changes as controlled edits, not a full replacement of the anchor image.");
+  }
+  if (activeAnchorPhotoreal) {
+    constraints.push("Keep the output photorealistic with natural lighting, lens behavior, and realistic surface texture.");
+  }
   if (!hasHumanInputs) {
     constraints.push("No extra humans or faces unless clearly present in the input references.");
   }
+  if (transformLockedIds.length) {
+    constraints.push("Respect current canvas transform locks (rotation, skew, and user-set scale) for referenced source images.");
+  }
   const multiImageRules = [];
   if (multiImage) {
-    multiImageRules.push("Integrate all references into a single coherent scene (not a collage).");
+    multiImageRules.push("Fuse all references into one striking scene (not a split-screen collage).");
     if (subjectIds.length && modelIds.length) {
       multiImageRules.push(
-        `Preserve primary subject identity from ${subjectIds.join(", ")} and key material/color cues from ${modelIds.join(", ")}.`
+        `Blend cues from ${subjectIds.join(", ")} and ${modelIds.join(", ")} into one unexpected but visually compelling scene.`
       );
     } else if (targetIds.length && referenceIds.length) {
       multiImageRules.push(
-        `Preserve identifiable structure from ${targetIds[0]} while transferring visual language from ${referenceIds[0]}.`
+        `Remix structure from ${targetIds[0]} with visual language from ${referenceIds[0]} in a surprising way.`
       );
     }
-    multiImageRules.push("Match perspective, scale, and lighting direction across fused elements.");
-    multiImageRules.push("Keep one coherent camera framing and focal hierarchy.");
+    multiImageRules.push("Use perspective, scale, and lighting intentionally so the blend feels deliberate.");
+    multiImageRules.push("Keep a clear focal hierarchy so the image reads instantly.");
   }
   const positiveLines = [
     `Transformation mode: ${transformationMode}.`,
@@ -14020,11 +15416,48 @@ function motherV2CompilePromptLocal(payload = {}) {
     `Intent summary: ${summary}.`,
     `Role anchors: ${roleText}.`,
   ];
+  if (activeAnchorId) {
+    positiveLines.push(
+      `Active image anchor: ${activeAnchorId}. Preserve as much of this image as possible while integrating the proposal.`
+    );
+  }
+  if (activeAnchorPhotoreal) {
+    positiveLines.push("Style continuity: keep the anchor image photorealistic and avoid painterly/cartoon stylization.");
+  }
+  if (activeAnchorTransform) {
+    const transformParts = [];
+    if (Math.abs(Number(activeAnchorTransform.rotateDeg) || 0) > 0.2) {
+      transformParts.push(`rotation ${Number(activeAnchorTransform.rotateDeg).toFixed(2)}deg`);
+    }
+    if (Math.abs(Number(activeAnchorTransform.skewXDeg) || 0) > 0.2) {
+      transformParts.push(`skew ${Number(activeAnchorTransform.skewXDeg).toFixed(2)}deg`);
+    }
+    if (activeAnchorTransform.userResized) transformParts.push("user-resized scale");
+    if (transformParts.length) {
+      positiveLines.push(`Active anchor transform lock: preserve ${transformParts.join(", ")} unless explicitly contradicted by intent.`);
+    }
+  }
+  if (transformLockedIds.length) {
+    const lockList = transformLockedIds
+      .map((entry) => {
+        const transform = entry.transform || {};
+        const parts = [];
+        if (Math.abs(Number(transform.rotateDeg) || 0) > 0.2) parts.push(`rot ${Number(transform.rotateDeg).toFixed(2)}deg`);
+        if (Math.abs(Number(transform.skewXDeg) || 0) > 0.2) parts.push(`skew ${Number(transform.skewXDeg).toFixed(2)}deg`);
+        if (transform.userResized) parts.push("resized");
+        if (!parts.length) return "";
+        return `${entry.id}(${parts.join(", ")})`;
+      })
+      .filter(Boolean);
+    if (lockList.length) {
+      positiveLines.push(`Canvas transform guidance: ${lockList.join("; ")}.`);
+    }
+  }
   if (multiImageRules.length) {
     positiveLines.push(`Multi-image fusion rules: ${multiImageRules.join(" ")}`);
   }
   positiveLines.push(`Anti-overlay constraints: ${constraints.join(" ")}`);
-  positiveLines.push("Produce coherent composition, emotional resonance, and production-grade lighting.");
+  positiveLines.push("Produce bold composition, emotional resonance, and production-grade lighting.");
   positiveLines.push("No text overlays, words, letters, logos-as-text, or watermarks.");
   positiveLines.push("Create one production-ready concept image.");
   return {
@@ -14101,37 +15534,52 @@ function motherV2AmbientTransformationModeHints() {
     return { preferredMode: null, candidates: [] };
   }
   const candidates = [];
-  const pushCandidate = (rawMode, rawConfidence = null) => {
-    const mode = motherV2MaybeTransformationMode(rawMode);
-    if (!mode) return;
-    const confidence =
-      typeof rawConfidence === "number" && Number.isFinite(rawConfidence)
-        ? clamp(Number(rawConfidence) || 0, 0, 1)
-        : null;
-    const exists = candidates.find((entry) => entry.mode === mode);
+  const pushCandidate = (rawMode, rawConfidence = null, rawAweJoyScore = null, { idx = null } = {}) => {
+    const normalized = motherV2NormalizeModeCandidate(
+      {
+        mode: rawMode,
+        confidence: rawConfidence,
+        awe_joy_score: rawAweJoyScore,
+      },
+      { idx: idx === null ? candidates.length : idx }
+    );
+    if (!normalized) return;
+    const exists = candidates.find((entry) => entry.mode === normalized.mode);
     if (!exists) {
-      candidates.push({ mode, confidence });
+      candidates.push(normalized);
       return;
     }
-    if (typeof confidence === "number") {
+    if (typeof normalized.confidence === "number") {
       const prior = typeof exists.confidence === "number" ? exists.confidence : -1;
-      if (confidence > prior) exists.confidence = confidence;
+      if (normalized.confidence > prior) exists.confidence = normalized.confidence;
     }
+    if (typeof normalized.awe_joy_score === "number") {
+      const prior = typeof exists.awe_joy_score === "number" ? exists.awe_joy_score : -1;
+      if (normalized.awe_joy_score > prior) exists.awe_joy_score = normalized.awe_joy_score;
+    }
+    const priorIdx = Number.isFinite(Number(exists._idx)) ? Number(exists._idx) : Number.MAX_SAFE_INTEGER;
+    const nextIdx = Number.isFinite(Number(normalized._idx)) ? Number(normalized._idx) : Number.MAX_SAFE_INTEGER;
+    exists._idx = Math.min(priorIdx, nextIdx);
   };
 
-  pushCandidate(iconState.transformation_mode, null);
+  pushCandidate(iconState.transformation_mode, null, null, { idx: 0 });
+  let modeCandidateIdx = 1;
   for (const entry of Array.isArray(iconState.transformation_mode_candidates) ? iconState.transformation_mode_candidates : []) {
     if (!entry || typeof entry !== "object") continue;
-    pushCandidate(entry.mode || entry.transformation_mode, entry.confidence);
+    pushCandidate(entry.mode || entry.transformation_mode, entry.confidence, entry.awe_joy_score, {
+      idx: modeCandidateIdx,
+    });
+    modeCandidateIdx += 1;
   }
-  candidates.sort((a, b) => {
-    const ac = typeof a.confidence === "number" ? a.confidence : -1;
-    const bc = typeof b.confidence === "number" ? b.confidence : -1;
-    return bc - ac;
-  });
+  candidates.sort(motherV2CompareModeCandidates);
+  const outputCandidates = candidates.map((entry) => ({
+    mode: entry.mode,
+    awe_joy_score: typeof entry.awe_joy_score === "number" ? entry.awe_joy_score : null,
+    confidence: typeof entry.confidence === "number" ? entry.confidence : null,
+  }));
   return {
-    preferredMode: candidates[0]?.mode || null,
-    candidates,
+    preferredMode: outputCandidates[0]?.mode || null,
+    candidates: outputCandidates,
   };
 }
 
@@ -14163,6 +15611,7 @@ function motherV2BuildProposalContextForIntentPayload({
   const SATURATION_K = Object.freeze({
     move: 8,
     resize: 4,
+    transform: 5,
     selection: 8,
     action: 4,
   });
@@ -14267,6 +15716,7 @@ function motherV2BuildProposalContextForIntentPayload({
     const signal = signalsById.get(row.id) || {
       move_count: 0,
       resize_count: 0,
+      transform_count: 0,
       selection_hits: 0,
       action_grid_hits: 0,
       last_event_at_ms: 0,
@@ -14274,10 +15724,11 @@ function motherV2BuildProposalContextForIntentPayload({
     };
     const moveSat = sat(signal.move_count, SATURATION_K.move);
     const resizeSat = sat(signal.resize_count, SATURATION_K.resize);
+    const transformSat = sat(signal.transform_count, SATURATION_K.transform);
     const selectionSat = sat(signal.selection_hits, SATURATION_K.selection);
     const actionSat = sat(signal.action_grid_hits, SATURATION_K.action);
     const interactionBase =
-      0.35 * moveSat + 0.35 * resizeSat + 0.25 * selectionSat + 0.05 * actionSat;
+      0.3 * moveSat + 0.22 * resizeSat + 0.23 * transformSat + 0.2 * selectionSat + 0.05 * actionSat;
     const transformRecencyMs = Number(signal.last_transform_at_ms) || 0;
     const recencyMs = transformRecencyMs || Number(signal.last_event_at_ms) || 0;
     const ageMs = recencyMs ? Math.max(0, nowMs - recencyMs) : INTERACTION_STALE_CUTOFF_MS + 1;
@@ -14291,6 +15742,7 @@ function motherV2BuildProposalContextForIntentPayload({
     if (
       Number(signal.move_count) <= 1 &&
       Number(signal.resize_count) === 0 &&
+      Number(signal.transform_count) === 0 &&
       Number(signal.selection_hits) <= 2 &&
       Number(signal.action_grid_hits) === 0
     ) {
@@ -14499,6 +15951,7 @@ function motherV2IntentPayload() {
   const canvasSummary = motherV2CanvasContextSummaryHint();
   const images = motherIdleBaseImageItems().map((item) => {
     const rect = state.freeformRects.get(item.id) || null;
+    const rectTransform = readFreeformRectTransform(rect);
     const visionDesc = normalizeVisionHintForIntent(item?.visionDesc, { maxChars: REALTIME_VISION_LABEL_MAX_CHARS }) || "";
     return {
       id: String(item.id || ""),
@@ -14521,6 +15974,13 @@ function motherV2IntentPayload() {
             h: Math.max(0, Number(rect.h) || 0) / canvasCssH,
           }
         : null,
+      transform: rect
+        ? {
+            rotate_deg: rectTransform.rotateDeg,
+            skew_x_deg: rectTransform.skewXDeg,
+            user_resized: rect.autoAspect === false,
+          }
+        : null,
       };
   });
   const proposalModeCandidates = [
@@ -14537,8 +15997,8 @@ function motherV2IntentPayload() {
   return {
     schema: "brood.mother.intent_infer.v1",
     action_version: Number(idle?.actionVersion) || 0,
-    creative_directive: MOTHER_CREATIVE_DIRECTIVE,
-    creative_directive_instruction: MOTHER_CREATIVE_DIRECTIVE_SENTENCE,
+    creative_directive: motherCurrentCreativeDirective(),
+    creative_directive_instruction: motherCurrentCreativeDirectiveSentence(),
     preferred_transformation_mode: preferredTransformationMode,
     intensity: clamp(Number(idle?.intensity) || 62, 0, 100),
     active_id: activeId ? String(activeId) : null,
@@ -14579,7 +16039,7 @@ function motherV2ApplyIntent(intentPayload = {}, { source = "local", preserveMod
     intentPayload && typeof intentPayload === "object"
       ? {
           ...intentPayload,
-          creative_directive: String(intentPayload.creative_directive || "").trim() || MOTHER_CREATIVE_DIRECTIVE,
+          creative_directive: String(intentPayload.creative_directive || "").trim() || motherCurrentCreativeDirective(),
           transformation_mode: motherV2NormalizeTransformationMode(intentPayload.transformation_mode),
           _intent_request_id: resolvedRequestId,
           _intent_source_kind: sourceKind || "fallback",
@@ -14601,6 +16061,18 @@ function motherV2ApplyIntent(intentPayload = {}, { source = "local", preserveMod
     }
   }
   idle.intent = normalizedIntent;
+  motherV2ClearLiveProposalRefreshTimer();
+  idle.liveProposalUpdating = false;
+  if (Array.isArray(idle.drafts) && idle.drafts.length) {
+    for (const draft of idle.drafts) {
+      if (draft?.path) removeFile(String(draft.path)).catch(() => {});
+      if (draft?.receiptPath) removeFile(String(draft.receiptPath)).catch(() => {});
+    }
+    idle.drafts = [];
+    idle.selectedDraftId = null;
+    idle.hoverDraftId = null;
+  }
+  idle.speculativePrefetchReadyMode = null;
   motherV2NormalizeRoles(normalizedIntent?.roles || null);
   idle.pendingIntent = false;
   const canUpgradeFromLateRealtime = sourceKind !== "realtime" && priorPendingRealtimePath;
@@ -14620,6 +16092,7 @@ function motherV2ApplyIntent(intentPayload = {}, { source = "local", preserveMod
   clearTimeout(idle.pendingVisionRetryTimer);
   idle.pendingVisionRetryTimer = null;
   motherIdleTransitionTo(MOTHER_IDLE_EVENTS.INTENT_INFERRED);
+  motherV2ScheduleSpeculativePrefetch({ reason: "intent_inferred" });
   appendMotherTraceLog({
     kind: "intent_inferred",
     traceId: idle.telemetry?.traceId || null,
@@ -14631,6 +16104,11 @@ function motherV2ApplyIntent(intentPayload = {}, { source = "local", preserveMod
     intent_id: intentPayload?.intent_id || null,
     placement_policy: intentPayload?.placement_policy || null,
     confidence: Number(intentPayload?.confidence) || 0,
+    optimization_target: motherCurrentOptimizationTarget(),
+    proposal_mode: motherV2NormalizeTransformationMode(normalizedIntent?.transformation_mode),
+    proposal_candidates: motherV2ProposalCandidateSummary(normalizedIntent, { limit: 5 }),
+    target_ids: motherV2NormalizeImageIdList(normalizedIntent?.target_ids || []).slice(0, 6),
+    reference_ids: motherV2NormalizeImageIdList(normalizedIntent?.reference_ids || []).slice(0, 6),
   }).catch(() => {});
   renderMotherReadout();
   requestRender();
@@ -14791,32 +16269,53 @@ async function motherV2RetryRealtimeIntentTransport({ path = "", errorMessage = 
   return true;
 }
 
-async function motherV2RequestIntentInference() {
+function motherV2SeedProvisionalIntent(payload = null, { requestId = null } = {}) {
+  const idle = state.motherIdle;
+  if (!idle) return false;
+  if (idle.phase !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) return false;
+  const payloadForIntent = payload && typeof payload === "object" ? payload : motherV2IntentPayload();
+  const realtimeIcons = state.intentAmbient?.iconState && typeof state.intentAmbient.iconState === "object"
+    ? state.intentAmbient.iconState
+    : null;
+  const provisional = motherV2IntentFromRealtimeIcons(realtimeIcons, payloadForIntent);
+  if (!provisional || typeof provisional !== "object") return false;
+  const normalized = motherV2EnsureProposalCandidates(
+    motherV2SanitizeIntentImageIds({
+      ...provisional,
+      creative_directive: String(provisional.creative_directive || "").trim() || motherCurrentCreativeDirective(),
+      _intent_request_id: String(requestId || idle.pendingIntentRequestId || "").trim() || null,
+      _intent_source_kind: "fallback",
+    })
+  );
+  if (!motherV2HasRealProposalPayload(normalized)) return false;
+  idle.intent = normalized;
+  motherV2NormalizeRoles(normalized.roles || null);
+  idle.liveProposalUpdating = false;
+  appendMotherTraceLog({
+    kind: "intent_seeded_local",
+    traceId: idle.telemetry?.traceId || null,
+    actionVersion: Number(idle.actionVersion) || 0,
+    request_id: String(requestId || idle.pendingIntentRequestId || "").trim() || null,
+    proposal_mode: motherV2NormalizeTransformationMode(normalized?.transformation_mode),
+  }).catch(() => {});
+  renderMotherReadout();
+  requestRender();
+  return true;
+}
+
+async function motherV2RequestIntentInference({
+  snapshotLoadTimeoutMs = INTENT_SNAPSHOT_FAST_LOAD_TIMEOUT_MS,
+  snapshotMaxDimPx = INTENT_SNAPSHOT_MAX_DIM_PX,
+  scheduleVisionLabels = true,
+  fastUploadPath = false,
+} = {}) {
   const idle = state.motherIdle;
   if (!idle) return false;
   if (idle.pendingIntent || idle.pendingPromptCompile || idle.pendingGeneration) return false;
   if (!motherIdleHasArmedCanvas()) return false;
   if (motherV2InCooldown()) return false;
-  const visionGate = motherV2VisionReadyForIntent({ schedule: true });
-  if (!visionGate.ready) {
-    idle.pendingVisionImageIds = visionGate.missingIds.slice();
-    clearTimeout(idle.pendingVisionRetryTimer);
-    idle.pendingVisionRetryTimer = setTimeout(() => {
-      const current = state.motherIdle;
-      if (!current) return;
-      current.pendingVisionRetryTimer = null;
-      if (current.phase !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) return;
-      if (current.pendingIntent || current.pendingPromptCompile || current.pendingGeneration) return;
-      if (state.pointer.active) return;
-      if (!motherIdleHasArmedCanvas()) return;
-      if (motherV2InCooldown()) return;
-      motherV2RequestIntentInference().catch(() => {});
-    }, MOTHER_V2_VISION_RETRY_MS);
-    setStatus("Mother: reading image context…");
-    renderMotherReadout();
-    return false;
-  }
-  idle.pendingVisionImageIds = [];
+  const visionGate = motherV2VisionReadyForIntent({ schedule: Boolean(scheduleVisionLabels) });
+  idle.pendingVisionImageIds = visionGate.ready ? [] : visionGate.missingIds.slice();
   clearTimeout(idle.pendingVisionRetryTimer);
   idle.pendingVisionRetryTimer = null;
   const actionVersion = Number(idle.actionVersion) || 0;
@@ -14847,6 +16346,27 @@ async function motherV2RequestIntentInference() {
   const payloadPath = await motherV2WritePayloadFile("mother_intent_infer", payload);
   const ok = await ensureEngineSpawned({ reason: "mother_intent_rt" });
   if (!ok) return false;
+  const uploadFastPath = Boolean(fastUploadPath);
+  let seededFastIntent = false;
+  if (uploadFastPath) {
+    seededFastIntent = motherV2SeedProvisionalIntent(payload, { requestId });
+    if (seededFastIntent) {
+      motherIdleDispatchGeneration()
+        .then((started) => {
+          if (started) return;
+          motherV2ScheduleSpeculativePrefetch({
+            reason: "upload_fast_seed_retry",
+            delayMs: 0,
+          });
+        })
+        .catch(() => {
+          motherV2ScheduleSpeculativePrefetch({
+            reason: "upload_fast_seed_retry",
+            delayMs: 0,
+          });
+        });
+    }
+  }
 
   const failRealtimeIntent = ({ sourceTag = "intent_rt_failed", message = null } = {}) => {
     const current = state.motherIdle;
@@ -14855,6 +16375,19 @@ async function motherV2RequestIntentInference() {
       return;
     }
     const fallbackMessage = String(message || "Mother realtime intent inference failed.").trim();
+    if (uploadFastPath) {
+      appendMotherTraceLog({
+        kind: "intent_realtime_soft_failed",
+        traceId: current.telemetry?.traceId || null,
+        actionVersion,
+        request_id: requestId,
+        source: String(sourceTag || "intent_rt_failed"),
+        error: fallbackMessage,
+      }).catch(() => {});
+      clearOwnedPendingRequest(current);
+      renderMotherReadout();
+      return;
+    }
     appendMotherTraceLog({
       kind: "intent_realtime_failed",
       traceId: current.telemetry?.traceId || null,
@@ -14873,10 +16406,35 @@ async function motherV2RequestIntentInference() {
     snapshotPath = `${state.runDir}/mother-intent-${suffix}.png`;
     const frameId = `mother-intent-a${actionVersion}-${suffix}`;
     try {
-      await waitForIntentImagesLoaded({ timeoutMs: 900 });
+      if (!uploadFastPath) {
+        await waitForIntentImagesLoaded({
+          timeoutMs: Math.max(0, Number(snapshotLoadTimeoutMs) || 0),
+          maxImages: MOTHER_V2_INTENT_TARGET_IMAGE_LIMIT,
+        });
+      }
       render();
-      await writeIntentSnapshot(snapshotPath, { maxDimPx: INTENT_SNAPSHOT_MAX_DIM_PX });
-      await writeIntentContextEnvelope(snapshotPath, frameId, { motherContextPayload: payload }).catch(() => null);
+      await writeIntentSnapshot(snapshotPath, {
+        maxDimPx: Math.max(420, Number(snapshotMaxDimPx) || INTENT_SNAPSHOT_MAX_DIM_PX),
+      });
+      if (!uploadFastPath) {
+        const ctxResult = await motherV2WriteIntentContextEnvelopeWithRefRetry(
+          snapshotPath,
+          frameId,
+          payload,
+          { requestId, actionVersion }
+        );
+        if (!ctxResult.ok) {
+          appendMotherTraceLog({
+            kind: "intent_request_context_refs_soft_missing",
+            traceId: idle.telemetry?.traceId || null,
+            actionVersion,
+            request_id: requestId,
+            snapshot_path: snapshotPath || null,
+            required_refs: ctxResult.requiredRefs,
+            available_refs: ctxResult.availableRefs,
+          }).catch(() => {});
+        }
+      }
     } catch {
       snapshotPath = null;
     }
@@ -14911,6 +16469,9 @@ async function motherV2RequestIntentInference() {
     payload_path: payloadPath || null,
     snapshot_path: snapshotPath || null,
   }).catch(() => {});
+  if (!seededFastIntent) {
+    motherV2SeedProvisionalIntent(payload, { requestId });
+  }
   setStatus("Mother: hypothesizing intent (realtime)…");
   renderMotherReadout();
 
@@ -14936,7 +16497,7 @@ async function motherV2RequestIntentInference() {
   return true;
 }
 
-async function motherV2RequestPromptCompile() {
+async function motherV2RequestPromptCompile({ speculative = false } = {}) {
   const idle = state.motherIdle;
   if (!idle || !idle.intent) return null;
   const sanitizedIntent = motherV2SanitizeIntentImageIds(idle.intent) || idle.intent;
@@ -14947,7 +16508,7 @@ async function motherV2RequestPromptCompile() {
     action_version: Number(idle.actionVersion) || 0,
     intent: sanitizedIntent,
     roles: motherV2RoleMapClone(),
-    creative_directive: String(sanitizedIntent?.creative_directive || "").trim() || MOTHER_CREATIVE_DIRECTIVE,
+    creative_directive: String(sanitizedIntent?.creative_directive || "").trim() || motherCurrentCreativeDirective(),
     transformation_mode: motherV2NormalizeTransformationMode(sanitizedIntent?.transformation_mode),
     intensity: clamp(Number(idle.intensity) || 62, 0, 100),
     active_id: activeId ? String(activeId) : null,
@@ -14960,6 +16521,7 @@ async function motherV2RequestPromptCompile() {
   };
   const payloadPath = await motherV2WritePayloadFile("mother_prompt_compile", payload);
   idle.pendingPromptCompile = true;
+  idle.pendingPromptCompileSpeculative = Boolean(speculative);
   idle.pendingPromptCompilePath = payloadPath;
   idle.pendingActionVersion = Number(idle.actionVersion) || 0;
   clearTimeout(idle.pendingPromptCompileTimeout);
@@ -14967,11 +16529,12 @@ async function motherV2RequestPromptCompile() {
     if (!state.motherIdle?.pendingPromptCompile) return;
     if (Number(state.motherIdle.pendingActionVersion) !== Number(state.motherIdle.actionVersion)) {
       state.motherIdle.pendingPromptCompile = false;
+      state.motherIdle.pendingPromptCompileSpeculative = false;
       return;
     }
     const compiled = motherV2CompilePromptLocal(payload);
     motherV2DispatchCompiledPrompt(compiled).catch(() => {});
-  }, 2200);
+  }, MOTHER_V2_PROMPT_COMPILE_FALLBACK_MS);
 
   if (payloadPath) {
     await invoke("write_pty", { data: `${PTY_COMMANDS.PROMPT_COMPILE} ${quoteForPtyArg(payloadPath)}\n` }).catch(() => {});
@@ -15013,9 +16576,10 @@ function motherV2ExtractPromptConstraints(compiled = {}) {
 }
 
 function motherV2BuildPromptComposerResult(compiled = {}) {
+  const currentDirective = motherCurrentCreativeDirective();
   let positive = String(compiled?.positive_prompt || "").trim();
-  if (positive && !positive.toLowerCase().includes(MOTHER_CREATIVE_DIRECTIVE)) {
-    positive = `Create one ${MOTHER_CREATIVE_DIRECTIVE} image. ${positive}`.trim();
+  if (positive && !positive.toLowerCase().includes(currentDirective.toLowerCase())) {
+    positive = `Create one ${currentDirective} image. ${positive}`.trim();
   }
   const negative = String(compiled?.negative_prompt || "").trim();
   const constraints = motherV2ExtractPromptConstraints(compiled).slice(0, 8);
@@ -15099,10 +16663,11 @@ function motherV2CollectGenerationImagePaths() {
     return [latestUploadId, latestMotherId];
   })();
 
-  // Prioritize explicit user selection first so follow-up proposals use the intended pair/set.
-  pushMany(preferredPairIds);
-  pushMany(selectedIds);
+  // Keep the active image first so proposal drafts behave like controlled edits of the active anchor.
   push(activeId);
+  // Then include user-selected/supporting references.
+  pushMany(selectedIds);
+  pushMany(preferredPairIds);
 
   const roles = motherV2RoleMapClone();
   pushMany(roles.subject);
@@ -15115,23 +16680,201 @@ function motherV2CollectGenerationImagePaths() {
   pushMany(motherIdleBaseImageItems().map((item) => String(item?.id || "").trim()));
   if (!ids.length) push(getVisibleActiveId());
 
-  const paths = [];
+  const records = [];
   for (const imageId of ids) {
     const item = state.imagesById.get(imageId) || null;
     if (!item?.path) continue;
     const path = String(item.path || "").trim();
     if (!path) continue;
-    if (paths.includes(path)) continue;
-    paths.push(path);
+    if (records.some((entry) => entry.path === path)) continue;
+    const rect = state.freeformRects.get(imageId) || null;
+    const transform = readFreeformRectTransform(rect);
+    records.push({
+      id: imageId,
+      path,
+      rect: rect
+        ? {
+            w: Math.max(1, Number(rect.w) || 1),
+            h: Math.max(1, Number(rect.h) || 1),
+            autoAspect: rect.autoAspect !== false,
+          }
+        : null,
+      transform: {
+        rotateDeg: transform.rotateDeg,
+        skewXDeg: transform.skewXDeg,
+      },
+    });
   }
+  const paths = records.map((entry) => entry.path);
 
   const initImage = paths[0] || null;
   const referenceImages = paths.slice(1);
   return {
     sourceImageIds: ids.slice(),
+    sourceRecords: records,
+    sourceImagesOriginal: paths.slice(),
     sourceImages: paths,
     initImage,
     referenceImages,
+  };
+}
+
+function motherV2GenerationImageTransformSignature(record = null) {
+  const imageId = String(record?.id || "").trim();
+  const path = String(record?.path || "").trim();
+  if (!imageId || !path) return "";
+  const transform = record?.transform && typeof record.transform === "object" ? record.transform : {};
+  const rect = record?.rect && typeof record.rect === "object" ? record.rect : {};
+  const rotateDeg = normalizeFreeformRotateDeg(transform.rotateDeg);
+  const skewXDeg = normalizeFreeformSkewDeg(transform.skewXDeg);
+  const w = Math.max(1, Math.round(Number(rect.w) || 1));
+  const h = Math.max(1, Math.round(Number(rect.h) || 1));
+  const resized = rect.autoAspect === false ? 1 : 0;
+  return `${imageId}|${path}|w${w}|h${h}|r${rotateDeg.toFixed(2)}|s${skewXDeg.toFixed(2)}|z${resized}`;
+}
+
+function motherV2ShouldExportGenerationImageTransform(record = null) {
+  if (!record || typeof record !== "object") return false;
+  const rotateDeg = normalizeFreeformRotateDeg(record?.transform?.rotateDeg);
+  const skewXDeg = normalizeFreeformSkewDeg(record?.transform?.skewXDeg);
+  const userResized = record?.rect?.autoAspect === false;
+  if (userResized) return true;
+  return Math.abs(rotateDeg) > 0.2 || Math.abs(skewXDeg) > 0.2;
+}
+
+function motherV2GenerationImageDispatchSize(record = null, img = null) {
+  const rectW = Math.max(1, Number(record?.rect?.w) || Number(img?.naturalWidth) || Number(img?.width) || 1);
+  const rectH = Math.max(1, Number(record?.rect?.h) || Number(img?.naturalHeight) || Number(img?.height) || 1);
+  const aspect = rectW / Math.max(1, rectH);
+  const targetLong = clamp(
+    Math.round(Math.max(rectW, rectH) * 2),
+    MOTHER_V2_DISPATCH_TRANSFORM_EXPORT_MIN_DIM_PX,
+    MOTHER_V2_DISPATCH_TRANSFORM_EXPORT_MAX_DIM_PX
+  );
+  let baseW = aspect >= 1 ? targetLong : Math.round(targetLong * aspect);
+  let baseH = aspect >= 1 ? Math.round(targetLong / Math.max(0.0001, aspect)) : targetLong;
+  baseW = Math.max(1, Math.round(baseW));
+  baseH = Math.max(1, Math.round(baseH));
+  return { baseW, baseH };
+}
+
+async function motherV2ExportGenerationImageTransform(record = null) {
+  if (!state.runDir || !record?.path || !record?.id) return null;
+  if (!motherV2ShouldExportGenerationImageTransform(record)) return null;
+  const signature = motherV2GenerationImageTransformSignature(record);
+  if (!signature) return null;
+
+  const cachedPath = String(motherDispatchTransformExportCache.get(signature) || "").trim();
+  if (cachedPath && (await exists(cachedPath).catch(() => false))) return cachedPath;
+
+  const cacheKey = Math.abs(hash32(signature)).toString(16);
+  const outPath = `${state.runDir}/mother-src-${cacheKey}.png`;
+  if (await exists(outPath).catch(() => false)) {
+    motherDispatchTransformExportCache.set(signature, outPath);
+    return outPath;
+  }
+
+  const imageId = String(record.id || "").trim();
+  const item = state.imagesById.get(imageId) || null;
+  let img = item?.img || null;
+  if (!img) {
+    img = await loadImage(record.path).catch(() => null);
+  }
+  if (!img) return null;
+  const transform = readFreeformRectTransform(record.transform || null);
+  const { baseW, baseH } = motherV2GenerationImageDispatchSize(record, img);
+  const points = transformedRectPolygonPoints({
+    x: 0,
+    y: 0,
+    w: baseW,
+    h: baseH,
+    rotateDeg: transform.rotateDeg,
+    skewXDeg: transform.skewXDeg,
+  });
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const pt of points) {
+    minX = Math.min(minX, Number(pt?.x) || 0);
+    minY = Math.min(minY, Number(pt?.y) || 0);
+    maxX = Math.max(maxX, Number(pt?.x) || 0);
+    maxY = Math.max(maxY, Number(pt?.y) || 0);
+  }
+  const outW = Math.max(1, Math.min(4096, Math.ceil(maxX - minX)));
+  const outH = Math.max(1, Math.min(4096, Math.ceil(maxY - minY)));
+  const canvas = document.createElement("canvas");
+  canvas.width = outW;
+  canvas.height = outH;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.clearRect(0, 0, outW, outH);
+  drawImageRectWithTransform(ctx, img, {
+    x: -minX,
+    y: -minY,
+    w: baseW,
+    h: baseH,
+    rotateDeg: transform.rotateDeg,
+    skewXDeg: transform.skewXDeg,
+  });
+  await writeCanvasPngToPath(canvas, outPath);
+  motherDispatchTransformExportCache.set(signature, outPath);
+  if (motherDispatchTransformExportCache.size > 96) {
+    const oldestKey = motherDispatchTransformExportCache.keys().next().value;
+    if (oldestKey) motherDispatchTransformExportCache.delete(oldestKey);
+  }
+  return outPath;
+}
+
+async function motherV2ResolveGenerationImagePayload(imagePayload = null) {
+  const payload = imagePayload && typeof imagePayload === "object" ? imagePayload : {};
+  const records = Array.isArray(payload.sourceRecords) ? payload.sourceRecords : [];
+  if (!records.length) return payload;
+
+  const manifest = [];
+  const resolvedPaths = [];
+  for (let i = 0; i < records.length; i += 1) {
+    const record = records[i];
+    const sourcePath = String(record?.path || "").trim();
+    if (!sourcePath) continue;
+    const rotateDeg = normalizeFreeformRotateDeg(record?.transform?.rotateDeg);
+    const skewXDeg = normalizeFreeformSkewDeg(record?.transform?.skewXDeg);
+    const userResized = record?.rect?.autoAspect === false;
+    const canTransform = i < MOTHER_V2_DISPATCH_TRANSFORM_EXPORT_LIMIT;
+    let dispatchPath = sourcePath;
+    let transformed = false;
+    if (canTransform) {
+      const exportedPath = await motherV2ExportGenerationImageTransform(record).catch(() => null);
+      if (exportedPath) {
+        dispatchPath = exportedPath;
+        transformed = true;
+      }
+    }
+    manifest.push({
+      id: String(record?.id || "").trim() || null,
+      source_path: sourcePath,
+      dispatch_path: dispatchPath,
+      transformed,
+      rotate_deg: rotateDeg,
+      skew_x_deg: skewXDeg,
+      user_resized: userResized,
+      canvas_rect:
+        record?.rect && typeof record.rect === "object"
+          ? {
+              w: Math.max(1, Math.round(Number(record.rect.w) || 1)),
+              h: Math.max(1, Math.round(Number(record.rect.h) || 1)),
+            }
+          : null,
+    });
+    if (!resolvedPaths.includes(dispatchPath)) resolvedPaths.push(dispatchPath);
+  }
+  return {
+    ...payload,
+    sourceImagesOriginal: Array.isArray(payload.sourceImagesOriginal) ? payload.sourceImagesOriginal.slice() : [],
+    sourceImages: resolvedPaths,
+    initImage: resolvedPaths[0] || null,
+    referenceImages: resolvedPaths.slice(1),
+    dispatchImageManifest: manifest,
   };
 }
 
@@ -15141,7 +16884,7 @@ function motherV2BuildOperationSpec({ intent = null, imagePayload = null, action
   const targetIds = motherV2NormalizeImageIdList(parsedIntent.target_ids || []);
   const referenceIds = motherV2NormalizeImageIdList(parsedIntent.reference_ids || []);
   const activeId = String(getVisibleActiveId() || "").trim();
-  const targetId = targetIds[0] || activeId || sourceImageIds[0] || null;
+  const targetId = activeId || targetIds[0] || sourceImageIds[0] || null;
   if (!targetId) return null;
   const refs = [];
   const refSet = new Set([targetId]);
@@ -15216,6 +16959,7 @@ function motherV2CollectImageInteractionSignals(imageIds = []) {
       map.set(imageId, {
         move_count: 0,
         resize_count: 0,
+        transform_count: 0,
         selection_hits: 0,
         action_grid_hits: 0,
         last_event_at_ms: 0,
@@ -15233,12 +16977,13 @@ function motherV2CollectImageInteractionSignals(imageIds = []) {
     if (!entry || typeof entry !== "object") continue;
     const type = String(entry.type || "").trim();
     const atMs = Number(entry.at_ms) || 0;
-    if (type === "image_move" || type === "image_resize") {
+    if (type === "image_move" || type === "image_resize" || type === "image_transform") {
       const imageId = String(entry.image_id || "").trim();
       const row = ensure(out, imageId);
       if (!row) continue;
       if (type === "image_move") row.move_count += 1;
       if (type === "image_resize") row.resize_count += 1;
+      if (type === "image_transform") row.transform_count += 1;
       if (atMs > row.last_transform_at_ms) row.last_transform_at_ms = atMs;
       if (atMs > row.last_event_at_ms) row.last_event_at_ms = atMs;
       continue;
@@ -15331,12 +17076,18 @@ function motherV2BuildNonGeminiModelContextEnvelope({
   const selectedIds = normalizeIds(proposalLock.selected_ids || getVisibleSelectedIds(), 6);
   const targetIds = normalizeIds(proposalLock.target_ids || intent.target_ids, 6);
   const referenceIds = normalizeIds(proposalLock.reference_ids || intent.reference_ids, 8);
+  const dispatchManifestById = new Map(
+    (Array.isArray(imagePayload?.dispatchImageManifest) ? imagePayload.dispatchImageManifest : [])
+      .map((entry) => [String(entry?.id || "").trim(), entry])
+      .filter(([id]) => Boolean(id))
+  );
   const packetImages = Array.isArray(packet?.images) ? packet.images : [];
   let images = packetImages
     .map((entry) => {
       if (!entry || typeof entry !== "object") return null;
       const id = String(entry.id || "").trim();
       if (!id) return null;
+      const dispatchEntry = dispatchManifestById.get(id) || null;
       return {
         slot: String(entry.slot || "").trim() || null,
         id,
@@ -15345,6 +17096,20 @@ function motherV2BuildNonGeminiModelContextEnvelope({
         weight: Number.isFinite(Number(entry.weight)) ? Number(entry.weight) : null,
         preserve: (Array.isArray(entry.preserve) ? entry.preserve : []).map((v) => String(v || "").trim()).filter(Boolean).slice(0, 2),
         transform: (Array.isArray(entry.transform) ? entry.transform : []).map((v) => String(v || "").trim()).filter(Boolean).slice(0, 2),
+        transform_state:
+          entry.transform_state && typeof entry.transform_state === "object"
+            ? {
+                rotate_deg: Number(entry.transform_state.rotate_deg) || 0,
+                skew_x_deg: Number(entry.transform_state.skew_x_deg) || 0,
+                user_resized: Boolean(entry.transform_state.user_resized),
+              }
+            : dispatchEntry
+            ? {
+                rotate_deg: Number(dispatchEntry.rotate_deg) || 0,
+                skew_x_deg: Number(dispatchEntry.skew_x_deg) || 0,
+                user_resized: Boolean(dispatchEntry.user_resized),
+              }
+            : null,
         position_tier: String(entry.position_tier || "").trim() || null,
         size_tier: String(entry.size_tier || "").trim() || null,
       };
@@ -15360,6 +17125,7 @@ function motherV2BuildNonGeminiModelContextEnvelope({
       weight: null,
       preserve: [],
       transform: [],
+      transform_state: null,
       position_tier: null,
       size_tier: null,
     }));
@@ -15412,7 +17178,7 @@ function motherV2BuildNonGeminiModelContextEnvelope({
     260
   );
   const creativeDirective = clampText(
-    String(compiled?.creative_directive || intent?.creative_directive || MOTHER_CREATIVE_DIRECTIVE),
+    String(compiled?.creative_directive || intent?.creative_directive || motherCurrentCreativeDirective()),
     140
   );
   const guidance =
@@ -15420,12 +17186,17 @@ function motherV2BuildNonGeminiModelContextEnvelope({
       ? [
           "Keep directives concise and concrete.",
           "Prioritize subject continuity and lighting realism.",
+          "Respect canvas rotation/skew/scale intent from input geometry.",
           "Treat must_not constraints as hard requirements.",
         ]
       : [
           "Use explicit composition and subject continuity instructions.",
+          "Respect canvas rotation/skew/scale intent from input geometry.",
           "Treat must_not constraints as hard requirements.",
         ];
+  const transformedSourceCount = Array.isArray(imagePayload?.dispatchImageManifest)
+    ? imagePayload.dispatchImageManifest.filter((entry) => Boolean(entry?.transformed)).length
+    : 0;
   const envelope = {
     schema: `brood.model_context_envelope.${providerKey}.v1`,
     provider: providerKey,
@@ -15443,6 +17214,8 @@ function motherV2BuildNonGeminiModelContextEnvelope({
     alternate_lens_guidance: shotTypeHints.alternate_lens_guidance,
     layout,
     source_image_ids: sourceImageIds.slice(0, 8),
+    respect_canvas_transforms: true,
+    transformed_source_images: transformedSourceCount,
     target_ids: targetIds.slice(0, 4),
     reference_ids: referenceIds.slice(0, 6),
     selected_ids: selectedIds.slice(0, 4),
@@ -15500,6 +17273,7 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
   const SATURATION_K = Object.freeze({
     move: 8,
     resize: 4,
+    transform: 5,
     selection: 8,
     action: 4,
   });
@@ -15633,7 +17407,7 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
 
   const actionVersion = Number(idle?.actionVersion) || 0;
   const summary = String(intent.summary || motherV2ProposalSentence(intent) || "").trim();
-  const creativeDirective = String(compiled?.creative_directive || intent.creative_directive || MOTHER_CREATIVE_DIRECTIVE || "").trim();
+  const creativeDirective = String(compiled?.creative_directive || intent.creative_directive || motherCurrentCreativeDirective() || "").trim();
   const transformationMode = motherV2NormalizeTransformationMode(
     intent.transformation_mode || compiled?.transformation_mode || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE
   );
@@ -15641,19 +17415,52 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
     ? intent.transformation_mode_candidates
     : [];
   const transformationModeCandidates = [];
-  const pushModeCandidate = (rawMode) => {
-    const mode = motherV2MaybeTransformationMode(rawMode);
-    if (!mode) return;
-    if (!transformationModeCandidates.includes(mode)) transformationModeCandidates.push(mode);
+  const pushModeCandidate = (rawMode, rawConfidence = null, rawAweJoyScore = null, { idx = null } = {}) => {
+    const normalized = motherV2NormalizeModeCandidate(
+      {
+        mode: rawMode,
+        confidence: rawConfidence,
+        awe_joy_score: rawAweJoyScore,
+      },
+      { idx: idx === null ? transformationModeCandidates.length : idx }
+    );
+    if (!normalized) return;
+    const existing = transformationModeCandidates.find((entry) => entry.mode === normalized.mode) || null;
+    if (!existing) {
+      transformationModeCandidates.push(normalized);
+      return;
+    }
+    if (typeof normalized.confidence === "number") {
+      const prior = typeof existing.confidence === "number" ? existing.confidence : -1;
+      if (normalized.confidence > prior) existing.confidence = normalized.confidence;
+    }
+    if (typeof normalized.awe_joy_score === "number") {
+      const prior = typeof existing.awe_joy_score === "number" ? existing.awe_joy_score : -1;
+      if (normalized.awe_joy_score > prior) existing.awe_joy_score = normalized.awe_joy_score;
+    }
+    const priorIdx = Number.isFinite(Number(existing._idx)) ? Number(existing._idx) : Number.MAX_SAFE_INTEGER;
+    const nextIdx = Number.isFinite(Number(normalized._idx)) ? Number(normalized._idx) : Number.MAX_SAFE_INTEGER;
+    existing._idx = Math.min(priorIdx, nextIdx);
   };
-  pushModeCandidate(transformationMode);
+  pushModeCandidate(transformationMode, null, null, { idx: 0 });
+  let modeCandidateIdx = 1;
   for (const entry of transformationModeCandidatesRaw) {
-    if (entry && typeof entry === "object") pushModeCandidate(entry.mode || entry.transformation_mode);
-    else pushModeCandidate(entry);
+    if (entry && typeof entry === "object") {
+      pushModeCandidate(entry.mode || entry.transformation_mode, entry.confidence, entry.awe_joy_score, { idx: modeCandidateIdx });
+    } else {
+      pushModeCandidate(entry, null, null, { idx: modeCandidateIdx });
+    }
+    modeCandidateIdx += 1;
   }
+  transformationModeCandidates.sort(motherV2CompareModeCandidates);
+  const rankedTransformationModeCandidates = transformationModeCandidates.map((entry) => ({
+    mode: entry.mode,
+    awe_joy_score: typeof entry.awe_joy_score === "number" ? entry.awe_joy_score : null,
+    confidence: typeof entry.confidence === "number" ? entry.confidence : null,
+  }));
   const shotTypeHints = motherV2ShotTypeHints({
     preferredMode: transformationMode,
-    candidateModes: transformationModeCandidates,
+    candidateModes: rankedTransformationModeCandidates,
   });
   const placementPolicy = String(
     intent.placement_policy ||
@@ -15678,13 +17485,16 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
   const draft = [];
   for (const imageId of sourceImageIds) {
     const item = state.imagesById.get(imageId) || null;
-    const rectNorm = toRectNorm(state.freeformRects.get(imageId) || null);
+    const rectCss = state.freeformRects.get(imageId) || null;
+    const rectNorm = toRectNorm(rectCss);
+    const rectTransform = readFreeformRectTransform(rectCss);
     const canvasAreaRatio = rectNorm ? Math.max(0, Number(rectNorm.w) * Number(rectNorm.h)) : 0;
     const aspectRatioNorm =
       rectNorm && Number(rectNorm.h) > 1e-6 ? Number(rectNorm.w) / Number(rectNorm.h) : null;
     const signal = signalsById.get(imageId) || {
       move_count: 0,
       resize_count: 0,
+      transform_count: 0,
       selection_hits: 0,
       action_grid_hits: 0,
       last_event_at_ms: 0,
@@ -15699,20 +17509,27 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
     const isObject = roleTags.includes("object");
 
     const preserve = [];
-    if (isTarget || isSubject || isObject || imageId === sourceImageIds[0]) preserve.push("subject identity");
+    if (isTarget || isSubject || isObject || imageId === sourceImageIds[0]) preserve.push("primary anchor");
     if (Number(signal.resize_count) > 0) preserve.push("user framing emphasis");
+    if (Number(signal.transform_count) > 0) preserve.push("user transform intent");
     if (Number(signal.selection_hits) > 0 || Number(signal.action_grid_hits) > 0) preserve.push("user focus cues");
 
     const transform = [];
     if (isReference || isModel || isMediator) transform.push("material and style cues");
     if (Number(signal.move_count) > 0) transform.push("composition relationship cues");
+    if (Number(signal.transform_count) > 0) transform.push("rotation/skew cues");
+    if (Math.abs(Number(rectTransform.rotateDeg) || 0) > 0.2 || Math.abs(Number(rectTransform.skewXDeg) || 0) > 0.2) {
+      transform.push("canvas transform lock");
+    }
+    if (rectCss?.autoAspect === false) transform.push("user scale lock");
 
     const moveSat = sat(signal.move_count, SATURATION_K.move);
     const resizeSat = sat(signal.resize_count, SATURATION_K.resize);
+    const transformSat = sat(signal.transform_count, SATURATION_K.transform);
     const selectionSat = sat(signal.selection_hits, SATURATION_K.selection);
     const actionSat = sat(signal.action_grid_hits, SATURATION_K.action);
     const interactionBase =
-      0.35 * moveSat + 0.35 * resizeSat + 0.25 * selectionSat + 0.05 * actionSat;
+      0.3 * moveSat + 0.22 * resizeSat + 0.23 * transformSat + 0.2 * selectionSat + 0.05 * actionSat;
     const transformRecencyMs = Number(signal.last_transform_at_ms) || 0;
     const recencyMs = transformRecencyMs || Number(signal.last_event_at_ms) || 0;
     const ageMs = recencyMs ? Math.max(0, nowMs - recencyMs) : INTERACTION_STALE_CUTOFF_MS + 1;
@@ -15726,6 +17543,7 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
     if (
       Number(signal.move_count) <= 1 &&
       Number(signal.resize_count) === 0 &&
+      Number(signal.transform_count) === 0 &&
       Number(signal.selection_hits) <= 2 &&
       Number(signal.action_grid_hits) === 0
     ) {
@@ -15747,6 +17565,11 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
       interaction_raw: Math.max(0, Number(interactionRaw) || 0),
       interaction_stale: interactionStale,
       rect_norm: rectNorm,
+      transform_state: {
+        rotate_deg: round2(rectTransform.rotateDeg),
+        skew_x_deg: round2(rectTransform.skewXDeg),
+        user_resized: rectCss?.autoAspect === false,
+      },
       canvas_area_ratio: canvasAreaRatio,
       aspect_ratio_norm: aspectRatioNorm,
       focus_score_raw: 0,
@@ -16069,6 +17892,7 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
       role_tags: entry.role_tags.slice(0, 3),
       preserve: Array.from(new Set(entry.preserve)).slice(0, 3),
       transform: Array.from(new Set(entry.transform)).slice(0, 3),
+      transform_state: entry.transform_state,
       geometry_trace: entry.geometry_trace,
     };
   });
@@ -16083,6 +17907,7 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
     tier: idx === 0 || entry.weight >= 0.5 ? "PRIMARY" : entry.weight >= 0.2 ? "SECONDARY" : "ACCENT",
     preserve: Array.from(new Set(entry.preserve)).slice(0, 3),
     transform: Array.from(new Set(entry.transform)).slice(0, 3),
+    transform_state: entry.transform_state,
     weight: round4(entry.weight),
     focus_score: round4(entry.focus_score),
     geometry_score: round4(entry.geometry_score),
@@ -16123,17 +17948,19 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
   }
   const mustNotFinal = mustNot.slice(0, 6);
   const overallConfidence = round4(clamp01(0.6 * interactionConfidence + 0.4 * geometryConfidence));
+  const dispatchManifest = Array.isArray(imagePayload?.dispatchImageManifest) ? imagePayload.dispatchImageManifest : [];
+  const transformedDispatchCount = dispatchManifest.filter((entry) => Boolean(entry?.transformed)).length;
 
   return {
     schema: "brood.gemini.context_packet.v2",
     action_version: actionVersion,
     intent_id: String(intent.intent_id || idle?.intent?.intent_id || "").trim() || null,
     goal: `Intent summary: ${summary || MOTHER_V2_PROPOSAL_BY_MODE[transformationMode] || "Create one coherent image."}`,
-    creative_directive: creativeDirective || MOTHER_CREATIVE_DIRECTIVE,
-    optimization_target: "stunningly awe-inspiring and joyous + novel",
+    creative_directive: creativeDirective || motherCurrentCreativeDirective(),
+    optimization_target: motherCurrentOptimizationTarget(),
     style: {
-      creative_directive: creativeDirective || MOTHER_CREATIVE_DIRECTIVE,
-      optimization_target: "stunningly awe-inspiring and joyous + novel",
+      creative_directive: creativeDirective || motherCurrentCreativeDirective(),
+      optimization_target: motherCurrentOptimizationTarget(),
       shot_type: shotTypeHints.primary_shot_type,
       lighting_profile: shotTypeHints.primary_lighting_profile,
       lens_guidance: shotTypeHints.primary_lens_guidance,
@@ -16152,7 +17979,7 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
     },
     proposal_lock: {
       transformation_mode: transformationMode,
-      transformation_mode_candidates: transformationModeCandidates,
+      transformation_mode_candidates: rankedTransformationModeCandidates,
       placement_policy: placementPolicy,
       shot_type: shotTypeHints.primary_shot_type,
       alternate_shot_type: shotTypeHints.alternate_shot_type,
@@ -16164,10 +17991,17 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
       selected_ids: selectedIds,
       target_ids: targetIds,
       reference_ids: referenceIds,
+      respect_canvas_transforms: true,
     },
     images: imagesCompact,
     relations: compactRelations,
     image_manifest: imageManifest,
+    source_image_manifest: dispatchManifest.slice(0, 10),
+    canvas_transform_lock: {
+      respect_canvas_transforms: true,
+      transformed_source_images: transformedDispatchCount,
+      active_id: activeId,
+    },
     spatial_relations: spatialRelations,
     behavior_signals: {
       focus_rank: imageManifest.map((entry) => entry.id).slice(0, 5),
@@ -16194,7 +18028,8 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
 async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "", { selectedModel = "" } = {}) {
   const idle = state.motherIdle;
   if (!idle) return false;
-  const imagePayload = motherV2CollectGenerationImagePaths();
+  const collectedImagePayload = motherV2CollectGenerationImagePaths();
+  const imagePayload = await motherV2ResolveGenerationImagePayload(collectedImagePayload).catch(() => collectedImagePayload);
   const sanitizedIntent = motherV2SanitizeIntentImageIds(idle.intent) || idle.intent || null;
   const resolvedModel = String(selectedModel || settings.imageModel || MOTHER_GENERATION_MODEL).trim() || MOTHER_GENERATION_MODEL;
   const geminiContextPacket = motherV2BuildGeminiContextPacket({
@@ -16237,6 +18072,37 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "", {
   if (compiledGenerationParams.person_generation !== undefined && compiledGenerationParams.person_generation !== null) {
     generationParams.person_generation = compiledGenerationParams.person_generation;
   }
+  if (compiledGenerationParams.transport_retries !== undefined && compiledGenerationParams.transport_retries !== null) {
+    const retriesValue = Number(compiledGenerationParams.transport_retries);
+    if (Number.isFinite(retriesValue)) {
+      generationParams.transport_retries = Math.max(0, Math.trunc(retriesValue));
+    }
+  }
+  if (compiledGenerationParams.request_retries !== undefined && compiledGenerationParams.request_retries !== null) {
+    const requestRetriesValue = Number(compiledGenerationParams.request_retries);
+    if (Number.isFinite(requestRetriesValue)) {
+      generationParams.request_retries = Math.max(0, Math.trunc(requestRetriesValue));
+    }
+  }
+  if (compiledGenerationParams.retry_backoff !== undefined && compiledGenerationParams.retry_backoff !== null) {
+    const retryBackoffValue = Number(compiledGenerationParams.retry_backoff);
+    if (Number.isFinite(retryBackoffValue) && retryBackoffValue > 0) {
+      generationParams.retry_backoff = retryBackoffValue;
+    }
+  }
+  const normalizedModel = String(resolvedModel || "").toLowerCase();
+  const isGeminiProImagePreviewModel = normalizedModel.includes("gemini-3-pro-image-preview");
+  if (isGeminiProImagePreviewModel) {
+    if (typeof generationParams.image_size !== "string" || !generationParams.image_size.trim()) {
+      generationParams.image_size = "1K";
+    }
+    if (generationParams.transport_retries === undefined && generationParams.request_retries === undefined) {
+      generationParams.transport_retries = 0;
+    }
+    if (generationParams.retry_backoff === undefined) {
+      generationParams.retry_backoff = 0.1;
+    }
+  }
   const payload = {
     schema: "brood.mother.generate.v2",
     action_version: Number(idle.actionVersion) || 0,
@@ -16247,6 +18113,12 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "", {
     init_image: imagePayload.initImage,
     reference_images: imagePayload.referenceImages,
     gemini_context_packet: geminiContextPacket,
+    source_image_manifest: Array.isArray(imagePayload.dispatchImageManifest)
+      ? imagePayload.dispatchImageManifest.slice(0, 10)
+      : null,
+    canvas_transform_lock: {
+      respect_canvas_transforms: true,
+    },
   };
   const operationSpec = motherV2BuildOperationSpec({
     intent: sanitizedIntent,
@@ -16284,6 +18156,9 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "", {
     placement_policy: sanitizedIntent?.placement_policy || null,
     selected_ids: getVisibleSelectedIds().map((v) => String(v || "").trim()).filter(Boolean),
     source_image_ids: Array.isArray(imagePayload.sourceImageIds) ? imagePayload.sourceImageIds.slice(0, 10) : [],
+    source_images_transformed: Array.isArray(imagePayload.dispatchImageManifest)
+      ? imagePayload.dispatchImageManifest.filter((entry) => Boolean(entry?.transformed)).length
+      : 0,
     init_image_id: Array.isArray(imagePayload.sourceImageIds) && imagePayload.sourceImageIds.length
       ? String(imagePayload.sourceImageIds[0] || "")
       : null,
@@ -16296,21 +18171,30 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "", {
 async function motherV2DispatchCompiledPrompt(compiled = {}) {
   const idle = state.motherIdle;
   if (!idle) return false;
-  if (idle.phase !== MOTHER_IDLE_STATES.DRAFTING) return false;
+  const inIntentPhase = idle.phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING;
+  const effectiveSpeculative = Boolean(idle.pendingPromptCompileSpeculative && inIntentPhase);
+  const canDispatch =
+    idle.phase === MOTHER_IDLE_STATES.DRAFTING ||
+    effectiveSpeculative;
+  if (!canDispatch) return false;
   if (Number(idle.pendingActionVersion) !== Number(idle.actionVersion)) {
     motherV2MarkStale({ stage: "prompt_compile", pending_action_version: Number(idle.pendingActionVersion) || 0 });
     return false;
   }
   idle.pendingPromptCompile = false;
+  idle.pendingPromptCompileSpeculative = false;
   clearTimeout(idle.pendingPromptCompileTimeout);
   idle.pendingPromptCompileTimeout = null;
   idle.promptMotionProfile = motherV2PromptMotionProfileFromCompiled(compiled);
   const selectedModel = motherPreferredGenerationModel();
+  const dispatchProvider = providerFromModel(selectedModel) || null;
   idle.lastDispatchModel = selectedModel;
   const promptComposer = motherV2BuildPromptComposerResult(compiled);
   const promptLine = promptComposer.line;
   if (!promptLine) {
-    motherIdleHandleGenerationFailed("Mother prompt compile produced an empty prompt.");
+    motherIdleHandleGenerationFailed("Mother prompt compile produced an empty prompt.", {
+      speculative: effectiveSpeculative,
+    });
     return false;
   }
   motherIdleResetDispatchCorrelation({ rememberPendingVersion: true });
@@ -16320,14 +18204,28 @@ async function motherV2DispatchCompiledPrompt(compiled = {}) {
   idle.pendingGeneration = true;
   idle.pendingDispatchToken = Date.now();
   idle.pendingPromptLine = promptLine;
-  state.pendingMotherDraft = {
-    sourceIds: motherV2RoleContextIds(),
-    startedAt: Date.now(),
-  };
-  state.lastAction = "Mother Suggestion";
-  state.expectingArtifacts = true;
-  setImageFxActive(true, "Mother Draft");
-  setStatus("Mother: drafting…");
+  idle.pendingDispatchSpeculative = effectiveSpeculative;
+  idle.pendingDispatchProposalMode = motherV2CurrentIntentMode(idle.intent);
+  if (effectiveSpeculative) {
+    idle.speculativePrefetchInFlight = true;
+    idle.speculativePrefetchReadyMode = null;
+    state.lastAction = "Mother Suggestion";
+    state.pendingMotherDraft = null;
+    state.expectingArtifacts = false;
+  } else {
+    state.pendingMotherDraft = {
+      sourceIds: motherV2RoleContextIds(),
+      startedAt: Date.now(),
+    };
+    state.lastAction = "Mother Suggestion";
+    state.expectingArtifacts = true;
+    setImageFxActive(true, "Mother Draft");
+    portraitWorking("Mother Draft", {
+      providerOverride: dispatchProvider,
+      forceProvider: true,
+    });
+    setStatus("Mother: drafting…");
+  }
   await maybeOverrideEngineImageModel(selectedModel);
   motherIdleArmDispatchTimeout(
     MOTHER_GENERATION_TIMEOUT_MS,
@@ -16350,7 +18248,9 @@ async function motherV2DispatchCompiledPrompt(compiled = {}) {
     }
     // Mother drafts must dispatch via structured payload so source_images always includes
     // the full canvas context (uploaded + Mother-generated images).
-    motherIdleHandleGenerationFailed("Mother could not start drafting payload.");
+    motherIdleHandleGenerationFailed("Mother could not start drafting payload.", {
+      speculative: effectiveSpeculative,
+    });
     return false;
   }
   return true;
@@ -16360,9 +18260,16 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
   if (!id || !path) return false;
   const idle = state.motherIdle;
   if (!idle) return false;
-  if (idle.phase !== MOTHER_IDLE_STATES.DRAFTING) return false;
+  const isSpeculativeIntentDispatch =
+    idle.phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING &&
+    Boolean(idle.pendingDispatchSpeculative);
+  if (!(idle.phase === MOTHER_IDLE_STATES.DRAFTING || isSpeculativeIntentDispatch)) return false;
   if (!idle.pendingDispatchToken && !idle.pendingGeneration) return false;
 
+  const dispatchWasSpeculative = Boolean(idle.pendingDispatchSpeculative);
+  const dispatchMode = motherV2NormalizeTransformationMode(
+    idle.pendingDispatchProposalMode || idle.intent?.transformation_mode
+  );
   const incomingVersionId = String(versionId || "").trim() || null;
   if (!motherIdleDispatchVersionMatches(incomingVersionId)) {
     if (incomingVersionId) motherIdleRememberIgnoredVersion(incomingVersionId);
@@ -16380,6 +18287,10 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
     if (!idle.pendingVersionId && incomingVersionId) idle.pendingVersionId = incomingVersionId;
     motherIdleResetDispatchCorrelation({ rememberPendingVersion: true });
     idle.pendingDispatchToken = 0;
+    idle.pendingDispatchSpeculative = false;
+    idle.pendingDispatchProposalMode = null;
+    idle.pendingPromptCompileSpeculative = false;
+    idle.speculativePrefetchInFlight = false;
     idle.dispatchTimeoutExtensions = 0;
     state.pendingMotherDraft = null;
     state.expectingArtifacts = false;
@@ -16394,6 +18305,10 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
   if (!idle.pendingVersionId && incomingVersionId) idle.pendingVersionId = incomingVersionId;
   motherIdleResetDispatchCorrelation({ rememberPendingVersion: true });
   idle.pendingDispatchToken = 0;
+  idle.pendingDispatchSpeculative = false;
+  idle.pendingDispatchProposalMode = null;
+  idle.pendingPromptCompileSpeculative = false;
+  idle.speculativePrefetchInFlight = false;
   idle.dispatchTimeoutExtensions = 0;
   state.pendingMotherDraft = null;
   idle.generatedImageId = id;
@@ -16416,6 +18331,8 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
     receiptPath: receiptPath ? String(receiptPath) : null,
     versionId: incomingVersionId,
     actionVersion: Number(idle.actionVersion) || 0,
+    proposalMode: dispatchMode,
+    speculative: dispatchWasSpeculative,
     createdAt: Date.now(),
     receiptMeta: null,
     img: null,
@@ -16436,6 +18353,38 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
   idle.drafts = [draft];
   idle.selectedDraftId = draft.id;
   idle.hoverDraftId = draft.id;
+  if (dispatchWasSpeculative && idle.phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
+    const currentMode = motherV2CurrentIntentMode(idle.intent);
+    if (dispatchMode !== currentMode) {
+      if (draft?.path) removeFile(String(draft.path)).catch(() => {});
+      if (draft?.receiptPath) removeFile(String(draft.receiptPath)).catch(() => {});
+      idle.drafts = [];
+      idle.selectedDraftId = null;
+      idle.hoverDraftId = null;
+      idle.speculativePrefetchReadyMode = null;
+      appendMotherTraceLog({
+        kind: "speculative_prefetch_discarded",
+        traceId: idle.telemetry?.traceId || null,
+        actionVersion: Number(idle.actionVersion) || 0,
+        proposal_mode: dispatchMode,
+        current_mode: currentMode,
+      }).catch(() => {});
+      renderMotherReadout();
+      requestRender();
+      return true;
+    }
+    idle.speculativePrefetchReadyMode = dispatchMode;
+    appendMotherTraceLog({
+      kind: "speculative_prefetch_ready",
+      traceId: idle.telemetry?.traceId || null,
+      actionVersion: Number(idle.actionVersion) || 0,
+      draft_id: draft.id,
+      proposal_mode: dispatchMode,
+    }).catch(() => {});
+    renderMotherReadout();
+    requestRender();
+    return true;
+  }
   motherIdleTransitionTo(MOTHER_IDLE_EVENTS.DRAFT_READY);
   setStatus("Mother: proposal ready.");
   renderMotherReadout();
@@ -16446,6 +18395,10 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
     draft_id: draft.id,
     intent_id: idle.intent?.intent_id || null,
     placement_policy: idle.intent?.placement_policy || null,
+    optimization_target: motherCurrentOptimizationTarget(),
+    proposal_mode: motherV2NormalizeTransformationMode(idle.intent?.transformation_mode),
+    proposal_candidates: motherV2ProposalCandidateSummary(idle.intent, { limit: 5 }),
+    proposal_confidence: Number(idle.intent?.confidence) || 0,
   }).catch(() => {});
   if (!isReelSizeLocked()) {
     showToast("Mother proposal ready. ✓ deploy, ✕ dismiss, R reroll.", "tip", 2200);
@@ -16454,14 +18407,24 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
   return true;
 }
 
-function motherIdleHandleGenerationFailed(message = null) {
+function motherIdleHandleGenerationFailed(message = null, { speculative = false } = {}) {
   const idle = state.motherIdle;
   if (!idle) return;
+  const speculativeFailure = Boolean(
+    speculative ||
+      (
+        idle.phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING &&
+        (idle.pendingDispatchSpeculative || idle.pendingPromptCompileSpeculative || idle.speculativePrefetchInFlight)
+      )
+  );
   clearMotherIdleDispatchTimeout();
+  motherV2ClearLiveProposalRefreshTimer();
+  idle.liveProposalUpdating = false;
   motherIdleResetDispatchCorrelation({ rememberPendingVersion: true });
   idle.dispatchTimeoutExtensions = 0;
   idle.pendingGeneration = false;
   idle.pendingPromptCompile = false;
+  idle.pendingPromptCompileSpeculative = false;
   idle.pendingIntent = false;
   idle.pendingIntentRequestId = null;
   idle.pendingIntentTransportRetryCount = 0;
@@ -16471,11 +18434,26 @@ function motherIdleHandleGenerationFailed(message = null) {
   idle.pendingIntentPath = null;
   idle.pendingIntentPayload = null;
   idle.pendingDispatchToken = 0;
+  idle.pendingDispatchSpeculative = false;
+  idle.pendingDispatchProposalMode = null;
+  idle.speculativePrefetchInFlight = false;
   state.pendingMotherDraft = null;
   state.expectingArtifacts = false;
   restoreEngineImageModelIfNeeded();
   setImageFxActive(false);
   updatePortraitIdle();
+  if (speculativeFailure) {
+    idle.speculativePrefetchReadyMode = null;
+    appendMotherTraceLog({
+      kind: "speculative_prefetch_failed",
+      traceId: idle.telemetry?.traceId || null,
+      actionVersion: Number(idle.actionVersion) || 0,
+      error: message || null,
+    }).catch(() => {});
+    renderMotherReadout();
+    requestRender();
+    return;
+  }
   motherIdleTransitionTo(MOTHER_IDLE_EVENTS.REJECT);
   if (state.motherIdle?.phase === MOTHER_IDLE_STATES.COOLDOWN) {
     motherV2ArmCooldown({ rejected: true });
@@ -16510,15 +18488,20 @@ function motherIdleRollbackDraftFxIfDispatchUnarmed() {
 async function motherIdleDispatchGeneration() {
   const idle = state.motherIdle;
   if (!idle) return false;
-  if (idle.phase !== MOTHER_IDLE_STATES.DRAFTING) return false;
+  const allowSpeculative = idle.phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING;
+  if (!(idle.phase === MOTHER_IDLE_STATES.DRAFTING || allowSpeculative)) return false;
   if (state.pointer.active) return false;
-  motherIdlePrimeDraftFx();
+  if (!allowSpeculative) {
+    motherIdlePrimeDraftFx();
+  } else {
+    state.pendingMotherDraft = null;
+  }
   const ok = await ensureEngineSpawned({ reason: "mother_drafting" });
   if (!ok) {
     motherIdleRollbackDraftFxIfDispatchUnarmed();
     return false;
   }
-  await motherV2RequestPromptCompile();
+  await motherV2RequestPromptCompile({ speculative: allowSpeculative });
   const dispatchArmed = Boolean(idle.pendingPromptCompile || idle.pendingGeneration || idle.pendingDispatchToken);
   if (!dispatchArmed) {
     motherIdleRollbackDraftFxIfDispatchUnarmed();
@@ -16602,7 +18585,9 @@ function motherIdleArmIntentTimer() {
   if (idle.phase !== MOTHER_IDLE_STATES.WATCHING) return;
   const nowMs = Date.now();
   const intentIdleMs = motherV2IntentIdleDelayMs(nowMs);
-  const dueAt = (Number(state.lastInteractionAt) || nowMs) + intentIdleMs;
+  const quietDueAt = (Number(state.lastInteractionAt) || nowMs) + intentIdleMs;
+  const settleDueAt = motherV2UploadSettleDueAtMs();
+  const dueAt = Math.max(quietDueAt, settleDueAt || 0);
   const delay = Math.max(25, dueAt - Date.now());
   idle.intentIdleTimer = setTimeout(async () => {
     idle.intentIdleTimer = null;
@@ -16614,6 +18599,10 @@ function motherIdleArmIntentTimer() {
     const now = Date.now();
     const intentDelayMs = motherV2IntentIdleDelayMs(now);
     if (quietFor < intentDelayMs) {
+      motherIdleArmIntentTimer();
+      return;
+    }
+    if (motherV2UploadSettleRemainingMs(now) > 0) {
       motherIdleArmIntentTimer();
       return;
     }
@@ -16652,7 +18641,7 @@ function motherV2CancelInFlight({ reason = "interaction" } = {}) {
   }).catch(() => {});
 }
 
-function motherIdleSyncFromInteraction({ userInteraction = false, semantic = true } = {}) {
+function motherIdleSyncFromInteraction({ userInteraction = false, semantic = true, proposalLiveRefresh = false } = {}) {
   const idle = state.motherIdle;
   if (!idle) return;
   if (idle.commitMutationInFlight) return;
@@ -16681,11 +18670,29 @@ function motherIdleSyncFromInteraction({ userInteraction = false, semantic = tru
       }).catch(() => {});
     }
     idle.multiUploadIdleBoostUntil = 0;
+    const shouldPreserveLiveProposal = Boolean(
+      proposalLiveRefresh &&
+      motherV2CanUseLiveProposalRefresh(idle) &&
+      (
+        idle.phase === MOTHER_IDLE_STATES.OFFERING ||
+        idle.phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING ||
+        idle.phase === MOTHER_IDLE_STATES.WATCHING ||
+        idle.phase === MOTHER_IDLE_STATES.OBSERVING
+      )
+    );
     idle.actionVersion = (Number(idle.actionVersion) || 0) + 1;
     closeMotherWheelMenu({ immediate: false });
     clearMotherIdleTimers({ first: true, takeover: true });
     motherV2CancelInFlight({ reason: "user_interaction" });
-    if (idle.phase === MOTHER_IDLE_STATES.OFFERING || idle.phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
+    if (shouldPreserveLiveProposal) {
+      motherV2ClearDraftsOnly({ removeFiles: true });
+      idle.liveProposalUpdating = true;
+      const refreshDelay = state.pointer.active ? MOTHER_V2_LIVE_PROPOSAL_REFRESH_DEBOUNCE_MS : 120;
+      motherV2ScheduleLiveProposalRefresh({
+        reason: "canvas_structure_edit",
+        delayMs: refreshDelay,
+      });
+    } else if (idle.phase === MOTHER_IDLE_STATES.OFFERING || idle.phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
       motherV2ClearIntentAndDrafts({ removeFiles: true });
     }
     motherIdleTransitionTo(MOTHER_IDLE_EVENTS.USER_INTERACTION);
@@ -16696,7 +18703,7 @@ function motherIdleSyncFromInteraction({ userInteraction = false, semantic = tru
   }
 }
 
-function bumpInteraction({ motherHot = true, semantic = true } = {}) {
+function bumpInteraction({ motherHot = true, semantic = true, proposalLiveRefresh = false } = {}) {
   state.lastInteractionAt = Date.now();
   if (motherHot) state.lastMotherHotAt = state.lastInteractionAt;
   // Keep the Mother realtime pulse/video responsive while the user is working.
@@ -16706,7 +18713,7 @@ function bumpInteraction({ motherHot = true, semantic = true } = {}) {
     state.mother.hotSyncAt = now;
     syncMotherPortrait();
   }
-  motherIdleSyncFromInteraction({ userInteraction: true, semantic });
+  motherIdleSyncFromInteraction({ userInteraction: true, semantic, proposalLiveRefresh });
 }
 
 const USER_EVENT_MAX = 72;
@@ -18242,6 +20249,116 @@ function computeFreeformRectsPx(canvasW, canvasH) {
   return rects;
 }
 
+function normalizeFreeformRotateDeg(raw) {
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return 0;
+  let out = value % 360;
+  if (out > 180) out -= 360;
+  if (out <= -180) out += 360;
+  return Number(out.toFixed(2));
+}
+
+function normalizeFreeformSkewDeg(raw) {
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return 0;
+  return Number(clamp(value, -28, 28).toFixed(2));
+}
+
+function readFreeformRectTransform(rectCss = null) {
+  return {
+    rotateDeg: normalizeFreeformRotateDeg(rectCss?.rotateDeg),
+    skewXDeg: normalizeFreeformSkewDeg(rectCss?.skewXDeg),
+  };
+}
+
+function drawImageRectWithTransform(ctx, img, { x = 0, y = 0, w = 1, h = 1, rotateDeg = 0, skewXDeg = 0 } = {}) {
+  if (!ctx || !img) return;
+  const rotation = normalizeFreeformRotateDeg(rotateDeg);
+  const skew = normalizeFreeformSkewDeg(skewXDeg);
+  const rotationRad = (rotation * Math.PI) / 180;
+  const skewTan = Math.tan((skew * Math.PI) / 180);
+  if (Math.abs(rotation) < 0.001 && Math.abs(skew) < 0.001) {
+    ctx.drawImage(img, x, y, w, h);
+    return;
+  }
+  ctx.save();
+  ctx.translate(x + w * 0.5, y + h * 0.5);
+  if (Math.abs(rotationRad) > 0.00001) ctx.rotate(rotationRad);
+  if (Math.abs(skewTan) > 0.00001) ctx.transform(1, 0, skewTan, 1, 0, 0);
+  ctx.beginPath();
+  ctx.rect(-w * 0.5, -h * 0.5, w, h);
+  ctx.clip();
+  ctx.drawImage(img, -w * 0.5, -h * 0.5, w, h);
+  ctx.restore();
+}
+
+function transformedRectPolygonPoints({ x = 0, y = 0, w = 1, h = 1, rotateDeg = 0, skewXDeg = 0 } = {}) {
+  const width = Math.max(1, Number(w) || 1);
+  const height = Math.max(1, Number(h) || 1);
+  const rotation = normalizeFreeformRotateDeg(rotateDeg);
+  const skew = normalizeFreeformSkewDeg(skewXDeg);
+  const rotationRad = (rotation * Math.PI) / 180;
+  const cos = Math.cos(rotationRad);
+  const sin = Math.sin(rotationRad);
+  const skewTan = Math.tan((skew * Math.PI) / 180);
+  const cx = (Number(x) || 0) + width * 0.5;
+  const cy = (Number(y) || 0) + height * 0.5;
+  const local = [
+    { x: -width * 0.5, y: -height * 0.5 },
+    { x: width * 0.5, y: -height * 0.5 },
+    { x: width * 0.5, y: height * 0.5 },
+    { x: -width * 0.5, y: height * 0.5 },
+  ];
+  return local.map((pt) => {
+    const sx = pt.x + skewTan * pt.y;
+    const sy = pt.y;
+    return {
+      x: cx + sx * cos - sy * sin,
+      y: cy + sx * sin + sy * cos,
+    };
+  });
+}
+
+function untransformPointForRect(point = null, { x = 0, y = 0, w = 1, h = 1, rotateDeg = 0, skewXDeg = 0 } = {}) {
+  const px = Number(point?.x);
+  const py = Number(point?.y);
+  const width = Math.max(1, Number(w) || 1);
+  const height = Math.max(1, Number(h) || 1);
+  const cx = (Number(x) || 0) + width * 0.5;
+  const cy = (Number(y) || 0) + height * 0.5;
+  if (!Number.isFinite(px) || !Number.isFinite(py)) return { x: cx, y: cy };
+  const rotation = normalizeFreeformRotateDeg(rotateDeg);
+  const skew = normalizeFreeformSkewDeg(skewXDeg);
+  if (Math.abs(rotation) < 0.001 && Math.abs(skew) < 0.001) {
+    return { x: px, y: py };
+  }
+  const rotationRad = (rotation * Math.PI) / 180;
+  const cos = Math.cos(rotationRad);
+  const sin = Math.sin(rotationRad);
+  const dx = px - cx;
+  const dy = py - cy;
+  const rx = dx * cos + dy * sin;
+  const ry = -dx * sin + dy * cos;
+  const skewTan = Math.tan((skew * Math.PI) / 180);
+  const lx = rx - skewTan * ry;
+  const ly = ry;
+  return {
+    x: cx + lx,
+    y: cy + ly,
+  };
+}
+
+function drawPolygonPath(ctx, points = []) {
+  if (!ctx || !Array.isArray(points) || points.length < 2) return false;
+  ctx.beginPath();
+  ctx.moveTo(Number(points[0].x) || 0, Number(points[0].y) || 0);
+  for (let i = 1; i < points.length; i += 1) {
+    ctx.lineTo(Number(points[i].x) || 0, Number(points[i].y) || 0);
+  }
+  ctx.closePath();
+  return true;
+}
+
 function clampFreeformRectCss(rectCss, canvasCssW, canvasCssH, { margin = 14, minSize = 44 } = {}) {
   const w = Math.max(minSize, Math.round(Number(rectCss?.w) || 0));
   const h = Math.max(minSize, Math.round(Number(rectCss?.h) || 0));
@@ -18253,6 +20370,8 @@ function clampFreeformRectCss(rectCss, canvasCssW, canvasCssH, { margin = 14, mi
     w,
     h,
     autoAspect: Boolean(rectCss?.autoAspect),
+    rotateDeg: normalizeFreeformRotateDeg(rectCss?.rotateDeg),
+    skewXDeg: normalizeFreeformSkewDeg(rectCss?.skewXDeg),
   };
 }
 
@@ -18263,17 +20382,33 @@ function freeformWorkspaceClampOptions(canvasCssW, canvasCssH, { minSize = 44 } 
   return { margin: workspaceMargin, minSize };
 }
 
-function hitTestFreeformCornerHandleWithPad(ptCanvas, rectPx, padPx = 0) {
+function hitTestFreeformCornerHandleWithPad(ptCanvas, rectPx, padPx = 0, rectTransform = null) {
   if (!ptCanvas || !rectPx) return null;
   const dpr = getDpr();
   const hs = Math.max(10, Math.round(10 * dpr));
   const r = Math.round(hs / 2) + Math.max(0, Math.round(Number(padPx) || 0));
-  const corners = [
-    { id: "nw", x: rectPx.x, y: rectPx.y },
-    { id: "ne", x: rectPx.x + rectPx.w, y: rectPx.y },
-    { id: "sw", x: rectPx.x, y: rectPx.y + rectPx.h },
-    { id: "se", x: rectPx.x + rectPx.w, y: rectPx.y + rectPx.h },
-  ];
+  const transform = readFreeformRectTransform(rectTransform);
+  const transformedCorners = transformedRectPolygonPoints({
+    x: rectPx.x,
+    y: rectPx.y,
+    w: rectPx.w,
+    h: rectPx.h,
+    rotateDeg: transform.rotateDeg,
+    skewXDeg: transform.skewXDeg,
+  });
+  const corners = Array.isArray(transformedCorners) && transformedCorners.length === 4
+    ? [
+        { id: "nw", x: transformedCorners[0].x, y: transformedCorners[0].y },
+        { id: "ne", x: transformedCorners[1].x, y: transformedCorners[1].y },
+        { id: "se", x: transformedCorners[2].x, y: transformedCorners[2].y },
+        { id: "sw", x: transformedCorners[3].x, y: transformedCorners[3].y },
+      ]
+    : [
+        { id: "nw", x: rectPx.x, y: rectPx.y },
+        { id: "ne", x: rectPx.x + rectPx.w, y: rectPx.y },
+        { id: "sw", x: rectPx.x, y: rectPx.y + rectPx.h },
+        { id: "se", x: rectPx.x + rectPx.w, y: rectPx.y + rectPx.h },
+      ];
   for (const c of corners) {
     if (Math.abs(ptCanvas.x - c.x) <= r && Math.abs(ptCanvas.y - c.y) <= r) return c.id;
   }
@@ -18292,7 +20427,8 @@ function hitTestAnyFreeformCornerHandle(ptCanvas, { padPx = 0 } = {}) {
     const [id, rect] = entries[i];
     if (isImageEffectTokenized(id)) continue;
     if (!rect) continue;
-    const corner = hitTestFreeformCornerHandleWithPad({ x, y }, rect, padPx);
+    const rectTransform = state.freeformRects.get(id) || null;
+    const corner = hitTestFreeformCornerHandleWithPad({ x, y }, rect, padPx, rectTransform);
     if (!corner) continue;
     return { id, corner };
   }
@@ -18354,7 +20490,15 @@ function resizeFreeformRectFromCorner(startRectCss, corner, pointerCss, canvasCs
   const ny1 = Math.max(fy, cy);
 
   return clampFreeformRectCss(
-    { x: nx0, y: ny0, w: nx1 - nx0, h: ny1 - ny0, autoAspect: false },
+    {
+      x: nx0,
+      y: ny0,
+      w: nx1 - nx0,
+      h: ny1 - ny0,
+      autoAspect: false,
+      rotateDeg: start.rotateDeg,
+      skewXDeg: start.skewXDeg,
+    },
     canvasCssW,
     canvasCssH,
     clampOpts
@@ -18373,8 +20517,20 @@ function hitTestMulti(pt, { includeTokenized = false } = {}) {
     const [id, rect] = entries[i];
     if (!includeTokenized && isImageEffectTokenized(id)) continue;
     if (!rect) continue;
-    if (x < rect.x || x > rect.x + rect.w) continue;
-    if (y < rect.y || y > rect.y + rect.h) continue;
+    const rectTransform = state.freeformRects.get(id) || null;
+    const localPoint = untransformPointForRect(
+      { x, y },
+      {
+        x: rect.x,
+        y: rect.y,
+        w: rect.w,
+        h: rect.h,
+        rotateDeg: rectTransform?.rotateDeg,
+        skewXDeg: rectTransform?.skewXDeg,
+      }
+    );
+    if (localPoint.x < rect.x || localPoint.x > rect.x + rect.w) continue;
+    if (localPoint.y < rect.y || localPoint.y > rect.y + rect.h) continue;
     return id;
   }
   return null;
@@ -18396,8 +20552,20 @@ function hitTestMultiWithPad(pt, padPx = 0, { includeTokenized = false } = {}) {
     const [id, rect] = entries[i];
     if (!includeTokenized && isImageEffectTokenized(id)) continue;
     if (!rect) continue;
-    if (x < rect.x - pad || x > rect.x + rect.w + pad) continue;
-    if (y < rect.y - pad || y > rect.y + rect.h + pad) continue;
+    const rectTransform = state.freeformRects.get(id) || null;
+    const localPoint = untransformPointForRect(
+      { x, y },
+      {
+        x: rect.x,
+        y: rect.y,
+        w: rect.w,
+        h: rect.h,
+        rotateDeg: rectTransform?.rotateDeg,
+        skewXDeg: rectTransform?.skewXDeg,
+      }
+    );
+    if (localPoint.x < rect.x - pad || localPoint.x > rect.x + rect.w + pad) continue;
+    if (localPoint.y < rect.y - pad || localPoint.y > rect.y + rect.h + pad) continue;
     return id;
   }
   return null;
@@ -18464,11 +20632,16 @@ function getActiveImageRectCss() {
     const my = state.multiView?.offsetY || 0;
     const rect = state.activeId ? state.multiRects.get(state.activeId) : null;
     if (!rect) return null;
+    const rectTransform = readFreeformRectTransform(
+      state.activeId ? state.freeformRects.get(state.activeId) || null : null
+    );
     return {
       left: (mx + rect.x * ms) / dpr,
       top: (my + rect.y * ms) / dpr,
       width: (rect.w * ms) / dpr,
       height: (rect.h * ms) / dpr,
+      rotateDeg: rectTransform.rotateDeg,
+      skewXDeg: rectTransform.skewXDeg,
     };
   }
   if (state.canvasMode !== "single") return null;
@@ -18482,6 +20655,8 @@ function getActiveImageRectCss() {
     top: state.view.offsetY / dpr,
     width: (iw * state.view.scale) / dpr,
     height: (ih * state.view.scale) / dpr,
+    rotateDeg: 0,
+    skewXDeg: 0,
   };
 }
 
@@ -18494,11 +20669,14 @@ function getImageRectCss(imageId) {
     const my = state.multiView?.offsetY || 0;
     const rect = state.multiRects.get(imageId) || null;
     if (!rect) return null;
+    const rectTransform = readFreeformRectTransform(state.freeformRects.get(imageId) || null);
     return {
       left: (mx + rect.x * ms) / dpr,
       top: (my + rect.y * ms) / dpr,
       width: (rect.w * ms) / dpr,
       height: (rect.h * ms) / dpr,
+      rotateDeg: rectTransform.rotateDeg,
+      skewXDeg: rectTransform.skewXDeg,
     };
   }
   if (state.canvasMode !== "single") return null;
@@ -18569,6 +20747,7 @@ function hideImageFxOverlays() {
     fx.classList.add("hidden");
     fx.style.width = "0px";
     fx.style.height = "0px";
+    fx.style.transform = "none";
   }
 }
 
@@ -18586,12 +20765,20 @@ function updateImageFxRect() {
     if (!rect) {
       el.style.width = "0px";
       el.style.height = "0px";
+      el.style.transform = "none";
       return;
     }
+    const rotateDeg = Number(rect.rotateDeg) || 0;
+    const skewXDeg = Number(rect.skewXDeg) || 0;
     el.style.left = `${rect.left.toFixed(2)}px`;
     el.style.top = `${rect.top.toFixed(2)}px`;
     el.style.width = `${Math.max(0, rect.width).toFixed(2)}px`;
     el.style.height = `${Math.max(0, rect.height).toFixed(2)}px`;
+    el.style.transformOrigin = "50% 50%";
+    el.style.transform =
+      Math.abs(rotateDeg) > 0.001 || Math.abs(skewXDeg) > 0.001
+        ? `rotate(${rotateDeg.toFixed(2)}deg) skewX(${skewXDeg.toFixed(2)}deg)`
+        : "none";
   };
 
   const fallbackRect = getActiveImageRectCss();
@@ -20874,7 +23061,7 @@ async function setActiveImage(id, { preserveSelection = false, source = "system"
   if (state.timelineOpen) renderTimeline();
 }
 
-function addImage(item, { select = false } = {}) {
+function addImage(item, { select = false, deferAlwaysOnVision = false, deferAmbientIntent = false } = {}) {
   if (!item || !item.id || !item.path) return;
   if (state.imagesById.has(item.id)) return;
   const assignedPaletteIndex = Number(item.uiPaletteIndex);
@@ -20904,15 +23091,17 @@ function addImage(item, { select = false } = {}) {
   }
   showDropHint(false);
   scheduleVisualPromptWrite();
-  markAlwaysOnVisionDirty("image_add");
-  scheduleAlwaysOnVision();
+  if (!deferAlwaysOnVision) {
+    markAlwaysOnVisionDirty("image_add");
+    scheduleAlwaysOnVision();
+  }
   recordUserEvent("image_add", {
     image_id: String(item.id),
     kind: item.kind ? String(item.kind) : null,
     file: item.path ? basename(item.path) : null,
     n_images: state.images.length,
   });
-  if (intentAmbientActive()) {
+  if (!deferAmbientIntent && intentAmbientActive()) {
     updateEmptyCanvasHint();
     scheduleAmbientIntentInference({ immediate: true, reason: "add", imageIds: [item.id] });
   }
@@ -21535,7 +23724,11 @@ async function importLocalPathsAtCanvasPoint(
           receiptPath,
           label: basename(src),
         },
-        { select: focusImported ? ok === 0 : ok === 0 && !state.activeId }
+        {
+          select: focusImported ? ok === 0 : ok === 0 && !state.activeId,
+          deferAlwaysOnVision: true,
+          deferAmbientIntent: true,
+        }
       );
       importedIds.push(artifactId);
       importedVisionPaths.push(dest);
@@ -21553,11 +23746,62 @@ async function importLocalPathsAtCanvasPoint(
     return { ok, failed, importedIds };
   }
 
+  const motherIdle = state.motherIdle;
+  if (motherIdle) {
+    motherIdle.lastUploadCompletedAt = Date.now();
+    motherIdle.speculativePrefetchReadyMode = null;
+    motherV2ClearSpeculativePrefetchTimer();
+    if (
+      motherIdle.phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING &&
+      motherV2HasRealProposalPayload(motherIdle.intent || null)
+    ) {
+      motherV2ScheduleSpeculativePrefetch({ reason: "upload_completed", delayMs: 0 });
+    }
+  }
   motherV2ArmMultiUploadIdleBoost(ok);
-  scheduleVisionDescribeBurst(importedVisionPaths, {
-    priority: true,
-    maxConcurrent: UPLOAD_DESCRIBE_PRIORITY_BURST,
-  });
+  if (
+    motherIdle &&
+    ok >= MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL &&
+    !state.pointer.active &&
+    !motherV2InCooldown()
+  ) {
+    if (motherIdle.phase === MOTHER_IDLE_STATES.OBSERVING) {
+      motherIdleTransitionTo(MOTHER_IDLE_EVENTS.IDLE_WINDOW_ELAPSED);
+      motherIdleTransitionTo(MOTHER_IDLE_EVENTS.IDLE_WINDOW_ELAPSED);
+    } else if (motherIdle.phase === MOTHER_IDLE_STATES.WATCHING) {
+      motherIdleTransitionTo(MOTHER_IDLE_EVENTS.IDLE_WINDOW_ELAPSED);
+    }
+    if (state.motherIdle?.phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
+      motherV2RequestIntentInference({
+        snapshotLoadTimeoutMs: MOTHER_V2_UPLOAD_FAST_INTENT_SNAPSHOT_WAIT_MS,
+        snapshotMaxDimPx: MOTHER_V2_UPLOAD_FAST_INTENT_SNAPSHOT_MAX_DIM_PX,
+        scheduleVisionLabels: false,
+        fastUploadPath: true,
+      }).catch(() => {});
+    }
+  }
+  const deferUploadVision =
+    Boolean(motherIdle) &&
+    ok >= MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL &&
+    String(state.motherIdle?.phase || "") === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING;
+  markAlwaysOnVisionDirty("image_add_batch");
+  if (deferUploadVision) {
+    const burstPaths = importedVisionPaths.slice();
+    setTimeout(() => {
+      if (!state.images.length) return;
+      scheduleAlwaysOnVision();
+      scheduleVisionDescribeBurst(burstPaths, {
+        priority: true,
+        maxConcurrent: 1,
+      });
+    }, MOTHER_V2_UPLOAD_VISION_DEFER_MS);
+  } else {
+    scheduleAlwaysOnVision();
+    scheduleVisionDescribeBurst(importedVisionPaths, {
+      priority: true,
+      maxConcurrent: UPLOAD_DESCRIBE_PRIORITY_BURST,
+    });
+  }
   const suffix = failed ? ` (${failed} failed)` : "";
   setStatus(`Engine: imported ${ok} photo${ok === 1 ? "" : "s"}${suffix}`, failed > 0);
 
@@ -21580,7 +23824,17 @@ async function importLocalPathsAtCanvasPoint(
   }
   if (intentAmbientActive()) {
     const touched = importedIds.filter((id) => state.imagesById.has(id));
-    if (touched.length) scheduleAmbientIntentInference({ immediate: true, reason: "import", imageIds: touched });
+    if (touched.length) {
+      setTimeout(() => {
+        const visibleTouched = touched.filter((id) => state.imagesById.has(id));
+        if (!visibleTouched.length) return;
+        scheduleAmbientIntentInference({
+          immediate: false,
+          reason: "import_batch",
+          imageIds: visibleTouched,
+        });
+      }, INTENT_AMBIENT_IMPORT_DELAY_MS);
+    }
   }
   requestRender();
   return { ok, failed, importedIds };
@@ -23207,6 +25461,8 @@ async function handleEventLegacy(event) {
     if (!idle) return;
     if (!idle.pendingPromptCompile) return;
     idle.pendingPromptCompile = false;
+    const compileWasSpeculative = Boolean(idle.pendingPromptCompileSpeculative);
+    idle.pendingPromptCompileSpeculative = false;
     idle.pendingPromptCompilePath = null;
     clearTimeout(idle.pendingPromptCompileTimeout);
     idle.pendingPromptCompileTimeout = null;
@@ -23220,7 +25476,14 @@ async function handleEventLegacy(event) {
       roles: motherV2RoleMapClone(),
       transformation_mode: motherV2NormalizeTransformationMode(idle.intent?.transformation_mode),
       intensity: clamp(Number(idle.intensity) || 62, 0, 100),
+      active_id: getVisibleActiveId() || null,
+      images: motherIdleBaseImageItems().map((item) => ({
+        id: String(item.id || ""),
+        file: basename(item.path || ""),
+        vision_desc: normalizeVisionHintForIntent(item?.visionDesc, { maxChars: REALTIME_VISION_LABEL_MAX_CHARS }) || "",
+      })),
     });
+    idle.pendingPromptCompileSpeculative = compileWasSpeculative;
     await motherV2DispatchCompiledPrompt(compiled).catch((err) => {
       motherIdleHandleGenerationFailed(err?.message || "Mother prompt compile fallback failed.");
     });
@@ -23287,8 +25550,7 @@ async function handleEventLegacy(event) {
       promptBenchmarkMarkSuccessFromArtifactEvent(event);
     }
     const motherDispatchInFlight =
-      state.motherIdle?.phase === MOTHER_IDLE_STATES.GENERATION_DISPATCHED &&
-      Boolean(state.motherIdle?.pendingDispatchToken) &&
+      motherV2DispatchInFlight(state.motherIdle) &&
       !state.pendingReplace &&
       !state.pendingBlend &&
       !state.pendingSwapDna &&
@@ -23621,7 +25883,7 @@ async function handleEventLegacy(event) {
   } else if (eventType === DESKTOP_EVENT_TYPES.GENERATION_FAILED) {
     promptBenchmarkMarkFailureFromGenerationFailedEvent(event);
     const idleDrafting = state.motherIdle?.phase === MOTHER_IDLE_STATES.DRAFTING;
-    const idleDispatching = Boolean(state.motherIdle?.pendingDispatchToken);
+    const idleDispatching = motherV2DispatchInFlight(state.motherIdle);
     if (idleDrafting && idleDispatching) {
       const msg = event.error ? `Mother draft failed: ${event.error}` : "Mother draft failed.";
       setStatus(`Engine: ${msg}`, true);
@@ -23632,9 +25894,12 @@ async function handleEventLegacy(event) {
       return;
     }
     const eventVersionId = motherEventVersionId(event);
-    const wasMotherDispatch =
-      state.motherIdle?.phase === MOTHER_IDLE_STATES.GENERATION_DISPATCHED &&
-      Boolean(state.motherIdle?.pendingDispatchToken);
+    const wasMotherDispatch = motherV2DispatchInFlight(state.motherIdle);
+    const hiddenSpeculativeDispatch = Boolean(
+      wasMotherDispatch &&
+      state.motherIdle?.phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING &&
+      state.motherIdle?.pendingDispatchSpeculative
+    );
     if (wasMotherDispatch) {
       if (!motherIdleDispatchVersionMatches(eventVersionId)) {
         if (eventVersionId) motherIdleRememberIgnoredVersion(eventVersionId);
@@ -23652,6 +25917,13 @@ async function handleEventLegacy(event) {
         });
         return;
       }
+      if (hiddenSpeculativeDispatch) {
+        const msg = event.error ? `Mother speculative prefetch failed: ${event.error}` : "Mother speculative prefetch failed.";
+        motherIdleHandleGenerationFailed(msg, { speculative: true });
+        renderMotherReadout();
+        requestRender();
+        return;
+      }
       clearMotherIdleDispatchTimeout();
       const idle = state.motherIdle;
       const retryModel =
@@ -23662,6 +25934,9 @@ async function handleEventLegacy(event) {
         const failedVersionId = idle.pendingVersionId || eventVersionId || null;
         idle.retryAttempted = true;
         idle.pendingDispatchToken = 0;
+        idle.pendingDispatchSpeculative = false;
+        idle.pendingDispatchProposalMode = null;
+        idle.pendingPromptCompileSpeculative = false;
         idle.dispatchTimeoutExtensions = 0;
         motherIdleResetDispatchCorrelation({ rememberPendingVersion: true });
         state.expectingArtifacts = false;
@@ -23675,7 +25950,7 @@ async function handleEventLegacy(event) {
           error: event.error ? String(event.error) : null,
         }).catch(() => {});
         setStatus(`Engine: Mother retrying with ${retryModel}…`);
-        const retried = await motherIdleDispatchGeneration({ forcedModel: retryModel, isRetry: true }).catch(() => false);
+        const retried = await motherIdleDispatchGeneration().catch(() => false);
         if (retried) {
           renderQuickActions();
           renderHudReadout();
@@ -24815,16 +27090,32 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     const h = rect.h * ms;
     const dimOfferSeed = isDimOfferSeedId(imageId);
     const effectToken = imageId ? effectTokenForImageId(imageId) : null;
+    const rectTransform = readFreeformRectTransform(state.freeformRects.get(imageId) || null);
+    const framePoints = transformedRectPolygonPoints({
+      x,
+      y,
+      w,
+      h,
+      rotateDeg: rectTransform.rotateDeg,
+      skewXDeg: rectTransform.skewXDeg,
+    });
     if (effectToken) {
       // Token visuals are rendered by the Pixi effects runtime on a dedicated transparent layer.
     } else if (item?.img) {
       wctx.save();
       if (dimOfferSeed) wctx.globalAlpha = 0.62;
-      wctx.drawImage(item.img, x, y, w, h);
+      drawImageRectWithTransform(wctx, item.img, {
+        x,
+        y,
+        w,
+        h,
+        rotateDeg: rectTransform.rotateDeg,
+        skewXDeg: rectTransform.skewXDeg,
+      });
       if (dimOfferSeed) {
         wctx.globalAlpha = 1;
         wctx.fillStyle = "rgba(6, 10, 14, 0.26)";
-        wctx.fillRect(x, y, w, h);
+        if (drawPolygonPath(wctx, framePoints)) wctx.fill();
       }
       wctx.restore();
     } else {
@@ -24832,10 +27123,10 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
       g.addColorStop(0, "rgba(18, 26, 37, 0.90)");
       g.addColorStop(1, "rgba(6, 8, 12, 0.96)");
       wctx.fillStyle = g;
-      wctx.fillRect(x, y, w, h);
+      if (drawPolygonPath(wctx, framePoints)) wctx.fill();
       if (dimOfferSeed) {
         wctx.fillStyle = "rgba(6, 10, 14, 0.26)";
-        wctx.fillRect(x, y, w, h);
+        if (drawPolygonPath(wctx, framePoints)) wctx.fill();
       }
       wctx.fillStyle = "rgba(230, 237, 243, 0.65)";
       wctx.font = `${Math.max(11, Math.round(12 * dpr))}px IBM Plex Mono`;
@@ -24850,7 +27141,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
       wctx.strokeStyle = motherGenerated ? "rgba(82, 255, 148, 0.90)" : "rgba(54, 76, 106, 0.58)";
       wctx.shadowColor = motherGenerated ? "rgba(82, 255, 148, 0.26)" : "rgba(0, 0, 0, 0.6)";
       wctx.shadowBlur = Math.round(10 * dpr);
-      wctx.strokeRect(x - 1, y - 1, w + 2, h + 2);
+      if (drawPolygonPath(wctx, framePoints)) wctx.stroke();
       wctx.restore();
     }
   }
@@ -24879,7 +27170,16 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
       const y = rect.y * ms + moy;
       const w = rect.w * ms;
       const h = rect.h * ms;
-      octx.strokeRect(x - 3, y - 3, w + 6, h + 6);
+      const rectTransform = readFreeformRectTransform(state.freeformRects.get(imageId) || null);
+      const points = transformedRectPolygonPoints({
+        x: x - 3,
+        y: y - 3,
+        w: w + 6,
+        h: h + 6,
+        rotateDeg: rectTransform.rotateDeg,
+        skewXDeg: rectTransform.skewXDeg,
+      });
+      if (drawPolygonPath(octx, points)) octx.stroke();
     }
     octx.restore();
   } else {
@@ -24900,7 +27200,16 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
         const y = rect.y * ms + moy;
         const w = rect.w * ms;
         const h = rect.h * ms;
-        octx.strokeRect(x - 2, y - 2, w + 4, h + 4);
+        const rectTransform = readFreeformRectTransform(state.freeformRects.get(imageId) || null);
+        const points = transformedRectPolygonPoints({
+          x: x - 2,
+          y: y - 2,
+          w: w + 4,
+          h: h + 4,
+          rotateDeg: rectTransform.rotateDeg,
+          skewXDeg: rectTransform.skewXDeg,
+        });
+        if (drawPolygonPath(octx, points)) octx.stroke();
       }
       octx.restore();
     }
@@ -24920,52 +27229,74 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
       const ay = activeRect.y * ms + moy;
       const aw = activeRect.w * ms;
       const ah = activeRect.h * ms;
+      const activeTransform = readFreeformRectTransform(state.freeformRects.get(state.activeId) || null);
+      const activeBorderPoints = transformedRectPolygonPoints({
+        x: ax,
+        y: ay,
+        w: aw,
+        h: ah,
+        rotateDeg: activeTransform.rotateDeg,
+        skewXDeg: activeTransform.skewXDeg,
+      });
 
       // Outer glow stroke (wide + soft).
       octx.strokeStyle = outerStroke;
       octx.lineWidth = Math.max(1, Math.round(10 * dpr));
       octx.shadowColor = mainShadow;
       octx.shadowBlur = Math.round(44 * dpr);
-      octx.strokeRect(ax - 5, ay - 5, aw + 10, ah + 10);
+      if (drawPolygonPath(octx, activeBorderPoints)) octx.stroke();
 
       // Main border stroke.
       octx.strokeStyle = mainStroke;
       octx.lineWidth = Math.max(1, Math.round(3.4 * dpr));
       octx.shadowColor = mainShadow;
       octx.shadowBlur = Math.round(28 * dpr);
-      octx.strokeRect(ax - 3, ay - 3, aw + 6, ah + 6);
+      if (drawPolygonPath(octx, activeBorderPoints)) octx.stroke();
 
       // Inner crisp stroke for definition.
       octx.shadowBlur = 0;
       octx.strokeStyle = innerStroke;
       octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
-      octx.strokeRect(ax - 1, ay - 1, aw + 2, ah + 2);
+      if (drawPolygonPath(octx, activeBorderPoints)) octx.stroke();
       octx.restore();
 
       // Freeform resize handles (corner drag). Render only for the active image to keep the canvas clean.
       const showHandles = state.tool === "pan" || intentModeActive();
       if (showHandles) {
-        const hs = Math.max(10, Math.round(10 * dpr));
+        const hs = Math.max(8, Math.round(8 * dpr));
         const r = Math.round(hs / 2);
-        const corners = [
-          { x: ax, y: ay, cursor: "nw" },
-          { x: ax + aw, y: ay, cursor: "ne" },
-          { x: ax, y: ay + ah, cursor: "sw" },
-          { x: ax + aw, y: ay + ah, cursor: "se" },
-        ];
+        const corners = Array.isArray(activeBorderPoints) && activeBorderPoints.length === 4
+          ? [
+              { x: Number(activeBorderPoints[0].x) || ax, y: Number(activeBorderPoints[0].y) || ay, cursor: "nw" },
+              { x: Number(activeBorderPoints[1].x) || (ax + aw), y: Number(activeBorderPoints[1].y) || ay, cursor: "ne" },
+              { x: Number(activeBorderPoints[3].x) || ax, y: Number(activeBorderPoints[3].y) || (ay + ah), cursor: "sw" },
+              { x: Number(activeBorderPoints[2].x) || (ax + aw), y: Number(activeBorderPoints[2].y) || (ay + ah), cursor: "se" },
+            ]
+          : [
+              { x: ax, y: ay, cursor: "nw" },
+              { x: ax + aw, y: ay, cursor: "ne" },
+              { x: ax, y: ay + ah, cursor: "sw" },
+              { x: ax + aw, y: ay + ah, cursor: "se" },
+            ];
         octx.save();
         octx.shadowColor = "rgba(0, 0, 0, 0.55)";
-        octx.shadowBlur = Math.round(12 * dpr);
+        octx.shadowBlur = Math.round(8 * dpr);
         for (const c of corners) {
-          octx.fillStyle = "rgba(8, 10, 14, 0.86)";
+          octx.fillStyle = "rgba(8, 10, 14, 0.78)";
           octx.strokeStyle = handleStroke;
-          octx.lineWidth = Math.max(1, Math.round(1.6 * dpr));
-          octx.beginPath();
-          octx.rect(Math.round(c.x - r), Math.round(c.y - r), hs, hs);
+          octx.lineWidth = Math.max(1, Math.round(1.25 * dpr));
+          _drawRoundedRect(octx, Math.round(c.x - r), Math.round(c.y - r), hs, hs, Math.max(2, Math.round(2 * dpr)));
           octx.fill();
           octx.stroke();
         }
         octx.restore();
+        renderActiveImageTransformControls(octx, {
+          anchorRect: { x: ax, y: ay, w: aw, h: ah },
+          anchorPoints: activeBorderPoints,
+          dpr,
+          accent: handleStroke,
+          targetId: state.activeId,
+        });
       }
     }
   }
@@ -24976,31 +27307,53 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     const ay = activeRect.y * ms + moy;
     const aw = activeRect.w * ms;
     const ah = activeRect.h * ms;
+    const activeTransform = readFreeformRectTransform(state.freeformRects.get(state.activeId) || null);
+    const activeBorderPoints = transformedRectPolygonPoints({
+      x: ax,
+      y: ay,
+      w: aw,
+      h: ah,
+      rotateDeg: activeTransform.rotateDeg,
+      skewXDeg: activeTransform.skewXDeg,
+    });
     const activeMother = isMotherGeneratedImageItem(activeItem);
     const handleStroke = activeMother ? "rgba(82, 255, 148, 0.92)" : "rgba(255, 212, 0, 0.92)";
     const showHandles = state.tool === "pan" || intentModeActive();
     if (showHandles) {
-      const hs = Math.max(10, Math.round(10 * dpr));
+      const hs = Math.max(8, Math.round(8 * dpr));
       const r = Math.round(hs / 2);
-      const corners = [
-        { x: ax, y: ay, cursor: "nw" },
-        { x: ax + aw, y: ay, cursor: "ne" },
-        { x: ax, y: ay + ah, cursor: "sw" },
-        { x: ax + aw, y: ay + ah, cursor: "se" },
-      ];
+      const corners = Array.isArray(activeBorderPoints) && activeBorderPoints.length === 4
+        ? [
+            { x: Number(activeBorderPoints[0].x) || ax, y: Number(activeBorderPoints[0].y) || ay, cursor: "nw" },
+            { x: Number(activeBorderPoints[1].x) || (ax + aw), y: Number(activeBorderPoints[1].y) || ay, cursor: "ne" },
+            { x: Number(activeBorderPoints[3].x) || ax, y: Number(activeBorderPoints[3].y) || (ay + ah), cursor: "sw" },
+            { x: Number(activeBorderPoints[2].x) || (ax + aw), y: Number(activeBorderPoints[2].y) || (ay + ah), cursor: "se" },
+          ]
+        : [
+            { x: ax, y: ay, cursor: "nw" },
+            { x: ax + aw, y: ay, cursor: "ne" },
+            { x: ax, y: ay + ah, cursor: "sw" },
+            { x: ax + aw, y: ay + ah, cursor: "se" },
+          ];
       octx.save();
       octx.shadowColor = "rgba(0, 0, 0, 0.55)";
-      octx.shadowBlur = Math.round(12 * dpr);
+      octx.shadowBlur = Math.round(8 * dpr);
       for (const c of corners) {
-        octx.fillStyle = "rgba(8, 10, 14, 0.86)";
+        octx.fillStyle = "rgba(8, 10, 14, 0.78)";
         octx.strokeStyle = handleStroke;
-        octx.lineWidth = Math.max(1, Math.round(1.6 * dpr));
-        octx.beginPath();
-        octx.rect(Math.round(c.x - r), Math.round(c.y - r), hs, hs);
+        octx.lineWidth = Math.max(1, Math.round(1.25 * dpr));
+        _drawRoundedRect(octx, Math.round(c.x - r), Math.round(c.y - r), hs, hs, Math.max(2, Math.round(2 * dpr)));
         octx.fill();
         octx.stroke();
       }
       octx.restore();
+      renderActiveImageTransformControls(octx, {
+        anchorRect: { x: ax, y: ay, w: aw, h: ah },
+        anchorPoints: activeBorderPoints,
+        dpr,
+        accent: handleStroke,
+        targetId: state.activeId,
+      });
     }
   }
 
@@ -25028,13 +27381,26 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   if (oddId && !isHiddenOfferSeedId(oddId)) {
     const rect = state.multiRects.get(oddId) || null;
     if (rect) {
+      const x = rect.x * ms + mox;
+      const y = rect.y * ms + moy;
+      const w = rect.w * ms;
+      const h = rect.h * ms;
+      const rectTransform = readFreeformRectTransform(state.freeformRects.get(oddId) || null);
+      const oddOutlinePoints = transformedRectPolygonPoints({
+        x: x - 3,
+        y: y - 3,
+        w: w + 6,
+        h: h + 6,
+        rotateDeg: rectTransform.rotateDeg,
+        skewXDeg: rectTransform.skewXDeg,
+      });
       octx.save();
       octx.lineWidth = Math.max(1, Math.round(2.5 * dpr));
       octx.setLineDash([Math.round(10 * dpr), Math.round(8 * dpr)]);
       octx.strokeStyle = "rgba(255, 72, 72, 0.86)";
       octx.shadowColor = "rgba(255, 72, 72, 0.18)";
       octx.shadowBlur = Math.round(18 * dpr);
-      octx.strokeRect(rect.x + mox - 3, rect.y + moy - 3, rect.w + 6, rect.h + 6);
+      if (drawPolygonPath(octx, oddOutlinePoints)) octx.stroke();
       octx.setLineDash([]);
       octx.restore();
     }
@@ -25212,6 +27578,255 @@ function hitTestMotherOverlayUi(ptCanvas) {
     if (ptCanvas.x >= x0 && ptCanvas.x <= x0 + w && ptCanvas.y >= y0 && ptCanvas.y <= y0 + h) return hit;
   }
   return null;
+}
+
+function activeImageTransformPushUiHit(hit = null) {
+  if (!hit?.rect) return;
+  if (!Array.isArray(state.activeImageTransformUiHits)) state.activeImageTransformUiHits = [];
+  state.activeImageTransformUiHits.push(hit);
+}
+
+function hitTestActiveImageTransformUi(ptCanvas) {
+  if (!ptCanvas) return null;
+  const hits = Array.isArray(state.activeImageTransformUiHits) ? state.activeImageTransformUiHits : [];
+  for (let i = hits.length - 1; i >= 0; i -= 1) {
+    const hit = hits[i];
+    const rect = hit?.rect;
+    if (!rect) continue;
+    const x0 = Number(rect.x) || 0;
+    const y0 = Number(rect.y) || 0;
+    const w = Number(rect.w) || 0;
+    const h = Number(rect.h) || 0;
+    if (ptCanvas.x >= x0 && ptCanvas.x <= x0 + w && ptCanvas.y >= y0 && ptCanvas.y <= y0 + h) return hit;
+  }
+  return null;
+}
+
+function ensureFreeformRectForImageId(rawId = "") {
+  const id = String(rawId || "").trim();
+  if (!id) return null;
+  let rect = state.freeformRects.get(id) || null;
+  if (rect) return rect;
+  const wrap = els.canvasWrap;
+  const canvasCssW = Number(wrap?.clientWidth) || 0;
+  const canvasCssH = Number(wrap?.clientHeight) || 0;
+  if (canvasCssW > 0 && canvasCssH > 0) {
+    ensureFreeformLayoutRectsCss(state.images || [], canvasCssW, canvasCssH);
+    rect = state.freeformRects.get(id) || null;
+  }
+  return rect;
+}
+
+function renderActiveImageTransformControls(
+  octx,
+  { anchorRect = null, anchorPoints = null, dpr = 1, accent = "rgba(255, 212, 0, 0.92)", targetId = "" } = {}
+) {
+  if (!octx || !anchorRect) return;
+  const id = String(targetId || state.activeId || "").trim();
+  if (!id) return;
+
+  const canvasW = Number(octx.canvas?.width) || 0;
+  const canvasH = Number(octx.canvas?.height) || 0;
+  if (canvasW <= 0 || canvasH <= 0) return;
+  const ax = Number(anchorRect.x) || 0;
+  const ay = Number(anchorRect.y) || 0;
+  const aw = Math.max(1, Number(anchorRect.w) || 1);
+  const ah = Math.max(1, Number(anchorRect.h) || 1);
+  const fallbackPoints = [
+    { x: ax, y: ay },
+    { x: ax + aw, y: ay },
+    { x: ax + aw, y: ay + ah },
+    { x: ax, y: ay + ah },
+  ];
+  const points = Array.isArray(anchorPoints) && anchorPoints.length === 4
+    ? anchorPoints.map((pt, idx) => ({
+        x: Number(pt?.x),
+        y: Number(pt?.y),
+        fallback: fallbackPoints[idx],
+      })).map((pt) => ({
+        x: Number.isFinite(pt.x) ? pt.x : pt.fallback.x,
+        y: Number.isFinite(pt.y) ? pt.y : pt.fallback.y,
+      }))
+    : fallbackPoints;
+  const p0 = points[0] || fallbackPoints[0];
+  const p1 = points[1] || fallbackPoints[1];
+  const p2 = points[2] || fallbackPoints[2];
+  const p3 = points[3] || fallbackPoints[3];
+  const midpoint = (a, b) => ({
+    x: ((Number(a?.x) || 0) + (Number(b?.x) || 0)) * 0.5,
+    y: ((Number(a?.y) || 0) + (Number(b?.y) || 0)) * 0.5,
+  });
+  const center = {
+    x: (Number(p0.x) + Number(p1.x) + Number(p2.x) + Number(p3.x)) / 4,
+    y: (Number(p0.y) + Number(p1.y) + Number(p2.y) + Number(p3.y)) / 4,
+  };
+  const topMid = midpoint(p0, p1);
+  const leftMid = midpoint(p3, p0);
+  const rightMid = midpoint(p1, p2);
+  const outwardDir = (origin, target, fallback) => {
+    const dx = (Number(target?.x) || 0) - (Number(origin?.x) || 0);
+    const dy = (Number(target?.y) || 0) - (Number(origin?.y) || 0);
+    const len = Math.hypot(dx, dy);
+    if (len > 0.0001) return { x: dx / len, y: dy / len };
+    return fallback;
+  };
+  const topDir = outwardDir(center, topMid, { x: 0, y: -1 });
+  const leftDir = outwardDir(center, leftMid, { x: -1, y: 0 });
+  const rightDir = outwardDir(center, rightMid, { x: 1, y: 0 });
+  const pivotX = Number(center.x) || (ax + aw * 0.5);
+  const pivotY = Number(center.y) || (ay + ah * 0.5);
+  const pad = Math.max(8, Math.round(9 * dpr));
+  const rotateRadius = Math.max(6, Math.round(6 * dpr));
+  const skewRadius = Math.max(5, Math.round(5 * dpr));
+  const stemLen = Math.max(10, Math.round(12 * dpr));
+  const sideOffset = Math.max(12, Math.round(14 * dpr));
+
+  const currentTransform = readFreeformRectTransform(state.freeformRects.get(id) || null);
+  const rotateActive = Math.abs(Number(currentTransform.rotateDeg) || 0) > 0.001;
+  const skewActive = Math.abs(Number(currentTransform.skewXDeg) || 0) > 0.001;
+  let rotateCx = topMid.x + topDir.x * (stemLen + rotateRadius);
+  let rotateCy = topMid.y + topDir.y * (stemLen + rotateRadius);
+  rotateCx = clamp(rotateCx, pad + rotateRadius, Math.max(pad + rotateRadius, canvasW - pad - rotateRadius));
+  rotateCy = clamp(rotateCy, pad + rotateRadius, Math.max(pad + rotateRadius, canvasH - pad - rotateRadius));
+  const rotateVecX = rotateCx - topMid.x;
+  const rotateVecY = rotateCy - topMid.y;
+  const rotateVecLen = Math.hypot(rotateVecX, rotateVecY);
+  const rotateDir = rotateVecLen > 0.0001
+    ? { x: rotateVecX / rotateVecLen, y: rotateVecY / rotateVecLen }
+    : topDir;
+  const stemEndX = rotateCx - rotateDir.x * rotateRadius;
+  const stemEndY = rotateCy - rotateDir.y * rotateRadius;
+  const leftCx = clamp(
+    leftMid.x + leftDir.x * sideOffset,
+    pad + skewRadius,
+    Math.max(pad + skewRadius, canvasW - pad - skewRadius)
+  );
+  const leftCy = clamp(
+    leftMid.y + leftDir.y * sideOffset,
+    pad + skewRadius,
+    Math.max(pad + skewRadius, canvasH - pad - skewRadius)
+  );
+  const rightCx = clamp(
+    rightMid.x + rightDir.x * sideOffset,
+    pad + skewRadius,
+    Math.max(pad + skewRadius, canvasW - pad - skewRadius)
+  );
+  const rightCy = clamp(
+    rightMid.y + rightDir.y * sideOffset,
+    pad + skewRadius,
+    Math.max(pad + skewRadius, canvasH - pad - skewRadius)
+  );
+  const anchorWidth = Math.max(1, Math.hypot((Number(rightMid.x) || 0) - (Number(leftMid.x) || 0), (Number(rightMid.y) || 0) - (Number(leftMid.y) || 0)));
+
+  octx.save();
+  octx.shadowColor = "rgba(0, 0, 0, 0.56)";
+  octx.shadowBlur = Math.round(7 * dpr);
+
+  // Photoshop-like rotate handle: stem + circular knob outside the transformed top edge.
+  octx.beginPath();
+  octx.moveTo(Math.round(topMid.x), Math.round(topMid.y));
+  octx.lineTo(Math.round(stemEndX), Math.round(stemEndY));
+  octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+  octx.strokeStyle = accent;
+  octx.stroke();
+
+  octx.beginPath();
+  octx.arc(Math.round(rotateCx), Math.round(rotateCy), rotateRadius, 0, Math.PI * 2);
+  octx.fillStyle = rotateActive ? "rgba(14, 30, 22, 0.9)" : "rgba(8, 10, 14, 0.84)";
+  octx.fill();
+  octx.lineWidth = Math.max(1, Math.round(1.3 * dpr));
+  octx.strokeStyle = rotateActive ? "rgba(122, 220, 172, 0.9)" : accent;
+  octx.stroke();
+
+  // Photoshop-like skew side handles (left/right edge drag).
+  const drawSkewHandle = (cx, cy, edge) => {
+    octx.save();
+    octx.translate(Math.round(cx), Math.round(cy));
+    octx.rotate(Math.PI / 4);
+    const size = skewRadius * 1.18;
+    octx.beginPath();
+    octx.rect(-size, -size, size * 2, size * 2);
+    octx.fillStyle = skewActive ? "rgba(14, 30, 22, 0.9)" : "rgba(8, 10, 14, 0.84)";
+    octx.fill();
+    octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+    octx.strokeStyle = skewActive ? "rgba(122, 220, 172, 0.9)" : accent;
+    octx.stroke();
+    octx.restore();
+    const hitPad = Math.max(4, Math.round(4 * dpr));
+    activeImageTransformPushUiHit({
+      kind: "skew",
+      edge,
+      cursor: "ew-resize",
+      targetId: id,
+      pivotX,
+      pivotY,
+      anchorWidth,
+      rect: {
+        x: Math.round(cx - skewRadius - hitPad),
+        y: Math.round(cy - skewRadius - hitPad),
+        w: Math.round((skewRadius + hitPad) * 2),
+        h: Math.round((skewRadius + hitPad) * 2),
+      },
+    });
+  };
+
+  drawSkewHandle(leftCx, leftCy, "left");
+  drawSkewHandle(rightCx, rightCy, "right");
+
+  const rotateHitPad = Math.max(3, Math.round(4 * dpr));
+  activeImageTransformPushUiHit({
+    kind: "rotate",
+    cursor: "grabbing",
+    targetId: id,
+    pivotX,
+    pivotY,
+    anchorWidth,
+    rect: {
+      x: Math.round(rotateCx - rotateRadius - rotateHitPad),
+      y: Math.round(rotateCy - rotateRadius - rotateHitPad),
+      w: Math.round((rotateRadius + rotateHitPad) * 2),
+      h: Math.round((rotateRadius + rotateHitPad) * 2),
+    },
+  });
+  octx.restore();
+}
+
+function beginActiveImageTransformDrag(event, { ptCanvas = null, ptCss = null, hit = null } = {}) {
+  const transformKind = String(hit?.kind || "").trim().toLowerCase();
+  if (transformKind !== "rotate" && transformKind !== "skew") return false;
+  const id = String(hit?.targetId || state.activeId || "").trim();
+  if (!id || !ptCanvas || !ptCss) return false;
+  const rectCss = ensureFreeformRectForImageId(id);
+  if (!rectCss) return false;
+  const pivotX = Number(hit?.pivotX);
+  const pivotY = Number(hit?.pivotY);
+  if (!Number.isFinite(pivotX) || !Number.isFinite(pivotY)) return false;
+  const transform = readFreeformRectTransform(rectCss);
+  const startAngle = Math.atan2((Number(ptCanvas.y) || 0) - pivotY, (Number(ptCanvas.x) || 0) - pivotX);
+
+  els.overlayCanvas.setPointerCapture(event.pointerId);
+  state.pointer.active = true;
+  state.pointer.kind = transformKind === "rotate" ? POINTER_KINDS.FREEFORM_ROTATE : POINTER_KINDS.FREEFORM_SKEW;
+  state.pointer.imageId = id;
+  state.pointer.corner = null;
+  state.pointer.startX = Number(ptCanvas.x) || 0;
+  state.pointer.startY = Number(ptCanvas.y) || 0;
+  state.pointer.lastX = Number(ptCanvas.x) || 0;
+  state.pointer.lastY = Number(ptCanvas.y) || 0;
+  state.pointer.startCssX = Number(ptCss.x) || 0;
+  state.pointer.startCssY = Number(ptCss.y) || 0;
+  state.pointer.startRectCss = { ...rectCss };
+  state.pointer.transformHandleEdge =
+    transformKind === "skew" ? (String(hit?.edge || "").trim().toLowerCase() === "left" ? "left" : "right") : null;
+  state.pointer.transformPivotX = pivotX;
+  state.pointer.transformPivotY = pivotY;
+  state.pointer.transformAnchorWidthPx = Math.max(1, Number(hit?.anchorWidth) || 1);
+  state.pointer.transformStartAngleRad = Number.isFinite(startAngle) ? startAngle : 0;
+  state.pointer.transformStartRotateDeg = Number(transform.rotateDeg) || 0;
+  state.pointer.transformStartSkewXDeg = Number(transform.skewXDeg) || 0;
+  state.pointer.wheelOnTap = false;
+  state.pointer.moved = false;
+  return true;
 }
 
 function motherCloseOverlayDetails() {
@@ -26817,6 +29432,8 @@ function render() {
 
   wctx.clearRect(0, 0, work.width, work.height);
   octx.clearRect(0, 0, overlay.width, overlay.height);
+  state.motherOverlayUiHits = [];
+  state.activeImageTransformUiHits = [];
 
   const item = getActiveImage();
 
@@ -26825,11 +29442,21 @@ function render() {
   } else {
     const img = item?.img;
     if (img) {
+      const singleTransform = readFreeformRectTransform(state.freeformRects.get(String(item?.id || "")) || null);
+      const singleW = img.naturalWidth || item?.width || 1;
+      const singleH = img.naturalHeight || item?.height || 1;
       wctx.save();
       wctx.setTransform(state.view.scale, 0, 0, state.view.scale, state.view.offsetX, state.view.offsetY);
       wctx.imageSmoothingEnabled = true;
       wctx.imageSmoothingQuality = "high";
-      wctx.drawImage(img, 0, 0);
+      drawImageRectWithTransform(wctx, img, {
+        x: 0,
+        y: 0,
+        w: singleW,
+        h: singleH,
+        rotateDeg: singleTransform.rotateDeg,
+        skewXDeg: singleTransform.skewXDeg,
+      });
       wctx.restore();
 
       // Keep single-view active selection clearly visible, matching multi-view behavior.
@@ -26843,6 +29470,14 @@ function render() {
       const iy = state.view.offsetY;
       const iw = (img.naturalWidth || item.width || 1) * state.view.scale;
       const ih = (img.naturalHeight || item.height || 1) * state.view.scale;
+      const singleBorderPoints = transformedRectPolygonPoints({
+        x: ix,
+        y: iy,
+        w: iw,
+        h: ih,
+        rotateDeg: singleTransform.rotateDeg,
+        skewXDeg: singleTransform.skewXDeg,
+      });
 
       octx.save();
       octx.lineJoin = "round";
@@ -26850,21 +29485,31 @@ function render() {
       octx.lineWidth = Math.max(1, Math.round(10 * dpr));
       octx.shadowColor = mainShadow;
       octx.shadowBlur = Math.round(44 * dpr);
-      octx.strokeRect(ix - 5, iy - 5, iw + 10, ih + 10);
+      if (drawPolygonPath(octx, singleBorderPoints)) octx.stroke();
 
       octx.strokeStyle = mainStroke;
       octx.lineWidth = Math.max(1, Math.round(3.4 * dpr));
       octx.shadowColor = mainShadow;
       octx.shadowBlur = Math.round(28 * dpr);
-      octx.strokeRect(ix - 3, iy - 3, iw + 6, ih + 6);
+      if (drawPolygonPath(octx, singleBorderPoints)) octx.stroke();
 
-      octx.shadowBlur = 0;
-      octx.strokeStyle = innerStroke;
-      octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
-      octx.strokeRect(ix - 1, iy - 1, iw + 2, ih + 2);
-      octx.restore();
-    }
-  }
+	      octx.shadowBlur = 0;
+	      octx.strokeStyle = innerStroke;
+	      octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+	      if (drawPolygonPath(octx, singleBorderPoints)) octx.stroke();
+	      octx.restore();
+	      if (state.tool === "pan" || intentModeActive()) {
+	        const handleStroke = motherGenerated ? "rgba(82, 255, 148, 0.92)" : "rgba(255, 212, 0, 0.92)";
+	        renderActiveImageTransformControls(octx, {
+	          anchorRect: { x: ix, y: iy, w: iw, h: ih },
+            anchorPoints: singleBorderPoints,
+	          dpr,
+	          accent: handleStroke,
+	          targetId: item.id,
+	        });
+	      }
+	    }
+	  }
   syncEffectsRuntimeScene();
   updateImageFxRect();
 
@@ -27161,6 +29806,14 @@ function installCanvasHandlers() {
             requestRender();
             return;
           }
+          const transformUiHit = hitTestActiveImageTransformUi(p);
+          if (transformUiHit && event.button === 0) {
+            bumpInteraction({ semantic: false });
+            if (beginActiveImageTransformDrag(event, { ptCanvas: p, ptCss: pCss, hit: transformUiHit })) {
+              requestRender();
+              return;
+            }
+          }
           // Initial pointer-down in multi-canvas is often a focus change (selection). Treat as
           // non-semantic; real arrangement changes are still marked semantic during pointermove.
           bumpInteraction({ semantic: false });
@@ -27288,7 +29941,10 @@ function installCanvasHandlers() {
 
 		      if (state.tool === "pan") {
 		        const rectPx = state.multiRects.get(hit) || null;
-		        const cornerHit = corner || (rectPx ? hitTestFreeformCornerHandleWithPad(p, rectPx, Math.round(12 * getDpr())) : null);
+		        const rectCss = state.freeformRects.get(hit) || null;
+		        const cornerHit = corner || (rectPx
+              ? hitTestFreeformCornerHandleWithPad(p, rectPx, Math.round(12 * getDpr()), rectCss)
+              : null);
 
 		        // Bring the active (dragged) image to the top for intuitive hit-testing and stacking.
 		        const z = state.freeformZOrder || [];
@@ -27298,7 +29954,6 @@ function installCanvasHandlers() {
 		          z.push(hit);
 		        }
 
-		        const rectCss = state.freeformRects.get(hit) || null;
 		        els.overlayCanvas.setPointerCapture(event.pointerId);
 		        state.pointer.active = true;
 		        state.pointer.kind = cornerHit ? POINTER_KINDS.FREEFORM_RESIZE : POINTER_KINDS.FREEFORM_MOVE;
@@ -27408,6 +30063,14 @@ function installCanvasHandlers() {
         if (isReelSizeLocked()) {
           reelTouchPulseFromCanvasPoint(p, { down: event.button === 0, lingerMs: REEL_TOUCH_TAP_VISIBLE_MS });
           requestRender();
+        }
+        const transformUiHit = hitTestActiveImageTransformUi(p);
+        if (transformUiHit && event.button === 0) {
+          bumpInteraction({ semantic: false });
+          if (beginActiveImageTransformDrag(event, { ptCanvas: p, ptCss: pCss, hit: transformUiHit })) {
+            requestRender();
+            return;
+          }
         }
         if (wheelModifier && event.button === 0) {
           els.overlayCanvas.setPointerCapture(event.pointerId);
@@ -27531,6 +30194,11 @@ function installCanvasHandlers() {
         setOverlayCursor("grab");
         return;
       }
+      const transformUiHit = hitTestActiveImageTransformUi(p);
+      if (transformUiHit) {
+        setOverlayCursor(String(transformUiHit.cursor || "pointer"));
+        return;
+      }
       const ambientHit = intentAmbientActive() ? hitTestAmbientIntentNudge(p) : null;
       if (ambientHit) {
         setOverlayCursor("pointer");
@@ -27591,6 +30259,10 @@ function installCanvasHandlers() {
       }
     } else if (state.pointer.kind === POINTER_KINDS.FREEFORM_MOVE) {
       setOverlayCursor("grabbing");
+    } else if (state.pointer.kind === POINTER_KINDS.FREEFORM_ROTATE) {
+      setOverlayCursor("grabbing");
+    } else if (state.pointer.kind === POINTER_KINDS.FREEFORM_SKEW) {
+      setOverlayCursor("ew-resize");
     } else if (state.pointer.kind === POINTER_KINDS.EFFECT_TOKEN_DRAG) {
       setOverlayCursor("grabbing");
     } else if (state.pointer.kind === POINTER_KINDS.FREEFORM_IMPORT || state.pointer.kind === POINTER_KINDS.FREEFORM_WHEEL) {
@@ -27641,12 +30313,20 @@ function installCanvasHandlers() {
       return;
     }
 
-    if (state.pointer.kind === POINTER_KINDS.FREEFORM_MOVE || state.pointer.kind === POINTER_KINDS.FREEFORM_RESIZE) {
+    if (
+      state.pointer.kind === POINTER_KINDS.FREEFORM_MOVE ||
+      state.pointer.kind === POINTER_KINDS.FREEFORM_RESIZE ||
+      state.pointer.kind === POINTER_KINDS.FREEFORM_ROTATE ||
+      state.pointer.kind === POINTER_KINDS.FREEFORM_SKEW
+    ) {
       const dragDistCss = Math.hypot(
         (Number(pCss.x) || 0) - state.pointer.startCssX,
         (Number(pCss.y) || 0) - state.pointer.startCssY
       );
-      bumpInteraction({ semantic: state.pointer.moved || dragDistCss > MOTHER_SELECTION_SEMANTIC_DRAG_PX });
+      bumpInteraction({
+        semantic: state.pointer.moved || dragDistCss > MOTHER_SELECTION_SEMANTIC_DRAG_PX,
+        proposalLiveRefresh: true,
+      });
     } else {
       bumpInteraction();
     }
@@ -27679,6 +30359,8 @@ function installCanvasHandlers() {
           w: Number(startRect.w) || 1,
           h: Number(startRect.h) || 1,
           autoAspect: false,
+          rotateDeg: startRect.rotateDeg,
+          skewXDeg: startRect.skewXDeg,
         },
         canvasCssW,
         canvasCssH,
@@ -27711,10 +30393,19 @@ function installCanvasHandlers() {
         x: ((Number(pCss.x) || 0) - mxCss) / Math.max(ms, 0.0001),
         y: ((Number(pCss.y) || 0) - myCss) / Math.max(ms, 0.0001),
       };
+      const startTransform = readFreeformRectTransform(startRect);
+      const pointerRectSpace = untransformPointForRect(worldPointerCss, {
+        x: Number(startRect.x) || 0,
+        y: Number(startRect.y) || 0,
+        w: Math.max(1, Number(startRect.w) || 1),
+        h: Math.max(1, Number(startRect.h) || 1),
+        rotateDeg: startTransform.rotateDeg,
+        skewXDeg: startTransform.skewXDeg,
+      });
       const next = resizeFreeformRectFromCorner(
         startRect,
         state.pointer.corner,
-        worldPointerCss,
+        pointerRectSpace,
         canvasCssW,
         canvasCssH,
         clampOpts
@@ -27723,6 +30414,78 @@ function installCanvasHandlers() {
       state.pointer.moved = true;
       scheduleVisualPromptWrite();
       if (intentAmbientActive()) scheduleAmbientIntentInference({ reason: "resize", imageIds: [id] });
+      requestRender();
+      return;
+    }
+    if (state.pointer.kind === POINTER_KINDS.FREEFORM_ROTATE && state.pointer.imageId) {
+      const id = state.pointer.imageId;
+      const startRect = state.pointer.startRectCss || state.freeformRects.get(id) || null;
+      if (!startRect) return;
+      const pivotX = Number(state.pointer.transformPivotX);
+      const pivotY = Number(state.pointer.transformPivotY);
+      if (!Number.isFinite(pivotX) || !Number.isFinite(pivotY)) return;
+      const startAngleRad = Number(state.pointer.transformStartAngleRad) || 0;
+      const currentAngleRad = Math.atan2((Number(p.y) || 0) - pivotY, (Number(p.x) || 0) - pivotX);
+      if (!Number.isFinite(currentAngleRad)) return;
+      let deltaDeg = ((currentAngleRad - startAngleRad) * 180) / Math.PI;
+      while (deltaDeg > 180) deltaDeg -= 360;
+      while (deltaDeg < -180) deltaDeg += 360;
+      if (!state.pointer.moved && Math.abs(deltaDeg) <= 0.75) return;
+      const wrap = els.canvasWrap;
+      const canvasCssW = Number(wrap?.clientWidth) || 0;
+      const canvasCssH = Number(wrap?.clientHeight) || 0;
+      let next = {
+        ...startRect,
+        autoAspect: false,
+        rotateDeg: normalizeFreeformRotateDeg((Number(state.pointer.transformStartRotateDeg) || 0) + deltaDeg),
+        skewXDeg: normalizeFreeformSkewDeg(state.pointer.transformStartSkewXDeg),
+      };
+      if (canvasCssW > 0 && canvasCssH > 0) {
+        next = clampFreeformRectCss(
+          next,
+          canvasCssW,
+          canvasCssH,
+          freeformWorkspaceClampOptions(canvasCssW, canvasCssH, { minSize: 44 })
+        );
+      }
+      state.freeformRects.set(id, next);
+      state.pointer.moved = true;
+      scheduleVisualPromptWrite();
+      if (intentAmbientActive()) scheduleAmbientIntentInference({ reason: "transform", imageIds: [id] });
+      requestRender();
+      return;
+    }
+    if (state.pointer.kind === POINTER_KINDS.FREEFORM_SKEW && state.pointer.imageId) {
+      const id = state.pointer.imageId;
+      const startRect = state.pointer.startRectCss || state.freeformRects.get(id) || null;
+      if (!startRect) return;
+      const edge = String(state.pointer.transformHandleEdge || "").trim().toLowerCase() === "left" ? "left" : "right";
+      const dir = edge === "left" ? -1 : 1;
+      const anchorWidthPx = Math.max(40, Number(state.pointer.transformAnchorWidthPx) || 0);
+      const dxPx = ((Number(p.x) || 0) - (Number(state.pointer.startX) || 0)) * dir;
+      const deltaDeg = (dxPx / anchorWidthPx) * 52;
+      if (!state.pointer.moved && Math.abs(deltaDeg) <= 0.5) return;
+      const wrap = els.canvasWrap;
+      const canvasCssW = Number(wrap?.clientWidth) || 0;
+      const canvasCssH = Number(wrap?.clientHeight) || 0;
+      let next = {
+        ...startRect,
+        autoAspect: false,
+        rotateDeg: normalizeFreeformRotateDeg(state.pointer.transformStartRotateDeg),
+        skewXDeg: normalizeFreeformSkewDeg((Number(state.pointer.transformStartSkewXDeg) || 0) + deltaDeg),
+      };
+      if (canvasCssW > 0 && canvasCssH > 0) {
+        next = clampFreeformRectCss(
+          next,
+          canvasCssW,
+          canvasCssH,
+          freeformWorkspaceClampOptions(canvasCssW, canvasCssH, { minSize: 44 })
+        );
+      }
+      state.freeformRects.set(id, next);
+      state.pointer.moved = true;
+      scheduleVisualPromptWrite();
+      if (intentAmbientActive()) scheduleAmbientIntentInference({ reason: "transform", imageIds: [id] });
       requestRender();
       return;
     }
@@ -27797,6 +30560,9 @@ function installCanvasHandlers() {
         const roleKey = state.pointer.role;
 		    const startRectCss = state.pointer.startRectCss;
 		    const corner = state.pointer.corner;
+        const transformHandleEdge = state.pointer.transformHandleEdge;
+        const transformStartRotateDeg = Number(state.pointer.transformStartRotateDeg) || 0;
+        const transformStartSkewXDeg = Number(state.pointer.transformStartSkewXDeg) || 0;
         const importPt = state.pointer.importPointCss;
         const wheelOnTap = Boolean(state.pointer.wheelOnTap);
 		    const moved = Boolean(state.pointer.moved);
@@ -27806,6 +30572,13 @@ function installCanvasHandlers() {
         state.pointer.role = null;
 		    state.pointer.corner = null;
 		    state.pointer.startRectCss = null;
+        state.pointer.transformHandleEdge = null;
+        state.pointer.transformPivotX = 0;
+        state.pointer.transformPivotY = 0;
+        state.pointer.transformAnchorWidthPx = 0;
+        state.pointer.transformStartAngleRad = 0;
+        state.pointer.transformStartRotateDeg = 0;
+        state.pointer.transformStartSkewXDeg = 0;
 		    state.pointer.importPointCss = null;
         state.pointer.wheelOnTap = false;
 		    state.pointer.moved = false;
@@ -27823,8 +30596,22 @@ function installCanvasHandlers() {
         const motherRoleDrag = isMotherRolePath(kind);
         const effectTokenDrag = isEffectTokenPath(kind);
         if (!motherRoleDrag && !effectTokenDrag) {
-          const selectionOnly = (kind === POINTER_KINDS.FREEFORM_MOVE || kind === POINTER_KINDS.FREEFORM_RESIZE) && !moved;
-          bumpInteraction({ semantic: !selectionOnly });
+          const selectionOnly =
+            (kind === POINTER_KINDS.FREEFORM_MOVE ||
+              kind === POINTER_KINDS.FREEFORM_RESIZE ||
+              kind === POINTER_KINDS.FREEFORM_ROTATE ||
+              kind === POINTER_KINDS.FREEFORM_SKEW) &&
+            !moved;
+          bumpInteraction({
+            semantic: !selectionOnly,
+            proposalLiveRefresh: Boolean(
+              moved &&
+              (kind === POINTER_KINDS.FREEFORM_MOVE ||
+                kind === POINTER_KINDS.FREEFORM_RESIZE ||
+                kind === POINTER_KINDS.FREEFORM_ROTATE ||
+                kind === POINTER_KINDS.FREEFORM_SKEW)
+            ),
+          });
         }
 
 		    if (moved && (kind === POINTER_KINDS.FREEFORM_MOVE || kind === POINTER_KINDS.FREEFORM_RESIZE) && imageId) {
@@ -27851,6 +30638,22 @@ function installCanvasHandlers() {
           markAlwaysOnVisionDirty(kind === POINTER_KINDS.FREEFORM_MOVE ? "image_move" : "image_resize");
           scheduleAlwaysOnVision();
 		    }
+        if (moved && (kind === POINTER_KINDS.FREEFORM_ROTATE || kind === POINTER_KINDS.FREEFORM_SKEW) && imageId) {
+          const end = state.freeformRects.get(imageId) || null;
+          if (end) {
+            recordUserEvent("image_transform", {
+              image_id: String(imageId),
+              action: kind === POINTER_KINDS.FREEFORM_ROTATE ? "rotate_drag" : "skew_drag",
+              edge: kind === POINTER_KINDS.FREEFORM_SKEW ? String(transformHandleEdge || "right") : null,
+              rotate_deg: Number(end.rotateDeg) || 0,
+              skew_x_deg: Number(end.skewXDeg) || 0,
+              rotate_start_deg: transformStartRotateDeg,
+              skew_start_deg: transformStartSkewXDeg,
+            });
+          }
+          markAlwaysOnVisionDirty("image_transform");
+          scheduleAlwaysOnVision();
+        }
 
 			    if (kind === POINTER_KINDS.FREEFORM_IMPORT) {
 			      if (!moved && importPt) {
@@ -28533,9 +31336,20 @@ function installUi() {
     els.motherAbilityIcon.addEventListener("click", () => {
       // Cycling proposals should not invalidate intent hypothesis state.
       bumpInteraction({ semantic: false });
+      const beforeMode = motherV2NormalizeTransformationMode(state.motherIdle?.intent?.transformation_mode);
       const cycled = motherV2CycleProposal(1);
       if (cycled) {
         recordUserEvent("mother_next_proposal", {});
+        const idle = state.motherIdle;
+        appendMotherTraceLog({
+          kind: "proposal_next",
+          traceId: idle?.telemetry?.traceId || null,
+          actionVersion: Number(idle?.actionVersion) || 0,
+          optimization_target: motherCurrentOptimizationTarget(),
+          from_mode: beforeMode || null,
+          to_mode: motherV2NormalizeTransformationMode(idle?.intent?.transformation_mode),
+          proposal_candidates: motherV2ProposalCandidateSummary(idle?.intent || null, { limit: 5 }),
+        }).catch(() => {});
       } else {
         const phase = state.motherIdle?.phase || motherIdleInitialState();
         if (phase !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
@@ -28555,6 +31369,24 @@ function installUi() {
   if (els.motherStop) {
     els.motherStop.addEventListener("click", () => {
       stopMotherTakeover();
+    });
+  }
+  if (els.motherMoodToggle) {
+    els.motherMoodToggle.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setMotherMoodMenuOpen(!motherMoodMenuIsOpen());
+    });
+  }
+  if (els.motherMoodMenu) {
+    els.motherMoodMenu.addEventListener("click", (event) => {
+      const btn = event?.target?.closest ? event.target.closest("button[data-mood]") : null;
+      if (!btn || !els.motherMoodMenu.contains(btn)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setMotherMood(btn.dataset?.mood || "");
+      setMotherMoodMenuOpen(false);
+      requestRender();
     });
   }
   if (els.motherPanel) {
@@ -29220,6 +32052,13 @@ function installUi() {
     hidePromptGeneratePanel();
   });
 
+  document.addEventListener("pointerdown", (event) => {
+    if (!motherMoodMenuIsOpen()) return;
+    const hit = event?.target?.closest ? event.target.closest("#canvas-mood-status") : null;
+    if (hit) return;
+    setMotherMoodMenuOpen(false);
+  });
+
   if (els.filmstrip) {
     els.filmstrip.addEventListener("click", (event) => {
       const thumb = event?.target?.closest ? event.target.closest(".thumb") : null;
@@ -29234,6 +32073,10 @@ function installUi() {
   document.addEventListener("keydown", (event) => {
     const rawKey = String(event?.key || "");
     const key = rawKey.toLowerCase();
+    if (key === "escape" && motherMoodMenuIsOpen()) {
+      setMotherMoodMenuOpen(false);
+      return;
+    }
     const target = event?.target;
     const tag = target?.tagName ? String(target.tagName).toLowerCase() : "";
     const isEditable = Boolean(
@@ -29559,6 +32402,8 @@ async function boot() {
   installCanvasHandlers();
   installDnD();
   installUi();
+  renderMotherMoodStatus();
+  setMotherMoodMenuOpen(false);
   if (ENABLE_FILE_BROWSER_DOCK) {
     await initializeFileBrowserDock();
   }

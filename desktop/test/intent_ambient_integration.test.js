@@ -10,7 +10,7 @@ const app = readFileSync(appPath, "utf8");
 
 test("Ambient intent: edit triggers schedule background inference", () => {
   assert.match(app, /scheduleAmbientIntentInference\(\{\s*immediate:\s*true,\s*reason:\s*"add"/);
-  assert.match(app, /scheduleAmbientIntentInference\(\{\s*immediate:\s*true,\s*reason:\s*"import"/);
+  assert.match(app, /scheduleAmbientIntentInference\(\{\s*immediate:\s*false,\s*reason:\s*"import_batch"/);
   assert.match(app, /scheduleAmbientIntentInference\(\{\s*immediate:\s*true,\s*reason:\s*"remove"/);
   assert.match(app, /scheduleAmbientIntentInference\(\{\s*reason:\s*"move"/);
   assert.match(app, /scheduleAmbientIntentInference\(\{\s*reason:\s*"resize"/);

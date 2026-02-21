@@ -15,6 +15,16 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function normalizeAweJoyScore(rawScore, rawConfidence = null) {
+  if (typeof rawScore === "number" && Number.isFinite(rawScore)) {
+    return clamp(Number(rawScore) || 0, 0, 100);
+  }
+  if (typeof rawConfidence === "number" && Number.isFinite(rawConfidence)) {
+    return clamp((Number(rawConfidence) || 0) * 100, 0, 100);
+  }
+  return null;
+}
+
 function clampText(text, maxLen) {
   const s = String(text || "").trim();
   if (!s) return "";
@@ -383,11 +393,15 @@ export function parseIntentIconsJsonDetailed(raw, { normalizeTransformationMode 
       const confidence = typeof entry.confidence === "number" && Number.isFinite(entry.confidence)
         ? clamp(Number(entry.confidence) || 0, 0, 1)
         : null;
-      return { _idx: idx, mode, confidence };
+      const aweJoyScore = normalizeAweJoyScore(entry.awe_joy_score, confidence);
+      return { _idx: idx, mode, confidence, awe_joy_score: aweJoyScore };
     })
     .filter(Boolean);
   if (modeCandidates.length) {
     modeCandidates.sort((a, b) => {
+      const as = typeof a.awe_joy_score === "number" ? a.awe_joy_score : -1;
+      const bs = typeof b.awe_joy_score === "number" ? b.awe_joy_score : -1;
+      if (bs !== as) return bs - as;
       const ac = typeof a.confidence === "number" ? a.confidence : -1;
       const bc = typeof b.confidence === "number" ? b.confidence : -1;
       if (bc !== ac) return bc - ac;
@@ -396,6 +410,7 @@ export function parseIntentIconsJsonDetailed(raw, { normalizeTransformationMode 
   }
   obj.transformation_mode_candidates = modeCandidates.map((entry) => ({
     mode: entry.mode,
+    awe_joy_score: typeof entry.awe_joy_score === "number" ? entry.awe_joy_score : null,
     confidence: typeof entry.confidence === "number" ? entry.confidence : null,
   }));
   if (!obj.transformation_mode && obj.transformation_mode_candidates.length) {
