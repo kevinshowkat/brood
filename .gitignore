@@ -81,6 +81,9 @@ yellow.png
 /media/features/edit_annotation.gif
 /media/features/intent_build.gif
 /media/features/remove_people.gif
+/media/features/readme/.*
+/media/features/readme/context_intent_share_draft_*.gif
+/media/features/readme/ref_v*.png
 
 # Local visibility probe artifacts
 docs/ai_visibility.md
