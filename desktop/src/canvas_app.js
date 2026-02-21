@@ -235,6 +235,10 @@ const MOTHER_V2_PROPOSAL_BY_MODE = Object.freeze({
   romanticize: "Soften the scene into intimate emotional warmth.",
   alienate: "Shift the familiar into a precise uncanny atmosphere.",
 });
+const MOTHER_V2_OPERATION_TYPE_BY_MODE = Object.freeze({
+  amplify: "dna_apply",
+  hybridize: "hybridize",
+});
 const MOTHER_V2_PROPOSAL_ICON_ACCENT_BY_MODE = Object.freeze({
   amplify: "rgba(99, 224, 255, 0.96)",
   transcend: "rgba(132, 189, 255, 0.96)",
@@ -978,7 +982,8 @@ const state = {
   needsRender: false,
   lastInteractionAt: Date.now(),
   lastMotherHotAt: Date.now(),
-  userEvents: [], // [{ seq, at_ms, type, ... }]
+  userEvents: [], // scoring ring consumed by intent/proposal weighting
+  userTelemetryEvents: [], // high-volume event log (not used for scoring)
   userEventSeq: 0,
   mother: {
     running: false,
@@ -1044,6 +1049,7 @@ const state = {
     cancelArtifactUntil: 0,
     cancelArtifactReason: null,
     intent: null, // structured intent payload from intent realtime (with fallback inference)
+    currentOperationSpec: null, // { op_id, op_type, target_id, reference_ids, mode, trigger_source } | null
     roles: { subject: [], model: [], mediator: [], object: [] },
     drafts: [], // [{ id, path, receiptPath, versionId, actionVersion, createdAt, img }]
     selectedDraftId: null,
@@ -3061,7 +3067,13 @@ function buildCanvasContextEnvelope() {
     label: node?.label ? String(node.label) : null,
   }));
 
-  const eventsRecent = (Array.isArray(state.userEvents) ? state.userEvents : [])
+  const recentEventSource =
+    Array.isArray(state.userTelemetryEvents) && state.userTelemetryEvents.length
+      ? state.userTelemetryEvents
+      : Array.isArray(state.userEvents)
+      ? state.userEvents
+      : [];
+  const eventsRecent = recentEventSource
     .slice(-32)
     .map((ev) => {
       const out = {
@@ -12106,6 +12118,7 @@ function resetMotherIdleAndWheelState() {
     state.motherIdle.rejectedModeHistoryByContext = {};
     state.motherIdle.cancelArtifactUntil = 0;
     state.motherIdle.cancelArtifactReason = null;
+    state.motherIdle.currentOperationSpec = null;
     state.motherIdle.intent = null;
     state.motherIdle.roles = { subject: [], model: [], mediator: [], object: [] };
     state.motherIdle.drafts = [];
@@ -13811,6 +13824,76 @@ function motherV2CollectGenerationImagePaths() {
   };
 }
 
+function motherV2BuildOperationSpec({ intent = null, imagePayload = null, actionVersion = 0, triggerSource = "auto" } = {}) {
+  const parsedIntent = intent && typeof intent === "object" ? intent : {};
+  const sourceImageIds = motherV2NormalizeImageIdList(imagePayload?.sourceImageIds || []).slice(0, 10);
+  const targetIds = motherV2NormalizeImageIdList(parsedIntent.target_ids || []);
+  const referenceIds = motherV2NormalizeImageIdList(parsedIntent.reference_ids || []);
+  const activeId = String(getVisibleActiveId() || "").trim();
+  const targetId = targetIds[0] || activeId || sourceImageIds[0] || null;
+  if (!targetId) return null;
+  const refs = [];
+  const refSet = new Set([targetId]);
+  const pushRef = (raw) => {
+    const id = String(raw || "").trim();
+    if (!id || refSet.has(id)) return;
+    refSet.add(id);
+    refs.push(id);
+  };
+  for (const id of referenceIds) pushRef(id);
+  for (const id of sourceImageIds) pushRef(id);
+  const mode = motherV2NormalizeTransformationMode(parsedIntent.transformation_mode);
+  const opType = MOTHER_V2_OPERATION_TYPE_BY_MODE[mode] || mode;
+  const actionVersionNum = Math.max(0, Math.trunc(Number(actionVersion) || 0));
+  const opId = [
+    "op",
+    String(parsedIntent.intent_id || "mother"),
+    String(actionVersionNum),
+    Date.now().toString(36),
+  ].join("-");
+  return {
+    op_id: opId,
+    op_type: String(opType || mode || "operation"),
+    target_id: targetId,
+    reference_ids: refs.slice(0, 8),
+    dna_token_id: null,
+    mode,
+    trigger_source: String(triggerSource || "auto") === "user" ? "user" : "auto",
+  };
+}
+
+function motherV2InferOperationTriggerSource(nowMs = Date.now()) {
+  const events =
+    Array.isArray(state.userTelemetryEvents) && state.userTelemetryEvents.length
+      ? state.userTelemetryEvents
+      : Array.isArray(state.userEvents)
+      ? state.userEvents
+      : [];
+  const isUserAuthoredTrigger = (entry, type) => {
+    const actor = String(entry?.actor || "").trim().toLowerCase();
+    if (actor && actor !== "user") return false;
+    if (type === "dna_apply" || type === "dna_extract") {
+      const phase = String(entry?.phase || "").trim().toLowerCase();
+      // Only request-phase DNA interactions should imply user-triggered operations.
+      if (phase && phase !== "request") return false;
+    }
+    return true;
+  };
+  for (let idx = events.length - 1; idx >= 0; idx -= 1) {
+    const entry = events[idx];
+    if (!entry || typeof entry !== "object") continue;
+    const atMs = Number(entry.at_ms) || 0;
+    if (atMs > 0 && nowMs - atMs > 3000) break;
+    const type = String(entry.type || "").trim();
+    if (!type) continue;
+    if (type === "mother_accept" || type === "action_grid_press" || type === "dna_apply" || type === "dna_extract") {
+      if (!isUserAuthoredTrigger(entry, type)) continue;
+      return "user";
+    }
+  }
+  return "auto";
+}
+
 function motherV2CollectImageInteractionSignals(imageIds = []) {
   const ids = (Array.isArray(imageIds) ? imageIds : [])
     .map((v) => String(v || "").trim())
@@ -14802,6 +14885,28 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "", {
     reference_images: imagePayload.referenceImages,
     gemini_context_packet: geminiContextPacket,
   };
+  const operationSpec = motherV2BuildOperationSpec({
+    intent: sanitizedIntent,
+    imagePayload,
+    actionVersion: Number(idle.actionVersion) || 0,
+    triggerSource: motherV2InferOperationTriggerSource(),
+  });
+  idle.currentOperationSpec = operationSpec;
+  if (operationSpec) {
+    payload.operation_spec = operationSpec;
+    recordUserEvent("operation_spec_created", {
+      actor: "system",
+      source: "mother_dispatch",
+      op_id: operationSpec.op_id,
+      op_type: operationSpec.op_type,
+      target_id: operationSpec.target_id,
+      reference_ids: operationSpec.reference_ids.slice(0, 8),
+      mode: operationSpec.mode || null,
+      trigger_source: operationSpec.trigger_source,
+      intent_id: sanitizedIntent?.intent_id || idle.intent?.intent_id || null,
+      action_version: Number(idle.actionVersion) || 0,
+    }, { includeInScoringRing: false });
+  }
   if (modelContextEnvelopes && typeof modelContextEnvelopes === "object" && Object.keys(modelContextEnvelopes).length) {
     payload.model_context_envelopes = modelContextEnvelopes;
   }
@@ -14819,6 +14924,7 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "", {
     init_image_id: Array.isArray(imagePayload.sourceImageIds) && imagePayload.sourceImageIds.length
       ? String(imagePayload.sourceImageIds[0] || "")
       : null,
+    operation_spec: operationSpec || null,
   }).catch(() => {});
   await invoke("write_pty", { data: `${PTY_COMMANDS.MOTHER_GENERATE} ${quoteForPtyArg(payloadPath)}\n` });
   return true;
@@ -15241,7 +15347,8 @@ function bumpInteraction({ motherHot = true, semantic = true } = {}) {
 }
 
 const USER_EVENT_MAX = 72;
-function recordUserEvent(type, fields = {}) {
+const USER_TELEMETRY_EVENT_MAX = 240;
+function recordUserEvent(type, fields = {}, { includeInScoringRing = true } = {}) {
   const t = String(type || "").trim();
   if (!t) return;
   const entry = {
@@ -15250,9 +15357,16 @@ function recordUserEvent(type, fields = {}) {
     type: t,
     ...fields,
   };
-  state.userEvents.push(entry);
-  if (state.userEvents.length > USER_EVENT_MAX) {
-    state.userEvents = state.userEvents.slice(state.userEvents.length - USER_EVENT_MAX);
+  if (!Array.isArray(state.userTelemetryEvents)) state.userTelemetryEvents = [];
+  state.userTelemetryEvents.push(entry);
+  if (state.userTelemetryEvents.length > USER_TELEMETRY_EVENT_MAX) {
+    state.userTelemetryEvents = state.userTelemetryEvents.slice(state.userTelemetryEvents.length - USER_TELEMETRY_EVENT_MAX);
+  }
+  if (includeInScoringRing) {
+    state.userEvents.push(entry);
+    if (state.userEvents.length > USER_EVENT_MAX) {
+      state.userEvents = state.userEvents.slice(state.userEvents.length - USER_EVENT_MAX);
+    }
   }
 }
 
@@ -16944,6 +17058,9 @@ function resetViewToFit() {
   // Keep the image smaller than full-bleed so the HUD/spawnbar have breathing room.
   const maxWidthFrac = isMobile ? 0.92 : 0.6;
   const maxHeightFrac = isMobile ? 0.9 : 0.86;
+  const prevScale = Number(state.view.scale) || 1;
+  const prevOffsetX = Number(state.view.offsetX) || 0;
+  const prevOffsetY = Number(state.view.offsetY) || 0;
   const scale = Math.min((cw * maxWidthFrac) / iw, (ch * maxHeightFrac) / ih);
   state.view.scale = clamp(scale, 0.05, 20);
   const slackX = cw - iw * state.view.scale;
@@ -16953,6 +17070,24 @@ function resetViewToFit() {
   // Bias images toward the top so the bottom HUD/spawnbar feels like "control surface" space.
   const desiredTop = Math.round(ch * (isMobile ? 0.04 : 0.06));
   state.view.offsetY = slackY <= desiredTop ? slackY / 2 : desiredTop;
+  const nextScale = Number(state.view.scale) || 1;
+  const nextOffsetX = Number(state.view.offsetX) || 0;
+  const nextOffsetY = Number(state.view.offsetY) || 0;
+  const fitChanged =
+    Math.abs(nextScale - prevScale) > 0.0001 ||
+    Math.abs(nextOffsetX - prevOffsetX) > 0.5 ||
+    Math.abs(nextOffsetY - prevOffsetY) > 0.5;
+  if (fitChanged) {
+    recordUserEvent("canvas_fit", {
+      actor: "system",
+      source: "reset_view_to_fit",
+      canvas_mode: state.canvasMode,
+      active_id: state.activeId || null,
+      scale: nextScale,
+      offset_x: nextOffsetX,
+      offset_y: nextOffsetY,
+    }, { includeInScoringRing: false });
+  }
   renderHudReadout();
   scheduleVisualPromptWrite();
   requestRender();
@@ -19300,7 +19435,10 @@ async function jumpToTimelineNode(nodeId) {
   }
 
   if (state.activeId !== imgItem.id) {
-    await setActiveImage(imgItem.id).catch(() => {});
+    await setActiveImage(imgItem.id, {
+      source: "timeline",
+      reason: "timeline_jump",
+    }).catch(() => {});
   }
 
   if (imgItem.path !== node.path) {
@@ -19309,6 +19447,8 @@ async function jumpToTimelineNode(nodeId) {
       receiptPath: node.receiptPath || null,
       kind: imgItem.kind,
       clearVision: true,
+      source: "timeline",
+      reason: "timeline_jump",
     });
     if (!ok) return;
   }
@@ -19317,7 +19457,14 @@ async function jumpToTimelineNode(nodeId) {
   renderTimeline();
 }
 
-async function setActiveImage(id, { preserveSelection = false } = {}) {
+const USER_ACTIVE_IMAGE_EVENT_SOURCES = new Set(["user_select", "filmstrip_click", "timeline"]);
+function activeImageEventActorForSource(source = "system", explicitActor = null) {
+  if (explicitActor === "user" || explicitActor === "system") return explicitActor;
+  const normalizedSource = String(source || "system").trim();
+  return USER_ACTIVE_IMAGE_EVENT_SOURCES.has(normalizedSource) ? "user" : "system";
+}
+
+async function setActiveImage(id, { preserveSelection = false, source = "system", reason = null, actor = null } = {}) {
   const item = state.imagesById.get(id);
   if (!item) return;
   const prevActive = state.activeId;
@@ -19328,6 +19475,18 @@ async function setActiveImage(id, { preserveSelection = false } = {}) {
     setSelectedIds(next.length > 3 ? next.slice(next.length - 3) : next);
   } else {
     setSelectedIds([id]);
+  }
+  if (prevActive !== id) {
+    const eventActor = activeImageEventActorForSource(source, actor);
+    recordUserEvent("active_image_change", {
+      actor: eventActor,
+      source: String(source || "system"),
+      reason: reason ? String(reason) : null,
+      canvas_mode: state.canvasMode,
+      from_active_id: prevActive || null,
+      active_id: id,
+      selected_ids: getSelectedIds().slice(0, 3),
+    });
   }
   setFilmstripSelected(prevActive, id);
   clearSelection();
@@ -21149,6 +21308,7 @@ async function createRun() {
   resetDescribeQueue();
   // Run-local interaction history for canvas context envelopes.
   state.userEvents = [];
+  state.userTelemetryEvents = [];
   state.userEventSeq = 0;
   state.images = [];
   state.imagesById.clear();
@@ -21267,6 +21427,7 @@ async function openExistingRun() {
   resetDescribeQueue();
   // Run-local interaction history for canvas context envelopes.
   state.userEvents = [];
+  state.userTelemetryEvents = [];
   state.userEventSeq = 0;
   state.images = [];
   state.imagesById.clear();
