@@ -44,6 +44,7 @@ npm-debug.log*
 !desktop/src/assets/portraits/*.mp4
 
 # Generated artifacts
+outputs/
 outputs/first_light/
 outputs/aip_packs/
 outputs/aip_server/
@@ -72,6 +73,7 @@ yellow.png
 /images_gemini_wire_subject_*/
 /outputs/llm_spatial_review_*/
 /outputs/local_root_archive/
+/media/archive/root_legacy/
 /media/brood_demo_intent_build_*.gif
 /media/brood_demo_v*.gif
 /media/features/edit_annotation.gif

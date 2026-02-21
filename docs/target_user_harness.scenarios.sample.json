@@ -74,17 +74,17 @@
       "inputs": [
         {
           "id": "input_subject",
-          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/P0.jpg",
+          "path": "./images/P0.jpg",
           "label": "Original subject image"
         },
         {
           "id": "failed_release_output",
-          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/item-0001.jpg",
+          "path": "./images/item-0001.jpg",
           "label": "Output from failing release"
         },
         {
           "id": "target_reference",
-          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/P3-processed.jpg",
+          "path": "./images/P3-processed.jpg",
           "label": "Target quality reference"
         }
       ],
@@ -198,7 +198,7 @@
           "command": {
             "name": "diagnose",
             "paths": [
-              "/Users/mainframe/Desktop/projects/gridlock/image_test/item-0001.jpg"
+              "./images/item-0001.jpg"
             ]
           },
           "reason": "Collect explicit critique and failure hypotheses early."
@@ -208,7 +208,7 @@
           "command": {
             "name": "canvas_context",
             "paths": [
-              "/Users/mainframe/Desktop/projects/gridlock/image_test/P0.jpg"
+              "./images/P0.jpg"
             ]
           },
           "reason": "Capture context for a reproducible setup before remediation."
@@ -223,17 +223,17 @@
       "inputs": [
         {
           "id": "brand_subject",
-          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/sofa_test.png",
+          "path": "./images/sofa_test.png",
           "label": "Primary subject"
         },
         {
           "id": "style_ref_a",
-          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/boat.webp",
+          "path": "./images/boat.webp",
           "label": "Style reference A"
         },
         {
           "id": "style_ref_b",
-          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/shopping.webp",
+          "path": "./images/shopping.webp",
           "label": "Style reference B"
         }
       ],
@@ -356,8 +356,8 @@
           "command": {
             "name": "swap_dna",
             "paths": [
-              "/Users/mainframe/Desktop/projects/gridlock/image_test/sofa_test.png",
-              "/Users/mainframe/Desktop/projects/gridlock/image_test/boat.webp"
+              "./images/sofa_test.png",
+              "./images/boat.webp"
             ]
           },
           "reason": "Generate a first directional variant rapidly."
@@ -392,8 +392,8 @@
           "command": {
             "name": "argue",
             "paths": [
-              "/Users/mainframe/Desktop/projects/gridlock/image_test/sofa_test.png",
-              "/Users/mainframe/Desktop/projects/gridlock/image_test/boat.webp"
+              "./images/sofa_test.png",
+              "./images/boat.webp"
             ]
           },
           "reason": "Run explicit comparison on a deterministic two-image selection before freeform direction prompts."
@@ -413,17 +413,17 @@
       "inputs": [
         {
           "id": "client_product",
-          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/item-0002.jpg",
+          "path": "./images/item-0002.jpg",
           "label": "Client product source"
         },
         {
           "id": "campaign_reference",
-          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/P4.jpg",
+          "path": "./images/P4.jpg",
           "label": "Campaign reference"
         },
         {
           "id": "fallback_baseline",
-          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/P2.jpg",
+          "path": "./images/P2.jpg",
           "label": "Known baseline output"
         }
       ],
@@ -464,7 +464,7 @@
           "command": {
             "name": "use",
             "paths": [
-              "/Users/mainframe/Desktop/projects/gridlock/image_test/item-0002.jpg"
+              "./images/item-0002.jpg"
             ]
           },
           "reason": "Pin a primary source before recipe exploration."
@@ -546,8 +546,8 @@
           "command": {
             "name": "blend",
             "paths": [
-              "/Users/mainframe/Desktop/projects/gridlock/image_test/item-0002.jpg",
-              "/Users/mainframe/Desktop/projects/gridlock/image_test/P4.jpg"
+              "./images/item-0002.jpg",
+              "./images/P4.jpg"
             ]
           },
           "reason": "Build a client-facing candidate while tracking cost-mode effects."
@@ -567,17 +567,17 @@
       "inputs": [
         {
           "id": "llms_entrypoint",
-          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/crash-movie-david-cronenberg-three.jpg",
+          "path": "./images/crash-movie-david-cronenberg-three.jpg",
           "label": "llms entrypoint screenshot"
         },
         {
           "id": "agent_intake_contract",
-          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/caterpillar.jpeg",
+          "path": "./images/caterpillar.jpeg",
           "label": "agent-intake contract screenshot"
         },
         {
           "id": "visibility_probe_output",
-          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/caterpillar2.jpg",
+          "path": "./images/caterpillar2.jpg",
           "label": "visibility probe output screenshot"
         }
       ],
@@ -618,7 +618,7 @@
           "command": {
             "name": "describe",
             "paths": [
-              "/Users/mainframe/Desktop/projects/gridlock/image_test/crash-movie-david-cronenberg-three.jpg"
+              "./images/crash-movie-david-cronenberg-three.jpg"
             ]
           },
           "reason": "Capture first-pass interpretation of agent-facing entrypoints."
@@ -694,7 +694,7 @@
           "command": {
             "name": "canvas_context",
             "paths": [
-              "/Users/mainframe/Desktop/projects/gridlock/image_test/caterpillar.jpeg"
+              "./images/caterpillar.jpeg"
             ]
           },
           "reason": "Assess whether intended integration context is understandable."
@@ -704,9 +704,9 @@
           "command": {
             "name": "extract_rule",
             "paths": [
-              "/Users/mainframe/Desktop/projects/gridlock/image_test/crash-movie-david-cronenberg-three.jpg",
-              "/Users/mainframe/Desktop/projects/gridlock/image_test/caterpillar.jpeg",
-              "/Users/mainframe/Desktop/projects/gridlock/image_test/caterpillar2.jpg"
+              "./images/crash-movie-david-cronenberg-three.jpg",
+              "./images/caterpillar.jpeg",
+              "./images/caterpillar2.jpg"
             ]
           },
           "reason": "Synthesize one rule for what makes the project legible to agents."
@@ -721,17 +721,17 @@
       "inputs": [
         {
           "id": "subject_image",
-          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/sofa_test.png",
+          "path": "./images/sofa_test.png",
           "label": "Primary subject image"
         },
         {
           "id": "style_image_a",
-          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/boat.webp",
+          "path": "./images/boat.webp",
           "label": "Style reference image A"
         },
         {
           "id": "style_image_b",
-          "path": "/Users/mainframe/Desktop/projects/gridlock/image_test/shopping.webp",
+          "path": "./images/shopping.webp",
           "label": "Style reference image B"
         }
       ],
