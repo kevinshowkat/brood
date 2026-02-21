@@ -25,3 +25,10 @@ test("Mother realtime recovery: retry decision is wired before hard failure", ()
   assert.match(app, /kind:\s*"intent_realtime_retry_exhausted"/);
   assert.match(app, /motherIdleHandleGenerationFailed\(`Mother realtime intent failed\. \${msg}`\);/);
 });
+
+test("Mother realtime source kind recognizes provider tags as realtime", () => {
+  assert.match(
+    app,
+    /function motherV2IntentSourceKind\(source = ""\) \{[\s\S]*realtimeSourceSupported\(raw\)[\s\S]*raw\.startsWith\("openai_realtime"\) \|\| raw\.startsWith\("gemini_flash"\)[\s\S]*return "realtime";/
+  );
+});
