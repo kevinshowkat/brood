@@ -5329,7 +5329,7 @@ function inferIntentBranchFromVisionDescriptions() {
   bump("game_dev_assets", /\b(character sheet|character sheets)\b/i, 4);
   bump("game_dev_assets", /\b(concept art)\b/i, 4);
   bump("game_dev_assets", /\b(unreal|unity)\b/i, 2);
-  bump("game_dev_assets", /\b(terran|zerg|scv)\b/i, 4);
+  bump("game_dev_assets", /\b(faction|factions|rts|real[- ]?time strategy)\b/i, 4);
   bump("game_dev_assets", /\b(game|gamedev|mod)\b/i, 2);
 
   bump("streaming_content", /\b(instagram|twitch|youtube|tiktok)\b/i, 5);
