@@ -153,11 +153,24 @@ cargo run -p brood-cli -- recreate --reference path/to/image.png --out /tmp/broo
 ## API Keys
 
 - Copy `.env.example` to `.env` and fill provider keys.
-- Supported key families: OpenAI, Anthropic, Gemini/Google, Imagen/Vertex, Flux/BFL.
+- Supported key families: OpenAI, OpenRouter, Anthropic, Gemini/Google, Imagen/Vertex, Flux/BFL.
 - For OpenAI image models:
   - set `OPENAI_API_KEY` (or `OPENAI_API_KEY_BACKUP`)
   - use `/image_model gpt-image-1` in chat or `--image-model gpt-image-1` on CLI
   - optional: `OPENAI_IMAGE_USE_RESPONSES=1`, `OPENAI_IMAGE_STREAM=1`
+- Realtime intent/canvas provider routing:
+  - set `BROOD_REALTIME_PROVIDER` to `openai_realtime` or `gemini_flash`
+  - optional scoped overrides:
+    - `BROOD_CANVAS_CONTEXT_REALTIME_PROVIDER`
+    - `BROOD_INTENT_REALTIME_PROVIDER`
+    - `BROOD_MOTHER_INTENT_REALTIME_PROVIDER`
+  - default behavior:
+    - OpenAI key present -> `openai_realtime`
+    - otherwise, OpenRouter/Gemini presence -> `gemini_flash`
+  - OpenRouter-first setup for realtime intent/canvas:
+    - set `OPENROUTER_API_KEY` (for OpenRouter workflows)
+    - set `GEMINI_API_KEY` or `GOOGLE_API_KEY` (for realtime transport)
+  - if you force `openai_realtime`, you must provide `OPENAI_API_KEY` (or backup key)
 
 ## Optional Configuration
 

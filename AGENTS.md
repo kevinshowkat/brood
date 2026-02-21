@@ -76,6 +76,16 @@ Tests:
 - Desktop file access requires Tauri FS scope (see `desktop/src-tauri/tauri.conf.json`).
 - Desktop runtime is native-only (`brood-rs`); Python compat fallback is retired from normal desktop runtime.
 - API keys are listed in `.env.example` and should be stored in a local `.env` (gitignored).
+- Realtime intent/canvas provider routing envs:
+  - `BROOD_REALTIME_PROVIDER` (`openai_realtime` or `gemini_flash`)
+  - optional scoped overrides:
+    - `BROOD_CANVAS_CONTEXT_REALTIME_PROVIDER`
+    - `BROOD_INTENT_REALTIME_PROVIDER`
+    - `BROOD_MOTHER_INTENT_REALTIME_PROVIDER`
+- OpenRouter-first realtime setup:
+  - keep `OPENROUTER_API_KEY` for OpenRouter-backed generation flows
+  - provide `GEMINI_API_KEY` or `GOOGLE_API_KEY` for realtime intent/canvas transport
+  - if forcing `openai_realtime`, require `OPENAI_API_KEY` (or `OPENAI_API_KEY_BACKUP`)
 
 ## Agent/LLM Intake (Optional)
 - `llms.txt` is the agent-facing entrypoints file (high-signal files + task routing).

@@ -15,17 +15,24 @@ test("Realtime pricing constants include gpt-realtime-mini token rates", () => {
   );
 });
 
-test("Realtime cost ingest helper gates on finalized openai_realtime payloads", () => {
+test("Realtime cost ingest helper gates on finalized supported realtime payloads", () => {
   const fnMatch = app.match(/function topMetricIngestRealtimeCostFromPayload\(payload, \{ render = false \} = \{\}\) \{[\s\S]*?\n}\n\nfunction topMetricIngestCost/);
   assert.ok(fnMatch, "topMetricIngestRealtimeCostFromPayload function not found");
   const fnText = fnMatch[0];
 
   assert.match(fnText, /if \(payload\.partial\) return false;/);
   assert.match(fnText, /const source = String\(payload\.source \|\| ""\)\.trim\(\)\.toLowerCase\(\);/);
-  assert.match(fnText, /if \(source !== "openai_realtime"\) return false;/);
+  assert.match(fnText, /if \(!realtimeSourceSupported\(source\)\) return false;/);
   assert.match(fnText, /const tokens = extractTokenUsage\(payload\);/);
   assert.match(fnText, /const estimate = estimateRealtimeTokenCostUsd\(\{/);
   assert.match(fnText, /topMetricIngestCost\(estimate\);/);
+});
+
+test("Realtime source helper accepts openai and gemini realtime source tags", () => {
+  assert.match(
+    app,
+    /function realtimeSourceSupported\(source\) \{[\s\S]*normalized === "openai_realtime" \|\| normalized === "gemini_flash";/
+  );
 });
 
 test("Realtime final canvas/intents events feed estimated realtime cost into COST", () => {
