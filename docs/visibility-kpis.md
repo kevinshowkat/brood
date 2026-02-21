@@ -1,0 +1,36 @@
+# Visibility KPIs
+
+Track discoverability with emphasis on unprompted assistant mentions.
+
+## North-Star KPI
+
+`unprompted_mention_rate`
+
+- Numerator: probe results where Brood is mentioned and query does **not** contain `brood`.
+- Denominator: all probe results where query does **not** contain `brood`.
+
+## Supporting KPIs
+
+- `prompted_mention_rate`
+- `external_unique_referrers_total`
+- channel-level uniques (`hacker_news`, `reddit`, `search`, `ai_assistant`, etc.)
+- `clone_to_view_ratio` and `unique_clone_to_unique_view_ratio` (context only; not primary)
+
+## Weekly Workflow
+
+1. Run visibility probes and collect `results.jsonl`.
+2. Pull GitHub traffic snapshots (`github_traffic.json`).
+3. Run:
+
+```bash
+python scripts/compute_visibility_kpis.py \
+  --results outputs/ai_visibility/*/results.jsonl \
+  --traffic outputs/ai_visibility/*/github_traffic.json
+```
+
+4. Log weekly KPI values and deltas.
+
+## Notes
+
+- Keep prompted and unprompted buckets separate.
+- Do not use raw clone count as primary growth signal.

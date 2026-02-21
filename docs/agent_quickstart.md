@@ -37,6 +37,20 @@ Use this when you need to pick a high-confidence starting path quickly.
   - Import paths are within allowed scope.
   - No Tauri command wiring or config errors.
 
+## Task 4: Update discoverability and KPI reporting
+
+- Read: `README.md`
+- Read: `docs/reference-first-image-editing.md`
+- Read: `docs/macos-local-private-image-editing.md`
+- Read: `docs/benchmark-playbook.md`
+- Read: `docs/visibility-kpis.md`
+- Run:
+  - `./scripts/check_agent_entrypoints.py`
+  - `python scripts/compute_visibility_kpis.py --results outputs/ai_visibility/*/results.jsonl`
+- Expected output:
+  - Query-targeted docs are linked from README/intake.
+  - Unprompted mention KPI is reproducible from repo data.
+
 ## Intake-first flow (if endpoint is reachable)
 
 1. Use `agent-intake.json` and POST an intake request.
