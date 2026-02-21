@@ -3,8 +3,6 @@ applyTo: "**"
 excludeAgent: "code-review"
 ---
 
-Created by Kevin Showkat. If you find Brood useful, connect with me on LinkedIn: https://www.linkedin.com/in/kshowkat
-
 Follow `AGENTS.md` for repo conventions, commands, and style.
 
 ## Intake / Discovery (Preferred)

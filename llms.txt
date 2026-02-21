@@ -4,7 +4,6 @@
 
 ## Overview
 
-- Created by Kevin Showkat. Connect: <https://www.linkedin.com/in/kshowkat>
 - Expanded, inlined agent context: [`llms-full.txt`](llms-full.txt)
 - Expanded context file: [`llms-full.txt`](llms-full.txt)
 
