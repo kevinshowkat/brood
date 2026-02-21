@@ -275,6 +275,10 @@ const TOP_METRICS_THRESHOLDS = Object.freeze({
   avg_render_s: { cool_max: 8, warm_max: 18 },
 });
 const SPARKLINE_GLYPHS = Object.freeze(["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]);
+// Per-1K-token estimates for realtime text calls (input/output priced separately).
+const REALTIME_TOKEN_PRICING_USD_PER_1K = Object.freeze({
+  "gpt-realtime-mini": Object.freeze({ input: 0.0006, output: 0.0024 }),
+});
 const REEL_PRESET = Object.freeze({
   width: 540,
   height: 960,
@@ -950,6 +954,8 @@ const state = {
   },
   effectTokenDrag: null, // { tokenId, sourceImageId, targetImageId, moved, x, y }
   effectTokenApplyLocks: new Map(), // tokenId -> { dispatchId, targetImageId, queued, startedAt }
+  motherOverlayUiHits: [], // [{ kind, targetId?, rect: {x,y,w,h} }]
+  motherResultDetailsOpenId: null, // imageId currently showing provenance popover
   wheelMenu: {
     open: false,
     hideTimer: null,
@@ -1044,6 +1050,7 @@ const state = {
     hoverDraftId: null,
     commitMutationInFlight: false,
     roleGlyphHits: [], // [{ role, imageId, rect }]
+    offerDetailsOpen: false,
     roleGlyphDrag: null, // { role, imageId, startX, startY, moved }
     advancedOpen: false,
     optionReveal: false,
@@ -1676,6 +1683,45 @@ function topMetricIngestTokensFromPayload(payload, { atMs = Date.now(), render =
   return true;
 }
 
+function topMetricRealtimePricingForModel(model) {
+  const raw = String(model || "").trim().toLowerCase();
+  if (!raw) return null;
+  if (raw.startsWith("gpt-realtime-mini")) return REALTIME_TOKEN_PRICING_USD_PER_1K["gpt-realtime-mini"];
+  if (raw.startsWith("gpt-4o-mini")) return REALTIME_TOKEN_PRICING_USD_PER_1K["gpt-realtime-mini"];
+  return null;
+}
+
+function estimateRealtimeTokenCostUsd({ model = "", inputTokens = 0, outputTokens = 0 } = {}) {
+  const pricing = topMetricRealtimePricingForModel(model);
+  if (!pricing) return null;
+  const input = Math.max(0, Number(inputTokens) || 0);
+  const output = Math.max(0, Number(outputTokens) || 0);
+  if (!input && !output) return null;
+  const inputCost = (input / 1000) * (Number(pricing.input) || 0);
+  const outputCost = (output / 1000) * (Number(pricing.output) || 0);
+  const total = inputCost + outputCost;
+  if (!Number.isFinite(total) || total <= 0) return null;
+  return total;
+}
+
+function topMetricIngestRealtimeCostFromPayload(payload, { render = false } = {}) {
+  if (!payload || typeof payload !== "object") return false;
+  if (payload.partial) return false;
+  const source = String(payload.source || "").trim().toLowerCase();
+  if (source !== "openai_realtime") return false;
+  const tokens = extractTokenUsage(payload);
+  if (!tokens) return false;
+  const estimate = estimateRealtimeTokenCostUsd({
+    model: payload.model,
+    inputTokens: tokens.input_tokens,
+    outputTokens: tokens.output_tokens,
+  });
+  if (!(Number.isFinite(estimate) && estimate > 0)) return false;
+  topMetricIngestCost(estimate);
+  if (render) renderSessionApiCallsReadout();
+  return true;
+}
+
 function topMetricIngestCost(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return;
@@ -1867,6 +1913,7 @@ async function ensureReceiptMeta(item) {
   if (getActiveImage()?.id === item.id) {
     renderHudReadout();
   }
+  requestRender();
 }
 
 async function ingestTopMetricsFromReceiptPath(receiptPath, { allowCostFallback = false, allowLatencyFallback = false } = {}) {
@@ -9128,7 +9175,6 @@ function renderMotherRolePreview() {
 function buildMotherText() {
   const idle = state.motherIdle || null;
   const phase = idle?.phase || motherIdleInitialState();
-  const drafts = Array.isArray(idle?.drafts) ? idle.drafts : [];
   const cooldownMs = Math.max(0, (Number(idle?.cooldownUntil) || 0) - Date.now());
   const undoAvailable = motherV2CommitUndoAvailable();
   const canPropose = motherIdleHasArmedCanvas();
@@ -9145,11 +9191,10 @@ function buildMotherText() {
     return "";
   }
   if (phase === MOTHER_IDLE_STATES.OFFERING) {
-    const draftCount = drafts.length;
     if (isReelSizeLocked()) {
-      return `Draft ready (${draftCount}). ✓ deploy, R reroll.`;
+      return "Proposal ready. ✓ deploy, R reroll.";
     }
-    return `Draft ready (${draftCount}). ✓ deploy, ✕ reject, R reroll.`;
+    return "Proposal ready. ✓ deploy, ✕ dismiss, R reroll.";
   }
   if (phase === MOTHER_IDLE_STATES.COMMITTING) {
     return "Committing draft to canvas…";
@@ -9197,7 +9242,6 @@ function buildMotherText() {
 function motherV2StatusText() {
   const idle = state.motherIdle || null;
   const phase = idle?.phase || motherIdleInitialState();
-  const drafts = Array.isArray(idle?.drafts) ? idle.drafts : [];
   const canPropose = motherIdleHasArmedCanvas();
   if (!canPropose && (phase === MOTHER_IDLE_STATES.WATCHING || phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING)) {
     return "Observing";
@@ -9210,8 +9254,8 @@ function motherV2StatusText() {
     if (idle?.intent && typeof idle.intent === "object") return "Proposed";
     return "Proposing";
   }
-  if (phase === MOTHER_IDLE_STATES.DRAFTING) return "Drafting 1/1";
-  if (phase === MOTHER_IDLE_STATES.OFFERING) return `Offer ${Math.max(1, drafts.length || 0)}`;
+  if (phase === MOTHER_IDLE_STATES.DRAFTING) return "Drafting";
+  if (phase === MOTHER_IDLE_STATES.OFFERING) return "Proposal ready";
   if (phase === MOTHER_IDLE_STATES.COMMITTING) return "Deploying";
   if (phase === MOTHER_IDLE_STATES.COOLDOWN) {
     const cooldownMs = Math.max(0, (Number(idle?.cooldownUntil) || 0) - Date.now());
@@ -9283,6 +9327,7 @@ function motherV2IntentSourceKind(source = "") {
 function motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml }) {
   const normalizedPhase = String(phase || "").trim();
   const isDraftingPhase = normalizedPhase === MOTHER_IDLE_STATES.DRAFTING;
+  const isOfferingPhase = normalizedPhase === MOTHER_IDLE_STATES.OFFERING;
   const isCooldownPhase = normalizedPhase === MOTHER_IDLE_STATES.COOLDOWN;
   const visibleImageCount = motherIdleBaseImageItems().length;
   if (visibleImageCount < MOTHER_V2_MIN_IMAGES_FOR_PROPOSAL) return "";
@@ -9325,7 +9370,7 @@ function motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml }) {
   const visualHtml = readoutHtml || proposalVisualHtml;
   const visualLine = visualHtml ? `<div class="mother-proposal-visual">${visualHtml}</div>` : "";
   const flowLine = `<div class="mother-proposal-flow">${visualLine}</div>`;
-  const modeLine = !isDraftingPhase && !isCooldownPhase && modeLabel
+  const modeLine = !isDraftingPhase && !isOfferingPhase && !isCooldownPhase && modeLabel
     ? `<div class="mother-proposal-mode" style="--proposal-mode-accent:${escapeHtml(modeAccent)}" aria-label="${escapeHtml(modeAria)}">${escapeHtml(modeLabel)}</div>`
     : "";
   return `
@@ -9339,6 +9384,7 @@ function motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml }) {
 function motherV2PhaseCardKind(phase = null) {
   const statePhase = phase || state.motherIdle?.phase || motherIdleInitialState();
   if (statePhase === MOTHER_IDLE_STATES.COOLDOWN) return "cooldown";
+  if (statePhase === MOTHER_IDLE_STATES.OFFERING) return "ready";
   if (statePhase !== MOTHER_IDLE_STATES.DRAFTING) return "";
   return state.motherIdle?.pendingPromptCompile ? "braiding" : "drafting";
 }
@@ -9347,7 +9393,10 @@ function renderMotherReadout() {
   renderMotherControls();
   syncMotherIntentSourceIndicator();
   const phase = state.motherIdle?.phase || motherIdleInitialState();
-  const isPhaseCardState = phase === MOTHER_IDLE_STATES.DRAFTING || phase === MOTHER_IDLE_STATES.COOLDOWN;
+  const isPhaseCardState =
+    phase === MOTHER_IDLE_STATES.DRAFTING ||
+    phase === MOTHER_IDLE_STATES.OFFERING ||
+    phase === MOTHER_IDLE_STATES.COOLDOWN;
   if (els.motherPanel) {
     els.motherPanel.classList.toggle(
       "mother-drafting-view",
@@ -9368,7 +9417,7 @@ function renderMotherReadout() {
   const proposalIconsHtml = motherV2ProposalIconsHtml(state.motherIdle?.intent || null, { phase });
   const draftStatusHtml = motherV2DraftStatusHtml({ phase });
   const statusText = motherV2StatusText();
-  const readoutHtml = phase === MOTHER_IDLE_STATES.DRAFTING || phase === MOTHER_IDLE_STATES.COOLDOWN
+  const readoutHtml = phase === MOTHER_IDLE_STATES.DRAFTING || phase === MOTHER_IDLE_STATES.OFFERING || phase === MOTHER_IDLE_STATES.COOLDOWN
     ? draftStatusHtml
     : proposalIconsHtml || draftStatusHtml;
   const proposalCardHtml = motherV2ProposalCardHtml({ phase, statusText, next, readoutHtml });
@@ -9642,6 +9691,12 @@ function motherV2CollectCommitSeedIds(intent = null) {
 }
 
 function motherV2OfferingHiddenSeedIds() {
+  // Keep parent inputs visible while Mother is drafting/offering.
+  // We intentionally no-op this legacy hide path and dim instead.
+  return new Set();
+}
+
+function motherV2OfferingDimSeedIds() {
   const idle = state.motherIdle;
   if (!idle) return new Set();
   if (idle.phase !== MOTHER_IDLE_STATES.OFFERING) return new Set();
@@ -9816,6 +9871,9 @@ async function motherV2CommitSelectedDraft() {
               receiptPath: t.receiptPath ? String(t.receiptPath) : null,
               kind: t.kind ? String(t.kind) : null,
               source: t.source ? String(t.source) : null,
+              motherVersionId: t.motherVersionId ? String(t.motherVersionId) : null,
+              receiptMeta: t.receiptMeta && typeof t.receiptMeta === "object" ? { ...t.receiptMeta } : null,
+              receiptMetaChecked: Boolean(t.receiptMetaChecked),
             }
           : null;
       })()
@@ -9835,7 +9893,15 @@ async function motherV2CommitSelectedDraft() {
       }).catch(() => false);
       if (!ok) throw new Error("Mother commit failed to replace target.");
       const targetItem = state.imagesById.get(targetId) || null;
-      if (targetItem) targetItem.source = MOTHER_GENERATED_SOURCE;
+      if (targetItem) {
+        targetItem.source = MOTHER_GENERATED_SOURCE;
+        targetItem.motherVersionId = draft.versionId ? String(draft.versionId) : null;
+        if (draft.receiptMeta && typeof draft.receiptMeta === "object") {
+          targetItem.receiptMeta = { ...draft.receiptMeta };
+          targetItem.receiptMetaChecked = true;
+          targetItem.receiptMetaLoading = false;
+        }
+      }
       committedImageId = String(targetId);
       commitUndo = {
         mode: "replace",
@@ -9869,6 +9935,10 @@ async function motherV2CommitSelectedDraft() {
           label: basename(draft.path),
           timelineAction: "Mother Suggestion",
           timelineParents: [],
+          motherVersionId: draft.versionId ? String(draft.versionId) : null,
+          receiptMeta: draft.receiptMeta && typeof draft.receiptMeta === "object" ? { ...draft.receiptMeta } : null,
+          receiptMetaChecked: Boolean(draft.receiptMeta),
+          receiptMetaLoading: false,
         },
         { select: false }
       );
@@ -9943,6 +10013,13 @@ async function motherV2UndoCommit() {
       const targetItem = state.imagesById.get(String(undo.targetId)) || null;
       if (targetItem) {
         targetItem.source = undo.before.source || null;
+        targetItem.motherVersionId = undo.before.motherVersionId ? String(undo.before.motherVersionId) : null;
+        targetItem.receiptMeta =
+          undo.before.receiptMeta && typeof undo.before.receiptMeta === "object"
+            ? { ...undo.before.receiptMeta }
+            : null;
+        targetItem.receiptMetaChecked = Boolean(undo.before.receiptMetaChecked);
+        targetItem.receiptMetaLoading = false;
       }
     }
   }
@@ -10455,6 +10532,8 @@ function motherV2DraftStatusIconSvg(kind = "drafting") {
   let inner = "";
   if (iconKind === "braiding") {
     inner = '<path d="M4.8 8c2.9 0 3.3 7.8 7.2 7.8s4.3-7.8 7.2-7.8"/><path d="M4.8 16c2.9 0 3.3-7.8 7.2-7.8s4.3 7.8 7.2 7.8"/><circle cx="4.8" cy="8" r="1.2"/><circle cx="4.8" cy="16" r="1.2"/><circle cx="19.2" cy="8" r="1.2"/><circle cx="19.2" cy="16" r="1.2"/>';
+  } else if (iconKind === "ready") {
+    inner = '<path d="M5 12.7 9.3 17l9.7-9.7"/><path d="M12 4.2v2.1"/><path d="M6.8 6.1 8.2 7.5"/><path d="M17.2 6.1 15.8 7.5"/>';
   } else if (iconKind === "cooldown") {
     inner = '<circle cx="12" cy="12" r="7.4"/><path d="M12 8.4v4.4l2.9 2"/><path d="M9.6 3.8h4.8"/><path d="M6.2 6.2 4.6 4.6"/><path d="M17.8 6.2 19.4 4.6"/>';
   } else {
@@ -10465,13 +10544,26 @@ function motherV2DraftStatusIconSvg(kind = "drafting") {
 
 function motherV2DraftStatusHtml({ phase = null } = {}) {
   const statePhase = phase || state.motherIdle?.phase || motherIdleInitialState();
-  if (statePhase !== MOTHER_IDLE_STATES.DRAFTING && statePhase !== MOTHER_IDLE_STATES.COOLDOWN) return "";
+  if (
+    statePhase !== MOTHER_IDLE_STATES.DRAFTING &&
+    statePhase !== MOTHER_IDLE_STATES.OFFERING &&
+    statePhase !== MOTHER_IDLE_STATES.COOLDOWN
+  ) {
+    return "";
+  }
   if (statePhase === MOTHER_IDLE_STATES.COOLDOWN) {
     const accent = "rgba(143, 222, 255, 0.95)";
     const tooltip = "Mother is cooling down before the next intent cycle.";
     const label = "COOLDOWN";
     const icon = motherV2DraftStatusIconSvg("cooldown");
     return `<div class="mother-phase-icons is-draft-card" aria-label="${escapeHtml(tooltip)}"><span class="mother-phase-icon is-cooldown is-draft-card" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}" style="--phase-accent:${escapeHtml(accent)}">${icon}</span><span class="mother-phase-label is-draft-card" style="--phase-accent:${escapeHtml(accent)}">${escapeHtml(label)}</span></div>`;
+  }
+  if (statePhase === MOTHER_IDLE_STATES.OFFERING) {
+    const accent = "rgba(122, 238, 178, 0.96)";
+    const tooltip = "Mother proposal is ready. Deploy, dismiss, or reroll.";
+    const label = "PROPOSAL READY";
+    const icon = motherV2DraftStatusIconSvg("ready");
+    return `<div class="mother-phase-icons is-draft-card" aria-label="${escapeHtml(tooltip)}"><span class="mother-phase-icon is-ready is-draft-card" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}" style="--phase-accent:${escapeHtml(accent)}">${icon}</span><span class="mother-phase-label is-draft-card" style="--phase-accent:${escapeHtml(accent)}">${escapeHtml(label)}</span></div>`;
   }
   const idle = state.motherIdle || null;
   const isBraiding = Boolean(idle?.pendingPromptCompile);
@@ -11606,6 +11698,7 @@ function motherV2ClearIntentAndDrafts({ removeFiles = false } = {}) {
   idle.drafts = [];
   idle.selectedDraftId = null;
   idle.hoverDraftId = null;
+  idle.offerDetailsOpen = false;
   idle.pendingVisionImageIds = [];
   clearTimeout(idle.pendingVisionRetryTimer);
   idle.pendingVisionRetryTimer = null;
@@ -14855,8 +14948,17 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
     versionId: incomingVersionId,
     actionVersion: Number(idle.actionVersion) || 0,
     createdAt: Date.now(),
+    receiptMeta: null,
     img: null,
   };
+  if (draft.receiptPath) {
+    try {
+      const payload = JSON.parse(await readTextFile(draft.receiptPath));
+      draft.receiptMeta = extractReceiptMeta(payload);
+    } catch {
+      draft.receiptMeta = null;
+    }
+  }
   try {
     draft.img = await loadImage(draft.path);
   } catch {
@@ -14866,6 +14968,8 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
   idle.selectedDraftId = draft.id;
   idle.hoverDraftId = draft.id;
   motherIdleTransitionTo(MOTHER_IDLE_EVENTS.DRAFT_READY);
+  setStatus("Mother: proposal ready.");
+  renderMotherReadout();
   appendMotherTraceLog({
     kind: "draft_ready",
     traceId: idle.telemetry?.traceId || null,
@@ -14875,7 +14979,7 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
     placement_policy: idle.intent?.placement_policy || null,
   }).catch(() => {});
   if (!isReelSizeLocked()) {
-    showToast("Mother draft ready. ✓ deploy, ✕ dismiss, R reroll.", "tip", 2200);
+    showToast("Mother proposal ready. ✓ deploy, ✕ dismiss, R reroll.", "tip", 2200);
   }
   requestRender();
   return true;
@@ -19303,6 +19407,9 @@ function addImage(item, { select = false } = {}) {
 async function removeImageFromCanvas(imageId) {
   const id = String(imageId || "");
   if (!id) return false;
+  if (state.motherResultDetailsOpenId === id) {
+    state.motherResultDetailsOpenId = null;
+  }
   const item = state.imagesById.get(id) || null;
   if (!item) return false;
   recordUserEvent("image_remove", {
@@ -21707,6 +21814,7 @@ async function handleEventLegacy(event) {
         setStatus("Engine: ready");
         updatePortraitIdle();
         setImageFxActive(false);
+        renderMotherReadout();
         renderQuickActions();
         renderHudReadout();
         processActionQueue().catch(() => {});
@@ -22187,6 +22295,9 @@ async function handleEventLegacy(event) {
   } else if (eventType === DESKTOP_EVENT_TYPES.CANVAS_CONTEXT) {
     const text = event.text;
     const isPartial = Boolean(event.partial);
+    if (!isPartial) {
+      topMetricIngestRealtimeCostFromPayload(event, { render: true });
+    }
     const aov = state.alwaysOnVision;
     if (aov) {
       if (isPartial) {
@@ -22302,6 +22413,9 @@ async function handleEventLegacy(event) {
     );
     if (!intent && !ambient && !motherCanAcceptRealtime) return;
     const isPartial = Boolean(event.partial);
+    if (!isPartial) {
+      topMetricIngestRealtimeCostFromPayload(event, { render: true });
+    }
     const text = event.text;
     const path = event.image_path ? String(event.image_path) : "";
     if (!path) return;
@@ -23123,6 +23237,7 @@ function hitTestEffectToken(ptCanvas) {
 }
 
 function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
+  state.motherOverlayUiHits = [];
   const items = state.images || [];
   const nowMs = performance.now ? performance.now() : Date.now();
   for (const item of items) {
@@ -23134,7 +23249,9 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
   const mox = Number(state.multiView?.offsetX) || 0;
   const moy = Number(state.multiView?.offsetY) || 0;
   const hiddenOfferSeedIds = motherV2OfferingHiddenSeedIds();
+  const dimOfferSeedIds = motherV2OfferingDimSeedIds();
   const isHiddenOfferSeedId = (rawId) => hiddenOfferSeedIds.has(String(rawId || "").trim());
+  const isDimOfferSeedId = (rawId) => dimOfferSeedIds.has(String(rawId || "").trim());
 
   const dpr = getDpr();
   wctx.save();
@@ -23154,17 +23271,30 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     const y = rect.y * ms + moy;
     const w = rect.w * ms;
     const h = rect.h * ms;
+    const dimOfferSeed = isDimOfferSeedId(imageId);
     const effectToken = imageId ? effectTokenForImageId(imageId) : null;
     if (effectToken) {
       // Token visuals are rendered by the Pixi effects runtime on a dedicated transparent layer.
     } else if (item?.img) {
+      wctx.save();
+      if (dimOfferSeed) wctx.globalAlpha = 0.62;
       wctx.drawImage(item.img, x, y, w, h);
+      if (dimOfferSeed) {
+        wctx.globalAlpha = 1;
+        wctx.fillStyle = "rgba(6, 10, 14, 0.26)";
+        wctx.fillRect(x, y, w, h);
+      }
+      wctx.restore();
     } else {
       const g = wctx.createLinearGradient(x, y, x, y + h);
       g.addColorStop(0, "rgba(18, 26, 37, 0.90)");
       g.addColorStop(1, "rgba(6, 8, 12, 0.96)");
       wctx.fillStyle = g;
       wctx.fillRect(x, y, w, h);
+      if (dimOfferSeed) {
+        wctx.fillStyle = "rgba(6, 10, 14, 0.26)";
+        wctx.fillRect(x, y, w, h);
+      }
       wctx.fillStyle = "rgba(230, 237, 243, 0.65)";
       wctx.font = `${Math.max(11, Math.round(12 * dpr))}px IBM Plex Mono`;
       wctx.fillText("LOADING…", x + Math.round(12 * dpr), y + Math.round(22 * dpr));
@@ -23332,6 +23462,23 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     }
   }
 
+  if (activeRect && activeItem && isMotherGeneratedImageItem(activeItem)) {
+    const ax = activeRect.x * ms + mox;
+    const ay = activeRect.y * ms + moy;
+    const aw = activeRect.w * ms;
+    const ah = activeRect.h * ms;
+    const activeId = String(activeItem.id || "").trim();
+    motherRenderDetailsBadgeAndPopover(octx, {
+      anchorRect: { x: ax, y: ay, w: aw, h: ah },
+      dpr,
+      open: Boolean(activeId && state.motherResultDetailsOpenId === activeId),
+      details: motherV2ImageRunDetails(activeItem),
+      toggleKind: "mother_result_details_toggle",
+      panelKind: "mother_result_details_panel",
+      targetId: activeId,
+    });
+  }
+
   renderMotherRoleGlyphs(octx, { ms, mox, moy });
 
   // Triplet insights overlays (Extract the Rule / Odd One Out).
@@ -23407,6 +23554,214 @@ function motherV2RoleImageIds(roleKey) {
   return motherV2RoleIds(roleKey).filter((id) => state.imagesById.has(id));
 }
 
+function motherV2ReceiptFallbackRunId(receiptPath = "") {
+  const path = String(receiptPath || "").trim();
+  if (!path) return "";
+  const match = path.match(/receipt[^/]*-([a-z0-9_-]+)\.json$/i);
+  return match ? String(match[1] || "").trim() : "";
+}
+
+function motherV2FormatCostDeltaUsd(costUsd = null) {
+  const value = Number(costUsd);
+  if (!Number.isFinite(value)) return "n/a";
+  const abs = Math.abs(value);
+  const precision = abs < 1 ? 3 : 2;
+  return `+$${value.toFixed(precision)}`;
+}
+
+function motherV2ProposalRunDetails(draft = null) {
+  const idle = state.motherIdle || null;
+  const meta = draft?.receiptMeta && typeof draft.receiptMeta === "object" ? draft.receiptMeta : null;
+  const providerKey = String(meta?.provider || "").trim() || providerFromModel(idle?.lastDispatchModel || settings.imageModel);
+  const model = String(meta?.model || idle?.lastDispatchModel || "").trim() || "unknown";
+  const runId = String(
+    draft?.versionId ||
+      idle?.generatedVersionId ||
+      motherV2ReceiptFallbackRunId(draft?.receiptPath)
+  ).trim();
+  const costUsd = Number.isFinite(Number(meta?.cost_total_usd)) ? Number(meta.cost_total_usd) : null;
+  return {
+    provider: providerDisplay(providerKey || "unknown"),
+    model,
+    runId: runId || "n/a",
+    costLabel: motherV2FormatCostDeltaUsd(costUsd),
+  };
+}
+
+function motherV2ImageRunDetails(item = null) {
+  if (!item) return null;
+  if (item.receiptPath && !item.receiptMetaChecked && !item.receiptMetaLoading) {
+    ensureReceiptMeta(item).catch(() => {});
+  }
+  const meta = item.receiptMeta && typeof item.receiptMeta === "object" ? item.receiptMeta : null;
+  const providerKey = String(meta?.provider || "").trim() || providerFromModel(settings.imageModel);
+  const model = String(meta?.model || "").trim() || "unknown";
+  const runId = String(
+    item.motherVersionId ||
+      item.versionId ||
+      motherV2ReceiptFallbackRunId(item.receiptPath)
+  ).trim();
+  const costUsd = Number.isFinite(Number(meta?.cost_total_usd)) ? Number(meta.cost_total_usd) : null;
+  return {
+    provider: providerDisplay(providerKey || "unknown"),
+    model,
+    runId: runId || "n/a",
+    costLabel: motherV2FormatCostDeltaUsd(costUsd),
+  };
+}
+
+function motherPushOverlayUiHit(hit = null) {
+  if (!hit?.rect) return;
+  if (!Array.isArray(state.motherOverlayUiHits)) state.motherOverlayUiHits = [];
+  state.motherOverlayUiHits.push(hit);
+}
+
+function hitTestMotherOverlayUi(ptCanvas) {
+  if (!ptCanvas) return null;
+  const hits = Array.isArray(state.motherOverlayUiHits) ? state.motherOverlayUiHits : [];
+  for (let i = hits.length - 1; i >= 0; i -= 1) {
+    const hit = hits[i];
+    const rect = hit?.rect;
+    if (!rect) continue;
+    const x0 = Number(rect.x) || 0;
+    const y0 = Number(rect.y) || 0;
+    const w = Number(rect.w) || 0;
+    const h = Number(rect.h) || 0;
+    if (ptCanvas.x >= x0 && ptCanvas.x <= x0 + w && ptCanvas.y >= y0 && ptCanvas.y <= y0 + h) return hit;
+  }
+  return null;
+}
+
+function motherCloseOverlayDetails() {
+  if (state.motherIdle) state.motherIdle.offerDetailsOpen = false;
+  state.motherResultDetailsOpenId = null;
+}
+
+function motherToggleOverlayDetails(hit = null) {
+  const kind = String(hit?.kind || "").trim();
+  const targetId = String(hit?.targetId || "").trim();
+  if (kind === "mother_offer_details_toggle") {
+    if (state.motherIdle) state.motherIdle.offerDetailsOpen = !Boolean(state.motherIdle.offerDetailsOpen);
+    state.motherResultDetailsOpenId = null;
+    return true;
+  }
+  if (kind === "mother_result_details_toggle") {
+    state.motherResultDetailsOpenId = state.motherResultDetailsOpenId === targetId ? null : targetId;
+    if (state.motherIdle) state.motherIdle.offerDetailsOpen = false;
+    return true;
+  }
+  if (kind === "mother_offer_details_panel" || kind === "mother_result_details_panel") {
+    return true;
+  }
+  return false;
+}
+
+function motherRenderDetailsBadgeAndPopover(
+  octx,
+  {
+    anchorRect = null,
+    dpr = 1,
+    open = false,
+    details = null,
+    toggleKind = "mother_offer_details_toggle",
+    panelKind = "mother_offer_details_panel",
+    targetId = null,
+  } = {}
+) {
+  if (!octx || !anchorRect) return;
+  const canvasW = Number(octx.canvas?.width) || 0;
+  const canvasH = Number(octx.canvas?.height) || 0;
+  if (canvasW <= 0 || canvasH <= 0) return;
+
+  const pad = Math.max(6, Math.round(7 * dpr));
+  const badgeSize = Math.max(16, Math.round(18 * dpr));
+  const badgeX = clamp(
+    Math.round((Number(anchorRect.x) || 0) + (Number(anchorRect.w) || 0) - badgeSize - pad),
+    pad,
+    Math.max(pad, canvasW - badgeSize - pad)
+  );
+  const badgeY = clamp(
+    Math.round((Number(anchorRect.y) || 0) + pad),
+    pad,
+    Math.max(pad, canvasH - badgeSize - pad)
+  );
+
+  octx.save();
+  octx.shadowColor = "rgba(0, 0, 0, 0.5)";
+  octx.shadowBlur = Math.round(10 * dpr);
+  _drawRoundedRect(octx, badgeX, badgeY, badgeSize, badgeSize, Math.max(4, Math.round(5 * dpr)));
+  octx.fillStyle = open ? "rgba(10, 32, 24, 0.92)" : "rgba(8, 10, 14, 0.86)";
+  octx.fill();
+  octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+  octx.strokeStyle = open ? "rgba(122, 238, 178, 0.88)" : "rgba(160, 188, 220, 0.66)";
+  octx.stroke();
+  octx.fillStyle = open ? "rgba(170, 255, 214, 0.98)" : "rgba(226, 235, 246, 0.96)";
+  octx.font = `${Math.max(9, Math.round(11 * dpr))}px IBM Plex Mono`;
+  octx.textAlign = "center";
+  octx.textBaseline = "middle";
+  octx.fillText("i", badgeX + badgeSize * 0.5, badgeY + badgeSize * 0.55);
+  octx.restore();
+  motherPushOverlayUiHit({
+    kind: toggleKind,
+    targetId: targetId || null,
+    rect: { x: badgeX, y: badgeY, w: badgeSize, h: badgeSize },
+  });
+
+  if (!open) return;
+  const detail = details && typeof details === "object" ? details : null;
+  const rows = [
+    `Provider: ${detail?.provider || "Unknown"}`,
+    `Model: ${clampText(detail?.model || "unknown", 28)}`,
+    `Run ID: ${clampText(detail?.runId || "n/a", 28)}`,
+    `Cost: ${detail?.costLabel || "n/a"}`,
+  ];
+
+  octx.save();
+  const fontPx = Math.max(8, Math.round(9 * dpr));
+  const lineH = Math.max(11, Math.round(12 * dpr));
+  const rowGap = Math.max(2, Math.round(3 * dpr));
+  const panelPadX = Math.max(7, Math.round(8 * dpr));
+  const panelPadY = Math.max(6, Math.round(7 * dpr));
+  octx.font = `${fontPx}px IBM Plex Mono`;
+  let maxLineW = 0;
+  for (const row of rows) {
+    maxLineW = Math.max(maxLineW, Math.ceil(octx.measureText(String(row)).width));
+  }
+  const panelW = Math.max(Math.round(150 * dpr), maxLineW + panelPadX * 2);
+  const panelH = panelPadY * 2 + rows.length * lineH + Math.max(0, rows.length - 1) * rowGap;
+  let panelX = Math.round(badgeX + badgeSize - panelW);
+  panelX = clamp(panelX, pad, Math.max(pad, canvasW - panelW - pad));
+  let panelY = Math.round(badgeY - panelH - Math.max(5, Math.round(6 * dpr)));
+  if (panelY < pad) {
+    panelY = Math.round(badgeY + badgeSize + Math.max(5, Math.round(6 * dpr)));
+  }
+  panelY = clamp(panelY, pad, Math.max(pad, canvasH - panelH - pad));
+
+  octx.shadowColor = "rgba(0, 0, 0, 0.56)";
+  octx.shadowBlur = Math.round(14 * dpr);
+  _drawRoundedRect(octx, panelX, panelY, panelW, panelH, Math.max(6, Math.round(7 * dpr)));
+  octx.fillStyle = "rgba(6, 10, 14, 0.94)";
+  octx.fill();
+  octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+  octx.strokeStyle = "rgba(122, 238, 178, 0.54)";
+  octx.stroke();
+
+  octx.fillStyle = "rgba(214, 255, 232, 0.96)";
+  octx.textAlign = "left";
+  octx.textBaseline = "top";
+  let textY = panelY + panelPadY;
+  for (const row of rows) {
+    octx.fillText(String(row), panelX + panelPadX, textY);
+    textY += lineH + rowGap;
+  }
+  octx.restore();
+  motherPushOverlayUiHit({
+    kind: panelKind,
+    targetId: targetId || null,
+    rect: { x: panelX, y: panelY, w: panelW, h: panelH },
+  });
+}
+
 function hitTestMotherRoleGlyph(ptCanvas) {
   const idle = state.motherIdle;
   if (!idle || !ptCanvas) return null;
@@ -23424,7 +23779,7 @@ function hitTestMotherRoleGlyph(ptCanvas) {
   return null;
 }
 
-function renderMotherDraftKeyboardHints(octx, rectPx, { dpr = 1 } = {}) {
+function renderMotherDraftKeyboardHints(octx, rectPx, { dpr = 1, details = null } = {}) {
   if (!octx || !rectPx || isReelSizeLocked()) return;
   const hints = [
     { key: "V", label: "DEPLOY" },
@@ -23498,12 +23853,27 @@ function renderMotherDraftKeyboardHints(octx, rectPx, { dpr = 1 } = {}) {
     cx += chip.width + gap;
   }
   octx.restore();
+
+  const idle = state.motherIdle || null;
+  const detailsOpen = Boolean(idle?.offerDetailsOpen);
+  motherRenderDetailsBadgeAndPopover(octx, {
+    anchorRect: { x, y, w: totalW, h: chipH },
+    dpr,
+    open: detailsOpen,
+    details,
+    toggleKind: "mother_offer_details_toggle",
+    panelKind: "mother_offer_details_panel",
+    targetId: "proposal",
+  });
 }
 
 function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
   const idle = state.motherIdle;
   if (!idle) return;
   const phase = idle.phase || motherIdleInitialState();
+  if (phase !== MOTHER_IDLE_STATES.OFFERING) {
+    idle.offerDetailsOpen = false;
+  }
   if (!(phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING || phase === MOTHER_IDLE_STATES.OFFERING)) {
     idle.roleGlyphHits = [];
     return;
@@ -23644,7 +24014,10 @@ function renderMotherRoleGlyphs(octx, { ms = 1, mox = 0, moy = 0 } = {}) {
       octx.strokeRect(Math.round(px.x - 3), Math.round(px.y - 3), Math.round(px.w + 6), Math.round(px.h + 6));
       octx.setLineDash([]);
       octx.restore();
-      renderMotherDraftKeyboardHints(octx, px, { dpr });
+      renderMotherDraftKeyboardHints(octx, px, {
+        dpr,
+        details: motherV2ProposalRunDetails(draft),
+      });
     }
   }
 
@@ -25125,10 +25498,21 @@ function installCanvasHandlers() {
             reelTouchPulseFromCanvasPoint(p, { down: event.button === 0, lingerMs: REEL_TOUCH_TAP_VISIBLE_MS });
             requestRender();
           }
-	      const pCss = canvasCssPointFromEvent(event);
+          const pCss = canvasCssPointFromEvent(event);
           rememberPromptGenerateHoverCss(pCss);
           const intentActive = intentModeActive();
           const wheelModifier = Boolean(event.metaKey || event.ctrlKey);
+          const motherOverlayHit = hitTestMotherOverlayUi(p);
+          if (motherOverlayHit && event.button === 0) {
+            bumpInteraction({ semantic: false });
+            if (motherToggleOverlayDetails(motherOverlayHit)) {
+              requestRender();
+              return;
+            }
+          }
+          if (event.button === 0 && (state.motherIdle?.offerDetailsOpen || state.motherResultDetailsOpenId)) {
+            motherCloseOverlayDetails();
+          }
           const motherRoleHit = motherV2InInteractivePhase() && motherV2IsAdvancedVisible() ? hitTestMotherRoleGlyph(p) : null;
 
           if (motherRoleHit && event.button === 0) {
@@ -25541,6 +25925,11 @@ function installCanvasHandlers() {
     }
 
     if (!state.pointer.active) {
+      const motherOverlayHit = hitTestMotherOverlayUi(p);
+      if (motherOverlayHit) {
+        setOverlayCursor("pointer");
+        return;
+      }
       const roleHit = motherV2InInteractivePhase() && motherV2IsAdvancedVisible() ? hitTestMotherRoleGlyph(p) : null;
       if (roleHit) {
         setOverlayCursor("pointer");
@@ -27176,6 +27565,11 @@ function installUi() {
     const hasModifier = Boolean(event?.metaKey || event?.ctrlKey || event?.altKey);
 
 		    if (key === "escape") {
+		      if (state.motherIdle?.offerDetailsOpen || state.motherResultDetailsOpenId) {
+		        motherCloseOverlayDetails();
+		        requestRender();
+		        return;
+		      }
 		      if (aestheticOnboardingState.open) {
 		        skipAestheticOnboarding();
 		        return;

@@ -18,6 +18,13 @@ Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, an
 - `scripts/`: helper scripts for packaging (`build_desktop.sh`, `dev_desktop.sh`).
 - `docs/param_forge_reference.md`: archived Param Forge compatibility notes used as reference context.
 
+## Parallel Agent Worktree Policy
+- When running multiple Codex/LLM agents in parallel, each feature must be developed in its own git worktree.
+- Do not run two agents against the same worktree or branch at the same time.
+- Create a new feature worktree with: `git worktree add ../brood-<feature> -b feature/<feature>`.
+- If the feature branch already exists, use: `git worktree add ../brood-<feature> feature/<feature>`.
+- After merge/cleanup, remove the worktree with: `git worktree remove ../brood-<feature>`.
+
 ## Build, Test, and Development Commands
 Engine (Rust, default):
 - `cd rust_engine && cargo fmt`
