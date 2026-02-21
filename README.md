@@ -179,6 +179,7 @@ cargo run -p brood-cli -- recreate --reference path/to/image.png --out /tmp/broo
     - if both OpenRouter and Gemini keys are present, realtime `gemini_flash` prefers OpenRouter transport
     - to force direct Gemini transport, leave `OPENROUTER_API_KEY` unset and set `GEMINI_API_KEY` or `GOOGLE_API_KEY`
     - Brood normalizes common aliases to provider IDs (e.g., `gemini-3.0-flash` -> `google/gemini-3-flash-preview` on OpenRouter)
+    - `gemini_flash` hard-errors if a non-Gemini realtime model override is configured
   - if you force `openai_realtime`, you must provide `OPENAI_API_KEY` (or backup key)
   - optional OpenRouter endpoint headers: `OPENROUTER_API_BASE`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_X_TITLE`
 - Flux provider auth:

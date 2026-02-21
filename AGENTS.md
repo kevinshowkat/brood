@@ -84,7 +84,8 @@ Tests:
     - `BROOD_MOTHER_INTENT_REALTIME_PROVIDER`
 - OpenRouter-first realtime setup:
   - keep `OPENROUTER_API_KEY` for OpenRouter-backed generation flows
-  - provide `GEMINI_API_KEY` or `GOOGLE_API_KEY` for realtime intent/canvas transport
+  - `OPENROUTER_API_KEY` alone is sufficient for `gemini_flash` realtime intent/canvas transport
+  - optional direct Gemini transport: unset `OPENROUTER_API_KEY` and set `GEMINI_API_KEY` or `GOOGLE_API_KEY`
   - if forcing `openai_realtime`, require `OPENAI_API_KEY` (or `OPENAI_API_KEY_BACKUP`)
 
 ## Agent/LLM Intake (Optional)

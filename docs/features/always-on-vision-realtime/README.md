@@ -76,6 +76,8 @@ Threading:
 - Provider credentials:
   - `openai_realtime`: `OPENAI_API_KEY` (or `OPENAI_API_KEY_BACKUP`)
   - `gemini_flash`: `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) or `OPENROUTER_API_KEY`
+- Desktop readiness behavior:
+  - realtime readiness is fail-closed until key status resolves (prevents brief false-ready UI states on startup/key refresh)
 - `BROOD_CANVAS_CONTEXT_REALTIME_MODEL` (default by provider):
   - OpenAI: `gpt-realtime-mini`
   - Gemini: `gemini-3-flash-preview` (OpenRouter normalized to `google/gemini-3-flash-preview`)
