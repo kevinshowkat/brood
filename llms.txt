@@ -48,4 +48,5 @@
 
 - Desktop expects Tauri v1 APIs (`@tauri-apps/api` v1 + v1 CLI).
 - Desktop runtime is native-only (`brood-rs`); Python compat fallback is retired from desktop runtime.
+- Multi-agent rule: one feature per git worktree. Do not run concurrent agents in the same worktree/branch.
 - Do not commit secrets; use `.env` (gitignored) based on `.env.example`.
