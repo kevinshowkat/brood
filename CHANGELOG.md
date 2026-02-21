@@ -5,9 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog (https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+
+## [0.2.1] - 2026-02-21
 - Retire desktop Python compatibility fallback paths; startup/export now fail explicitly when native engine launch fails.
 - Remove the legacy `brood_engine/` package, Python parity `tests/`, and Python runtime packaging metadata.
 - Move default pricing table ownership to `rust_engine/crates/brood-engine/resources/default_pricing.json`.
+- Remove single-view runtime mode and reject legacy automation requests targeting `single`.
+- Add `Prompt Generate` as an Action Grid skill with model selection modal, cursor-anchored insert placement, and pending shimmer placeholder.
+- Prevent auto-accept suggestion passes from being consumed by `Prompt Generate` (manual-input-only action).
+- Stabilize Action Grid slot positions between empty/single-image states and remove dedicated pan tile.
+- Upgrade `Create Layers` to a semantic background/subject/props pipeline.
+- Remove generated artifact payloads and legacy root archive files from the repository, and sanitize sample harness paths.
 
 ## [0.1.7] - 2026-02-20
 - Fix Mother realtime intent recovery races by revalidating pending request state after async retry decisions.
