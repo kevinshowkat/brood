@@ -92,6 +92,9 @@ struct ExportArgs {
 }
 
 const REALTIME_DESCRIPTION_MAX_CHARS: usize = 40;
+const OPENAI_VISION_FALLBACK_MODEL: &str = "gpt-5.2";
+const OPENAI_VISION_SECONDARY_MODEL: &str = "gpt-5-nano";
+const OPENROUTER_OPENAI_VISION_FALLBACK_MODEL: &str = "openai/gpt-5.2";
 
 fn main() {
     match run() {
@@ -5373,11 +5376,13 @@ fn openai_json_object_inference(
     max_output_tokens: u64,
     timeout: Duration,
 ) -> Option<(Map<String, Value>, String)> {
-    let requested =
-        sanitize_openai_responses_model(model_hint.unwrap_or("gpt-4o-mini"), "gpt-4o-mini");
+    let requested = sanitize_openai_responses_model(
+        model_hint.unwrap_or(OPENAI_VISION_FALLBACK_MODEL),
+        OPENAI_VISION_FALLBACK_MODEL,
+    );
     let mut models = vec![requested.clone()];
-    if requested != "gpt-4o-mini" {
-        models.push("gpt-4o-mini".to_string());
+    if requested != OPENAI_VISION_FALLBACK_MODEL {
+        models.push(OPENAI_VISION_FALLBACK_MODEL.to_string());
     }
 
     for model in models {
@@ -6825,7 +6830,7 @@ fn openai_vision_request(
     max_output_tokens: u64,
     timeout: Duration,
 ) -> Option<(String, Option<i64>, Option<i64>, String)> {
-    let request_model = sanitize_openai_responses_model(model, "gpt-4o-mini");
+    let request_model = sanitize_openai_responses_model(model, OPENAI_VISION_FALLBACK_MODEL);
     let client = HttpClient::builder().timeout(timeout).build().ok()?;
     if let Some(api_key) = openai_api_key() {
         let endpoint = format!("{}/responses", openai_api_base());
@@ -6833,7 +6838,7 @@ fn openai_vision_request(
             "model": request_model,
             "input": [{
                 "role": "user",
-                "content": content,
+                "content": content.clone(),
             }],
             "max_output_tokens": max_output_tokens,
         });
@@ -6842,23 +6847,24 @@ fn openai_vision_request(
             .bearer_auth(api_key)
             .header(CONTENT_TYPE, "application/json")
             .json(&payload)
-            .send()
-            .ok()?;
-        if !response.status().is_success() {
-            return None;
+            .send();
+        if let Ok(response) = response {
+            if response.status().is_success() {
+                if let Ok(parsed) = response.json::<Value>() {
+                    let text = extract_openai_output_text(&parsed);
+                    if !text.trim().is_empty() {
+                        let (input_tokens, output_tokens) = extract_token_usage_pair(&parsed);
+                        return Some((text, input_tokens, output_tokens, request_model.clone()));
+                    }
+                }
+            }
         }
-        let parsed: Value = response.json().ok()?;
-        let text = extract_openai_output_text(&parsed);
-        if text.trim().is_empty() {
-            return None;
-        }
-        let (input_tokens, output_tokens) = extract_token_usage_pair(&parsed);
-        return Some((text, input_tokens, output_tokens, request_model));
     }
 
     let openrouter_key = openrouter_api_key()?;
     let openrouter_base = openrouter_api_base();
-    let openrouter_model = sanitize_openrouter_model(&request_model, "openai/gpt-4o-mini");
+    let openrouter_model =
+        sanitize_openrouter_model(&request_model, OPENROUTER_OPENAI_VISION_FALLBACK_MODEL);
     let responses_endpoint = format!("{openrouter_base}/responses");
     let responses_payload = json!({
         "model": openrouter_model,
@@ -8005,6 +8011,57 @@ fn vision_description_realtime_model() -> String {
     normalize_realtime_model_name(&value, "gpt-realtime-mini")
 }
 
+fn vision_description_model_candidates_for(
+    provider: RealtimeProvider,
+    explicit_model: Option<&str>,
+) -> Vec<String> {
+    let explicit = explicit_model
+        .map(str::trim)
+        .map(str::to_string)
+        .filter(|value| !value.is_empty());
+    let mut models: Vec<String> = Vec::new();
+    if let Some(requested) = explicit {
+        models.push(requested.clone());
+        if requested != OPENAI_VISION_SECONDARY_MODEL {
+            models.push(OPENAI_VISION_SECONDARY_MODEL.to_string());
+        }
+    } else if provider == RealtimeProvider::GeminiFlash {
+        models.push("gemini-3.0-flash".to_string());
+        models.push("gemini-3-flash-preview".to_string());
+        models.push("google/gemini-3-flash-preview".to_string());
+    } else {
+        models.push(OPENAI_VISION_FALLBACK_MODEL.to_string());
+        models.push(OPENAI_VISION_SECONDARY_MODEL.to_string());
+    }
+    fn model_dedupe_key(provider: RealtimeProvider, model: &str) -> String {
+        if provider == RealtimeProvider::GeminiFlash {
+            sanitize_openrouter_model(model, OPENROUTER_OPENAI_VISION_FALLBACK_MODEL)
+                .trim()
+                .to_ascii_lowercase()
+        } else {
+            sanitize_openai_responses_model(model, OPENAI_VISION_FALLBACK_MODEL)
+                .trim()
+                .to_ascii_lowercase()
+        }
+    }
+
+    let mut deduped = Vec::new();
+    let mut seen = HashSet::new();
+    for model in models {
+        let normalized = model_dedupe_key(provider, &model);
+        if normalized.is_empty() || !seen.insert(normalized) {
+            continue;
+        }
+        deduped.push(model);
+    }
+    deduped
+}
+
+fn vision_description_model_candidates() -> Vec<String> {
+    let explicit = first_non_empty_env(&["BROOD_DESCRIBE_MODEL", "OPENAI_DESCRIBE_MODEL"]);
+    vision_description_model_candidates_for(canvas_context_realtime_provider(), explicit.as_deref())
+}
+
 fn vision_infer_description_realtime(
     path: &Path,
     max_chars: usize,
@@ -8164,12 +8221,7 @@ fn vision_infer_description(path: &Path, max_chars: usize) -> Option<Description
     if let Some(inference) = vision_infer_description_realtime(path, max_chars) {
         return Some(inference);
     }
-    let requested = first_non_empty_env(&["BROOD_DESCRIBE_MODEL", "OPENAI_DESCRIBE_MODEL"])
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
-    let mut models = vec![requested.clone()];
-    if requested != "gpt-5-nano" {
-        models.push("gpt-5-nano".to_string());
-    }
+    let models = vision_description_model_candidates();
     let data_url = prepare_vision_image_data_url(path, 1024)?;
     for model in models {
         let content = vec![
@@ -8197,7 +8249,7 @@ fn vision_infer_description(path: &Path, max_chars: usize) -> Option<Description
 
 fn vision_infer_diagnosis(path: &Path) -> Option<TextVisionInference> {
     let model = first_non_empty_env(&["BROOD_DIAGNOSE_MODEL", "OPENAI_DIAGNOSE_MODEL"])
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+        .unwrap_or_else(|| OPENAI_VISION_FALLBACK_MODEL.to_string());
     let data_url = prepare_vision_image_data_url(path, 1024)?;
     let content = vec![
         json!({"type": "input_text", "text": diagnose_instruction()}),
@@ -8227,11 +8279,11 @@ fn vision_infer_canvas_context(
         .or_else(|| {
             first_non_empty_env(&["BROOD_CANVAS_CONTEXT_MODEL", "OPENAI_CANVAS_CONTEXT_MODEL"])
         })
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
-    let requested = sanitize_openai_responses_model(&model_raw, "gpt-4o-mini");
+        .unwrap_or_else(|| OPENAI_VISION_FALLBACK_MODEL.to_string());
+    let requested = sanitize_openai_responses_model(&model_raw, OPENAI_VISION_FALLBACK_MODEL);
     let mut models = vec![requested.clone()];
-    if requested != "gpt-4o-mini" {
-        models.push("gpt-4o-mini".to_string());
+    if requested != OPENAI_VISION_FALLBACK_MODEL {
+        models.push(OPENAI_VISION_FALLBACK_MODEL.to_string());
     }
     let data_url = prepare_vision_image_data_url(path, 768)?;
     for model in models {
@@ -8260,7 +8312,7 @@ fn vision_infer_canvas_context(
 
 fn vision_infer_argument(path_a: &Path, path_b: &Path) -> Option<TextVisionInference> {
     let model = first_non_empty_env(&["BROOD_ARGUE_MODEL", "OPENAI_ARGUE_MODEL"])
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+        .unwrap_or_else(|| OPENAI_VISION_FALLBACK_MODEL.to_string());
     let content = build_labeled_image_content(
         &[("Image A:", path_a), ("Image B:", path_b)],
         argue_instruction(),
@@ -8283,7 +8335,7 @@ fn vision_infer_argument(path_a: &Path, path_b: &Path) -> Option<TextVisionInfer
 
 fn vision_infer_dna_signature(path: &Path) -> Option<DnaVisionInference> {
     let model = first_non_empty_env(&["BROOD_DNA_VISION_MODEL", "OPENAI_DNA_MODEL"])
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+        .unwrap_or_else(|| OPENAI_VISION_FALLBACK_MODEL.to_string());
     let data_url = prepare_vision_image_data_url(path, 1024)?;
     let content = vec![
         json!({"type": "input_text", "text": dna_extract_instruction()}),
@@ -8307,7 +8359,7 @@ fn vision_infer_dna_signature(path: &Path) -> Option<DnaVisionInference> {
 
 fn vision_infer_soul_signature(path: &Path) -> Option<SoulVisionInference> {
     let model = first_non_empty_env(&["BROOD_SOUL_VISION_MODEL", "OPENAI_SOUL_MODEL"])
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+        .unwrap_or_else(|| OPENAI_VISION_FALLBACK_MODEL.to_string());
     let data_url = prepare_vision_image_data_url(path, 1024)?;
     let content = vec![
         json!({"type": "input_text", "text": soul_extract_instruction()}),
@@ -8417,7 +8469,7 @@ fn vision_infer_triplet_rule(
         "BROOD_DIAGNOSE_MODEL",
         "OPENAI_DIAGNOSE_MODEL",
     ])
-    .unwrap_or_else(|| "gpt-4o-mini".to_string());
+    .unwrap_or_else(|| OPENAI_VISION_FALLBACK_MODEL.to_string());
     let content = build_labeled_image_content(
         &[
             ("Image A:", path_a),
@@ -8490,7 +8542,7 @@ fn vision_infer_triplet_odd_one_out(
         "BROOD_ARGUE_MODEL",
         "OPENAI_ARGUE_MODEL",
     ])
-    .unwrap_or_else(|| "gpt-4o-mini".to_string());
+    .unwrap_or_else(|| OPENAI_VISION_FALLBACK_MODEL.to_string());
     let content = build_labeled_image_content(
         &[
             ("Image A:", path_a),
@@ -9051,8 +9103,9 @@ mod tests {
         is_edit_style_prompt, openrouter_chat_content_to_responses_input,
         openrouter_responses_content_to_chat_content, resolve_streamed_response_text,
         sanitize_gemini_generate_content_model, sanitize_openrouter_gemini_model,
-        sanitize_openrouter_model, should_fallback_openrouter_responses, RealtimeJobError,
-        RealtimeJobErrorKind, RealtimeProvider, RealtimeSessionKind, REALTIME_BETA_HEADER_VALUE,
+        sanitize_openrouter_model, should_fallback_openrouter_responses,
+        vision_description_model_candidates_for, RealtimeJobError, RealtimeJobErrorKind,
+        RealtimeProvider, RealtimeSessionKind, REALTIME_BETA_HEADER_VALUE,
         REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX,
     };
     use serde_json::json;
@@ -9203,6 +9256,34 @@ mod tests {
         assert_eq!(
             default_realtime_model(RealtimeProvider::GeminiFlash, true),
             "gemini-3-flash-preview"
+        );
+    }
+
+    #[test]
+    fn describe_model_candidates_prefer_gemini_when_gemini_realtime_provider_active() {
+        let models = vision_description_model_candidates_for(RealtimeProvider::GeminiFlash, None);
+        assert_eq!(models, vec!["gemini-3.0-flash".to_string()]);
+    }
+
+    #[test]
+    fn describe_model_candidates_default_to_openai_family_when_openai_realtime_provider_active() {
+        let models =
+            vision_description_model_candidates_for(RealtimeProvider::OpenAiRealtime, None);
+        assert_eq!(
+            models,
+            vec!["gpt-5.2".to_string(), "gpt-5-nano".to_string()]
+        );
+    }
+
+    #[test]
+    fn describe_model_candidates_respect_explicit_override() {
+        let models = vision_description_model_candidates_for(
+            RealtimeProvider::GeminiFlash,
+            Some("openai/gpt-4.1-mini"),
+        );
+        assert_eq!(
+            models,
+            vec!["openai/gpt-4.1-mini".to_string(), "gpt-5-nano".to_string()]
         );
     }
 
