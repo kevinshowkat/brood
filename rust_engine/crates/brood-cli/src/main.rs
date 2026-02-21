@@ -139,6 +139,8 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
     let mut canvas_context_rt: Option<CanvasContextRealtimeSession> = None;
     let mut intent_rt: Option<IntentIconsRealtimeSession> = None;
     let mut mother_intent_rt: Option<IntentIconsRealtimeSession> = None;
+    let canvas_rt_source = || canvas_context_realtime_provider().as_str().to_string();
+    let intent_rt_source = |mother: bool| intent_realtime_provider(mother).as_str().to_string();
 
     println!("Brood chat started. Type /help for commands.");
 
@@ -595,7 +597,7 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": Value::Null,
                             "error": error,
-                            "source": "openai_realtime",
+                            "source": session.source(),
                             "model": session.model(),
                             "fatal": true,
                         })),
@@ -628,7 +630,10 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": Value::Null,
                             "error": msg,
-                            "source": "openai_realtime",
+                            "source": canvas_context_rt
+                                .as_ref()
+                                .map(|session| session.source().to_string())
+                                .unwrap_or_else(|| canvas_rt_source()),
                             "model": model,
                             "fatal": true,
                         })),
@@ -651,7 +656,10 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": path.to_string_lossy().to_string(),
                             "error": msg,
-                            "source": "openai_realtime",
+                            "source": canvas_context_rt
+                                .as_ref()
+                                .map(|session| session.source().to_string())
+                                .unwrap_or_else(|| canvas_rt_source()),
                             "model": model,
                             "fatal": true,
                         })),
@@ -674,7 +682,7 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": path.to_string_lossy().to_string(),
                             "error": error,
-                            "source": "openai_realtime",
+                            "source": session.source(),
                             "model": session.model(),
                             "fatal": true,
                         })),
@@ -702,7 +710,7 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": Value::Null,
                             "error": error,
-                            "source": "openai_realtime",
+                            "source": session.source(),
                             "model": session.model(),
                             "fatal": true,
                         })),
@@ -734,7 +742,10 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": Value::Null,
                             "error": msg,
-                            "source": "openai_realtime",
+                            "source": intent_rt
+                                .as_ref()
+                                .map(|session| session.source().to_string())
+                                .unwrap_or_else(|| intent_rt_source(false)),
                             "model": model,
                             "fatal": true,
                         })),
@@ -757,7 +768,10 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": path.to_string_lossy().to_string(),
                             "error": msg,
-                            "source": "openai_realtime",
+                            "source": intent_rt
+                                .as_ref()
+                                .map(|session| session.source().to_string())
+                                .unwrap_or_else(|| intent_rt_source(false)),
                             "model": model,
                             "fatal": true,
                         })),
@@ -782,7 +796,7 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": path.to_string_lossy().to_string(),
                             "error": error,
-                            "source": "openai_realtime",
+                            "source": session.source(),
                             "model": session.model(),
                             "fatal": true,
                         })),
@@ -808,7 +822,7 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": Value::Null,
                             "error": error,
-                            "source": "openai_realtime",
+                            "source": session.source(),
                             "model": session.model(),
                             "fatal": true,
                         })),
@@ -841,7 +855,10 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": Value::Null,
                             "error": msg,
-                            "source": "openai_realtime",
+                            "source": mother_intent_rt
+                                .as_ref()
+                                .map(|session| session.source().to_string())
+                                .unwrap_or_else(|| intent_rt_source(true)),
                             "model": model,
                             "fatal": true,
                         })),
@@ -864,7 +881,10 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                         json_object(json!({
                             "image_path": path.to_string_lossy().to_string(),
                             "error": msg,
-                            "source": "openai_realtime",
+                            "source": mother_intent_rt
+                                .as_ref()
+                                .map(|session| session.source().to_string())
+                                .unwrap_or_else(|| intent_rt_source(true)),
                             "model": model,
                             "fatal": true,
                         })),
@@ -885,7 +905,7 @@ fn run_chat_native(args: ChatArgs) -> Result<()> {
                     let mut payload = json_object(json!({
                         "image_path": path.to_string_lossy().to_string(),
                         "error": error,
-                        "source": "openai_realtime",
+                        "source": session.source(),
                         "model": session.model(),
                         "fatal": true,
                     }));
@@ -2720,47 +2740,134 @@ fn normalize_realtime_model_name(raw: &str, default: &str) -> String {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RealtimeProvider {
+    OpenAiRealtime,
+    GeminiFlash,
+}
+
+impl RealtimeProvider {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAiRealtime => "openai_realtime",
+            Self::GeminiFlash => "gemini_flash",
+        }
+    }
+
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "openai" | "openai_realtime" => Some(Self::OpenAiRealtime),
+            "gemini" | "gemini_flash" => Some(Self::GeminiFlash),
+            _ => None,
+        }
+    }
+}
+
+fn infer_default_realtime_provider() -> RealtimeProvider {
+    if openai_api_key().is_some() {
+        return RealtimeProvider::OpenAiRealtime;
+    }
+    if openrouter_api_key().is_some() || gemini_api_key().is_some() {
+        return RealtimeProvider::GeminiFlash;
+    }
+    RealtimeProvider::OpenAiRealtime
+}
+
+fn realtime_provider_from_env(keys: &[&str]) -> Option<RealtimeProvider> {
+    for key in keys {
+        if let Ok(value) = env::var(key) {
+            if let Some(provider) = RealtimeProvider::parse(&value) {
+                return Some(provider);
+            }
+        }
+    }
+    None
+}
+
+fn canvas_context_realtime_provider() -> RealtimeProvider {
+    realtime_provider_from_env(&[
+        "BROOD_CANVAS_CONTEXT_REALTIME_PROVIDER",
+        "BROOD_REALTIME_PROVIDER",
+    ])
+    .unwrap_or_else(infer_default_realtime_provider)
+}
+
+fn intent_realtime_provider(mother: bool) -> RealtimeProvider {
+    let keys = if mother {
+        vec![
+            "BROOD_MOTHER_INTENT_REALTIME_PROVIDER",
+            "BROOD_INTENT_REALTIME_PROVIDER",
+            "BROOD_REALTIME_PROVIDER",
+        ]
+    } else {
+        vec!["BROOD_INTENT_REALTIME_PROVIDER", "BROOD_REALTIME_PROVIDER"]
+    };
+    realtime_provider_from_env(&keys).unwrap_or_else(infer_default_realtime_provider)
+}
+
+fn default_realtime_model(provider: RealtimeProvider, mother: bool) -> &'static str {
+    match provider {
+        RealtimeProvider::OpenAiRealtime => {
+            if mother {
+                "gpt-realtime"
+            } else {
+                "gpt-realtime-mini"
+            }
+        }
+        RealtimeProvider::GeminiFlash => "gemini-2.0-flash",
+    }
+}
+
 fn canvas_context_realtime_model() -> String {
+    let provider = canvas_context_realtime_provider();
     let value = env::var("BROOD_CANVAS_CONTEXT_REALTIME_MODEL")
         .ok()
-        .or_else(|| env::var("OPENAI_CANVAS_CONTEXT_REALTIME_MODEL").ok())
-        .unwrap_or_else(|| "gpt-realtime-mini".to_string());
-    normalize_realtime_model_name(&value, "gpt-realtime-mini")
+        .or_else(|| {
+            if provider == RealtimeProvider::OpenAiRealtime {
+                env::var("OPENAI_CANVAS_CONTEXT_REALTIME_MODEL").ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| default_realtime_model(provider, false).to_string());
+    normalize_realtime_model_name(&value, default_realtime_model(provider, false))
 }
 
 fn intent_realtime_model(mother: bool) -> String {
+    let provider = intent_realtime_provider(mother);
     let keys: Vec<&str> = if mother {
-        vec![
-            "BROOD_MOTHER_INTENT_REALTIME_MODEL",
-            "BROOD_INTENT_REALTIME_MODEL",
-            "OPENAI_INTENT_REALTIME_MODEL",
-        ]
+        if provider == RealtimeProvider::OpenAiRealtime {
+            vec![
+                "BROOD_MOTHER_INTENT_REALTIME_MODEL",
+                "BROOD_INTENT_REALTIME_MODEL",
+                "OPENAI_INTENT_REALTIME_MODEL",
+            ]
+        } else {
+            vec![
+                "BROOD_MOTHER_INTENT_REALTIME_MODEL",
+                "BROOD_INTENT_REALTIME_MODEL",
+            ]
+        }
     } else {
-        vec![
-            "BROOD_INTENT_REALTIME_MODEL",
-            "OPENAI_INTENT_REALTIME_MODEL",
-        ]
+        if provider == RealtimeProvider::OpenAiRealtime {
+            vec![
+                "BROOD_INTENT_REALTIME_MODEL",
+                "OPENAI_INTENT_REALTIME_MODEL",
+            ]
+        } else {
+            vec!["BROOD_INTENT_REALTIME_MODEL"]
+        }
     };
     for key in keys {
         if let Ok(value) = env::var(key) {
-            let normalized = normalize_realtime_model_name(
-                &value,
-                if mother {
-                    "gpt-realtime"
-                } else {
-                    "gpt-realtime-mini"
-                },
-            );
+            let normalized =
+                normalize_realtime_model_name(&value, default_realtime_model(provider, mother));
             if !normalized.trim().is_empty() {
                 return normalized;
             }
         }
     }
-    if mother {
-        "gpt-realtime".to_string()
-    } else {
-        "gpt-realtime-mini".to_string()
-    }
+    default_realtime_model(provider, mother).to_string()
 }
 
 fn extract_action_version_from_path(path: &Path) -> Option<i64> {
@@ -2785,7 +2892,6 @@ fn extract_action_version_from_text(raw: &str) -> Option<i64> {
     None
 }
 
-const REALTIME_SOURCE: &str = "openai_realtime";
 const REALTIME_BETA_HEADER_VALUE: &str = "realtime=v1";
 const REALTIME_TIMEOUT_SECONDS: f64 = 42.0;
 const REALTIME_MAX_PARTIAL_HZ_MS: u64 = 250;
@@ -2808,6 +2914,21 @@ enum RealtimeSessionKind {
 }
 
 impl RealtimeSessionKind {
+    fn provider(self) -> RealtimeProvider {
+        match self {
+            Self::CanvasContext => canvas_context_realtime_provider(),
+            Self::IntentIcons { mother } => intent_realtime_provider(mother),
+        }
+    }
+
+    fn provider_env_key(self) -> &'static str {
+        match self {
+            Self::CanvasContext => "BROOD_CANVAS_CONTEXT_REALTIME_PROVIDER",
+            Self::IntentIcons { mother: true } => "BROOD_MOTHER_INTENT_REALTIME_PROVIDER",
+            Self::IntentIcons { mother: false } => "BROOD_INTENT_REALTIME_PROVIDER",
+        }
+    }
+
     fn event_type(self) -> &'static str {
         match self {
             Self::CanvasContext => "canvas_context",
@@ -2917,6 +3038,7 @@ enum RealtimeCommand {
 struct RealtimeSnapshotSession {
     events: EventWriter,
     model: String,
+    provider: RealtimeProvider,
     disabled: bool,
     kind: RealtimeSessionKind,
     sender: Option<mpsc::Sender<RealtimeCommand>>,
@@ -2930,6 +3052,7 @@ impl RealtimeSnapshotSession {
         Self {
             events,
             model,
+            provider: kind.provider(),
             disabled,
             kind,
             sender: None,
@@ -2943,15 +3066,44 @@ impl RealtimeSnapshotSession {
         &self.model
     }
 
+    fn source(&self) -> &'static str {
+        self.provider.as_str()
+    }
+
+    fn missing_api_key_message(&self) -> String {
+        match self.provider {
+            RealtimeProvider::OpenAiRealtime => {
+                if openrouter_api_key().is_some() {
+                    format!(
+                        "Realtime provider '{}' requires OPENAI_API_KEY (or OPENAI_API_KEY_BACKUP). OpenRouter does not support OpenAI realtime websocket for this flow. Set {}=gemini_flash and configure GEMINI_API_KEY (or GOOGLE_API_KEY), or provide OpenAI realtime credentials.",
+                        self.provider.as_str(),
+                        self.kind.provider_env_key()
+                    )
+                } else {
+                    "Missing OPENAI_API_KEY (or OPENAI_API_KEY_BACKUP).".to_string()
+                }
+            }
+            RealtimeProvider::GeminiFlash => {
+                if openrouter_api_key().is_some() {
+                    "Realtime provider 'gemini_flash' is selected, but GEMINI_API_KEY (or GOOGLE_API_KEY) is missing. OPENROUTER_API_KEY alone is insufficient for Brood realtime intent/canvas transport.".to_string()
+                } else {
+                    "Missing GEMINI_API_KEY (or GOOGLE_API_KEY) for realtime provider gemini_flash."
+                        .to_string()
+                }
+            }
+        }
+    }
+
     fn start(&mut self) -> (bool, Option<String>) {
         if self.disabled {
             return (false, Some(self.kind.disabled_message().to_string()));
         }
-        let Some(api_key) = openai_api_key() else {
-            return (
-                false,
-                Some("Missing OPENAI_API_KEY (or OPENAI_API_KEY_BACKUP).".to_string()),
-            );
+        let api_key = match self.provider {
+            RealtimeProvider::OpenAiRealtime => openai_api_key(),
+            RealtimeProvider::GeminiFlash => gemini_api_key(),
+        };
+        let Some(api_key) = api_key else {
+            return (false, Some(self.missing_api_key_message()));
         };
 
         self.cleanup_finished_worker();
@@ -2968,6 +3120,7 @@ impl RealtimeSnapshotSession {
         let worker = RealtimeWorker {
             events: self.events.clone(),
             model: self.model.clone(),
+            provider: self.provider,
             kind: self.kind,
             api_key,
             fatal_error: Arc::clone(&self.fatal_error),
@@ -3091,6 +3244,10 @@ impl CanvasContextRealtimeSession {
         self.inner.model()
     }
 
+    fn source(&self) -> &'static str {
+        self.inner.source()
+    }
+
     fn start(&mut self) -> (bool, Option<String>) {
         self.inner.start()
     }
@@ -3124,6 +3281,10 @@ impl IntentIconsRealtimeSession {
 
     fn model(&self) -> &str {
         self.inner.model()
+    }
+
+    fn source(&self) -> &'static str {
+        self.inner.source()
     }
 
     fn start(&mut self) -> (bool, Option<String>) {
@@ -3198,6 +3359,7 @@ impl std::fmt::Display for RealtimeJobError {
 struct RealtimeWorker {
     events: EventWriter,
     model: String,
+    provider: RealtimeProvider,
     kind: RealtimeSessionKind,
     api_key: String,
     fatal_error: Arc<Mutex<Option<String>>>,
@@ -3211,7 +3373,14 @@ impl RealtimeWorker {
         }
     }
 
-    fn open_session(&self) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
+    fn run_inner(&self, rx: mpsc::Receiver<RealtimeCommand>) -> Result<()> {
+        match self.provider {
+            RealtimeProvider::OpenAiRealtime => self.run_inner_openai(rx),
+            RealtimeProvider::GeminiFlash => self.run_inner_gemini(rx),
+        }
+    }
+
+    fn open_openai_session(&self) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
         let mut ws = open_realtime_websocket(&self.model, &self.api_key)?;
         let session_update = json!({
             "type": "session.update",
@@ -3226,9 +3395,9 @@ impl RealtimeWorker {
         Ok(ws)
     }
 
-    fn run_inner(&self, rx: mpsc::Receiver<RealtimeCommand>) -> Result<()> {
+    fn run_inner_openai(&self, rx: mpsc::Receiver<RealtimeCommand>) -> Result<()> {
         let max_retries = realtime_transport_retry_limit();
-        let mut ws = self.open_session()?;
+        let mut ws = self.open_openai_session()?;
 
         while !self.stop_flag.load(Ordering::SeqCst) {
             let command = match rx.recv_timeout(Duration::from_millis(200)) {
@@ -3261,7 +3430,7 @@ impl RealtimeWorker {
             };
             let mut attempt: usize = 0;
             loop {
-                match self.run_job(&mut ws, &job) {
+                match self.run_openai_job(&mut ws, &job) {
                     Ok(()) => break,
                     Err(err) => {
                         if !err.is_transport()
@@ -3277,7 +3446,7 @@ impl RealtimeWorker {
                         if !backoff.is_zero() {
                             thread::sleep(backoff);
                         }
-                        let reconnect = self.open_session().with_context(|| {
+                        let reconnect = self.open_openai_session().with_context(|| {
                             format!(
                                 "failed to reconnect realtime session after transient transport error (attempt {attempt}/{max_retries})"
                             )
@@ -3303,7 +3472,7 @@ impl RealtimeWorker {
         Ok(())
     }
 
-    fn run_job(
+    fn run_openai_job(
         &self,
         ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
         job: &RealtimeSnapshotJob,
@@ -3485,6 +3654,197 @@ impl RealtimeWorker {
         Ok(())
     }
 
+    fn run_inner_gemini(&self, rx: mpsc::Receiver<RealtimeCommand>) -> Result<()> {
+        let max_retries = realtime_transport_retry_limit();
+
+        while !self.stop_flag.load(Ordering::SeqCst) {
+            let command = match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(command) => command,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+
+            let mut jobs: Vec<RealtimeSnapshotJob> = Vec::new();
+            match command {
+                RealtimeCommand::Snapshot(job) => jobs.push(job),
+                RealtimeCommand::Stop => break,
+            }
+
+            while let Ok(next) = rx.try_recv() {
+                match next {
+                    RealtimeCommand::Snapshot(job) => jobs.push(job),
+                    RealtimeCommand::Stop => {
+                        self.stop_flag.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                }
+            }
+            if self.stop_flag.load(Ordering::SeqCst) {
+                break;
+            }
+
+            let Some(job) = self.kind.select_job(&jobs) else {
+                continue;
+            };
+            let mut attempt: usize = 0;
+            loop {
+                match self.run_gemini_job(&job) {
+                    Ok(()) => break,
+                    Err(err) => {
+                        if !err.is_transport()
+                            || attempt >= max_retries
+                            || self.stop_flag.load(Ordering::SeqCst)
+                        {
+                            self.fail_fatal(Some(&job.image_path), err.to_string());
+                            return Ok(());
+                        }
+                        attempt += 1;
+                        let backoff = realtime_transport_retry_backoff(attempt);
+                        if !backoff.is_zero() {
+                            thread::sleep(backoff);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn run_gemini_job(
+        &self,
+        job: &RealtimeSnapshotJob,
+    ) -> std::result::Result<(), RealtimeJobError> {
+        let _submitted_at_ms = job.submitted_at_ms;
+        let image_path = PathBuf::from(&job.image_path);
+        let main_image_part = read_image_as_gemini_inline_part(&image_path).ok_or_else(|| {
+            RealtimeJobError::terminal("failed to read image for realtime request")
+        })?;
+
+        let mut parts: Vec<Value> = Vec::new();
+        if let Some(context_text) = read_canvas_context_envelope(&image_path) {
+            parts.push(json!({ "text": context_text }));
+        }
+        if let Some(inline_instruction) = self.kind.per_request_input_text() {
+            parts.push(json!({ "text": inline_instruction }));
+        }
+
+        let context_refs = read_canvas_context_image_references(&image_path, 12);
+        if !context_refs.is_empty() {
+            let image_id_order = context_refs
+                .iter()
+                .map(|row| row.id.clone())
+                .collect::<Vec<String>>()
+                .join(", ");
+            parts.push(json!({
+                "text": format!("IMAGE_ID_ORDER: {image_id_order}"),
+            }));
+            parts.push(json!({
+                "text": "For image_descriptions, emit exactly one row per IMAGE_ID_ORDER id, preserve that order, and never swap labels across ids.",
+            }));
+        }
+        let reference_limit = match self.kind {
+            RealtimeSessionKind::IntentIcons { .. } => intent_realtime_reference_image_limit(),
+            RealtimeSessionKind::CanvasContext => 2,
+        };
+        for image_ref in context_refs.iter().take(reference_limit) {
+            if let Some((bytes, mime)) = prepare_vision_image(&image_ref.path, 1024) {
+                parts.push(json!({
+                    "text": format!("SOURCE_IMAGE_REFERENCE {} (high-res):", image_ref.id),
+                }));
+                parts.push(json!({
+                    "inlineData": {
+                        "mimeType": mime,
+                        "data": BASE64.encode(bytes),
+                    }
+                }));
+            }
+        }
+        parts.push(main_image_part);
+
+        let mut generation_config = Map::new();
+        generation_config.insert("temperature".to_string(), json!(self.kind.temperature()));
+        generation_config.insert(
+            "maxOutputTokens".to_string(),
+            Value::Number(self.kind.max_output_tokens().into()),
+        );
+        if let RealtimeSessionKind::IntentIcons { .. } = self.kind {
+            generation_config.insert(
+                "responseMimeType".to_string(),
+                Value::String("application/json".to_string()),
+            );
+        }
+        let payload = json!({
+            "systemInstruction": {
+                "parts": [{
+                    "text": self.kind.instruction()
+                }]
+            },
+            "contents": [{
+                "role": "user",
+                "parts": parts,
+            }],
+            "generationConfig": Value::Object(generation_config),
+        });
+        let endpoint = gemini_generate_content_endpoint(&self.model);
+        let client = HttpClient::builder()
+            .timeout(Duration::from_secs_f64(REALTIME_TIMEOUT_SECONDS))
+            .build()
+            .map_err(|err| {
+                RealtimeJobError::terminal(format!("failed to build realtime http client: {err}"))
+            })?;
+        let response = client
+            .post(&endpoint)
+            .query(&[("key", self.api_key.as_str())])
+            .header(CONTENT_TYPE, "application/json")
+            .json(&payload)
+            .send()
+            .map_err(|err| {
+                if is_reqwest_realtime_transport_error(&err) {
+                    RealtimeJobError::transport(format!("Gemini realtime request failed: {err}"))
+                } else {
+                    RealtimeJobError::terminal(format!("Gemini realtime request failed: {err}"))
+                }
+            })?;
+        if !response.status().is_success() {
+            let code = response.status().as_u16();
+            let body = response.text().unwrap_or_default();
+            return Err(RealtimeJobError::terminal(format!(
+                "Gemini realtime request failed ({code}): {}",
+                truncate_chars(&body, 420, 360)
+            )));
+        }
+        let parsed: Value = response.json().map_err(|err| {
+            RealtimeJobError::terminal(format!("Gemini realtime decode failed: {err}"))
+        })?;
+        let cleaned = extract_gemini_output_text(&parsed).trim().to_string();
+        if cleaned.is_empty() {
+            return Err(RealtimeJobError::terminal(
+                self.kind.empty_response_message(&parsed),
+            ));
+        }
+
+        let mut response_meta = Map::new();
+        if let Some((input_tokens, output_tokens)) = extract_gemini_token_usage_pair(&parsed) {
+            if let Some(value) = input_tokens {
+                response_meta.insert("input_tokens".to_string(), Value::Number(value.into()));
+            }
+            if let Some(value) = output_tokens {
+                response_meta.insert("output_tokens".to_string(), Value::Number(value.into()));
+            }
+        }
+        response_meta.insert(
+            "response_status".to_string(),
+            Value::String("completed".to_string()),
+        );
+        if let Some(reason) = extract_gemini_finish_reason(&parsed) {
+            response_meta.insert("response_status_reason".to_string(), Value::String(reason));
+        }
+
+        self.emit_stream_payload(&job.image_path, &cleaned, false, Some(response_meta));
+        Ok(())
+    }
+
     fn fail_fatal(&self, image_path: Option<&str>, message: String) {
         if let Ok(mut fatal) = self.fatal_error.lock() {
             *fatal = Some(if message.trim().is_empty() {
@@ -3511,7 +3871,11 @@ impl RealtimeWorker {
         payload.insert("text".to_string(), Value::String(text.to_string()));
         payload.insert(
             "source".to_string(),
-            Value::String(REALTIME_SOURCE.to_string()),
+            Value::String(self.provider.as_str().to_string()),
+        );
+        payload.insert(
+            "provider".to_string(),
+            Value::String(self.provider.as_str().to_string()),
         );
         payload.insert("model".to_string(), Value::String(self.model.clone()));
         if partial {
@@ -3547,7 +3911,11 @@ impl RealtimeWorker {
         payload.insert("error".to_string(), Value::String(error.to_string()));
         payload.insert(
             "source".to_string(),
-            Value::String(REALTIME_SOURCE.to_string()),
+            Value::String(self.provider.as_str().to_string()),
+        );
+        payload.insert(
+            "provider".to_string(),
+            Value::String(self.provider.as_str().to_string()),
         );
         payload.insert("model".to_string(), Value::String(self.model.clone()));
         if let RealtimeSessionKind::IntentIcons { .. } = self.kind {
@@ -3615,7 +3983,15 @@ fn is_anyhow_realtime_transport_error(err: &anyhow::Error) -> bool {
                 .downcast_ref::<io::Error>()
                 .map(|io_err| is_transport_io_error_kind(io_err.kind()))
                 .unwrap_or(false)
+            || cause
+                .downcast_ref::<reqwest::Error>()
+                .map(is_reqwest_realtime_transport_error)
+                .unwrap_or(false)
     })
+}
+
+fn is_reqwest_realtime_transport_error(err: &reqwest::Error) -> bool {
+    err.is_timeout() || err.is_connect() || err.is_request() || err.is_body()
 }
 
 fn is_tungstenite_transport_error(err: &tungstenite::Error) -> bool {
@@ -3709,6 +4085,91 @@ fn openai_realtime_ws_url(model: &str) -> String {
         return url.to_string();
     }
     format!("wss://api.openai.com/v1/realtime?model={}", model.trim())
+}
+
+fn gemini_generate_content_endpoint(model: &str) -> String {
+    let base = gemini_api_base();
+    let trimmed = model.trim();
+    let model_path = if trimmed.starts_with("models/") {
+        trimmed.to_string()
+    } else {
+        format!("models/{trimmed}")
+    };
+    format!("{}/{}:generateContent", base, model_path)
+}
+
+fn read_image_as_gemini_inline_part(path: &Path) -> Option<Value> {
+    let bytes = fs::read(path).ok()?;
+    Some(json!({
+        "inlineData": {
+            "mimeType": guess_image_mime(path),
+            "data": BASE64.encode(bytes),
+        }
+    }))
+}
+
+fn extract_gemini_output_text(response: &Value) -> String {
+    let mut chunks: Vec<String> = Vec::new();
+    if let Some(candidates) = response.get("candidates").and_then(Value::as_array) {
+        for candidate in candidates {
+            let Some(parts) = candidate
+                .get("content")
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("parts"))
+                .and_then(Value::as_array)
+            else {
+                continue;
+            };
+            for part in parts {
+                let text = part
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or_default();
+                if !text.is_empty() {
+                    chunks.push(text.to_string());
+                }
+            }
+        }
+    }
+    chunks.join("\n")
+}
+
+fn extract_gemini_token_usage_pair(response: &Value) -> Option<(Option<i64>, Option<i64>)> {
+    let usage = response
+        .get("usageMetadata")
+        .or_else(|| response.get("usage_metadata"))
+        .and_then(Value::as_object)?;
+    let input_tokens = usage
+        .get("promptTokenCount")
+        .or_else(|| usage.get("prompt_token_count"))
+        .and_then(Value::as_i64);
+    let output_tokens = usage
+        .get("candidatesTokenCount")
+        .or_else(|| usage.get("candidates_token_count"))
+        .or_else(|| usage.get("outputTokenCount"))
+        .or_else(|| usage.get("output_token_count"))
+        .and_then(Value::as_i64);
+    if input_tokens.is_none() && output_tokens.is_none() {
+        return None;
+    }
+    Some((input_tokens, output_tokens))
+}
+
+fn extract_gemini_finish_reason(response: &Value) -> Option<String> {
+    response
+        .get("candidates")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(Value::as_object)
+        .and_then(|row| {
+            row.get("finishReason")
+                .or_else(|| row.get("finish_reason"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn read_image_as_data_url(path: &Path) -> Option<String> {
@@ -5945,6 +6406,14 @@ fn openai_api_key() -> Option<String> {
     first_non_empty_env(&["OPENAI_API_KEY", "OPENAI_API_KEY_BACKUP"])
 }
 
+fn openrouter_api_key() -> Option<String> {
+    first_non_empty_env(&["OPENROUTER_API_KEY"])
+}
+
+fn gemini_api_key() -> Option<String> {
+    first_non_empty_env(&["GEMINI_API_KEY", "GOOGLE_API_KEY"])
+}
+
 fn openai_api_base() -> String {
     let raw = first_non_empty_env(&["OPENAI_API_BASE", "OPENAI_BASE_URL"])
         .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
@@ -5955,6 +6424,14 @@ fn openai_api_base() -> String {
         }
     }
     base.trim_end_matches('/').to_string()
+}
+
+fn gemini_api_base() -> String {
+    first_non_empty_env(&["GEMINI_API_BASE"])
+        .unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta".to_string())
+        .trim()
+        .trim_end_matches('/')
+        .to_string()
 }
 
 fn sanitize_openai_responses_model(raw: &str, default_model: &str) -> String {
@@ -7929,10 +8406,11 @@ fn json_object(value: Value) -> Map<String, Value> {
 mod tests {
     use super::{
         active_image_for_edit_prompt, build_realtime_websocket_request, clean_description,
-        description_realtime_instruction, intent_icons_instruction,
+        description_realtime_instruction, extract_gemini_finish_reason, extract_gemini_output_text,
+        extract_gemini_token_usage_pair, intent_icons_instruction,
         intent_realtime_reference_image_limit, is_anyhow_realtime_transport_error,
         is_edit_style_prompt, resolve_streamed_response_text, RealtimeJobError,
-        RealtimeJobErrorKind, RealtimeSessionKind, REALTIME_BETA_HEADER_VALUE,
+        RealtimeJobErrorKind, RealtimeProvider, RealtimeSessionKind, REALTIME_BETA_HEADER_VALUE,
         REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX,
     };
     use serde_json::json;
@@ -8054,6 +8532,27 @@ mod tests {
     }
 
     #[test]
+    fn realtime_provider_parse_accepts_openai_and_gemini_aliases() {
+        assert_eq!(
+            RealtimeProvider::parse("openai_realtime"),
+            Some(RealtimeProvider::OpenAiRealtime)
+        );
+        assert_eq!(
+            RealtimeProvider::parse("OPENAI"),
+            Some(RealtimeProvider::OpenAiRealtime)
+        );
+        assert_eq!(
+            RealtimeProvider::parse("gemini_flash"),
+            Some(RealtimeProvider::GeminiFlash)
+        );
+        assert_eq!(
+            RealtimeProvider::parse("GEMINI"),
+            Some(RealtimeProvider::GeminiFlash)
+        );
+        assert_eq!(RealtimeProvider::parse("unknown"), None);
+    }
+
+    #[test]
     fn resolve_streamed_response_text_includes_usage_tokens_in_meta() {
         let response = json!({
             "id": "resp_test",
@@ -8066,6 +8565,34 @@ mod tests {
         let (_text, meta) = resolve_streamed_response_text("ok", &response);
         assert_eq!(meta.get("input_tokens"), Some(&json!(321)));
         assert_eq!(meta.get("output_tokens"), Some(&json!(89)));
+    }
+
+    #[test]
+    fn gemini_extractors_pull_text_usage_and_finish_reason() {
+        let response = json!({
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": {
+                    "parts": [
+                        {"text": "line one"},
+                        {"text": "line two"}
+                    ]
+                }
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 111,
+                "candidatesTokenCount": 37
+            }
+        });
+        assert_eq!(extract_gemini_output_text(&response), "line one\nline two");
+        assert_eq!(
+            extract_gemini_token_usage_pair(&response),
+            Some((Some(111), Some(37)))
+        );
+        assert_eq!(
+            extract_gemini_finish_reason(&response),
+            Some("STOP".to_string())
+        );
     }
 
     #[test]
