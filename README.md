@@ -9,6 +9,13 @@ You steer outputs by arranging and combining images on a canvas, then applying a
 
 ## Live Workflow Highlights
 
+### OpenRouter-First Onboarding (Newly Supported)
+Brood now ships a first-run OpenRouter onboarding flow in-app. It guides users through key setup, stores `OPENROUTER_API_KEY` in `~/.brood/.env`, verifies connectivity, and unlocks OpenRouter-first runtime paths (including Gemini realtime intent/canvas routing).
+
+<p align="left">
+  <img src="media/features/readme/openrouter_onboarding.gif" alt="OpenRouter-first onboarding flow">
+</p>
+
 ### Realtime Canvas Proposals
 Mother watches your on-canvas edits (move/resize/select), infers what you are emphasizing, and proposes the next best transformation without requiring a typed prompt.
 
