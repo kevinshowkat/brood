@@ -2,6 +2,9 @@
 
 - Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
 - `docs/desktop.md`: how to use the current desktop app (Abilities, HUD, multi-view).
+- `docs/agent_quickstart.md`: practical task-routing examples for coding agents.
+- `docs/agent_intake_status.md`: deterministic intake health/fallback cue for intake-first routing.
+- `docs/agent_intake_roundtrip.sample.json`: compact intake request/response/next-action example bundle.
 - `docs/reference-first-image-editing.md`: positioning and workflow guide for reference-first image editing.
 - `docs/macos-local-private-image-editing.md`: macOS local-first and privacy-oriented deployment model.
 - `docs/benchmark-playbook.md`: reproducible benchmark table + artifact-linking template.

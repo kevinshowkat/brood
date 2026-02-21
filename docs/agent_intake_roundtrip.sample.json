@@ -1,0 +1,51 @@
+{
+  "schema_version": "brood.agent_intake_roundtrip.v1",
+  "intake_endpoint": "https://6yq5plinssvsog2ozyhnfnscya0qwdzp.lambda-url.us-east-1.on.aws/aip/intake",
+  "request": {
+    "schema_version": "aip-1",
+    "agent": {
+      "tool": "codex",
+      "tool_version": "0.0"
+    },
+    "repo": {
+      "url": "https://github.com/kevinshowkat/brood",
+      "ref": "main"
+    },
+    "task": {
+      "tags": [
+        "desktop-quick-actions",
+        "engine-events"
+      ],
+      "notes": "Add one desktop action and keep events.jsonl compatibility."
+    },
+    "telemetry": {
+      "opt_out": false
+    }
+  },
+  "success_response_example": {
+    "schema_version": "aip-1",
+    "entrypoints": [
+      "desktop/src/canvas_app.js",
+      "rust_engine/crates/brood-contracts/src/events.rs",
+      "docs/desktop.md"
+    ],
+    "suggested_tags": [
+      "desktop-quick-actions",
+      "engine-events"
+    ],
+    "packs": []
+  },
+  "next_actions_after_success": [
+    "Open entrypoints in order and implement the scoped change.",
+    "Run local tests for affected layers.",
+    "Run ./scripts/check_agent_entrypoints.py before commit."
+  ],
+  "fallback_if_degraded": {
+    "status": "degraded",
+    "next_actions": [
+      "Use llms.txt Start Here and Task Routing sections.",
+      "Use docs/agent_quickstart.md for canonical task flows.",
+      "Use agent-intake.json fallback_entrypoints as deterministic backup."
+    ]
+  }
+}

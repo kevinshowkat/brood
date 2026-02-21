@@ -235,6 +235,8 @@ Pricing/latency override file:
 - `llms.txt` high-signal entrypoints and task routing
 - `llms-full.txt` expanded inlined context
 - `agent-intake.json` optional Agent Intake Protocol (AIP) contract
+- `docs/agent_intake_status.md` deterministic intake health/fallback cue
+- `docs/agent_intake_roundtrip.sample.json` compact request/response/next-action bundle
 
 ## Parallel Agent Worktrees
 

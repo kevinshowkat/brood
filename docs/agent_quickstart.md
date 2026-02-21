@@ -2,6 +2,15 @@
 
 Use this when you need to pick a high-confidence starting path quickly.
 
+## Task 0: Check intake status and fallback path
+
+- Read: `docs/agent_intake_status.md`
+- Read: `docs/agent_intake_roundtrip.sample.json`
+- Read: `agent-intake.json`
+- Expected output:
+  - Intake mode is classified as `healthy` or `degraded`.
+  - If `degraded`, fallback sequence is explicit (`llms.txt` -> `docs/agent_quickstart.md` -> `fallback_entrypoints`).
+
 ## Task 1: Add or modify a desktop ability
 
 - Read: `desktop/src/canvas_app.js`

@@ -4,6 +4,7 @@
 Checks:
 - markdown links in llms.txt resolve to local files (for local paths)
 - agent-intake.json schema.local_path exists
+- agent-intake.json intake_status_cue.{status_doc,roundtrip_example} exist (if present)
 - agent-intake.json fallback_entrypoints[*].path exists
 - agent-intake.json tag_catalog.*.entrypoints[*] exist
 """
@@ -102,6 +103,19 @@ def _validate_agent_intake(errors: list[str]) -> None:
         _check_exists(schema_local_path, "agent-intake schema.local_path", errors)
     else:
         errors.append("agent-intake check: missing `schema.local_path`")
+
+    status_cue = payload.get("intake_status_cue")
+    if isinstance(status_cue, dict):
+        status_doc = str(status_cue.get("status_doc", "")).strip()
+        if status_doc:
+            _check_exists(status_doc, "agent-intake intake_status_cue.status_doc", errors)
+        roundtrip_example = str(status_cue.get("roundtrip_example", "")).strip()
+        if roundtrip_example:
+            _check_exists(
+                roundtrip_example,
+                "agent-intake intake_status_cue.roundtrip_example",
+                errors,
+            )
 
     fallback = payload.get("fallback_entrypoints")
     if isinstance(fallback, list):

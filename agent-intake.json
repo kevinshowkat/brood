@@ -9,8 +9,30 @@
   "intake_endpoint": "https://6yq5plinssvsog2ozyhnfnscya0qwdzp.lambda-url.us-east-1.on.aws/aip/intake",
   "notes": [
     "This file is repo-side only. AIP requires operating the intake_endpoint on infrastructure you control.",
-    "If you later host schema/intake on a custom domain, update the URLs here (or leave AIP unused and follow llms.txt fallback entrypoints)."
+    "If you later host schema/intake on a custom domain, update the URLs here (or leave AIP unused and follow llms.txt fallback entrypoints).",
+    "For deterministic intake health/fallback behavior, see docs/agent_intake_status.md and docs/agent_intake_roundtrip.sample.json."
   ],
+  "intake_status_cue": {
+    "healthy_when": [
+      "HTTP 200 response from intake_endpoint",
+      "valid JSON response",
+      "schema_version == aip-1",
+      "response.entrypoints is non-empty"
+    ],
+    "degraded_when": [
+      "timeout or network failure",
+      "non-2xx response",
+      "invalid JSON or wrong schema version",
+      "missing or empty entrypoints"
+    ],
+    "fallback_path": [
+      "llms.txt",
+      "docs/agent_quickstart.md",
+      "fallback_entrypoints"
+    ],
+    "status_doc": "docs/agent_intake_status.md",
+    "roundtrip_example": "docs/agent_intake_roundtrip.sample.json"
+  },
   "privacy": {
     "purpose": "Return curated entrypoints (files/scripts) and optional context pack URLs; optionally log coarse task tags for aggregate usage.",
     "expected_logs": [
@@ -63,6 +85,18 @@
       "path": "docs/desktop.md",
       "kind": "doc",
       "why": "Desktop concepts (Run/Unit/Views), Quick Actions list, HUD behavior, and run artifacts.",
+      "priority": 2
+    },
+    {
+      "path": "docs/agent_intake_status.md",
+      "kind": "doc",
+      "why": "Deterministic intake health/fallback cue for intake-first routing.",
+      "priority": 2
+    },
+    {
+      "path": "docs/agent_intake_roundtrip.sample.json",
+      "kind": "doc",
+      "why": "Compact request/response/next-action intake example.",
       "priority": 2
     },
     {
@@ -224,6 +258,8 @@
       "entrypoints": [
         "docs/README.md",
         "docs/desktop.md",
+        "docs/agent_intake_status.md",
+        "docs/agent_intake_roundtrip.sample.json",
         "docs/param_forge_reference.md",
         "docs/reference-first-image-editing.md",
         "docs/macos-local-private-image-editing.md",

@@ -12,6 +12,8 @@
 
 - Intake contract and endpoint: [`agent-intake.json`](agent-intake.json)
 - AIP schema: [`docs/aip-1.schema.json`](docs/aip-1.schema.json)
+- Intake health/fallback cue: [`docs/agent_intake_status.md`](docs/agent_intake_status.md)
+- Compact intake roundtrip example: [`docs/agent_intake_roundtrip.sample.json`](docs/agent_intake_roundtrip.sample.json)
 - If `intake_endpoint` is reachable, POST an intake request to get curated `entrypoints`, optional `packs`, and `suggested_tags`.
 - If intake is unavailable, use the fallback docs below.
 
