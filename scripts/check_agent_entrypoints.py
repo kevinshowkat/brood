@@ -20,6 +20,14 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def _is_within_root(path: Path) -> bool:
+    try:
+        path.relative_to(ROOT)
+        return True
+    except ValueError:
+        return False
+
+
 def _is_external_link(target: str) -> bool:
     lowered = target.lower()
     return lowered.startswith("http://") or lowered.startswith("https://") or lowered.startswith("mailto:")
@@ -54,8 +62,13 @@ def _iter_llms_markdown_links(llms_path: Path) -> Iterable[str]:
 
 
 def _check_exists(path_str: str, context: str, errors: list[str]) -> None:
-    path = ROOT / path_str
-    if not path.exists():
+    raw_path = Path(path_str)
+    candidate = raw_path if raw_path.is_absolute() else ROOT / raw_path
+    resolved = candidate.resolve()
+    if not _is_within_root(resolved):
+        errors.append(f"{context}: path `{path_str}` resolves outside repository")
+        return
+    if not resolved.exists():
         errors.append(f"{context}: missing path `{path_str}`")
 
 
