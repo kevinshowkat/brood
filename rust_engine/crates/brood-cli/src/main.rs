@@ -4014,6 +4014,13 @@ fn resolve_streamed_response_text(buffer: &str, response: &Value) -> (String, Ma
 
     let mut meta = Map::new();
     if let Some(object) = response.as_object() {
+        let (input_tokens, output_tokens) = extract_token_usage_pair(response);
+        if let Some(value) = input_tokens {
+            meta.insert("input_tokens".to_string(), Value::Number(value.into()));
+        }
+        if let Some(value) = output_tokens {
+            meta.insert("output_tokens".to_string(), Value::Number(value.into()));
+        }
         if let Some(value) = object
             .get("id")
             .and_then(Value::as_str)
@@ -7924,9 +7931,11 @@ mod tests {
         active_image_for_edit_prompt, build_realtime_websocket_request, clean_description,
         description_realtime_instruction, intent_icons_instruction,
         intent_realtime_reference_image_limit, is_anyhow_realtime_transport_error,
-        is_edit_style_prompt, RealtimeJobError, RealtimeJobErrorKind, RealtimeSessionKind,
-        REALTIME_BETA_HEADER_VALUE, REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX,
+        is_edit_style_prompt, resolve_streamed_response_text, RealtimeJobError,
+        RealtimeJobErrorKind, RealtimeSessionKind, REALTIME_BETA_HEADER_VALUE,
+        REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX,
     };
+    use serde_json::json;
     use std::io;
     use std::time::{SystemTime, UNIX_EPOCH};
     use std::{env, fs};
@@ -8042,6 +8051,21 @@ mod tests {
         let value = intent_realtime_reference_image_limit();
         assert!(value >= 1);
         assert!(value <= REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX);
+    }
+
+    #[test]
+    fn resolve_streamed_response_text_includes_usage_tokens_in_meta() {
+        let response = json!({
+            "id": "resp_test",
+            "status": "completed",
+            "usage": {
+                "input_tokens": 321,
+                "output_tokens": 89
+            }
+        });
+        let (_text, meta) = resolve_streamed_response_text("ok", &response);
+        assert_eq!(meta.get("input_tokens"), Some(&json!(321)));
+        assert_eq!(meta.get("output_tokens"), Some(&json!(89)));
     }
 
     #[test]
