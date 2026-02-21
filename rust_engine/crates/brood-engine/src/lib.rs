@@ -19,7 +19,7 @@ use brood_contracts::runs::thread_manifest::ThreadManifest;
 use image::{Rgb, RgbImage};
 use reqwest::blocking::multipart::{Form as MultipartForm, Part as MultipartPart};
 use reqwest::blocking::{Client as HttpClient, Response as HttpResponse};
-use reqwest::header::AUTHORIZATION;
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -1337,13 +1337,30 @@ impl ImageProvider for OpenAiProvider {
     }
 
     fn generate(&self, request: &ProviderGenerateRequest) -> Result<ProviderGenerateResponse> {
-        let Some(api_key) = Self::api_key() else {
-            bail!("OPENAI_API_KEY or OPENAI_API_KEY_BACKUP not set");
-        };
-        if Self::has_edit_inputs(request) {
-            return self.edit_images(request, &api_key);
+        if let Some(api_key) = Self::api_key() {
+            if Self::has_edit_inputs(request) {
+                return self.edit_images(request, &api_key);
+            }
+            return self.generate_images(request, &api_key);
         }
-        self.generate_images(request, &api_key)
+
+        if let Some(openrouter_key) = FluxProvider::openrouter_api_key() {
+            let mut openrouter_request = request.clone();
+            openrouter_request.model = normalize_openrouter_model_for_image_transport(
+                &openrouter_request.model,
+                "openai/gpt-image-1",
+            );
+            let mut response = FluxProvider::new()
+                .generate_via_openrouter(&openrouter_request, &openrouter_key)
+                .context("OpenAI OpenRouter fallback failed")?;
+            response.warnings.insert(
+                0,
+                "OpenAI API key missing; used OpenRouter image transport.".to_string(),
+            );
+            return Ok(response);
+        }
+
+        bail!("OPENAI_API_KEY or OPENAI_API_KEY_BACKUP or OPENROUTER_API_KEY not set");
     }
 }
 
@@ -1621,7 +1638,22 @@ impl ImageProvider for GeminiProvider {
 
     fn generate(&self, request: &ProviderGenerateRequest) -> Result<ProviderGenerateResponse> {
         let Some(api_key) = Self::api_key() else {
-            bail!("GEMINI_API_KEY or GOOGLE_API_KEY not set");
+            if let Some(openrouter_key) = FluxProvider::openrouter_api_key() {
+                let mut openrouter_request = request.clone();
+                openrouter_request.model = normalize_openrouter_model_for_image_transport(
+                    &openrouter_request.model,
+                    "google/gemini-3-pro-image-preview",
+                );
+                let mut response = FluxProvider::new()
+                    .generate_via_openrouter(&openrouter_request, &openrouter_key)
+                    .context("Gemini OpenRouter fallback failed")?;
+                response.warnings.insert(
+                    0,
+                    "Gemini API key missing; used OpenRouter image transport.".to_string(),
+                );
+                return Ok(response);
+            }
+            bail!("GEMINI_API_KEY or GOOGLE_API_KEY or OPENROUTER_API_KEY not set");
         };
         let endpoint = self.endpoint_for_model(&request.model);
         let mut warnings = Vec::new();
@@ -1768,6 +1800,23 @@ impl FluxProvider {
 
     fn api_key() -> Option<String> {
         non_empty_env("BFL_API_KEY").or_else(|| non_empty_env("FLUX_API_KEY"))
+    }
+
+    fn openrouter_api_key() -> Option<String> {
+        non_empty_env("OPENROUTER_API_KEY")
+    }
+
+    fn openrouter_api_base() -> String {
+        let raw = non_empty_env("OPENROUTER_API_BASE")
+            .or_else(|| non_empty_env("OPENROUTER_BASE_URL"))
+            .unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string());
+        let mut base = raw.trim().trim_end_matches('/').to_string();
+        if let Ok(parsed) = reqwest::Url::parse(&base) {
+            if parsed.path().trim().is_empty() || parsed.path() == "/" {
+                base = format!("{base}/api/v1");
+            }
+        }
+        base.trim_end_matches('/').to_string()
     }
 
     fn endpoint_for_request(&self, request: &ProviderGenerateRequest) -> (String, String) {
@@ -2099,6 +2148,620 @@ impl FluxProvider {
         Ok((out, manifest))
     }
 
+    fn map_flux_model_to_openrouter(model: &str) -> Option<&'static str> {
+        match model.trim().to_ascii_lowercase().as_str() {
+            "flux-2" | "flux-2-flex" | "flux-2-pro" | "flux-2-max" | "flux-klein"
+            | "flux-klein-pro" | "flux-klein-max" => Some("black-forest-labs/flux-1.1-pro"),
+            _ => None,
+        }
+    }
+
+    fn openrouter_model_candidates(
+        request: &ProviderGenerateRequest,
+        warnings: &mut Vec<String>,
+    ) -> Vec<String> {
+        let mut candidates: Vec<String> = Vec::new();
+        let push_model = |value: &str, out: &mut Vec<String>| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return;
+            }
+            if out.iter().any(|existing| existing == trimmed) {
+                return;
+            }
+            out.push(trimmed.to_string());
+        };
+        if let Some(explicit) = request
+            .provider_options
+            .get("openrouter_model")
+            .or_else(|| request.provider_options.get("responses_model"))
+            .or_else(|| request.provider_options.get("openai_responses_model"))
+            .and_then(Value::as_str)
+        {
+            let normalized = normalize_openrouter_model_for_image_transport(explicit, explicit);
+            push_model(&normalized, &mut candidates);
+            for alias in openrouter_image_model_aliases(&normalized) {
+                push_model(&alias, &mut candidates);
+            }
+            push_model(explicit, &mut candidates);
+            if normalized != explicit.trim() {
+                push_unique_warning(
+                    warnings,
+                    format!(
+                        "OpenRouter model '{}' normalized to '{}'.",
+                        explicit.trim(),
+                        normalized
+                    ),
+                );
+            }
+        }
+        let normalized_request_model =
+            normalize_openrouter_model_for_image_transport(&request.model, "openai/gpt-image-1");
+        if normalized_request_model != request.model.trim() {
+            push_unique_warning(
+                warnings,
+                format!(
+                    "Model '{}' normalized to '{}' for OpenRouter transport.",
+                    request.model.trim(),
+                    normalized_request_model
+                ),
+            );
+        }
+        push_model(&normalized_request_model, &mut candidates);
+        for alias in openrouter_image_model_aliases(&normalized_request_model) {
+            push_model(&alias, &mut candidates);
+        }
+        push_model(&request.model, &mut candidates);
+        if let Some(mapped) = Self::map_flux_model_to_openrouter(&request.model) {
+            if !candidates.iter().any(|existing| existing == mapped) {
+                push_unique_warning(
+                    warnings,
+                    format!(
+                        "Flux model '{}' mapped to OpenRouter model '{}' for OpenRouter transport.",
+                        request.model, mapped
+                    ),
+                );
+                candidates.push(mapped.to_string());
+            }
+        }
+        if candidates.is_empty() {
+            candidates.push("black-forest-labs/flux-1.1-pro".to_string());
+        }
+        candidates
+    }
+
+    fn openrouter_aspect_ratio(size: &str) -> String {
+        let (width, height) = parse_dims(size);
+        if width == 0 || height == 0 {
+            return "1:1".to_string();
+        }
+        let ratio = width as f64 / height as f64;
+        let candidates = [
+            ("1:1", 1.0),
+            ("16:9", 16.0 / 9.0),
+            ("9:16", 9.0 / 16.0),
+            ("4:3", 4.0 / 3.0),
+            ("3:4", 3.0 / 4.0),
+            ("3:2", 3.0 / 2.0),
+            ("2:3", 2.0 / 3.0),
+            ("5:4", 5.0 / 4.0),
+            ("4:5", 4.0 / 5.0),
+            ("21:9", 21.0 / 9.0),
+        ];
+        let mut best = "1:1";
+        let mut best_delta = f64::MAX;
+        for (label, value) in candidates {
+            let delta = (ratio - value).abs();
+            if delta < best_delta {
+                best_delta = delta;
+                best = label;
+            }
+        }
+        best.to_string()
+    }
+
+    fn flux_input_to_openrouter_image_url(value: &str) -> Result<String> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            bail!("OpenRouter image input value is empty");
+        }
+        let lowered = trimmed.to_ascii_lowercase();
+        if lowered.starts_with("http://")
+            || lowered.starts_with("https://")
+            || lowered.starts_with("data:image/")
+        {
+            return Ok(trimmed.to_string());
+        }
+        let path = PathBuf::from(trimmed);
+        if path.exists() && path.is_file() {
+            let bytes =
+                fs::read(&path).with_context(|| format!("failed reading {}", path.display()))?;
+            let mime = mime_for_path(&path).unwrap_or("image/png");
+            return Ok(format!("data:{mime};base64,{}", BASE64.encode(bytes)));
+        }
+        if BASE64.decode(trimmed.as_bytes()).is_ok() {
+            return Ok(format!("data:image/png;base64,{trimmed}"));
+        }
+        bail!(
+            "OpenRouter image input '{}' must be a URL, data URL, local file path, or base64 image bytes",
+            truncate_text(trimmed, 80)
+        );
+    }
+
+    fn build_openrouter_input_content(
+        request: &ProviderGenerateRequest,
+        warnings: &mut Vec<String>,
+    ) -> Result<Vec<Value>> {
+        let mut content = vec![json!({
+            "type": "input_text",
+            "text": request.prompt,
+        })];
+        if let Some(init_image) = request.inputs.init_image.as_ref() {
+            match Self::flux_input_to_openrouter_image_url(init_image) {
+                Ok(image_url) => {
+                    content.push(json!({
+                        "type": "input_image",
+                        "image_url": image_url,
+                    }));
+                }
+                Err(err) => push_unique_warning(
+                    warnings,
+                    format!(
+                        "OpenRouter dropped init_image input: {}",
+                        truncate_text(&err.to_string(), 220)
+                    ),
+                ),
+            }
+        }
+        for (idx, reference) in request.inputs.reference_images.iter().enumerate() {
+            match Self::flux_input_to_openrouter_image_url(reference) {
+                Ok(image_url) => {
+                    content.push(json!({
+                        "type": "input_image",
+                        "image_url": image_url,
+                    }));
+                }
+                Err(err) => push_unique_warning(
+                    warnings,
+                    format!(
+                        "OpenRouter dropped reference_images[{}]: {}",
+                        idx,
+                        truncate_text(&err.to_string(), 220)
+                    ),
+                ),
+            }
+        }
+        if request.inputs.mask.is_some() {
+            push_unique_warning(
+                warnings,
+                "OpenRouter image generation currently ignores mask input for Flux fallback."
+                    .to_string(),
+            );
+        }
+        Ok(content)
+    }
+
+    fn apply_openrouter_request_headers(
+        mut request: reqwest::blocking::RequestBuilder,
+    ) -> reqwest::blocking::RequestBuilder {
+        if let Some(referer) = non_empty_env("OPENROUTER_HTTP_REFERER")
+            .or_else(|| non_empty_env("BROOD_OPENROUTER_HTTP_REFERER"))
+        {
+            request = request.header("HTTP-Referer", referer);
+        }
+        if let Some(title) = non_empty_env("OPENROUTER_X_TITLE")
+            .or_else(|| non_empty_env("BROOD_OPENROUTER_X_TITLE"))
+        {
+            request = request.header("X-Title", title);
+        }
+        request
+    }
+
+    fn should_fallback_openrouter_responses(status_code: u16, body: &str) -> bool {
+        if matches!(status_code, 404 | 405 | 415 | 501) {
+            return true;
+        }
+        if matches!(status_code, 400 | 422) {
+            let lowered = body.to_ascii_lowercase();
+            return lowered.contains("response")
+                && (lowered.contains("unsupported")
+                    || lowered.contains("not supported")
+                    || lowered.contains("not found")
+                    || lowered.contains("unknown")
+                    || lowered.contains("does not exist")
+                    || lowered.contains("unavailable"));
+        }
+        false
+    }
+
+    fn extract_openrouter_chat_finish_reason(payload: &Value) -> Option<String> {
+        payload
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(Value::as_object)
+            .and_then(|row| row.get("finish_reason").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    }
+
+    fn extract_openrouter_generated_images(
+        &self,
+        payload: &Value,
+        download_timeout_s: f64,
+    ) -> Result<Vec<ImageBytes>> {
+        fn collect(value: &Value, key_hint: Option<&str>, out: &mut Vec<String>) {
+            match value {
+                Value::Object(obj) => {
+                    for (key, nested) in obj {
+                        collect(nested, Some(key), out);
+                    }
+                }
+                Value::Array(items) => {
+                    for item in items {
+                        collect(item, key_hint, out);
+                    }
+                }
+                Value::String(raw) => {
+                    let trimmed = raw.trim();
+                    if trimmed.is_empty() {
+                        return;
+                    }
+                    let key = key_hint
+                        .map(|value| value.trim().to_ascii_lowercase())
+                        .unwrap_or_default();
+                    let looks_http =
+                        trimmed.starts_with("http://") || trimmed.starts_with("https://");
+                    let looks_data_url = trimmed.starts_with("data:image/");
+                    let looks_b64_key =
+                        key.contains("b64") || key.contains("base64") || key == "result";
+                    let looks_url_key = key == "url"
+                        || key.ends_with("_url")
+                        || key.ends_with("url")
+                        || key.contains("image_url");
+                    if looks_data_url || (looks_http && looks_url_key) || looks_b64_key {
+                        if !out.iter().any(|existing| existing == trimmed) {
+                            out.push(trimmed.to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn decode_data_url(value: &str) -> Result<ImageBytes> {
+            let (meta, payload) = value
+                .split_once(',')
+                .ok_or_else(|| anyhow::anyhow!("invalid data URL image payload"))?;
+            let mime = meta
+                .trim()
+                .strip_prefix("data:")
+                .and_then(|rest| rest.split(';').next())
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .unwrap_or("image/png")
+                .to_string();
+            let bytes = BASE64
+                .decode(payload.trim().as_bytes())
+                .context("OpenRouter image data URL base64 decode failed")?;
+            Ok(ImageBytes {
+                bytes,
+                mime_type: Some(mime),
+            })
+        }
+
+        let mut candidates: Vec<String> = Vec::new();
+        collect(payload, None, &mut candidates);
+        let mut out: Vec<ImageBytes> = Vec::new();
+        for candidate in candidates {
+            let trimmed = candidate.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.starts_with("data:image/") {
+                if let Ok(image) = decode_data_url(trimmed) {
+                    out.push(image);
+                }
+                continue;
+            }
+            if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+                if let Ok(image) = self.download_openrouter_image(trimmed, download_timeout_s) {
+                    out.push(image);
+                }
+                continue;
+            }
+            if let Ok(bytes) = BASE64.decode(trimmed.as_bytes()) {
+                out.push(ImageBytes {
+                    bytes,
+                    mime_type: None,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    fn download_openrouter_image(&self, url: &str, timeout_s: f64) -> Result<ImageBytes> {
+        let response = self
+            .http
+            .get(url)
+            .timeout(Duration::from_secs_f64(timeout_s))
+            .send()
+            .with_context(|| format!("OpenRouter image download failed ({url})"))?;
+        if !response.status().is_success() {
+            let code = response.status().as_u16();
+            let body = response.text().unwrap_or_default();
+            bail!(
+                "OpenRouter image download failed ({code}): {}",
+                truncate_text(&body, 512)
+            );
+        }
+        let mime_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let bytes = response
+            .bytes()
+            .context("OpenRouter image bytes read failed")?
+            .to_vec();
+        Ok(ImageBytes { bytes, mime_type })
+    }
+
+    fn request_openrouter_image_generation(
+        &self,
+        model: &str,
+        input_content: &[Value],
+        seed: Option<i64>,
+        aspect_ratio: &str,
+        api_key: &str,
+        request_timeout: f64,
+        download_timeout: f64,
+    ) -> Result<(String, Value, Value, Vec<ImageBytes>)> {
+        let base = Self::openrouter_api_base();
+        let responses_endpoint = format!("{base}/responses");
+        let responses_payload = {
+            let mut payload = map_object(json!({
+                "model": model,
+                "input": [{
+                    "role": "user",
+                    "content": input_content,
+                }],
+                "modalities": ["text", "image"],
+                "stream": false,
+                "image_config": {
+                    "aspect_ratio": aspect_ratio,
+                },
+            }));
+            if let Some(seed_value) = seed {
+                payload.insert("seed".to_string(), Value::Number(seed_value.into()));
+            }
+            Value::Object(payload)
+        };
+        let responses_request = self
+            .http
+            .post(&responses_endpoint)
+            .bearer_auth(api_key)
+            .header("accept", "application/json")
+            .header(CONTENT_TYPE, "application/json")
+            .timeout(Duration::from_secs_f64(request_timeout));
+        let responses_response = Self::apply_openrouter_request_headers(responses_request)
+            .json(&responses_payload)
+            .send()
+            .with_context(|| {
+                format!("OpenRouter responses request failed ({responses_endpoint})")
+            })?;
+        if responses_response.status().is_success() {
+            let response_payload =
+                response_json_or_error("OpenRouter responses", responses_response)?;
+            let images =
+                self.extract_openrouter_generated_images(&response_payload, download_timeout)?;
+            if !images.is_empty() {
+                return Ok((
+                    "openrouter_responses".to_string(),
+                    responses_payload,
+                    response_payload,
+                    images,
+                ));
+            }
+        } else {
+            let code = responses_response.status().as_u16();
+            let body = responses_response.text().unwrap_or_default();
+            if !Self::should_fallback_openrouter_responses(code, &body) {
+                bail!(
+                    "OpenRouter responses request failed ({code}): {}",
+                    truncate_text(&body, 512)
+                );
+            }
+        }
+
+        let chat_endpoint = format!("{base}/chat/completions");
+        let mut chat_content = Vec::new();
+        for item in input_content {
+            let Some(obj) = item.as_object() else {
+                continue;
+            };
+            let kind = obj
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if kind == "input_text" {
+                if let Some(text) = obj
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    chat_content.push(json!({
+                        "type": "text",
+                        "text": text,
+                    }));
+                }
+            } else if kind == "input_image" {
+                let maybe_url = obj
+                    .get("image_url")
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        obj.get("image_url")
+                            .and_then(Value::as_object)
+                            .and_then(|row| row.get("url"))
+                            .and_then(Value::as_str)
+                    })
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+                if let Some(url) = maybe_url {
+                    chat_content.push(json!({
+                        "type": "image_url",
+                        "image_url": { "url": url }
+                    }));
+                }
+            }
+        }
+        let chat_payload = {
+            let mut payload = map_object(json!({
+                "model": model,
+                "messages": [{
+                    "role": "user",
+                    "content": chat_content,
+                }],
+                "modalities": ["text", "image"],
+                "stream": false,
+                "image_config": {
+                    "aspect_ratio": aspect_ratio,
+                },
+            }));
+            if let Some(seed_value) = seed {
+                payload.insert("seed".to_string(), Value::Number(seed_value.into()));
+            }
+            Value::Object(payload)
+        };
+        let chat_request = self
+            .http
+            .post(&chat_endpoint)
+            .bearer_auth(api_key)
+            .header("accept", "application/json")
+            .header(CONTENT_TYPE, "application/json")
+            .timeout(Duration::from_secs_f64(request_timeout));
+        let chat_response = Self::apply_openrouter_request_headers(chat_request)
+            .json(&chat_payload)
+            .send()
+            .with_context(|| format!("OpenRouter chat request failed ({chat_endpoint})"))?;
+        let chat_payload_response = response_json_or_error("OpenRouter chat", chat_response)?;
+        let images =
+            self.extract_openrouter_generated_images(&chat_payload_response, download_timeout)?;
+        if images.is_empty() {
+            let finish = Self::extract_openrouter_chat_finish_reason(&chat_payload_response)
+                .unwrap_or_else(|| "unknown".to_string());
+            bail!(
+                "OpenRouter chat image response returned no image payload (finish_reason={finish})"
+            );
+        }
+        Ok((
+            "openrouter_chat_completions".to_string(),
+            chat_payload,
+            chat_payload_response,
+            images,
+        ))
+    }
+
+    fn generate_via_openrouter(
+        &self,
+        request: &ProviderGenerateRequest,
+        api_key: &str,
+    ) -> Result<ProviderGenerateResponse> {
+        let (_poll_interval, _poll_timeout, request_timeout, download_timeout) =
+            Self::request_timeouts(request);
+        let mut warnings = Vec::new();
+        let candidates = Self::openrouter_model_candidates(request, &mut warnings);
+        let (width, height) = parse_dims(&request.size);
+        let stamp = timestamp_millis();
+        let aspect_ratio = Self::openrouter_aspect_ratio(&request.size);
+        let input_content = Self::build_openrouter_input_content(request, &mut warnings)?;
+
+        let mut request_manifests: Vec<Value> = Vec::new();
+        let mut response_manifests: Vec<Value> = Vec::new();
+        let mut results = Vec::new();
+
+        for idx in 0..request.n.max(1) {
+            let seed = request.seed.map(|value| value.saturating_add(idx as i64));
+            let mut last_error: Option<anyhow::Error> = None;
+            let mut generated: Option<(String, Value, Value, Vec<ImageBytes>)> = None;
+            for model in &candidates {
+                match self.request_openrouter_image_generation(
+                    model,
+                    &input_content,
+                    seed,
+                    &aspect_ratio,
+                    api_key,
+                    request_timeout,
+                    download_timeout,
+                ) {
+                    Ok(tuple) => {
+                        generated = Some(tuple);
+                        break;
+                    }
+                    Err(err) => {
+                        last_error = Some(err);
+                    }
+                }
+            }
+            let Some((transport, request_payload, response_payload, images)) = generated else {
+                let message = last_error
+                    .as_ref()
+                    .map(|err| err.to_string())
+                    .unwrap_or_else(|| "OpenRouter request failed".to_string());
+                bail!("OpenRouter image fallback failed: {message}");
+            };
+            let first = images
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("OpenRouter returned no image bytes"))?;
+            let ext = output_extension_from_mime_or_format(
+                first.mime_type.as_deref(),
+                &request.output_format,
+            );
+            let image_path = request
+                .run_dir
+                .join(format!("artifact-{}-{:02}.{}", stamp, idx, ext));
+            fs::write(&image_path, first.bytes)
+                .with_context(|| format!("failed to write {}", image_path.display()))?;
+            results.push(ProviderImageResult {
+                image_path,
+                width,
+                height,
+                seed,
+            });
+            request_manifests.push(json!({
+                "transport": transport,
+                "payload": request_payload,
+            }));
+            response_manifests.push(json!({
+                "transport": transport,
+                "response_id": response_payload.get("id").cloned().unwrap_or(Value::Null),
+                "status": response_payload.get("status").cloned().unwrap_or(Value::Null),
+                "usage": response_payload.get("usage").cloned().unwrap_or(Value::Null),
+            }));
+        }
+
+        Ok(ProviderGenerateResponse {
+            provider_request: map_object(json!({
+                "endpoint": format!("{}/responses", Self::openrouter_api_base()),
+                "payload": if request_manifests.len() == 1 {
+                    request_manifests.first().cloned().unwrap_or(Value::Null)
+                } else {
+                    Value::Array(request_manifests)
+                },
+            })),
+            provider_response: map_object(json!({
+                "responses": response_manifests,
+            })),
+            warnings,
+            results,
+        })
+    }
+
     fn post_flux_json(
         &self,
         endpoint: &str,
@@ -2160,9 +2823,14 @@ impl ImageProvider for FluxProvider {
     }
 
     fn generate(&self, request: &ProviderGenerateRequest) -> Result<ProviderGenerateResponse> {
-        let Some(api_key) = Self::api_key() else {
-            bail!("BFL_API_KEY or FLUX_API_KEY not set");
-        };
+        let api_key = Self::api_key();
+        if api_key.is_none() {
+            if let Some(openrouter_key) = Self::openrouter_api_key() {
+                return self.generate_via_openrouter(request, &openrouter_key);
+            }
+            bail!("BFL_API_KEY or FLUX_API_KEY or OPENROUTER_API_KEY not set");
+        }
+        let api_key = api_key.unwrap_or_default();
         let (endpoint, endpoint_label) = self.endpoint_for_request(request);
         let (poll_interval, poll_timeout, request_timeout, download_timeout) =
             Self::request_timeouts(request);
@@ -2586,7 +3254,22 @@ impl ImageProvider for ImagenProvider {
 
     fn generate(&self, request: &ProviderGenerateRequest) -> Result<ProviderGenerateResponse> {
         let Some(api_key) = Self::api_key() else {
-            bail!("IMAGEN_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY not set");
+            if let Some(openrouter_key) = FluxProvider::openrouter_api_key() {
+                let mut openrouter_request = request.clone();
+                openrouter_request.model = normalize_openrouter_model_for_image_transport(
+                    &openrouter_request.model,
+                    "google/imagen-4.0-ultra",
+                );
+                let mut response = FluxProvider::new()
+                    .generate_via_openrouter(&openrouter_request, &openrouter_key)
+                    .context("Imagen OpenRouter fallback failed")?;
+                response.warnings.insert(
+                    0,
+                    "Imagen API key missing; used OpenRouter image transport.".to_string(),
+                );
+                return Ok(response);
+            }
+            bail!("IMAGEN_API_KEY, GEMINI_API_KEY, GOOGLE_API_KEY, or OPENROUTER_API_KEY not set");
         };
 
         let mut warnings = Vec::new();
@@ -3906,6 +4589,79 @@ fn is_openai_gpt_image_model(model: &str) -> bool {
     model.trim().to_ascii_lowercase().starts_with("gpt-image")
 }
 
+fn normalize_openrouter_model_for_image_transport(raw: &str, default_model: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return default_model.to_string();
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    if lowered.contains('/') {
+        return match lowered.as_str() {
+            "google/gemini-3.0-flash" => "google/gemini-3-flash-preview".to_string(),
+            "google/gemini-2.0-flash" => "google/gemini-2.0-flash-001".to_string(),
+            "google/gemini-2.5-flash-image" => "google/gemini-2.5-flash-image-preview".to_string(),
+            _ => trimmed.to_string(),
+        };
+    }
+
+    if lowered.starts_with("gpt-")
+        || lowered.starts_with("o1")
+        || lowered.starts_with("o3")
+        || lowered.starts_with("o4")
+    {
+        return format!("openai/{trimmed}");
+    }
+
+    if lowered.starts_with("gemini-") {
+        let normalized = match lowered.as_str() {
+            "gemini-3.0-flash" => "gemini-3-flash-preview".to_string(),
+            "gemini-2.0-flash" => "gemini-2.0-flash-001".to_string(),
+            "gemini-2.5-flash-image" => "gemini-2.5-flash-image-preview".to_string(),
+            _ => trimmed.to_string(),
+        };
+        return format!("google/{normalized}");
+    }
+
+    if lowered.starts_with("imagen-") {
+        return format!("google/{trimmed}");
+    }
+
+    if lowered.starts_with("flux-") {
+        if let Some(mapped) = FluxProvider::map_flux_model_to_openrouter(trimmed) {
+            return mapped.to_string();
+        }
+    }
+
+    if lowered.starts_with("bfl/") {
+        if let Some((_, suffix)) = trimmed.split_once('/') {
+            return format!("black-forest-labs/{suffix}");
+        }
+    }
+
+    trimmed.to_string()
+}
+
+fn openrouter_image_model_aliases(raw: &str) -> Vec<String> {
+    let normalized = normalize_openrouter_model_for_image_transport(raw, raw);
+    let lowered = normalized.to_ascii_lowercase();
+    let canonical = lowered.strip_prefix("google/").unwrap_or(lowered.as_str());
+    let mut out = Vec::new();
+    match canonical {
+        "imagen-4.0-ultra" | "imagen-4-ultra" => {
+            out.push("google/imagen-4.0-ultra-generate-001".to_string());
+        }
+        "imagen-4" | "imagen-4.0" => {
+            out.push("google/imagen-4.0-generate-001".to_string());
+        }
+        "gemini-2.5-flash-image" => {
+            out.push("google/gemini-2.5-flash-image-preview".to_string());
+        }
+        _ => {}
+    }
+    out.retain(|candidate| candidate != &normalized);
+    out
+}
+
 fn normalize_openai_size(raw: &str, warnings: &mut Vec<String>) -> String {
     let normalized = raw.trim().to_ascii_lowercase();
     if normalized.is_empty() {
@@ -4282,6 +5038,7 @@ fn format_gemini_context_packet(packet: &Map<String, Value>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
     use std::fs;
     use std::path::Path;
 
@@ -4290,6 +5047,7 @@ mod tests {
 
     use brood_contracts::models::ModelSpec;
 
+    use super::BASE64;
     use super::{
         apply_quality_preset, default_provider_registry, error_chain_text,
         estimate_image_cost_with_params, image_inputs_from_settings, merge_openai_options_for_form,
@@ -4792,6 +5550,87 @@ mod tests {
             .iter()
             .any(|warning| warning
                 .contains("accepted first 4 input images; dropped 1 extra references")));
+        Ok(())
+    }
+
+    #[test]
+    fn flux_openrouter_model_candidates_include_mapped_fallback() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut request = provider_request_for_test(temp.path());
+        request.model = "flux-2-flex".to_string();
+        let mut warnings = Vec::new();
+        let candidates = FluxProvider::openrouter_model_candidates(&request, &mut warnings);
+        assert!(!candidates.is_empty());
+        assert!(candidates.iter().any(|value| value == "flux-2-flex"));
+        assert!(candidates
+            .iter()
+            .any(|value| value == "black-forest-labs/flux-1.1-pro"));
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("mapped to OpenRouter model")
+                || warning.contains("normalized")));
+    }
+
+    #[test]
+    fn openrouter_model_normalization_prefixes_common_provider_models() {
+        assert_eq!(
+            super::normalize_openrouter_model_for_image_transport(
+                "gpt-image-1.5",
+                "openai/gpt-image-1",
+            ),
+            "openai/gpt-image-1.5"
+        );
+        assert_eq!(
+            super::normalize_openrouter_model_for_image_transport(
+                "gemini-3-pro-image-preview",
+                "google/gemini-3-pro-image-preview",
+            ),
+            "google/gemini-3-pro-image-preview"
+        );
+        assert_eq!(
+            super::normalize_openrouter_model_for_image_transport(
+                "gemini-2.5-flash-image",
+                "google/gemini-3-pro-image-preview",
+            ),
+            "google/gemini-2.5-flash-image-preview"
+        );
+    }
+
+    #[test]
+    fn openrouter_model_candidates_include_normalized_gemini_and_imagen_aliases() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut request = provider_request_for_test(temp.path());
+        request.model = "gemini-3-pro-image-preview".to_string();
+        let mut warnings = Vec::new();
+        let candidates = FluxProvider::openrouter_model_candidates(&request, &mut warnings);
+        assert!(candidates
+            .iter()
+            .any(|value| value == "google/gemini-3-pro-image-preview"));
+
+        request.model = "imagen-4.0-ultra".to_string();
+        let candidates_imagen = FluxProvider::openrouter_model_candidates(&request, &mut warnings);
+        assert!(candidates_imagen
+            .iter()
+            .any(|value| value == "google/imagen-4.0-ultra"));
+        assert!(candidates_imagen
+            .iter()
+            .any(|value| value == "google/imagen-4.0-ultra-generate-001"));
+    }
+
+    #[test]
+    fn flux_openrouter_extracts_base64_image_from_responses_output() -> anyhow::Result<()> {
+        let provider = FluxProvider::new();
+        let raw = b"not-real-image-but-bytes";
+        let payload = json!({
+            "output": [{
+                "type": "image_generation_call",
+                "status": "completed",
+                "result": BASE64.encode(raw),
+            }]
+        });
+        let images = provider.extract_openrouter_generated_images(&payload, 1.0)?;
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].bytes, raw);
         Ok(())
     }
 
