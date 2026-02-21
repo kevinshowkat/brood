@@ -2698,7 +2698,7 @@ function realtimeProviderForScope(scope = "intent") {
 
 function realtimeScopeReady(scope = "intent") {
   const status = state.keyStatus;
-  if (!status || typeof status !== "object") return true;
+  if (!status || typeof status !== "object") return false;
   const key =
     scope === "canvas_context"
       ? "realtime_ready_canvas_context"
@@ -2730,6 +2730,9 @@ function isOpenAiRealtimeSignal({ source = null, model = null } = {}) {
 
 function realtimeScopeUnavailableMessage(scope = "intent") {
   const status = state.keyStatus;
+  if (!status || typeof status !== "object") {
+    return "Realtime key status still loading. Wait a moment and retry.";
+  }
   const provider = realtimeProviderForScope(scope);
   if (provider === "gemini_flash") {
     if (status && !status.gemini && !status.openrouter) {
@@ -2760,8 +2763,8 @@ function allowAlwaysOnVision() {
   if (!state.alwaysOnVision?.enabled) return false;
   if (!getVisibleCanvasImages().length) return false;
   if (!state.runDir) return false;
-  // Fail fast before dispatch if we know required keys are missing.
-  if (state.keyStatus && !realtimeScopeReady("canvas_context")) return false;
+  // Fail closed until key status resolves, then enforce provider-specific readiness.
+  if (!realtimeScopeReady("canvas_context")) return false;
   return true;
 }
 
@@ -4055,7 +4058,7 @@ function allowAmbientIntentRealtime() {
   if (!getVisibleCanvasImages().length) return false;
   if (!state.runDir) return false;
   if (state.motherIdle?.pendingIntent && String(state.motherIdle.pendingIntentRealtimePath || "").trim()) return false;
-  if (state.keyStatus && !realtimeScopeReady("intent")) return false;
+  if (!realtimeScopeReady("intent")) return false;
   return true;
 }
 
@@ -4107,10 +4110,10 @@ async function runAmbientIntentInferenceOnce({ reason = null } = {}) {
 
   await ensureRun();
   if (!allowAmbientIntentRealtime()) {
-    const msg = state.keyStatus ? realtimeScopeUnavailableMessage("intent") : "Intent realtime disabled.";
+    const msg = realtimeScopeUnavailableMessage("intent");
     applyAmbientIntentFallback("realtime_disabled", {
       message: msg,
-      hardDisable: Boolean(state.keyStatus && !realtimeScopeReady("intent")),
+      hardDisable: Boolean(!realtimeScopeReady("intent")),
     });
     appendIntentTrace({
       kind: "ambient_inference_blocked",
@@ -4214,8 +4217,8 @@ function allowIntentRealtime() {
   if (!state.runDir) return false;
   const intent = state.intent;
   if (!intent) return false;
-  // Fail fast before dispatch if we know required keys are missing.
-  if (state.keyStatus && !realtimeScopeReady("intent")) return false;
+  // Fail closed until key status resolves, then enforce provider-specific readiness.
+  if (!realtimeScopeReady("intent")) return false;
   return true;
 }
 
@@ -4328,7 +4331,7 @@ async function runIntentInferenceOnce({ reason = null } = {}) {
     intent.pendingAt = 0;
     intent.pendingFrameId = null;
     intent.rtState = "failed";
-    intent.disabledReason = state.keyStatus ? realtimeScopeUnavailableMessage("intent") : "Intent realtime disabled.";
+    intent.disabledReason = realtimeScopeUnavailableMessage("intent");
     intent.lastError = intent.disabledReason;
     intent.lastErrorAt = now;
     intent.uiHideSuggestion = false;
@@ -6979,7 +6982,27 @@ async function restartEngineAfterOpenRouterKeySave() {
   if (!state.ptySpawned) {
     throw new Error("OPENROUTER_API_KEY saved, but engine restart failed. Start a new run or relaunch.");
   }
-  return true;
+  const readyDeadline = Date.now() + 12_000;
+  while (Date.now() < readyDeadline) {
+    let status = null;
+    try {
+      status = await invoke("get_pty_status");
+    } catch (_) {
+      status = null;
+    }
+    const running = Boolean(status && typeof status === "object" && status.running);
+    if (running) {
+      const statusRunDir = status?.run_dir ? String(status.run_dir) : "";
+      const statusEventsPath = status?.events_path ? String(status.events_path) : "";
+      const runMatch = !statusRunDir || statusRunDir === state.runDir;
+      const eventsMatch = !statusEventsPath || statusEventsPath === state.eventsPath;
+      if (runMatch && eventsMatch) {
+        return true;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+  throw new Error("OPENROUTER_API_KEY saved, but engine did not report ready after restart. Start a new run or relaunch.");
 }
 
 async function submitOpenRouterOnboardingKey() {
@@ -7009,6 +7032,10 @@ async function submitOpenRouterOnboardingKey() {
     openrouterOnboardingState.statusMessage = "Restarting engine to apply key…";
     renderOpenRouterOnboardingStep({ animate: false });
     await restartEngineAfterOpenRouterKeySave();
+    await refreshKeyStatus().catch(() => {});
+    if (!state?.keyStatus?.openrouter) {
+      throw new Error("OPENROUTER_API_KEY saved, but post-restart key detection is still unavailable.");
+    }
     openrouterOnboardingState.keyMasked = result?.key_masked ? String(result.key_masked) : null;
     openrouterOnboardingState.envPath = result?.env_path ? String(result.env_path) : null;
     saveOpenRouterOnboardingCompletion({

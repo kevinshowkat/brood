@@ -3102,8 +3102,10 @@ impl RealtimeSnapshotSession {
             return (false, Some(self.missing_api_key_message()));
         };
         if self.provider == RealtimeProvider::GeminiFlash {
-            self.model =
-                resolve_realtime_gemini_model_for_transport(&self.model, gemini_via_openrouter);
+            match resolve_realtime_gemini_model_for_transport(&self.model, gemini_via_openrouter) {
+                Ok(model) => self.model = model,
+                Err(message) => return (false, Some(message)),
+            }
         }
 
         self.cleanup_finished_worker();
@@ -3233,12 +3235,27 @@ fn resolve_gemini_flash_credentials() -> (Option<String>, bool) {
     (None, false)
 }
 
-fn resolve_realtime_gemini_model_for_transport(raw: &str, via_openrouter: bool) -> String {
-    if via_openrouter {
+fn resolve_realtime_gemini_model_for_transport(
+    raw: &str,
+    via_openrouter: bool,
+) -> std::result::Result<String, String> {
+    let resolved = if via_openrouter {
         sanitize_openrouter_gemini_model(raw, "google/gemini-3-flash-preview")
     } else {
         sanitize_gemini_generate_content_model(raw, "gemini-3-flash-preview")
+    };
+    let normalized = resolved
+        .strip_prefix("google/")
+        .unwrap_or(&resolved)
+        .trim()
+        .to_ascii_lowercase();
+    if normalized.starts_with("gemini-") {
+        return Ok(resolved);
     }
+    Err(format!(
+        "Realtime provider gemini_flash requires a Gemini model. Got '{}'. Set BROOD_CANVAS_CONTEXT_REALTIME_MODEL / BROOD_INTENT_REALTIME_MODEL / BROOD_MOTHER_INTENT_REALTIME_MODEL to a Gemini Flash model.",
+        raw.trim()
+    ))
 }
 
 fn sanitize_gemini_generate_content_model(raw: &str, default_model: &str) -> String {
@@ -9101,12 +9118,12 @@ mod tests {
         extract_openrouter_chat_output_text, intent_icons_instruction,
         intent_realtime_reference_image_limit, is_anyhow_realtime_transport_error,
         is_edit_style_prompt, openrouter_chat_content_to_responses_input,
-        openrouter_responses_content_to_chat_content, resolve_streamed_response_text,
-        sanitize_gemini_generate_content_model, sanitize_openrouter_gemini_model,
-        sanitize_openrouter_model, should_fallback_openrouter_responses,
-        vision_description_model_candidates_for, RealtimeJobError, RealtimeJobErrorKind,
-        RealtimeProvider, RealtimeSessionKind, REALTIME_BETA_HEADER_VALUE,
-        REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX,
+        openrouter_responses_content_to_chat_content, resolve_realtime_gemini_model_for_transport,
+        resolve_streamed_response_text, sanitize_gemini_generate_content_model,
+        sanitize_openrouter_gemini_model, sanitize_openrouter_model,
+        should_fallback_openrouter_responses, vision_description_model_candidates_for,
+        RealtimeJobError, RealtimeJobErrorKind, RealtimeProvider, RealtimeSessionKind,
+        REALTIME_BETA_HEADER_VALUE, REALTIME_INTENT_REFERENCE_IMAGE_LIMIT_MAX,
     };
     use serde_json::json;
     use std::io;
@@ -9341,6 +9358,24 @@ mod tests {
                 "gemini-3-flash-preview"
             ),
             "gemini-2.0-flash-001"
+        );
+    }
+
+    #[test]
+    fn resolve_realtime_gemini_model_enforces_gemini_family() {
+        let via_openrouter = resolve_realtime_gemini_model_for_transport("gemini-3.0-flash", true)
+            .expect("gemini alias should normalize");
+        assert_eq!(via_openrouter, "google/gemini-3-flash-preview");
+
+        let direct = resolve_realtime_gemini_model_for_transport("models/gemini-2.0-flash", false)
+            .expect("gemini direct alias should normalize");
+        assert_eq!(direct, "gemini-2.0-flash-001");
+
+        let err = resolve_realtime_gemini_model_for_transport("openai/gpt-5.2", true)
+            .expect_err("non-gemini model should be rejected");
+        assert!(
+            err.contains("requires a Gemini model"),
+            "unexpected error: {err}"
         );
     }
 

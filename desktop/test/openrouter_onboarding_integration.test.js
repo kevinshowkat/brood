@@ -37,6 +37,8 @@ test("OpenRouter onboarding: key save invokes backend persistence + verification
   assert.match(app, /if \(!state\?\.keyStatus\?\.openrouter\)/);
   assert.match(app, /function restartEngineAfterOpenRouterKeySave\(\)/);
   assert.match(app, /await restartEngineAfterOpenRouterKeySave\(\);/);
+  assert.match(app, /invoke\("get_pty_status"\)/);
+  assert.match(app, /engine did not report ready after restart/);
   assert.match(app, /OpenRouter key confirmed/);
 });
 
