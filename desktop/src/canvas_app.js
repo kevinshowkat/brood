@@ -13935,10 +13935,7 @@ function motherV2MaybeArmIntentReplay(reason = "busy_cleared") {
     motherIdleArmFirstTimer();
     return true;
   }
-  if (
-    String(idle.phase || "") === MOTHER_IDLE_STATES.WATCHING ||
-    String(idle.phase || "") === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING
-  ) {
+  if (String(idle.phase || "") === MOTHER_IDLE_STATES.WATCHING) {
     motherV2ClearIntentReplayTimer();
     idle.intentReplayQueued = false;
     idle.intentReplayReason = null;
@@ -13950,6 +13947,49 @@ function motherV2MaybeArmIntentReplay(reason = "busy_cleared") {
       phase: String(idle.phase || ""),
     }).catch(() => {});
     motherIdleArmIntentTimer();
+    return true;
+  }
+  if (String(idle.phase || "") === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
+    motherV2ClearIntentReplayTimer();
+    Promise.resolve()
+      .then(async () => {
+        const current = state.motherIdle;
+        if (!current || !current.intentReplayQueued) return;
+        if (String(current.phase || "") !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
+          motherV2MaybeArmIntentReplay("phase_shifted");
+          return;
+        }
+        const dispatched = await motherV2RequestIntentInference().catch(() => false);
+        const latest = state.motherIdle;
+        if (!latest || !latest.intentReplayQueued) return;
+        if (dispatched) {
+          latest.intentReplayQueued = false;
+          latest.intentReplayReason = null;
+          appendMotherTraceLog({
+            kind: "intent_replay_armed",
+            traceId: latest.telemetry?.traceId || null,
+            actionVersion: Number(latest.actionVersion) || 0,
+            reason: replayReason,
+            phase: MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING,
+            dispatch: "direct",
+          }).catch(() => {});
+          return;
+        }
+        if (!latest.intentReplayTimer) {
+          motherV2ScheduleIntentReplayArm({
+            delayMs: MOTHER_V2_INTENT_REPLAY_ARM_MIN_DELAY_MS,
+            reason: "intent_replay_retry",
+          });
+        }
+      })
+      .catch(() => {
+        const latest = state.motherIdle;
+        if (!latest || !latest.intentReplayQueued || latest.intentReplayTimer) return;
+        motherV2ScheduleIntentReplayArm({
+          delayMs: MOTHER_V2_INTENT_REPLAY_ARM_MIN_DELAY_MS,
+          reason: "intent_replay_retry",
+        });
+      });
     return true;
   }
   return false;

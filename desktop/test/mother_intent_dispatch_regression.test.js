@@ -38,3 +38,10 @@ test("Mother intent icons early no-route drops are explicitly traced", () => {
     /if \(!intent && !ambient && !motherCanAcceptRealtime\) \{[\s\S]*kind: "intent_icons_ignored"[\s\S]*reason: "no_pending_route"[\s\S]*event_action_version:[\s\S]*return;/
   );
 });
+
+test("Mother intent replay in hypothesizing phase dispatches before consuming queue", () => {
+  assert.match(
+    app,
+    /if \(String\(idle\.phase \|\| ""\) === MOTHER_IDLE_STATES\.INTENT_HYPOTHESIZING\) \{[\s\S]*const dispatched = await motherV2RequestIntentInference\(\)\.catch\(\(\) => false\);[\s\S]*if \(dispatched\) \{[\s\S]*latest\.intentReplayQueued = false;[\s\S]*dispatch: "direct",/
+  );
+});
