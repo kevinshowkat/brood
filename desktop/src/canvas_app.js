@@ -184,6 +184,8 @@ const MOTHER_V2_SPECULATIVE_PREFETCH_DELAY_MS = 40;
 const MOTHER_V2_ENABLE_SPECULATIVE_PREFETCH = false;
 const MOTHER_V2_LIVE_PROPOSAL_REFRESH_DEBOUNCE_MS = 170;
 const MOTHER_V2_LIVE_PROPOSAL_REFRESH_MIN_INTERVAL_MS = 550;
+const MOTHER_V2_INTENT_REQUEST_COALESCE_MS = 900;
+const MOTHER_V2_INTENT_REPLAY_ARM_MIN_DELAY_MS = 60;
 const MOTHER_V2_SINGLE_RESULT_GUARD_WINDOW_MS = 20_000;
 const MOTHER_V2_PROMPT_COMPILE_FALLBACK_MS = 520;
 const MOTHER_V2_INTENT_TARGET_IMAGE_LIMIT = 2;
@@ -1386,6 +1388,8 @@ const state = {
     intentRealtimeBusyUntil: 0,
     intentReplayQueued: false,
     intentReplayReason: null,
+    intentReplayTimer: null,
+    lastIntentRequestAt: 0,
     pendingIntentPath: null,
     pendingIntentPayload: null,
     pendingIntentTimeout: null,
@@ -11925,14 +11929,27 @@ function motherV2RejectOrDismiss({ queueFollowup = false } = {}) {
   const idle = state.motherIdle;
   if (!idle) return;
   const phase = idle.phase || motherIdleInitialState();
+  const rejectablePhase =
+    phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING ||
+    phase === MOTHER_IDLE_STATES.OFFERING ||
+    phase === MOTHER_IDLE_STATES.DRAFTING;
+  if (!rejectablePhase) {
+    appendMotherTraceLog({
+      kind: "rejected_ignored",
+      traceId: idle.telemetry?.traceId || null,
+      actionVersion: Number(idle.actionVersion) || 0,
+      phase,
+      reason: "phase_not_rejectable",
+      queue_followup_requested: Boolean(queueFollowup),
+    }).catch(() => {});
+    return;
+  }
   const currentIntent = idle.intent && typeof idle.intent === "object" ? idle.intent : null;
   const shouldQueueFollowup = Boolean(
     queueFollowup &&
       !motherV2CommitUndoAvailable() &&
       motherIdleHasArmedCanvas() &&
-      (phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING ||
-        phase === MOTHER_IDLE_STATES.OFFERING ||
-        phase === MOTHER_IDLE_STATES.DRAFTING)
+      rejectablePhase
   );
   const contextSig = currentIntent ? motherV2IntentContextSignature(currentIntent) : "";
   const imageSetSig = currentIntent ? motherV2IntentImageSetSignature(currentIntent) : "";
@@ -13858,6 +13875,27 @@ function motherV2DispatchInFlight(idle = state.motherIdle) {
   return false;
 }
 
+function motherV2ClearIntentReplayTimer() {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  clearTimeout(idle.intentReplayTimer);
+  idle.intentReplayTimer = null;
+}
+
+function motherV2ScheduleIntentReplayArm({ delayMs = 0, reason = "busy_cleared" } = {}) {
+  const idle = state.motherIdle;
+  if (!idle || !idle.intentReplayQueued) return false;
+  motherV2ClearIntentReplayTimer();
+  const delay = Math.max(MOTHER_V2_INTENT_REPLAY_ARM_MIN_DELAY_MS, Number(delayMs) || 0);
+  idle.intentReplayTimer = setTimeout(() => {
+    const current = state.motherIdle;
+    if (!current) return;
+    current.intentReplayTimer = null;
+    motherV2MaybeArmIntentReplay(String(reason || "busy_cleared"));
+  }, delay);
+  return true;
+}
+
 function motherV2QueueIntentReplay(reason = "pending_intent") {
   const idle = state.motherIdle;
   if (!idle) return false;
@@ -13884,6 +13922,7 @@ function motherV2MaybeArmIntentReplay(reason = "busy_cleared") {
   if (idle.pendingIntent || idle.pendingPromptCompile || idle.pendingGeneration) return false;
   const replayReason = String(idle.intentReplayReason || reason || "busy_cleared");
   if (String(idle.phase || "") === MOTHER_IDLE_STATES.OBSERVING) {
+    motherV2ClearIntentReplayTimer();
     idle.intentReplayQueued = false;
     idle.intentReplayReason = null;
     appendMotherTraceLog({
@@ -13900,6 +13939,7 @@ function motherV2MaybeArmIntentReplay(reason = "busy_cleared") {
     String(idle.phase || "") === MOTHER_IDLE_STATES.WATCHING ||
     String(idle.phase || "") === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING
   ) {
+    motherV2ClearIntentReplayTimer();
     idle.intentReplayQueued = false;
     idle.intentReplayReason = null;
     appendMotherTraceLog({
@@ -14255,6 +14295,8 @@ function motherV2ResetInteractionState() {
   idle.intentRealtimeBusyUntil = 0;
   idle.intentReplayQueued = false;
   idle.intentReplayReason = null;
+  clearTimeout(idle.intentReplayTimer);
+  idle.intentReplayTimer = null;
   idle.pendingIntentPath = null;
   idle.pendingIntentPayload = null;
   idle.pendingDispatchSpeculative = false;
@@ -14325,6 +14367,8 @@ function motherV2ClearIntentAndDrafts({ removeFiles = false } = {}) {
   idle.intentRealtimeBusyUntil = 0;
   idle.intentReplayQueued = false;
   idle.intentReplayReason = null;
+  clearTimeout(idle.intentReplayTimer);
+  idle.intentReplayTimer = null;
   idle.pendingIntentPath = null;
   idle.pendingDispatchSpeculative = false;
   idle.pendingDispatchProposalMode = null;
@@ -14732,6 +14776,9 @@ function resetMotherIdleAndWheelState() {
     state.motherIdle.intentRealtimeBusyUntil = 0;
     state.motherIdle.intentReplayQueued = false;
     state.motherIdle.intentReplayReason = null;
+    clearTimeout(state.motherIdle.intentReplayTimer);
+    state.motherIdle.intentReplayTimer = null;
+    state.motherIdle.lastIntentRequestAt = 0;
     state.motherIdle.pendingIntentPath = null;
     state.motherIdle.pendingIntentPayload = null;
     state.motherIdle.pendingPromptCompile = false;
@@ -16437,6 +16484,21 @@ async function motherV2RequestIntentInference({
   }
   if (!motherIdleHasArmedCanvas()) return false;
   if (motherV2InCooldown()) return false;
+  const nowMs = Date.now();
+  const lastIntentRequestAt = Number(idle.lastIntentRequestAt) || 0;
+  const sinceLastIntentRequestMs = lastIntentRequestAt > 0 ? Math.max(0, nowMs - lastIntentRequestAt) : Number.POSITIVE_INFINITY;
+  if (sinceLastIntentRequestMs < MOTHER_V2_INTENT_REQUEST_COALESCE_MS) {
+    const waitMs = Math.max(
+      MOTHER_V2_INTENT_REPLAY_ARM_MIN_DELAY_MS,
+      MOTHER_V2_INTENT_REQUEST_COALESCE_MS - sinceLastIntentRequestMs
+    );
+    motherV2QueueIntentReplay("coalesce_window");
+    motherV2ScheduleIntentReplayArm({
+      delayMs: waitMs,
+      reason: "coalesce_window_elapsed",
+    });
+    return false;
+  }
   const visionGate = motherV2VisionReadyForIntent({ schedule: Boolean(scheduleVisionLabels) });
   idle.pendingVisionImageIds = visionGate.ready ? [] : visionGate.missingIds.slice();
   clearTimeout(idle.pendingVisionRetryTimer);
@@ -16474,10 +16536,12 @@ async function motherV2RequestIntentInference({
     }
   };
   // Claim the request before any async work to close the duplicate-start race window.
+  const requestStartedAt = Date.now();
+  idle.lastIntentRequestAt = requestStartedAt;
   idle.pendingIntent = true;
   idle.pendingIntentRequestId = requestId;
   idle.pendingIntentTransportRetryCount = 0;
-  idle.pendingIntentStartedAt = Date.now();
+  idle.pendingIntentStartedAt = requestStartedAt;
   idle.pendingIntentUpgradeUntil = 0;
   idle.pendingActionVersion = actionVersion;
   idle.pendingIntentRealtimePath = null;
@@ -26439,8 +26503,26 @@ async function handleEventLegacy(event) {
       (motherIdle?.pendingIntent && motherPhase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING && motherVersionMatches) ||
       motherLateRealtimeUpgrade
     );
-    if (!intent && !ambient && !motherCanAcceptRealtime) return;
     const isPartial = Boolean(event.partial);
+    const path = event.image_path ? String(event.image_path) : "";
+    const eventIntentScope = String(event.intent_scope || "").trim().toLowerCase();
+    const eventIsMotherScoped = !eventIntentScope || eventIntentScope === "mother";
+    const eventActionVersionRaw = Number(event.action_version);
+    if (!intent && !ambient && !motherCanAcceptRealtime) {
+      if (!isPartial && motherIdle && eventIsMotherScoped) {
+        appendMotherTraceLog({
+          kind: "intent_icons_ignored",
+          traceId: motherIdle.telemetry?.traceId || null,
+          actionVersion: motherActionVersion,
+          request_id: motherRequestId,
+          reason: "no_pending_route",
+          event_action_version: Number.isFinite(eventActionVersionRaw) ? eventActionVersionRaw : null,
+          snapshot_path: path || null,
+          intent_scope: eventIntentScope || null,
+        }).catch(() => {});
+      }
+      return;
+    }
     if (isOpenAiRealtimeSignal({ source: event.source, model: event.model })) {
       markOpenAiRealtimePortraitActivity();
     }
@@ -26448,11 +26530,7 @@ async function handleEventLegacy(event) {
       topMetricIngestRealtimeCostFromPayload(event, { render: true });
     }
     const text = event.text;
-    const path = event.image_path ? String(event.image_path) : "";
     if (!path) return;
-    const eventIntentScope = String(event.intent_scope || "").trim().toLowerCase();
-    const eventIsMotherScoped = !eventIntentScope || eventIntentScope === "mother";
-    const eventActionVersionRaw = Number(event.action_version);
     const routing = classifyIntentIconsRouting({
       path,
       intentPendingPath: intent?.pendingPath,
