@@ -261,9 +261,11 @@ body {
   line-height: 0;
   vertical-align: middle;
   border-radius: 999px;
-  border: 1px solid rgba(126, 140, 160, 0.92);
-  background: rgba(126, 140, 160, 0.9);
-  box-shadow: none;
+  border: 1px solid rgba(82, 232, 160, 0.95);
+  background: rgba(82, 232, 160, 0.95);
+  box-shadow:
+    0 0 10px rgba(82, 232, 160, 0.52),
+    inset 0 0 0 1px rgba(236, 255, 246, 0.48);
   pointer-events: auto;
 }
 

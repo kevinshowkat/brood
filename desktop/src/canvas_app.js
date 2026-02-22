@@ -173,14 +173,15 @@ const AESTHETIC_DIRECTION_OPTIONS = Object.freeze([
 ]);
 const MOTHER_SUGGESTION_LOG_FILENAME = "mother_suggestions.jsonl";
 const MOTHER_TRACE_FILENAME = "mother_trace.jsonl";
-const MOTHER_V2_WATCH_IDLE_MS = 520;
-const MOTHER_V2_INTENT_IDLE_MS = 900;
-const MOTHER_V2_MULTI_UPLOAD_WATCH_IDLE_MS = 240;
-const MOTHER_V2_MULTI_UPLOAD_INTENT_IDLE_MS = 520;
+const MOTHER_V2_WATCH_IDLE_MS = 100;
+const MOTHER_V2_INTENT_IDLE_MS = 0;
+const MOTHER_V2_MULTI_UPLOAD_WATCH_IDLE_MS = 100;
+const MOTHER_V2_MULTI_UPLOAD_INTENT_IDLE_MS = 0;
 const MOTHER_V2_MULTI_UPLOAD_IDLE_BOOST_WINDOW_MS = 20_000;
-const MOTHER_V2_UPLOAD_SETTLE_MS = 520;
+const MOTHER_V2_UPLOAD_SETTLE_MS = 120;
 const MOTHER_V2_UPLOAD_PREFETCH_WINDOW_MS = 120_000;
 const MOTHER_V2_SPECULATIVE_PREFETCH_DELAY_MS = 40;
+const MOTHER_V2_ENABLE_SPECULATIVE_PREFETCH = false;
 const MOTHER_V2_LIVE_PROPOSAL_REFRESH_DEBOUNCE_MS = 170;
 const MOTHER_V2_LIVE_PROPOSAL_REFRESH_MIN_INTERVAL_MS = 550;
 const MOTHER_V2_SINGLE_RESULT_GUARD_WINDOW_MS = 20_000;
@@ -196,6 +197,7 @@ const MOTHER_V2_INTENT_RT_WORKER_TIMEOUT_MS = 42_000;
 const MOTHER_V2_INTENT_RT_TIMEOUT_DEFER_GRACE_MS = 250;
 const MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_MAX = 2;
 const MOTHER_V2_INTENT_RT_TRANSPORT_RETRY_DELAY_MS = 220;
+const MOTHER_V2_INTENT_RT_BUSY_TTL_MS = 44_000;
 const MOTHER_V2_INTENT_LATE_REALTIME_UPGRADE_MS = 12000;
 const MOTHER_V2_INTENT_CONTEXT_REF_RETRY_MAX = 0;
 const MOTHER_V2_INTENT_CONTEXT_REF_RETRY_DELAY_MS = 220;
@@ -206,6 +208,7 @@ const MOTHER_V2_UPLOAD_VISION_DEFER_MS = 1800;
 const MOTHER_V2_DISPATCH_TRANSFORM_EXPORT_LIMIT = 4;
 const MOTHER_V2_DISPATCH_TRANSFORM_EXPORT_MAX_DIM_PX = 1500;
 const MOTHER_V2_DISPATCH_TRANSFORM_EXPORT_MIN_DIM_PX = 420;
+const MOTHER_V2_MAX_RANKED_PROPOSALS = 3;
 const MOTHER_V2_ROLE_KEYS = Object.freeze(["subject", "model", "mediator", "object"]);
 const MOTHER_V2_ROLE_LABEL = Object.freeze({
   subject: "SUBJECT",
@@ -1377,6 +1380,11 @@ const state = {
     pendingIntentStartedAt: 0,
     pendingIntentUpgradeUntil: 0,
     pendingIntentRealtimePath: null,
+    intentRealtimeBusyPath: null,
+    intentRealtimeBusyRequestId: null,
+    intentRealtimeBusyUntil: 0,
+    intentReplayQueued: false,
+    intentReplayReason: null,
     pendingIntentPath: null,
     pendingIntentPayload: null,
     pendingIntentTimeout: null,
@@ -5116,7 +5124,7 @@ function buildMotherRealtimeContextEnvelope({ motherContextPayload = null, image
             lens_guidance: String(preset?.lens_guidance || "").trim() || null,
           };
         })
-        .slice(0, MOTHER_V2_TRANSFORMATION_MODES.length)
+        .slice(0, MOTHER_V2_MAX_RANKED_PROPOSALS)
     : [];
   const proposalContext = payload?.proposal_context && typeof payload.proposal_context === "object"
     ? payload.proposal_context
@@ -5409,7 +5417,8 @@ function buildFallbackIntentIconState(frameId, { reason = null } = {}) {
   const iterate = { icon_id: "ITERATION", confidence: 0.44, position_hint: "primary" };
   const outputs = { icon_id: "OUTPUTS", confidence: 0.34, position_hint: "secondary" };
   const pipeline = { icon_id: "PIPELINE", confidence: 0.30, position_hint: "emerging" };
-  const fallbackModes = ["hybridize", "amplify", "transcend", "destabilize", "purify"];
+  const fallbackModes = ["hybridize", "amplify", "transcend", "destabilize", "purify"]
+    .slice(0, MOTHER_V2_MAX_RANKED_PROPOSALS);
   const branches = fallbackModes.map((mode, idx) => ({
     branch_id: mode,
     icons: [String(mode).toUpperCase(), "IMAGE_GENERATION", "ITERATION"],
@@ -11804,7 +11813,7 @@ async function motherV2CommitSelectedDraft() {
     placement_policy: policy,
     optimization_target: motherCurrentOptimizationTarget(),
     proposal_mode: motherV2NormalizeTransformationMode(intent?.transformation_mode),
-    proposal_candidates: motherV2ProposalCandidateSummary(intent, { limit: 5 }),
+    proposal_candidates: motherV2ProposalCandidateSummary(intent, { limit: MOTHER_V2_MAX_RANKED_PROPOSALS }),
     proposal_confidence: Number(intent?.confidence) || 0,
   }).catch(() => {});
   // Prevent immediate auto-reproposal loops right after deploy.
@@ -11913,7 +11922,7 @@ function motherV2RejectOrDismiss({ queueFollowup = false } = {}) {
     queue_followup: shouldQueueFollowup,
     optimization_target: motherCurrentOptimizationTarget(),
     proposal_mode: motherV2NormalizeTransformationMode(currentIntent?.transformation_mode),
-    proposal_candidates: motherV2ProposalCandidateSummary(currentIntent, { limit: 5 }),
+    proposal_candidates: motherV2ProposalCandidateSummary(currentIntent, { limit: MOTHER_V2_MAX_RANKED_PROPOSALS }),
     proposal_confidence: Number(currentIntent?.confidence) || 0,
   }).catch(() => {});
 
@@ -11967,7 +11976,7 @@ async function startMotherTakeover() {
       intent_id: idle.intent?.intent_id || null,
       optimization_target: motherCurrentOptimizationTarget(),
       proposal_mode: motherV2NormalizeTransformationMode(idle.intent?.transformation_mode),
-      proposal_candidates: motherV2ProposalCandidateSummary(idle.intent, { limit: 5 }),
+      proposal_candidates: motherV2ProposalCandidateSummary(idle.intent, { limit: MOTHER_V2_MAX_RANKED_PROPOSALS }),
       proposal_confidence: Number(idle.intent?.confidence) || 0,
     }).catch(() => {});
     if (hasPrefetchedDraft) {
@@ -12152,6 +12161,12 @@ function motherV2CompareModeCandidates(a, b) {
   const bi = Number.isFinite(Number(b?._idx)) ? Number(b._idx) : Number.MAX_SAFE_INTEGER;
   if (ai !== bi) return ai - bi;
   return String(a?.mode || "").localeCompare(String(b?.mode || ""));
+}
+
+function motherV2ProposalLimit(rawLimit = MOTHER_V2_MAX_RANKED_PROPOSALS) {
+  const parsed = Number(rawLimit);
+  if (!Number.isFinite(parsed)) return MOTHER_V2_MAX_RANKED_PROPOSALS;
+  return clamp(Math.floor(parsed), 1, MOTHER_V2_MAX_RANKED_PROPOSALS);
 }
 
 function motherV2CurrentTransformationMode() {
@@ -12454,7 +12469,7 @@ function motherV2EnsureProposalCandidates(intentPayload = null) {
   if (current) pushMode(current, null, null, { prepend: true });
   const baseMode = current || modes[0] || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE;
   const baseIdx = Math.max(0, MOTHER_V2_TRANSFORMATION_MODES.indexOf(baseMode));
-  for (let offset = 0; offset < MOTHER_V2_TRANSFORMATION_MODES.length && modes.length < MOTHER_V2_TRANSFORMATION_MODES.length; offset += 1) {
+  for (let offset = 0; offset < MOTHER_V2_TRANSFORMATION_MODES.length && modes.length < MOTHER_V2_MAX_RANKED_PROPOSALS; offset += 1) {
     const idx = (baseIdx + offset) % MOTHER_V2_TRANSFORMATION_MODES.length;
     const candidate = MOTHER_V2_TRANSFORMATION_MODES[idx];
     if (!candidate) continue;
@@ -12476,13 +12491,15 @@ function motherV2EnsureProposalCandidates(intentPayload = null) {
       }
     )
   );
-  intent.transformation_mode_candidates = modes.map((mode) => ({
+  const rankedModes = modes.slice(0, motherV2ProposalLimit());
+  intent.transformation_mode_candidates = rankedModes.map((mode) => ({
     mode,
     awe_joy_score: typeof aweJoyScoreByMode.get(mode) === "number" ? aweJoyScoreByMode.get(mode) : null,
     confidence: typeof confidenceByMode.get(mode) === "number" ? confidenceByMode.get(mode) : null,
   }));
-  if (!motherV2MaybeTransformationMode(intent.transformation_mode) && modes.length) {
-    intent.transformation_mode = modes[0];
+  const normalizedCurrent = motherV2MaybeTransformationMode(intent.transformation_mode);
+  if ((!normalizedCurrent || !rankedModes.includes(normalizedCurrent)) && rankedModes.length) {
+    intent.transformation_mode = rankedModes[0];
   }
   return intent;
 }
@@ -12501,12 +12518,11 @@ function motherV2ProposalModes(intentPayload = null) {
     pushMode(entry?.mode || entry?.transformation_mode);
   }
   const current = motherV2MaybeTransformationMode(intent.transformation_mode);
-  if (current && !modes.includes(current)) modes.unshift(current);
   if (!modes.length) modes.push(current || MOTHER_V2_DEFAULT_TRANSFORMATION_MODE);
-  return modes;
+  return modes.slice(0, motherV2ProposalLimit());
 }
 
-function motherV2ProposalCandidateSummary(intentPayload = null, { limit = 4 } = {}) {
+function motherV2ProposalCandidateSummary(intentPayload = null, { limit = MOTHER_V2_MAX_RANKED_PROPOSALS } = {}) {
   const intent = intentPayload && typeof intentPayload === "object" ? intentPayload : null;
   if (!intent) return [];
   const candidates = [];
@@ -12545,8 +12561,9 @@ function motherV2ProposalCandidateSummary(intentPayload = null, { limit = 4 } = 
   for (const entry of Array.isArray(intent.transformation_mode_candidates) ? intent.transformation_mode_candidates : []) {
     pushCandidate(entry?.mode || entry?.transformation_mode, entry?.confidence, entry?.awe_joy_score);
   }
-  pushCandidate(intent.transformation_mode, null, null, { prepend: true });
-  const maxItems = Math.max(1, Math.floor(Number(limit) || 4));
+  pushCandidate(intent.transformation_mode, null, null);
+  candidates.sort(motherV2CompareModeCandidates);
+  const maxItems = motherV2ProposalLimit(limit);
   return candidates.slice(0, maxItems).map((entry) => ({
     mode: entry.mode,
     awe_joy_score: typeof entry.awe_joy_score === "number" ? entry.awe_joy_score : null,
@@ -13797,6 +13814,105 @@ function motherV2DispatchInFlight(idle = state.motherIdle) {
   return false;
 }
 
+function motherV2QueueIntentReplay(reason = "pending_intent") {
+  const idle = state.motherIdle;
+  if (!idle) return false;
+  const queuedBefore = Boolean(idle.intentReplayQueued);
+  idle.intentReplayQueued = true;
+  idle.intentReplayReason = String(reason || idle.intentReplayReason || "pending_intent");
+  if (!queuedBefore) {
+    appendMotherTraceLog({
+      kind: "intent_replay_queued",
+      traceId: idle.telemetry?.traceId || null,
+      actionVersion: Number(idle.actionVersion) || 0,
+      reason: idle.intentReplayReason,
+    }).catch(() => {});
+  }
+  return !queuedBefore;
+}
+
+function motherV2MaybeArmIntentReplay(reason = "busy_cleared") {
+  const idle = state.motherIdle;
+  if (!idle || !idle.intentReplayQueued) return false;
+  if (!motherIdleHasArmedCanvas()) return false;
+  if (motherV2InCooldown()) return false;
+  if (state.pointer.active) return false;
+  if (idle.pendingIntent || idle.pendingPromptCompile || idle.pendingGeneration) return false;
+  const replayReason = String(idle.intentReplayReason || reason || "busy_cleared");
+  if (String(idle.phase || "") === MOTHER_IDLE_STATES.OBSERVING) {
+    idle.intentReplayQueued = false;
+    idle.intentReplayReason = null;
+    appendMotherTraceLog({
+      kind: "intent_replay_armed",
+      traceId: idle.telemetry?.traceId || null,
+      actionVersion: Number(idle.actionVersion) || 0,
+      reason: replayReason,
+      phase: MOTHER_IDLE_STATES.OBSERVING,
+    }).catch(() => {});
+    motherIdleArmFirstTimer();
+    return true;
+  }
+  if (
+    String(idle.phase || "") === MOTHER_IDLE_STATES.WATCHING ||
+    String(idle.phase || "") === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING
+  ) {
+    idle.intentReplayQueued = false;
+    idle.intentReplayReason = null;
+    appendMotherTraceLog({
+      kind: "intent_replay_armed",
+      traceId: idle.telemetry?.traceId || null,
+      actionVersion: Number(idle.actionVersion) || 0,
+      reason: replayReason,
+      phase: String(idle.phase || ""),
+    }).catch(() => {});
+    motherIdleArmIntentTimer();
+    return true;
+  }
+  return false;
+}
+
+function motherV2SetIntentRealtimeBusy({ path = "", requestId = null } = {}) {
+  const idle = state.motherIdle;
+  if (!idle) return;
+  const normalizedPath = String(path || "").trim();
+  if (!normalizedPath) return;
+  idle.intentRealtimeBusyPath = normalizedPath;
+  idle.intentRealtimeBusyRequestId = requestId ? String(requestId || "").trim() || null : null;
+  idle.intentRealtimeBusyUntil = Date.now() + MOTHER_V2_INTENT_RT_BUSY_TTL_MS;
+}
+
+function motherV2IntentRealtimeBusy(nowMs = Date.now()) {
+  const idle = state.motherIdle;
+  if (!idle) return false;
+  const busyPath = String(idle.intentRealtimeBusyPath || "").trim();
+  const busyUntil = Number(idle.intentRealtimeBusyUntil) || 0;
+  if (!busyPath || busyUntil <= 0) return false;
+  if (busyUntil > (Number(nowMs) || Date.now())) return true;
+  idle.intentRealtimeBusyPath = null;
+  idle.intentRealtimeBusyRequestId = null;
+  idle.intentRealtimeBusyUntil = 0;
+  motherV2MaybeArmIntentReplay("busy_ttl_expired");
+  return false;
+}
+
+function motherV2ClearIntentRealtimeBusy({ path = "", requestId = null, force = false, reason = "completed" } = {}) {
+  const idle = state.motherIdle;
+  if (!idle) return false;
+  const busyPath = String(idle.intentRealtimeBusyPath || "").trim();
+  if (!busyPath) return false;
+  const busyRequestId = String(idle.intentRealtimeBusyRequestId || "").trim();
+  const normalizedPath = String(path || "").trim();
+  const normalizedRequestId = String(requestId || "").trim();
+  const matchesPath = Boolean(normalizedPath && normalizedPath === busyPath);
+  const matchesRequest = Boolean(normalizedRequestId && busyRequestId && normalizedRequestId === busyRequestId);
+  if (!force && !matchesPath && !matchesRequest) return false;
+  idle.intentRealtimeBusyPath = null;
+  idle.intentRealtimeBusyRequestId = null;
+  idle.intentRealtimeBusyUntil = 0;
+  motherV2MaybeArmIntentReplay(reason);
+  return true;
+}
+
 function motherV2UploadSettleDueAtMs() {
   const idle = state.motherIdle;
   if (!idle) return 0;
@@ -13812,6 +13928,7 @@ function motherV2UploadSettleRemainingMs(nowMs = Date.now()) {
 }
 
 function motherV2CurrentProposalHasPrefetchedDraft() {
+  if (!MOTHER_V2_ENABLE_SPECULATIVE_PREFETCH) return false;
   const idle = state.motherIdle;
   if (!idle) return false;
   const draft = motherV2CurrentDraft();
@@ -13824,6 +13941,7 @@ function motherV2CurrentProposalHasPrefetchedDraft() {
 }
 
 function motherV2InFlightSpeculativeMatchesCurrentProposal() {
+  if (!MOTHER_V2_ENABLE_SPECULATIVE_PREFETCH) return false;
   const idle = state.motherIdle;
   if (!idle) return false;
   if (!idle.pendingDispatchSpeculative) return false;
@@ -13948,6 +14066,9 @@ function motherV2ScheduleLiveProposalRefresh({
 }
 
 function motherV2SpeculativePrefetchGate(nowMs = Date.now()) {
+  if (!MOTHER_V2_ENABLE_SPECULATIVE_PREFETCH) {
+    return { ok: false, reason: "feature_disabled", retryAfterMs: 0 };
+  }
   const idle = state.motherIdle;
   if (!idle) return { ok: false, reason: "no_idle", retryAfterMs: 0 };
   if (idle.phase !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
@@ -14085,6 +14206,11 @@ function motherV2ResetInteractionState() {
   idle.pendingIntentStartedAt = 0;
   idle.pendingIntentUpgradeUntil = 0;
   idle.pendingIntentRealtimePath = null;
+  idle.intentRealtimeBusyPath = null;
+  idle.intentRealtimeBusyRequestId = null;
+  idle.intentRealtimeBusyUntil = 0;
+  idle.intentReplayQueued = false;
+  idle.intentReplayReason = null;
   idle.pendingIntentPath = null;
   idle.pendingIntentPayload = null;
   idle.pendingDispatchSpeculative = false;
@@ -14149,6 +14275,11 @@ function motherV2ClearIntentAndDrafts({ removeFiles = false } = {}) {
   idle.pendingIntentStartedAt = 0;
   idle.pendingIntentUpgradeUntil = 0;
   idle.pendingIntentRealtimePath = null;
+  idle.intentRealtimeBusyPath = null;
+  idle.intentRealtimeBusyRequestId = null;
+  idle.intentRealtimeBusyUntil = 0;
+  idle.intentReplayQueued = false;
+  idle.intentReplayReason = null;
   idle.pendingIntentPath = null;
   idle.pendingDispatchSpeculative = false;
   idle.pendingDispatchProposalMode = null;
@@ -14549,6 +14680,11 @@ function resetMotherIdleAndWheelState() {
     state.motherIdle.pendingIntentStartedAt = 0;
     state.motherIdle.pendingIntentUpgradeUntil = 0;
     state.motherIdle.pendingIntentRealtimePath = null;
+    state.motherIdle.intentRealtimeBusyPath = null;
+    state.motherIdle.intentRealtimeBusyRequestId = null;
+    state.motherIdle.intentRealtimeBusyUntil = 0;
+    state.motherIdle.intentReplayQueued = false;
+    state.motherIdle.intentReplayReason = null;
     state.motherIdle.pendingIntentPath = null;
     state.motherIdle.pendingIntentPayload = null;
     state.motherIdle.pendingPromptCompile = false;
@@ -15046,7 +15182,7 @@ function motherV2IntentFromRealtimeIcons(iconState = null, payload = {}) {
     pushModeCandidate(transformationMode, null, null, { idx: modeCandidateIdx + 1 });
     transformationModeCandidates.sort(motherV2CompareModeCandidates);
   }
-  const rankedTransformationModeCandidates = transformationModeCandidates.map((entry) => ({
+  const rankedTransformationModeCandidates = transformationModeCandidates.slice(0, motherV2ProposalLimit()).map((entry) => ({
     mode: entry.mode,
     awe_joy_score: typeof entry.awe_joy_score === "number" ? entry.awe_joy_score : null,
     confidence: typeof entry.confidence === "number" ? entry.confidence : null,
@@ -15398,7 +15534,7 @@ function motherV2AmbientTransformationModeHints() {
     modeCandidateIdx += 1;
   }
   candidates.sort(motherV2CompareModeCandidates);
-  const outputCandidates = candidates.map((entry) => ({
+  const outputCandidates = candidates.slice(0, motherV2ProposalLimit()).map((entry) => ({
     mode: entry.mode,
     awe_joy_score: typeof entry.awe_joy_score === "number" ? entry.awe_joy_score : null,
     confidence: typeof entry.confidence === "number" ? entry.confidence : null,
@@ -15906,6 +16042,11 @@ function motherV2ApplyIntent(
   idle.speculativePrefetchReadyMode = null;
   motherV2NormalizeRoles(normalizedIntent?.roles || null);
   idle.pendingIntent = false;
+  motherV2ClearIntentRealtimeBusy({
+    path: priorPendingRealtimePath,
+    requestId: resolvedRequestId,
+    reason: "intent_applied",
+  });
   const canUpgradeFromLateRealtime = sourceKind !== "realtime" && priorPendingRealtimePath;
   idle.pendingIntentRealtimePath = canUpgradeFromLateRealtime ? priorPendingRealtimePath : null;
   idle.pendingIntentRequestId = canUpgradeFromLateRealtime ? (resolvedRequestId || priorRequestId || null) : null;
@@ -15923,7 +16064,6 @@ function motherV2ApplyIntent(
   clearTimeout(idle.pendingVisionRetryTimer);
   idle.pendingVisionRetryTimer = null;
   motherIdleTransitionTo(MOTHER_IDLE_EVENTS.INTENT_INFERRED);
-  motherV2ScheduleSpeculativePrefetch({ reason: "intent_inferred" });
   appendMotherTraceLog({
     kind: "intent_inferred",
     traceId: idle.telemetry?.traceId || null,
@@ -15937,7 +16077,7 @@ function motherV2ApplyIntent(
     confidence: Number(intentPayload?.confidence) || 0,
     optimization_target: motherCurrentOptimizationTarget(),
     proposal_mode: motherV2NormalizeTransformationMode(normalizedIntent?.transformation_mode),
-    proposal_candidates: motherV2ProposalCandidateSummary(normalizedIntent, { limit: 5 }),
+    proposal_candidates: motherV2ProposalCandidateSummary(normalizedIntent, { limit: MOTHER_V2_MAX_RANKED_PROPOSALS }),
     target_ids: motherV2NormalizeImageIdList(normalizedIntent?.target_ids || []).slice(0, 6),
     reference_ids: motherV2NormalizeImageIdList(normalizedIntent?.reference_ids || []).slice(0, 6),
   }).catch(() => {});
@@ -15967,6 +16107,7 @@ function motherV2ArmRealtimeIntentTimeout({ timeoutMs = MOTHER_V2_INTENT_RT_TIME
     };
     const emitTimeoutFailure = (activeIdle) => {
       if (!activeIdle) return;
+      const activePath = String(activeIdle.pendingIntentRealtimePath || "").trim();
       appendMotherTraceLog({
         kind: "intent_realtime_failed",
         traceId: activeIdle.telemetry?.traceId || null,
@@ -15975,6 +16116,12 @@ function motherV2ArmRealtimeIntentTimeout({ timeoutMs = MOTHER_V2_INTENT_RT_TIME
         source: "intent_rt_timeout",
         error: message,
       }).catch(() => {});
+      motherV2ClearIntentRealtimeBusy({
+        path: activePath,
+        requestId,
+        force: true,
+        reason: "intent_timeout",
+      });
       motherIdleHandleGenerationFailed(message);
     };
     const current = resolveActiveTimeoutRequest();
@@ -16087,6 +16234,7 @@ async function motherV2RetryRealtimeIntentTransport({ path = "", errorMessage = 
     .then(() => true)
     .catch(() => false);
   if (!dispatched) return false;
+  motherV2SetIntentRealtimeBusy({ path: snapshotPath, requestId });
 
   appendMotherTraceLog({
     kind: "intent_realtime_retry_dispatched",
@@ -16108,7 +16256,16 @@ async function motherV2RequestIntentInference({
 } = {}) {
   const idle = state.motherIdle;
   if (!idle) return false;
-  if (idle.pendingIntent || idle.pendingPromptCompile || idle.pendingGeneration) return false;
+  if (motherV2IntentRealtimeBusy()) {
+    motherV2QueueIntentReplay("intent_realtime_inflight");
+    return false;
+  }
+  if (idle.pendingIntent || idle.pendingPromptCompile || idle.pendingGeneration) {
+    if (idle.pendingIntent && String(idle.phase || "") === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) {
+      motherV2QueueIntentReplay("intent_pending");
+    }
+    return false;
+  }
   if (!motherIdleHasArmedCanvas()) return false;
   if (motherV2InCooldown()) return false;
   const visionGate = motherV2VisionReadyForIntent({ schedule: Boolean(scheduleVisionLabels) });
@@ -16245,6 +16402,7 @@ async function motherV2RequestIntentInference({
   }
 
   if (realtimeDispatched) {
+    motherV2SetIntentRealtimeBusy({ path: snapshotPath, requestId });
     motherV2ArmRealtimeIntentTimeout({ timeoutMs: MOTHER_V2_INTENT_RT_TIMEOUT_MS });
   } else {
     failRealtimeIntent({
@@ -17214,7 +17372,7 @@ function motherV2BuildGeminiContextPacket({ compiled = {}, promptLine = "", sani
     modeCandidateIdx += 1;
   }
   transformationModeCandidates.sort(motherV2CompareModeCandidates);
-  const rankedTransformationModeCandidates = transformationModeCandidates.map((entry) => ({
+  const rankedTransformationModeCandidates = transformationModeCandidates.slice(0, motherV2ProposalLimit()).map((entry) => ({
     mode: entry.mode,
     awe_joy_score: typeof entry.awe_joy_score === "number" ? entry.awe_joy_score : null,
     confidence: typeof entry.confidence === "number" ? entry.confidence : null,
@@ -18164,7 +18322,7 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
     placement_policy: idle.intent?.placement_policy || null,
     optimization_target: motherCurrentOptimizationTarget(),
     proposal_mode: motherV2NormalizeTransformationMode(idle.intent?.transformation_mode),
-    proposal_candidates: motherV2ProposalCandidateSummary(idle.intent, { limit: 5 }),
+    proposal_candidates: motherV2ProposalCandidateSummary(idle.intent, { limit: MOTHER_V2_MAX_RANKED_PROPOSALS }),
     proposal_confidence: Number(idle.intent?.confidence) || 0,
   }).catch(() => {});
   if (!isReelSizeLocked()) {
@@ -18198,6 +18356,11 @@ function motherIdleHandleGenerationFailed(message = null, { speculative = false 
   idle.pendingIntentStartedAt = 0;
   idle.pendingIntentUpgradeUntil = 0;
   idle.pendingIntentRealtimePath = null;
+  idle.intentRealtimeBusyPath = null;
+  idle.intentRealtimeBusyRequestId = null;
+  idle.intentRealtimeBusyUntil = 0;
+  idle.intentReplayQueued = false;
+  idle.intentReplayReason = null;
   idle.pendingIntentPath = null;
   idle.pendingIntentPayload = null;
   idle.pendingDispatchToken = 0;
@@ -18355,7 +18518,7 @@ function motherIdleArmIntentTimer() {
   const quietDueAt = (Number(state.lastInteractionAt) || nowMs) + intentIdleMs;
   const settleDueAt = motherV2UploadSettleDueAtMs();
   const dueAt = Math.max(quietDueAt, settleDueAt || 0);
-  const delay = Math.max(25, dueAt - Date.now());
+  const delay = Math.max(0, dueAt - Date.now());
   idle.intentIdleTimer = setTimeout(async () => {
     idle.intentIdleTimer = null;
     if (state.motherIdle?.blockedUntilUserInteraction) return;
@@ -23535,12 +23698,6 @@ async function importLocalPathsAtCanvasPoint(
     motherIdle.lastUploadCompletedAt = Date.now();
     motherIdle.speculativePrefetchReadyMode = null;
     motherV2ClearSpeculativePrefetchTimer();
-    if (
-      motherIdle.phase === MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING &&
-      motherV2HasRealProposalPayload(motherIdle.intent || null)
-    ) {
-      motherV2ScheduleSpeculativePrefetch({ reason: "upload_completed", delayMs: 0 });
-    }
   }
   motherV2ArmMultiUploadIdleBoost(ok);
   if (
@@ -26011,6 +26168,14 @@ async function handleEventLegacy(event) {
     const text = event.text;
     const path = event.image_path ? String(event.image_path) : "";
     if (!path) return;
+    const eventIntentScope = String(event.intent_scope || "").trim().toLowerCase();
+    const eventIsMotherScoped = !eventIntentScope || eventIntentScope === "mother";
+    if (!isPartial && eventIsMotherScoped) {
+      motherV2ClearIntentRealtimeBusy({
+        path,
+        reason: "intent_icons_final",
+      });
+    }
     const eventActionVersionRaw = Number(event.action_version);
     const routing = classifyIntentIconsRouting({
       path,
@@ -26020,7 +26185,7 @@ async function handleEventLegacy(event) {
       motherRealtimePath,
       motherActionVersion,
       eventActionVersion: eventActionVersionRaw,
-      eventIntentScope: event.intent_scope,
+      eventIntentScope,
     });
     const { matchAmbient, matchIntent, matchMother, ignoreReason } = routing;
     if (ignoreReason === "scope_mismatch") {
@@ -26382,6 +26547,12 @@ async function handleEventLegacy(event) {
     if (!path) return;
     const eventIntentScope = String(event.intent_scope || "").trim().toLowerCase();
     const eventIsMotherScoped = !eventIntentScope || eventIntentScope === "mother";
+    if (eventIsMotherScoped) {
+      motherV2ClearIntentRealtimeBusy({
+        path,
+        reason: "intent_icons_failed",
+      });
+    }
     const resolveActiveMotherRealtimeFailureTarget = () => {
       const motherIdleLatest = state.motherIdle;
       const matchMotherLatest = Boolean(
@@ -31102,7 +31273,7 @@ function installUi() {
           optimization_target: motherCurrentOptimizationTarget(),
           from_mode: beforeMode || null,
           to_mode: motherV2NormalizeTransformationMode(idle?.intent?.transformation_mode),
-          proposal_candidates: motherV2ProposalCandidateSummary(idle?.intent || null, { limit: 5 }),
+          proposal_candidates: motherV2ProposalCandidateSummary(idle?.intent || null, { limit: MOTHER_V2_MAX_RANKED_PROPOSALS }),
         }).catch(() => {});
       } else {
         const phase = state.motherIdle?.phase || motherIdleInitialState();

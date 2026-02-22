@@ -2808,15 +2808,9 @@ fn intent_realtime_provider(mother: bool) -> RealtimeProvider {
     realtime_provider_from_env(&keys).unwrap_or_else(infer_default_realtime_provider)
 }
 
-fn default_realtime_model(provider: RealtimeProvider, mother: bool) -> &'static str {
+fn default_realtime_model(provider: RealtimeProvider, _mother: bool) -> &'static str {
     match provider {
-        RealtimeProvider::OpenAiRealtime => {
-            if mother {
-                "gpt-realtime"
-            } else {
-                "gpt-realtime-mini"
-            }
-        }
+        RealtimeProvider::OpenAiRealtime => "gpt-realtime-mini",
         RealtimeProvider::GeminiFlash => "gemini-3-flash-preview",
     }
 }
@@ -9357,6 +9351,18 @@ mod tests {
         assert_eq!(
             default_realtime_model(RealtimeProvider::GeminiFlash, true),
             "gemini-3-flash-preview"
+        );
+    }
+
+    #[test]
+    fn openai_realtime_default_model_is_mini_for_mother_and_non_mother() {
+        assert_eq!(
+            default_realtime_model(RealtimeProvider::OpenAiRealtime, false),
+            "gpt-realtime-mini"
+        );
+        assert_eq!(
+            default_realtime_model(RealtimeProvider::OpenAiRealtime, true),
+            "gpt-realtime-mini"
         );
     }
 
