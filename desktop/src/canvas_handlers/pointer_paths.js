@@ -5,6 +5,8 @@ export const POINTER_KINDS = Object.freeze({
   EFFECT_TOKEN_DRAG: "effect_token_drag",
   FREEFORM_RESIZE: "freeform_resize",
   FREEFORM_MOVE: "freeform_move",
+  FREEFORM_ROTATE: "freeform_rotate",
+  FREEFORM_SKEW: "freeform_skew",
   SINGLE_PAN: "single_pan",
 });
 

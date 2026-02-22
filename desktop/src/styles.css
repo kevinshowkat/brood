@@ -261,9 +261,11 @@ body {
   line-height: 0;
   vertical-align: middle;
   border-radius: 999px;
-  border: 1px solid rgba(126, 140, 160, 0.92);
-  background: rgba(126, 140, 160, 0.9);
-  box-shadow: none;
+  border: 1px solid rgba(82, 232, 160, 0.95);
+  background: rgba(82, 232, 160, 0.95);
+  box-shadow:
+    0 0 10px rgba(82, 232, 160, 0.52),
+    inset 0 0 0 1px rgba(236, 255, 246, 0.48);
   pointer-events: auto;
 }
 
@@ -311,6 +313,22 @@ body {
   box-shadow:
     0 0 10px rgba(82, 232, 160, 0.52),
     inset 0 0 0 1px rgba(236, 255, 246, 0.48);
+}
+
+.mother-intent-source-indicator.is-realtime-openai-mini {
+  border-color: rgba(106, 194, 255, 0.96);
+  background: rgba(106, 194, 255, 0.95);
+  box-shadow:
+    0 0 10px rgba(106, 194, 255, 0.5),
+    inset 0 0 0 1px rgba(236, 248, 255, 0.46);
+}
+
+.mother-intent-source-indicator.is-realtime-gemini-flash {
+  border-color: rgba(255, 191, 88, 0.96);
+  background: rgba(255, 191, 88, 0.95);
+  box-shadow:
+    0 0 10px rgba(255, 191, 88, 0.44),
+    inset 0 0 0 1px rgba(255, 247, 232, 0.42);
 }
 
 .mother-intent-source-indicator.is-fallback {
@@ -1421,7 +1439,7 @@ button.ghost:hover {
   width: 0;
   height: 0;
   z-index: 2;
-  border-radius: 10px;
+  border-radius: 0;
   overflow: hidden;
   pointer-events: none;
   opacity: 0.98;
@@ -3035,10 +3053,144 @@ button.ghost:hover {
 #mother-portrait-shell .mother-portrait {
   display: flex;
   justify-content: center;
+  align-items: flex-start;
+  gap: 6px;
 }
 
 #mother-portrait-shell .mother-portrait-frame {
   border-color: rgba(0, 0, 0, 0.9);
+}
+
+#canvas-mood-status {
+  position: absolute;
+  top: 12px;
+  left: 10px;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  overflow: visible;
+}
+
+#canvas-mood-status .mother-mood-toggle {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
+  flex: 0 0 auto;
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 999px;
+  border: 1px solid rgba(116, 150, 188, 0.68);
+  background:
+    radial-gradient(26px 20px at 30% 24%, rgba(255, 255, 255, 0.2), transparent 72%),
+    linear-gradient(180deg, rgba(18, 27, 37, 0.97), rgba(8, 12, 18, 0.99));
+  color: rgba(232, 239, 246, 0.97);
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  overflow: visible;
+  box-sizing: border-box;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 0 0 1px rgba(20, 34, 50, 0.22),
+    0 8px 16px rgba(0, 0, 0, 0.34);
+  transition: transform 0.12s ease, border-color 0.12s ease, filter 0.12s ease;
+}
+
+#canvas-mood-status .mother-mood-toggle[data-empty="true"] {
+  color: rgba(206, 221, 236, 0.9);
+}
+
+#canvas-mood-status .mother-mood-toggle:hover {
+  border-color: rgba(255, 186, 122, 0.74);
+  filter: brightness(1.08);
+}
+
+#canvas-mood-status .mother-mood-toggle:active {
+  transform: translateY(1px);
+}
+
+#canvas-mood-status .canvas-mood-hint {
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(226, 234, 244, 0.95);
+  padding: 6px 0;
+  border-radius: 999px;
+  border: 1px solid rgba(90, 118, 148, 0.66);
+  border-bottom-color: rgba(26, 38, 54, 0.88);
+  background: rgba(10, 14, 20, 0.86);
+  transform: translateX(-5px);
+  transform-origin: left center;
+  transition:
+    max-width 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 120ms ease,
+    padding 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+#canvas-mood-status:hover .canvas-mood-hint,
+#canvas-mood-status.is-open .canvas-mood-hint {
+  max-width: 124px;
+  opacity: 1;
+  padding: 6px 11px;
+  transform: translateX(0);
+}
+
+#canvas-mood-status .mother-mood-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 122px;
+  padding: 5px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.92);
+  border-bottom-color: rgba(0, 0, 0, 0.98);
+  background:
+    radial-gradient(120px 62px at 20% 10%, rgba(255, 179, 0, 0.11), transparent 72%),
+    radial-gradient(130px 66px at 84% 12%, rgba(100, 210, 255, 0.1), transparent 74%),
+    linear-gradient(180deg, rgba(11, 15, 21, 0.95), rgba(6, 9, 14, 0.98));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -8px 12px rgba(0, 0, 0, 0.54),
+    0 10px 18px rgba(0, 0, 0, 0.38);
+  z-index: 8;
+}
+
+#canvas-mood-status .mother-mood-option {
+  border: 1px solid rgba(74, 98, 126, 0.72);
+  border-bottom-color: rgba(24, 38, 54, 0.88);
+  border-radius: 6px;
+  background: rgba(10, 14, 20, 0.82);
+  color: rgba(224, 233, 242, 0.96);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  text-align: left;
+  padding: 5px 7px;
+  line-height: 1.1;
+  cursor: pointer;
+}
+
+#canvas-mood-status .mother-mood-option:hover {
+  border-color: rgba(255, 186, 122, 0.74);
+}
+
+#canvas-mood-status .mother-mood-option.is-active {
+  border-color: rgba(122, 220, 172, 0.74);
+  color: rgba(186, 247, 217, 0.98);
+  background: rgba(14, 24, 18, 0.88);
 }
 
 .mother-overlay.busy #mother-portrait-shell .mother-portrait-frame {
@@ -3122,8 +3274,96 @@ button.ghost:hover {
   overflow: hidden;
 }
 
+#mother-panel .mother-role-preview-flow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 940;
+}
+
+#mother-panel .mother-role-preview-sankey {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+#mother-panel .mother-role-preview-sankey-ribbon {
+  opacity: 0.9;
+  mix-blend-mode: normal;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.14));
+}
+
+#mother-panel .mother-role-preview-sankey-ribbon.is-core {
+  opacity: 0.95;
+}
+
+#mother-panel .mother-role-preview-sankey-ribbon.is-top {
+  opacity: 0.84;
+  filter: drop-shadow(0 1px 1px rgba(255, 255, 255, 0.06));
+}
+
+#mother-panel .mother-role-preview-sankey-ribbon.is-side {
+  opacity: 0.82;
+  mix-blend-mode: normal;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.2));
+}
+
+#mother-panel .mother-role-preview-sankey-path {
+  display: none;
+}
+
+#mother-panel .mother-role-preview-sankey-depth {
+  display: none;
+}
+
+#mother-panel .mother-role-preview-sankey-depth.is-back {
+  display: none;
+}
+
+#mother-panel .mother-role-preview-sankey-edge {
+  display: none;
+}
+
+#mother-panel .mother-role-preview-sankey-edge.is-top {
+  display: none;
+}
+
+#mother-panel .mother-role-preview-sankey-edge.is-side {
+  display: none;
+}
+
+#mother-panel .mother-role-preview-sankey-edge.is-left {
+  display: none;
+}
+
+#mother-panel .mother-role-preview-sankey-flux {
+  display: none;
+}
+
+#mother-panel .mother-role-preview-flow-target {
+  --mother-role-accent: rgba(230, 237, 243, 0.94);
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin-left: -4px;
+  margin-top: -4px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--mother-role-accent) 82%, rgba(8, 12, 18, 0.38));
+  background: color-mix(in srgb, var(--mother-role-accent) 48%, rgba(8, 12, 18, 0.32));
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.42),
+    0 0 8px color-mix(in srgb, var(--mother-role-accent) 36%, transparent);
+  animation: motherRoleFlowTargetPulse 1700ms ease-in-out infinite;
+  animation-delay: var(--mother-flow-stagger, 0ms);
+}
+
 #mother-panel .mother-role-preview-rect {
   --mother-role-accent: rgba(255, 72, 72, 0.92);
+  --mother-role-base-rot: 0deg;
+  --mother-role-base-skew: 0deg;
   --mother-role-pre-mx: 0px;
   --mother-role-pre-my: 0px;
   --mother-role-pre-scale: 1;
@@ -3147,6 +3387,16 @@ button.ghost:hover {
   position: absolute;
   border-radius: 0;
   border: 0;
+  transform-origin: 50% 50%;
+  transform: rotate(var(--mother-role-base-rot)) skewX(var(--mother-role-base-skew));
+  pointer-events: none;
+}
+
+#mother-panel .mother-role-preview-rect-core {
+  position: absolute;
+  inset: 0;
+  border-radius: 0;
+  border: 0;
   background: color-mix(in srgb, var(--mother-role-accent) 44%, transparent);
   box-shadow:
     0 0 6px color-mix(in srgb, var(--mother-role-accent) 16%, transparent);
@@ -3157,13 +3407,48 @@ button.ghost:hover {
   will-change: transform, filter, opacity;
 }
 
-#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect {
+#mother-panel .mother-role-preview-corner {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  margin-left: -1px;
+  margin-top: -1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+#mother-panel .mother-role-preview-corner[data-corner="0"] {
+  left: 0;
+  top: 0;
+}
+
+#mother-panel .mother-role-preview-corner[data-corner="1"] {
+  left: 100%;
+  top: 0;
+}
+
+#mother-panel .mother-role-preview-corner[data-corner="2"] {
+  left: 100%;
+  top: 100%;
+}
+
+#mother-panel .mother-role-preview-corner[data-corner="3"] {
+  left: 0;
+  top: 100%;
+}
+
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect .mother-role-preview-rect-core {
   animation: motherRoleModeFlow var(--mother-role-mode-ms, 3000ms) ease-in-out infinite;
   animation-delay: var(--mother-role-stagger, 0ms);
   animation-direction: alternate;
 }
 
-#mother-panel .mother-role-preview[data-motion="paused"] .mother-role-preview-rect {
+#mother-panel .mother-role-preview[data-motion="paused"] .mother-role-preview-rect .mother-role-preview-rect-core {
+  animation-play-state: paused;
+}
+
+#mother-panel .mother-role-preview[data-motion="paused"] .mother-role-preview-sankey-flux,
+#mother-panel .mother-role-preview[data-motion="paused"] .mother-role-preview-flow-target {
   animation-play-state: paused;
 }
 
@@ -3231,61 +3516,61 @@ button.ghost:hover {
   opacity: 0.24;
 }
 
-#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="amplify"] {
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="amplify"] .mother-role-preview-rect-core {
   animation-name: motherRoleModeAmplify;
   animation-timing-function: cubic-bezier(0.18, 0.92, 0.26, 1);
   animation-direction: alternate-reverse;
 }
 
-#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="transcend"] {
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="transcend"] .mother-role-preview-rect-core {
   animation-name: motherRoleModeTranscend;
   animation-timing-function: cubic-bezier(0.12, 0.52, 0.22, 1);
   animation-direction: normal;
 }
 
-#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="destabilize"] {
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="destabilize"] .mother-role-preview-rect-core {
   animation-name: motherRoleModeDestabilize;
   animation-timing-function: steps(2, end);
   animation-direction: normal;
 }
 
-#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="purify"] {
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="purify"] .mother-role-preview-rect-core {
   animation-name: motherRoleModePurify;
   animation-timing-function: cubic-bezier(0.2, 0.64, 0.28, 1);
   animation-direction: normal;
 }
 
-#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="hybridize"] {
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="hybridize"] .mother-role-preview-rect-core {
   animation-name: motherRoleModeHybridize;
   animation-timing-function: cubic-bezier(0.22, 0.88, 0.3, 1);
   animation-direction: alternate;
 }
 
-#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="mythologize"] {
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="mythologize"] .mother-role-preview-rect-core {
   animation-name: motherRoleModeMythologize;
   animation-timing-function: cubic-bezier(0.34, 0.16, 0.54, 1);
   animation-direction: normal;
 }
 
-#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="monumentalize"] {
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="monumentalize"] .mother-role-preview-rect-core {
   animation-name: motherRoleModeMonumentalize;
   animation-timing-function: cubic-bezier(0.12, 0.42, 0.2, 1);
   animation-direction: normal;
 }
 
-#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="fracture"] {
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="fracture"] .mother-role-preview-rect-core {
   animation-name: motherRoleModeFracture;
   animation-timing-function: steps(3, end);
   animation-direction: normal;
 }
 
-#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="romanticize"] {
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="romanticize"] .mother-role-preview-rect-core {
   animation-name: motherRoleModeRomanticize;
   animation-timing-function: cubic-bezier(0.24, 0.72, 0.32, 1);
   animation-direction: alternate-reverse;
 }
 
-#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="alienate"] {
+#mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect[data-anim="alienate"] .mother-role-preview-rect-core {
   animation-name: motherRoleModeAlienate;
   animation-timing-function: cubic-bezier(0.08, 0.54, 0.16, 1);
   animation-direction: normal;
@@ -3315,6 +3600,35 @@ button.ghost:hover {
       rotate(var(--mother-role-rot));
     filter: saturate(var(--mother-role-sat)) brightness(var(--mother-role-bright));
     opacity: var(--mother-role-alpha);
+  }
+}
+
+@keyframes motherRoleSankeyFlux {
+  0% {
+    stroke-dashoffset: 0;
+    opacity: 0.58;
+  }
+  45% {
+    opacity: 0.92;
+  }
+  100% {
+    stroke-dashoffset: -76;
+    opacity: 0.28;
+  }
+}
+
+@keyframes motherRoleFlowTargetPulse {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.82;
+  }
+  48% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.92);
+    opacity: 0.86;
   }
 }
 
@@ -4025,7 +4339,7 @@ button.ghost:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect {
+  #mother-panel .mother-role-preview[data-mode] .mother-role-preview-rect .mother-role-preview-rect-core {
     animation: none !important;
     transform: none !important;
     filter: none !important;
@@ -4033,6 +4347,10 @@ button.ghost:hover {
   #mother-panel .mother-role-preview-merge-core {
     animation: none !important;
     transform: none !important;
+  }
+  #mother-panel .mother-role-preview-flow-beam::after,
+  #mother-panel .mother-role-preview-flow-target {
+    animation: none !important;
   }
 }
 
@@ -4449,6 +4767,8 @@ button.ghost:hover {
   color: var(--phase-accent, rgba(145, 238, 184, 0.95));
   transition: opacity 180ms ease, color 180ms ease, transform 220ms ease;
   opacity: 1 !important;
+  transform: translate3d(0, 0, 0) scale(1) !important;
+  filter: none !important;
   animation: mother-draft-icon-fade 260ms ease-out 40ms both !important;
 }
 
@@ -4546,10 +4866,7 @@ button.ghost:hover {
 
 #mother-panel .mother-panel-body #tips-text .mother-proposal-icon,
 #mother-panel .mother-panel-body #tips-text .mother-phase-icon {
-  animation: none !important;
   opacity: 1 !important;
-  filter: none !important;
-  transform: none !important;
 }
 
 #mother-panel .mother-panel-controls {
@@ -5231,9 +5548,6 @@ button.ghost:hover {
 
 #tips-text .mother-proposal-card .mother-proposal-icon {
   opacity: 1;
-  filter: none;
-  transform: none;
-  animation: none;
 }
 
 #tips-text .mother-proposal-icons {
@@ -5502,12 +5816,12 @@ button.ghost:hover {
   0% {
     opacity: 0;
     transform: translate3d(0, 0, 0) scale(0.92);
-    filter: blur(6px) saturate(1.06);
+    filter: saturate(1.06);
   }
   100% {
     opacity: 1;
     transform: translate3d(0, 0, 0) scale(1);
-    filter: blur(0) saturate(1);
+    filter: saturate(1);
   }
 }
 
@@ -5539,7 +5853,7 @@ button.ghost:hover {
   box-shadow: none;
   opacity: 0;
   transform: translate3d(0, 0, 0) scale(0.92);
-  filter: blur(6px) saturate(1.06);
+  filter: saturate(1.06);
   animation: mother-phase-focus-in 360ms cubic-bezier(0.22, 0.8, 0.3, 1) forwards;
 }
 
@@ -7822,6 +8136,11 @@ button.ghost:hover {
     right: 8px;
   }
 
+  #canvas-mood-status {
+    top: 8px;
+    left: 8px;
+  }
+
   #mother-portrait-shell {
     --mother-portrait-size: clamp(72px, 18vw, 112px);
   }
@@ -7870,6 +8189,12 @@ button.ghost:hover {
 
   .mother-overlay {
     right: 6px;
+    top: 6px;
+  }
+
+  #canvas-mood-status {
+    right: auto;
+    left: 6px;
     top: 6px;
   }
 

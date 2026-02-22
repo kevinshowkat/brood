@@ -36,5 +36,4 @@ Each run writes to `~/brood_runs/run-*` with:
 ## See Also
 
 - `docs/desktop.md`
-- `docs/realtime_canvas_intent_generation_flow.md`
 - `docs/benchmark-playbook.md`

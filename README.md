@@ -34,6 +34,10 @@ Mother watches your on-canvas edits (move/resize/select), infers what you are em
   </a>
 </p>
 
+### Set Vibe (Mood Steering)
+Mother now includes a top-left canvas `Set Vibe` control with four mood presets: `Joyous`, `Nefarious`, `Somber`, and `Angry`.  
+Changing vibe updates Mother's creative steering for proposals in-session, so users can shift tone without rewriting prompts.
+
 ### Top Panel Telemetry Metrics
 The top panel shows four live chips users can read at a glance: `TOK` (30m in/out token sparklines + API calls), `COST` (estimated session spend), `QUEUE` (pending/running actions + queue trend), and `AVG` (rolling render time), each heat-coded from cool to hot.
 
@@ -97,6 +101,7 @@ Install:
 ### Mother Workflow
 
 - Mother observes your canvas and proposes edits.
+- `Set Vibe` lets you steer proposal tone (`Joyous` / `Nefarious` / `Somber` / `Angry`) in real time.
 - Proposal loop supports next/propose, confirm/deploy, reject/stop, and reroll-style follow-ups.
 - Proposal intent and generation are fed by structured context packets (see below).
 
