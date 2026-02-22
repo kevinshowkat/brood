@@ -12021,6 +12021,8 @@ async function startMotherTakeover() {
       proposal_candidates: motherV2ProposalCandidateSummary(idle.intent, { limit: MOTHER_V2_MAX_RANKED_PROPOSALS }),
       proposal_confidence: Number(idle.intent?.confidence) || 0,
     }).catch(() => {});
+    // Once user confirms, stale in-flight intent inference must not reject drafting.
+    motherV2ClearPendingIntentRequest({ reason: "confirm_takeover" });
     if (hasPrefetchedDraft) {
       motherIdleTransitionTo(MOTHER_IDLE_EVENTS.CONFIRM);
       motherIdleTransitionTo(MOTHER_IDLE_EVENTS.DRAFT_READY);
@@ -16115,6 +16117,40 @@ function motherV2BuildIntentRequestId(actionVersion = 0) {
   return `mother-intent-a${Number(actionVersion) || 0}-${stamp}-${rand}`;
 }
 
+function motherV2ClearPendingIntentRequest({ reason = "intent_request_cleared", clearBusy = true } = {}) {
+  const idle = state.motherIdle;
+  if (!idle) return false;
+  const requestId = String(idle.pendingIntentRequestId || "").trim() || null;
+  const activePath = String(idle.pendingIntentRealtimePath || "").trim();
+  const hadPending = Boolean(
+    idle.pendingIntent ||
+      requestId ||
+      activePath ||
+      idle.pendingIntentPath ||
+      idle.pendingIntentPayload
+  );
+  if (!hadPending) return false;
+  idle.pendingIntent = false;
+  idle.pendingIntentRequestId = null;
+  idle.pendingIntentTransportRetryCount = 0;
+  idle.pendingIntentStartedAt = 0;
+  idle.pendingIntentUpgradeUntil = 0;
+  idle.pendingIntentRealtimePath = null;
+  idle.pendingIntentPath = null;
+  idle.pendingIntentPayload = null;
+  clearTimeout(idle.pendingIntentTimeout);
+  idle.pendingIntentTimeout = null;
+  if (clearBusy) {
+    motherV2ClearIntentRealtimeBusy({
+      path: activePath,
+      requestId,
+      force: true,
+      reason: String(reason || "intent_request_cleared"),
+    });
+  }
+  return true;
+}
+
 function motherV2ApplyIntent(
   intentPayload = {},
   { source = "local", sourceModel = null, preserveMode = false, requestId = null } = {}
@@ -16228,6 +16264,7 @@ function motherV2ArmRealtimeIntentTimeout({ timeoutMs = MOTHER_V2_INTENT_RT_TIME
     const resolveActiveTimeoutRequest = () => {
       const latest = state.motherIdle;
       if (!latest || !latest.pendingIntent) return null;
+      if (String(latest.phase || "") !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING) return null;
       if ((Number(latest.actionVersion) || 0) !== actionVersion) return null;
       if ((Number(latest.pendingActionVersion) || 0) !== pendingActionVersion) return null;
       const latestRequestId = String(latest.pendingIntentRequestId || "").trim() || null;
@@ -16410,9 +16447,10 @@ async function motherV2RequestIntentInference({
     if ((Number(current.actionVersion) || 0) !== actionVersion) return false;
     return String(current.pendingIntentRequestId || "") === requestId;
   };
-  const clearOwnedPendingRequest = (current) => {
+  const clearOwnedPendingRequest = (current, { clearBusy = false, busyReason = "intent_request_cleanup" } = {}) => {
     if (!current) return;
     if (String(current.pendingIntentRequestId || "") !== requestId) return;
+    const activePath = String(current.pendingIntentRealtimePath || "").trim();
     current.pendingIntent = false;
     current.pendingIntentRequestId = null;
     current.pendingIntentTransportRetryCount = 0;
@@ -16423,117 +16461,152 @@ async function motherV2RequestIntentInference({
     current.pendingIntentPayload = null;
     clearTimeout(current.pendingIntentTimeout);
     current.pendingIntentTimeout = null;
-  };
-  await ensureRun();
-  const payload = motherV2IntentPayload();
-  const payloadPath = await motherV2WritePayloadFile("mother_intent_infer", payload);
-  const ok = await ensureEngineSpawned({ reason: "mother_intent_rt" });
-  if (!ok) return false;
-  const uploadFastPath = Boolean(fastUploadPath);
-
-  const failRealtimeIntent = ({ sourceTag = "intent_rt_failed", message = null } = {}) => {
-    const current = state.motherIdle;
-    if (!requestMatchesCurrent(current, { requirePending: true })) {
-      clearOwnedPendingRequest(current);
-      return;
-    }
-    const failureMessage = String(message || "Mother realtime intent inference failed.").trim();
-    appendMotherTraceLog({
-      kind: "intent_realtime_failed",
-      traceId: current.telemetry?.traceId || null,
-      actionVersion,
-      request_id: requestId,
-      source: String(sourceTag || "intent_rt_failed"),
-      error: failureMessage,
-    }).catch(() => {});
-    motherIdleHandleGenerationFailed(failureMessage);
-  };
-
-  let snapshotPath = null;
-  if (state.runDir) {
-    const stamp = Date.now();
-    const suffix = `${stamp}-a${String(actionVersion).padStart(2, "0")}`;
-    snapshotPath = `${state.runDir}/mother-intent-${suffix}.png`;
-    const frameId = `mother-intent-a${actionVersion}-${suffix}`;
-    try {
-      if (!uploadFastPath) {
-        await waitForIntentImagesLoaded({
-          timeoutMs: Math.max(0, Number(snapshotLoadTimeoutMs) || 0),
-          maxImages: MOTHER_V2_INTENT_TARGET_IMAGE_LIMIT,
-        });
-      }
-      render();
-      await writeIntentSnapshot(snapshotPath, {
-        maxDimPx: Math.max(420, Number(snapshotMaxDimPx) || INTENT_SNAPSHOT_MAX_DIM_PX),
+    if (clearBusy) {
+      motherV2ClearIntentRealtimeBusy({
+        path: activePath,
+        requestId,
+        force: true,
+        reason: String(busyReason || "intent_request_cleanup"),
       });
-      if (!uploadFastPath) {
-        const ctxResult = await motherV2WriteIntentContextEnvelopeWithRefRetry(
-          snapshotPath,
-          frameId,
-          payload,
-          { requestId, actionVersion }
-        );
-        if (!ctxResult.ok) {
-          appendMotherTraceLog({
-            kind: "intent_request_context_refs_soft_missing",
-            traceId: idle.telemetry?.traceId || null,
-            actionVersion,
-            request_id: requestId,
-            snapshot_path: snapshotPath || null,
-            required_refs: ctxResult.requiredRefs,
-            available_refs: ctxResult.availableRefs,
-          }).catch(() => {});
-        }
-      }
-    } catch {
-      snapshotPath = null;
     }
-  }
-
-  if (
-    !state.motherIdle ||
-    state.motherIdle !== idle ||
-    (Number(idle.actionVersion) || 0) !== actionVersion ||
-    idle.phase !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING ||
-    state.pointer.active
-  ) {
-    return false;
-  }
-
+  };
+  // Claim the request before any async work to close the duplicate-start race window.
   idle.pendingIntent = true;
   idle.pendingIntentRequestId = requestId;
   idle.pendingIntentTransportRetryCount = 0;
   idle.pendingIntentStartedAt = Date.now();
   idle.pendingIntentUpgradeUntil = 0;
   idle.pendingActionVersion = actionVersion;
-  idle.pendingIntentRealtimePath = snapshotPath;
+  idle.pendingIntentRealtimePath = null;
   idle.pendingIntentPath = null;
-  idle.pendingIntentPayload = payload;
+  idle.pendingIntentPayload = null;
   clearTimeout(idle.pendingIntentTimeout);
   idle.pendingIntentTimeout = null;
-  appendMotherTraceLog({
-    kind: "intent_request_started",
-    traceId: idle.telemetry?.traceId || null,
-    actionVersion,
-    request_id: requestId,
-    payload_path: payloadPath || null,
-    snapshot_path: snapshotPath || null,
-  }).catch(() => {});
-  setStatus("Mother: hypothesizing intent (realtime)…");
-  renderMotherReadout();
 
-  let realtimeDispatched = false;
-  if (snapshotPath) {
-    await invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT_MOTHER_START}\n` }).catch(() => {});
-    realtimeDispatched = await invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT_MOTHER} ${quoteForPtyArg(snapshotPath)}\n` })
-      .then(() => true)
-      .catch(() => false);
-  }
+  let keepPendingRequest = false;
+  try {
+    const failRealtimeIntent = ({ sourceTag = "intent_rt_failed", message = null } = {}) => {
+      const current = state.motherIdle;
+      if (!requestMatchesCurrent(current, { requirePending: true })) {
+        clearOwnedPendingRequest(current, {
+          clearBusy: true,
+          busyReason: "intent_request_stale_failure",
+        });
+        return;
+      }
+      const failureMessage = String(message || "Mother realtime intent inference failed.").trim();
+      appendMotherTraceLog({
+        kind: "intent_realtime_failed",
+        traceId: current.telemetry?.traceId || null,
+        actionVersion,
+        request_id: requestId,
+        source: String(sourceTag || "intent_rt_failed"),
+        error: failureMessage,
+      }).catch(() => {});
+      motherIdleHandleGenerationFailed(failureMessage);
+    };
 
-  if (realtimeDispatched) {
-    motherV2SetIntentRealtimeBusy({ path: snapshotPath, requestId });
-    motherV2ArmRealtimeIntentTimeout({ timeoutMs: MOTHER_V2_INTENT_RT_TIMEOUT_MS });
-  } else {
+    await ensureRun();
+    if (!requestMatchesCurrent(state.motherIdle, { requirePending: true })) return false;
+
+    const payload = motherV2IntentPayload();
+    const payloadPath = await motherV2WritePayloadFile("mother_intent_infer", payload);
+    if (!requestMatchesCurrent(state.motherIdle, { requirePending: true })) return false;
+
+    const ok = await ensureEngineSpawned({ reason: "mother_intent_rt" });
+    if (!ok) return false;
+    if (!requestMatchesCurrent(state.motherIdle, { requirePending: true })) return false;
+
+    const uploadFastPath = Boolean(fastUploadPath);
+    let snapshotPath = null;
+    if (state.runDir) {
+      const stamp = Date.now();
+      const suffix = `${stamp}-a${String(actionVersion).padStart(2, "0")}`;
+      snapshotPath = `${state.runDir}/mother-intent-${suffix}.png`;
+      const frameId = `mother-intent-a${actionVersion}-${suffix}`;
+      try {
+        if (!uploadFastPath) {
+          await waitForIntentImagesLoaded({
+            timeoutMs: Math.max(0, Number(snapshotLoadTimeoutMs) || 0),
+            maxImages: MOTHER_V2_INTENT_TARGET_IMAGE_LIMIT,
+          });
+          if (!requestMatchesCurrent(state.motherIdle, { requirePending: true })) return false;
+        }
+        render();
+        await writeIntentSnapshot(snapshotPath, {
+          maxDimPx: Math.max(420, Number(snapshotMaxDimPx) || INTENT_SNAPSHOT_MAX_DIM_PX),
+        });
+        if (!requestMatchesCurrent(state.motherIdle, { requirePending: true })) return false;
+        if (!uploadFastPath) {
+          const ctxResult = await motherV2WriteIntentContextEnvelopeWithRefRetry(
+            snapshotPath,
+            frameId,
+            payload,
+            { requestId, actionVersion }
+          );
+          if (!requestMatchesCurrent(state.motherIdle, { requirePending: true })) return false;
+          if (!ctxResult.ok) {
+            appendMotherTraceLog({
+              kind: "intent_request_context_refs_soft_missing",
+              traceId: idle.telemetry?.traceId || null,
+              actionVersion,
+              request_id: requestId,
+              snapshot_path: snapshotPath || null,
+              required_refs: ctxResult.requiredRefs,
+              available_refs: ctxResult.availableRefs,
+            }).catch(() => {});
+          }
+        }
+      } catch {
+        snapshotPath = null;
+      }
+    }
+
+    const currentIdle = state.motherIdle;
+    if (
+      !requestMatchesCurrent(currentIdle, { requirePending: true }) ||
+      currentIdle !== idle ||
+      idle.phase !== MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING ||
+      state.pointer.active
+    ) {
+      return false;
+    }
+
+    idle.pendingIntentTransportRetryCount = 0;
+    idle.pendingIntentStartedAt = Date.now();
+    idle.pendingIntentUpgradeUntil = 0;
+    idle.pendingIntentRealtimePath = snapshotPath;
+    idle.pendingIntentPath = null;
+    idle.pendingIntentPayload = payload;
+    clearTimeout(idle.pendingIntentTimeout);
+    idle.pendingIntentTimeout = null;
+    appendMotherTraceLog({
+      kind: "intent_request_started",
+      traceId: idle.telemetry?.traceId || null,
+      actionVersion,
+      request_id: requestId,
+      payload_path: payloadPath || null,
+      snapshot_path: snapshotPath || null,
+    }).catch(() => {});
+    setStatus("Mother: hypothesizing intent (realtime)…");
+    renderMotherReadout();
+
+    let realtimeDispatched = false;
+    if (snapshotPath) {
+      await invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT_MOTHER_START}\n` }).catch(() => {});
+      if (!requestMatchesCurrent(state.motherIdle, { requirePending: true })) return false;
+      realtimeDispatched = await invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT_MOTHER} ${quoteForPtyArg(snapshotPath)}\n` })
+        .then(() => true)
+        .catch(() => false);
+    }
+
+    if (realtimeDispatched) {
+      motherV2SetIntentRealtimeBusy({ path: snapshotPath, requestId });
+      motherV2ArmRealtimeIntentTimeout({ timeoutMs: MOTHER_V2_INTENT_RT_TIMEOUT_MS });
+      keepPendingRequest = true;
+      return true;
+    }
+
     failRealtimeIntent({
       sourceTag: snapshotPath ? "intent_rt_dispatch_failed" : "intent_rt_snapshot_unavailable",
       message: snapshotPath
@@ -16541,8 +16614,14 @@ async function motherV2RequestIntentInference({
         : "Mother realtime intent snapshot unavailable.",
     });
     return false;
+  } finally {
+    if (!keepPendingRequest) {
+      clearOwnedPendingRequest(state.motherIdle, {
+        clearBusy: true,
+        busyReason: "intent_request_exit",
+      });
+    }
   }
-  return true;
 }
 
 function motherV2PromptCompileImageRows() {
@@ -16675,6 +16754,52 @@ function motherV2BuildPromptComposerResult(compiled = {}) {
 
 function motherV2PromptLineFromCompiled(compiled = {}) {
   return motherV2BuildPromptComposerResult(compiled).line;
+}
+
+function motherV2TransformLockManifestEntries(dispatchManifest = []) {
+  return (Array.isArray(dispatchManifest) ? dispatchManifest : [])
+    .map((entry) => {
+      const imageId = String(entry?.id || "").trim();
+      const rotateDeg = normalizeFreeformRotateDeg(entry?.rotate_deg);
+      const skewXDeg = normalizeFreeformSkewDeg(entry?.skew_x_deg);
+      const userResized = Boolean(entry?.user_resized);
+      const hasLock = userResized || Math.abs(rotateDeg) > 0.2 || Math.abs(skewXDeg) > 0.2;
+      if (!hasLock) return null;
+      return {
+        id: imageId,
+        rotateDeg,
+        skewXDeg,
+        userResized,
+      };
+    })
+    .filter(Boolean);
+}
+
+function motherV2TransformLockPromptLine(dispatchManifest = []) {
+  const locks = motherV2TransformLockManifestEntries(dispatchManifest);
+  if (!locks.length) return "";
+  const maxListed = 4;
+  const listed = locks.slice(0, maxListed).map((entry, idx) => {
+    const parts = [];
+    if (Math.abs(Number(entry.rotateDeg) || 0) > 0.2) parts.push(`rot ${Number(entry.rotateDeg).toFixed(2)}deg`);
+    if (Math.abs(Number(entry.skewXDeg) || 0) > 0.2) parts.push(`skew ${Number(entry.skewXDeg).toFixed(2)}deg`);
+    if (entry.userResized) parts.push("resized");
+    if (!parts.length) return "";
+    const label = String(entry.id || "").trim() || `src${idx + 1}`;
+    return `${label}(${parts.join(", ")})`;
+  }).filter(Boolean);
+  if (!listed.length) return "";
+  const overflow = locks.length > maxListed ? `; +${locks.length - maxListed} more` : "";
+  return `CANVAS TRANSFORM LOCK (MANDATORY): Preserve source orientation/geometry exactly as supplied (${listed.join("; ")}${overflow}). Do not auto-upright, de-skew, or normalize user scale unless explicitly instructed.`;
+}
+
+function motherV2EnsureTransformLockPromptLine(promptLine = "", dispatchManifest = []) {
+  const base = String(promptLine || "").trim();
+  if (!base) return base;
+  const lockLine = motherV2TransformLockPromptLine(dispatchManifest);
+  if (!lockLine) return base;
+  if (base.toLowerCase().includes("canvas transform lock (mandatory):")) return base;
+  return `${base}\n${lockLine}`;
 }
 
 function motherV2CollectGenerationImagePaths() {
@@ -18094,18 +18219,25 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "", {
   if (!idle) return false;
   const collectedImagePayload = motherV2CollectGenerationImagePaths();
   const imagePayload = await motherV2ResolveGenerationImagePayload(collectedImagePayload).catch(() => collectedImagePayload);
+  const dispatchManifest = Array.isArray(imagePayload?.dispatchImageManifest) ? imagePayload.dispatchImageManifest : [];
+  const finalPromptLine = motherV2EnsureTransformLockPromptLine(promptLine, dispatchManifest);
+  const transformLockEntries = motherV2TransformLockManifestEntries(dispatchManifest);
+  const transformPromptEnforced = Boolean(transformLockEntries.length && finalPromptLine !== String(promptLine || "").trim());
+  if (transformPromptEnforced) {
+    idle.pendingPromptLine = finalPromptLine;
+  }
   const sanitizedIntent = motherV2SanitizeIntentImageIds(idle.intent) || idle.intent || null;
   const resolvedModel = String(selectedModel || settings.imageModel || MOTHER_GENERATION_MODEL).trim() || MOTHER_GENERATION_MODEL;
   const geminiContextPacket = motherV2BuildGeminiContextPacket({
     compiled,
-    promptLine,
+    promptLine: finalPromptLine,
     sanitizedIntent,
     imagePayload,
   });
   const modelContextEnvelopes = motherV2BuildModelContextEnvelopes({
     selectedModel: resolvedModel,
     compiled,
-    promptLine,
+    promptLine: finalPromptLine,
     sanitizedIntent,
     imagePayload,
     geminiContextPacket,
@@ -18171,15 +18303,13 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "", {
     schema: "brood.mother.generate.v2",
     action_version: Number(idle.actionVersion) || 0,
     intent_id: sanitizedIntent?.intent_id || idle.intent?.intent_id || null,
-    prompt: promptLine,
+    prompt: finalPromptLine,
     n: 1,
     generation_params: generationParams,
     init_image: imagePayload.initImage,
     reference_images: imagePayload.referenceImages,
     gemini_context_packet: geminiContextPacket,
-    source_image_manifest: Array.isArray(imagePayload.dispatchImageManifest)
-      ? imagePayload.dispatchImageManifest.slice(0, 10)
-      : null,
+    source_image_manifest: dispatchManifest.slice(0, 10),
     canvas_transform_lock: {
       respect_canvas_transforms: true,
     },
@@ -18220,9 +18350,9 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "", {
     placement_policy: sanitizedIntent?.placement_policy || null,
     selected_ids: getVisibleSelectedIds().map((v) => String(v || "").trim()).filter(Boolean),
     source_image_ids: Array.isArray(imagePayload.sourceImageIds) ? imagePayload.sourceImageIds.slice(0, 10) : [],
-    source_images_transformed: Array.isArray(imagePayload.dispatchImageManifest)
-      ? imagePayload.dispatchImageManifest.filter((entry) => Boolean(entry?.transformed)).length
-      : 0,
+    source_images_transformed: dispatchManifest.filter((entry) => Boolean(entry?.transformed)).length,
+    transform_prompt_lock_enforced: transformPromptEnforced,
+    transform_prompt_lock_count: transformLockEntries.length,
     init_image_id: Array.isArray(imagePayload.sourceImageIds) && imagePayload.sourceImageIds.length
       ? String(imagePayload.sourceImageIds[0] || "")
       : null,

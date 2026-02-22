@@ -32,3 +32,9 @@ test("Mother realtime source kind recognizes provider tags as realtime", () => {
     /function motherV2IntentSourceKind\(source = ""\) \{[\s\S]*realtimeSourceSupported\(raw\)[\s\S]*raw\.startsWith\("openai_realtime"\) \|\| raw\.startsWith\("gemini_flash"\)[\s\S]*return "realtime";/
   );
 });
+
+test("Mother confirm path clears stale pending realtime intent request before drafting", () => {
+  assert.match(app, /function motherV2ClearPendingIntentRequest\(\{ reason = "intent_request_cleared", clearBusy = true \} = \{\}\)/);
+  assert.match(app, /motherV2ClearPendingIntentRequest\(\{ reason: "confirm_takeover" \}\);/);
+  assert.match(app, /if \(String\(latest\.phase \|\| ""\) !== MOTHER_IDLE_STATES\.INTENT_HYPOTHESIZING\) return null;/);
+});
