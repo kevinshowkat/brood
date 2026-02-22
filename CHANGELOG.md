@@ -6,6 +6,19 @@ The format is based on Keep a Changelog (https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-02-22
+- Fix Mother realtime timeout failures firing after proposal confirm by clearing stale in-flight intent requests before drafting.
+- Fix orphaned Mother `pendingIntent` latch when cancel/reject happens during realtime intent setup.
+- Add transform-aware prompt compile context and mother role tether updates for proposal/generation alignment.
+- Update Mother generate payload test expectation to match the finalized prompt variable wiring.
+
+## [0.2.2] - 2026-02-22
+- Add first-run OpenRouter onboarding in desktop (key capture, save, and connectivity verification).
+- Add provider-aware realtime routing/gating, including Gemini Flash realtime path support and OpenRouter-first transport behavior.
+- Improve Mother realtime proposal flow/recovery behavior and tighten proposal ranking/output shaping.
+- Add in-canvas `Set Vibe` mood steering (`Joyous`, `Nefarious`, `Somber`, `Angry`) for Mother proposals.
+- Improve prompt strategy benchmark reliability and Mother prompt workflow consistency.
+
 ## [0.2.1] - 2026-02-21
 - Retire desktop Python compatibility fallback paths; startup/export now fail explicitly when native engine launch fails.
 - Remove the legacy `brood_engine/` package, Python parity `tests/`, and Python runtime packaging metadata.

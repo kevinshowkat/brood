@@ -18,7 +18,7 @@ Brood is local-first on macOS: run artifacts stay on your machine under `~/brood
 
 ## Live Workflow Highlights
 
-### OpenRouter-First Onboarding (Newly Supported)
+### OpenRouter-First Onboarding
 Brood now ships a first-run OpenRouter onboarding flow in-app. It guides users through key setup, stores `OPENROUTER_API_KEY` in `~/.brood/.env`, verifies connectivity, and unlocks OpenRouter-first runtime paths (including Gemini realtime intent/canvas routing).
 
 <p align="left">
@@ -61,19 +61,19 @@ Mother (Brood's realtime proposal copilot) enters a drafting phase, assembles pr
 Brood is currently a **macOS-only desktop app** (Tauri).
 There is no web app, and Windows/Linux builds are not supported yet.
 
-## Rust Migration Roadmap
+## Rust Runtime Status
 
-### Current State (v0.1.6)
+### Current State (v0.2.3)
 
-- Desktop runtime defaults to native Rust (`brood-rs`).
+- Desktop runtime is native Rust (`brood-rs`) by default.
 - macOS release packaging/signing/notarization includes the staged Rust engine binary.
-- Legacy Python runtime paths have been retired from the repository.
+- Legacy Python runtime fallback paths are retired from desktop runtime.
 
 ### Near-Term (Next Milestones)
 
-- Expand Rust provider parity coverage for desktop-critical image/edit/reference flows.
+- Expand provider parity coverage for desktop-critical image/edit/reference flows.
 - Keep event/artifact compatibility stable (`events.jsonl`, receipt/thread/summary payload shapes).
-- Complete broader live-probe validation and eliminate remaining migration edge cases.
+- Continue live-probe validation and eliminate remaining migration-era edge cases.
 
 ## Download (macOS)
 
