@@ -26170,12 +26170,6 @@ async function handleEventLegacy(event) {
     if (!path) return;
     const eventIntentScope = String(event.intent_scope || "").trim().toLowerCase();
     const eventIsMotherScoped = !eventIntentScope || eventIntentScope === "mother";
-    if (!isPartial && eventIsMotherScoped) {
-      motherV2ClearIntentRealtimeBusy({
-        path,
-        reason: "intent_icons_final",
-      });
-    }
     const eventActionVersionRaw = Number(event.action_version);
     const routing = classifyIntentIconsRouting({
       path,

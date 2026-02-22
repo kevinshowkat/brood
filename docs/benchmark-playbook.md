@@ -42,4 +42,3 @@ Show reliable evidence for this workflow:
 ## See Also
 
 - `docs/visibility-kpis.md`
-- `docs/realtime_canvas_intent_generation_flow.md`

@@ -91,6 +91,8 @@ docs/ai_visibility.schema.json
 docs/ai_visibility_queries.sample.json
 docs/realtime_intent_pipeline_simulation_prompt_v2.md
 docs/realtime_intent_tuning_handoff_2026-02-21.md
+docs/realtime_canvas_intent_generation_flow.md
+docs/assets/diagrams/mother_realtime_user_journey_timeline/
 scripts/visibility_probe.py
 docs/prds/
 docs/target_user_*
