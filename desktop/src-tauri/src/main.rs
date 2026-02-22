@@ -253,6 +253,9 @@ fn save_openrouter_api_key(api_key: String) -> Result<serde_json::Value, String>
 
 const OPENROUTER_OAUTH_AUTHORIZE_URL: &str = "https://openrouter.ai/auth";
 const OPENROUTER_OAUTH_EXCHANGE_URL: &str = "https://openrouter.ai/api/v1/auth/keys";
+const OPENROUTER_OAUTH_LOCALHOST_BIND_HOST: &str = "127.0.0.1";
+const OPENROUTER_OAUTH_LOCALHOST_CALLBACK_URL: &str = "http://localhost:3000";
+const OPENROUTER_OAUTH_LOCALHOST_CALLBACK_PORT: u16 = 3000;
 
 fn oauth_random_urlsafe(len_bytes: usize) -> String {
     let mut bytes = vec![0_u8; len_bytes.max(16)];
@@ -332,21 +335,45 @@ fn oauth_error_message(payload: &serde_json::Value) -> Option<String> {
     None
 }
 
+fn oauth_error_detail(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        let mut detail = oauth_error_message(&payload).unwrap_or_else(|| trimmed.to_string());
+        let code = payload
+            .get("code")
+            .and_then(|value| value.as_i64())
+            .or_else(|| {
+                payload
+                    .get("error")
+                    .and_then(|value| value.get("code"))
+                    .and_then(|value| value.as_i64())
+            });
+        if let Some(code) = code {
+            detail = format!("{detail} (code {code})");
+        }
+        return detail;
+    }
+    trimmed.to_string()
+}
+
 fn run_openrouter_oauth_pkce_sign_in(
     app: &tauri::AppHandle,
     timeout_seconds: u64,
 ) -> Result<serde_json::Value, String> {
     let timeout_seconds = timeout_seconds.clamp(30, 600);
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .map_err(|e| format!("Could not start localhost callback listener: {e}"))?;
+    let port = OPENROUTER_OAUTH_LOCALHOST_CALLBACK_PORT;
+    let listener = TcpListener::bind((OPENROUTER_OAUTH_LOCALHOST_BIND_HOST, port)).map_err(|e| {
+        format!(
+            "Could not start localhost callback listener on {OPENROUTER_OAUTH_LOCALHOST_CALLBACK_URL}: {e}. If another app is using port {port}, close it and retry OpenRouter sign-in, or paste your API key manually."
+        )
+    })?;
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("Could not configure callback listener: {e}"))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| format!("Could not read callback listener port: {e}"))?
-        .port();
-    let callback_url = format!("http://localhost:{port}");
+    let callback_url = OPENROUTER_OAUTH_LOCALHOST_CALLBACK_URL.to_string();
 
     let state = oauth_random_urlsafe(24);
     let code_verifier = oauth_random_urlsafe(64);
@@ -393,22 +420,23 @@ fn run_openrouter_oauth_pkce_sign_in(
                     .unwrap_or_default();
 
                 if !oauth_error.is_empty() {
+                    let oauth_detail = oauth_error_detail(if oauth_error_description.is_empty() {
+                        &oauth_error
+                    } else {
+                        &oauth_error_description
+                    });
                     oauth_write_browser_result_page(
                         &mut stream,
                         "400 Bad Request",
                         "OpenRouter Sign-in Failed",
-                        &oauth_error_description
+                        &oauth_detail
                             .chars()
-                            .take(300)
+                            .take(350)
                             .collect::<String>()
                             .replace('<', "")
                             .replace('>', ""),
                     );
-                    return Err(if oauth_error_description.is_empty() {
-                        format!("OpenRouter sign-in failed: {oauth_error}")
-                    } else {
-                        format!("OpenRouter sign-in failed: {oauth_error_description}")
-                    });
+                    return Err(format!("OpenRouter sign-in failed: {oauth_detail}"));
                 }
 
                 if returned_state != state {
@@ -471,6 +499,11 @@ fn run_openrouter_oauth_pkce_sign_in(
         serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({ "raw": raw }));
     if !status.is_success() {
         let detail = oauth_error_message(&parsed).unwrap_or_else(|| "Unknown error".to_string());
+        if status.as_u16() == 409 {
+            return Err(format!(
+                "OpenRouter OAuth exchange failed (409): {detail}. Retry sign-in once; if this persists, use manual API key paste and report the error to OpenRouter support."
+            ));
+        }
         return Err(format!(
             "OpenRouter OAuth exchange failed ({}): {detail}",
             status.as_u16()

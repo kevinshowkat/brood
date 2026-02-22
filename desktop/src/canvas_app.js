@@ -77,8 +77,8 @@ const OPENROUTER_ONBOARDING_SORA_VIDEO_SRC = new URL(
   "./assets/onboarding/videos/openrouter_onboarding.mp4",
   import.meta.url
 ).href;
-const OPENROUTER_ONBOARDING_LOGO_SRC = new URL(
-  "./assets/onboarding/openrouter_logo_mark.svg",
+const OPENROUTER_ONBOARDING_LOGO_WHITE_SRC = new URL(
+  "./assets/onboarding/openrouter_logo_mark_white.svg",
   import.meta.url
 ).href;
 const MOTHER_REALTIME_MIN_MS = 4000;
@@ -104,6 +104,8 @@ const AESTHETIC_ONBOARDING_COMPLETED_KEY = "brood.aestheticOnboarding.completed.
 const AESTHETIC_ONBOARDING_PROFILE_KEY = "brood.aestheticOnboarding.profile.v1";
 const OPENROUTER_ONBOARDING_COMPLETED_KEY = "brood.openrouterOnboarding.completed.v1";
 const OPENROUTER_ONBOARDING_PROFILE_KEY = "brood.openrouterOnboarding.profile.v1";
+const OPENROUTER_ONBOARDING_SUCCESS_AUTO_CLOSE_MS = 1500;
+const OPENROUTER_OAUTH_WAITING_STATE_DELAY_MS = 900;
 const AESTHETIC_ONBOARDING_PROMPT =
   "Hyper-real modern loft interior with warm sunbeams, layered textures, and a hero seating area staged for a magazine shoot. Style focus: Interior designs.";
 const AESTHETIC_ONBOARDING_MODEL_CHOICES = Object.freeze([
@@ -1186,11 +1188,18 @@ const openrouterOnboardingState = {
   stepIndex: 0,
   source: "first_run",
   draft: defaultOpenRouterOnboardingDraft(),
+  manualEntryVisible: false,
   submitting: false,
   statusMessage: "",
   statusError: false,
+  statusDetail: "",
+  statusCanRetryOauth: false,
+  statusCanRevealManual: false,
+  statusCanCopyDetail: false,
   keyMasked: null,
   envPath: null,
+  oauthProgressTimer: null,
+  autoCloseTimer: null,
   transitionTimer: null,
 };
 
@@ -7397,6 +7406,109 @@ function renderOpenRouterOnboardingProgress(stepIndex) {
     }).join("");
 }
 
+function openRouterOnboardingRawErrorDetail(err, fallback = "Could not complete OpenRouter sign-in.") {
+  const value = err?.message || err?.cause?.message || err?.reason?.message || err || fallback;
+  const detail = String(value || fallback).replace(/\s+/g, " ").trim();
+  return detail || String(fallback);
+}
+
+function classifyOpenRouterOauthError(detail) {
+  const raw = String(detail || "").trim();
+  const lower = raw.toLowerCase();
+  if (
+    lower.includes("409") &&
+    (lower.includes("granting auth") ||
+      lower.includes("auth code") ||
+      lower.includes("openrouter oauth") ||
+      lower.includes("create or update app"))
+  ) {
+    return {
+      message: "OpenRouter sign-in returned a 409. Try again, or switch to manual key paste.",
+      canRetryOauth: true,
+      canRevealManual: true,
+      canCopyDetail: true,
+    };
+  }
+  if (
+    (lower.includes("port 3000") && (lower.includes("in use") || lower.includes("busy"))) ||
+    lower.includes("address already in use")
+  ) {
+    return {
+      message: "Port 3000 is in use, so Brood could not receive the OAuth callback. Retry after freeing that port, or use manual key paste.",
+      canRetryOauth: true,
+      canRevealManual: true,
+      canCopyDetail: true,
+    };
+  }
+  return {
+    message: normalizeErrorMessage(raw, "Could not complete OpenRouter sign-in."),
+    canRetryOauth: true,
+    canRevealManual: true,
+    canCopyDetail: true,
+  };
+}
+
+function openRouterOnboardingSetStatus({
+  message = "",
+  isError = false,
+  detail = "",
+  canRetryOauth = false,
+  canRevealManual = false,
+  canCopyDetail = false,
+} = {}) {
+  openrouterOnboardingState.statusMessage = String(message || "").trim();
+  openrouterOnboardingState.statusError = Boolean(isError);
+  openrouterOnboardingState.statusDetail = String(detail || "").trim();
+  openrouterOnboardingState.statusCanRetryOauth = Boolean(canRetryOauth);
+  openrouterOnboardingState.statusCanRevealManual = Boolean(canRevealManual);
+  openrouterOnboardingState.statusCanCopyDetail = Boolean(canCopyDetail);
+}
+
+function clearOpenRouterOnboardingOauthProgressTimer() {
+  if (openrouterOnboardingState.oauthProgressTimer) {
+    clearTimeout(openrouterOnboardingState.oauthProgressTimer);
+    openrouterOnboardingState.oauthProgressTimer = null;
+  }
+}
+
+function clearOpenRouterOnboardingAutoCloseTimer() {
+  if (openrouterOnboardingState.autoCloseTimer) {
+    clearTimeout(openrouterOnboardingState.autoCloseTimer);
+    openrouterOnboardingState.autoCloseTimer = null;
+  }
+}
+
+function scheduleOpenRouterOnboardingAutoClose() {
+  clearOpenRouterOnboardingAutoCloseTimer();
+  if (openrouterOnboardingState.source !== "first_run") return;
+  openrouterOnboardingState.autoCloseTimer = setTimeout(() => {
+    openrouterOnboardingState.autoCloseTimer = null;
+    if (!openrouterOnboardingState.open) return;
+    if (openrouterOnboardingState.stepIndex < 1) return;
+    closeOpenRouterOnboardingModal();
+  }, OPENROUTER_ONBOARDING_SUCCESS_AUTO_CLOSE_MS);
+}
+
+function revealOpenRouterOnboardingManualEntry({ focusInput = true } = {}) {
+  if (openrouterOnboardingState.manualEntryVisible) {
+    if (!focusInput) return;
+  } else {
+    openrouterOnboardingState.manualEntryVisible = true;
+    openrouterOnboardingState.statusCanRevealManual = false;
+  }
+  renderOpenRouterOnboardingStep({ animate: false });
+  if (!focusInput) return;
+  requestAnimationFrame(() => {
+    const inputEl = document.getElementById("openrouter-onboarding-key-input");
+    if (inputEl && typeof inputEl.focus === "function") {
+      inputEl.focus();
+      if (typeof inputEl.select === "function" && inputEl.value) {
+        inputEl.select();
+      }
+    }
+  });
+}
+
 function buildOpenRouterOnboardingKeyHtml() {
   const current = escapeHtml(openrouterOnboardingState.draft.apiKey || "");
   const statusText = String(openrouterOnboardingState.statusMessage || "").trim();
@@ -7404,12 +7516,52 @@ function buildOpenRouterOnboardingKeyHtml() {
     ? "openrouter-onboarding-form-status is-error"
     : "openrouter-onboarding-form-status";
   const submitDisabledAttr = openrouterOnboardingState.submitting ? " disabled" : "";
-  const keyStorageNote = "Saved to <code>~/.brood/.env</code> and applied for this app session.";
+  const manualEntryVisible = Boolean(openrouterOnboardingState.manualEntryVisible);
+  const statusActions = [];
+  if (openrouterOnboardingState.statusCanRetryOauth) {
+    statusActions.push(`
+      <button
+        type="button"
+        class="ghost openrouter-onboarding-status-action"
+        data-openrouter-action="oauth_retry"
+        ${submitDisabledAttr}
+      >
+        Try again
+      </button>
+    `);
+  }
+  if (openrouterOnboardingState.statusCanRevealManual && !manualEntryVisible) {
+    statusActions.push(`
+      <button
+        type="button"
+        class="ghost openrouter-onboarding-status-action"
+        data-openrouter-action="show_manual"
+        ${submitDisabledAttr}
+      >
+        Use manual key
+      </button>
+    `);
+  }
+  if (openrouterOnboardingState.statusCanCopyDetail) {
+    statusActions.push(`
+      <button
+        type="button"
+        class="ghost openrouter-onboarding-status-action"
+        data-openrouter-action="copy_error"
+        ${submitDisabledAttr}
+      >
+        Copy error details
+      </button>
+    `);
+  }
+  const statusActionsHtml = statusActions.length
+    ? `<div class="openrouter-onboarding-status-actions">${statusActions.join("")}</div>`
+    : "";
   return `
     <section class="openrouter-onboarding-step openrouter-onboarding-step-key">
       <h3 class="openrouter-onboarding-intro-title">Brood works best with OpenRouter</h3>
-      <p class="openrouter-onboarding-intro-copy">
-        Sign in with OpenRouter below, or paste your OPENROUTER_API_KEY manually and click Save key.
+      <p class="openrouter-onboarding-intro-copy openrouter-onboarding-key-lede">
+        Sign in with OpenRouter to connect your key automatically.
       </p>
       <div class="openrouter-onboarding-oauth-row">
         <button
@@ -7419,30 +7571,51 @@ function buildOpenRouterOnboardingKeyHtml() {
           ${submitDisabledAttr}
         >
           <span class="openrouter-onboarding-oauth-logo-wrap" aria-hidden="true">
-            <img class="openrouter-onboarding-oauth-logo" src="${OPENROUTER_ONBOARDING_LOGO_SRC}" alt="" />
+            <img class="openrouter-onboarding-oauth-logo" src="${OPENROUTER_ONBOARDING_LOGO_WHITE_SRC}" alt="" />
           </span>
-          <span class="openrouter-onboarding-oauth-button-label">Continue with OpenRouter</span>
+          <span class="openrouter-onboarding-oauth-button-label">Sign in with OpenRouter</span>
         </button>
-        <p class="openrouter-onboarding-key-note openrouter-onboarding-oauth-note">
-          Brood will open your browser, then finish setup automatically.
-        </p>
+        <div class="openrouter-onboarding-oauth-subsection">
+          ${
+            manualEntryVisible
+              ? `<p class="openrouter-onboarding-manual-label">Manual key entry</p>`
+              : `
+                  <button
+                    type="button"
+                    class="openrouter-onboarding-inline-link"
+                    data-openrouter-action="show_manual"
+                    ${submitDisabledAttr}
+                  >
+                    Use API key manually instead
+                  </button>
+                `
+          }
+        </div>
       </div>
-      <div class="openrouter-onboarding-divider" aria-hidden="true"><span>OR PASTE KEY MANUALLY</span></div>
-      <label class="openrouter-onboarding-inline-label" for="openrouter-onboarding-key-input">OPENROUTER_API_KEY</label>
-      <input
-        id="openrouter-onboarding-key-input"
-        class="openrouter-onboarding-key-input"
-        type="password"
-        autocomplete="off"
-        spellcheck="false"
-        placeholder="sk-or-v1-..."
-        value="${current}"
-        ${submitDisabledAttr}
-      />
-      <p class="openrouter-onboarding-intro-copy openrouter-onboarding-key-note">${keyStorageNote}</p>
+      ${
+        manualEntryVisible
+          ? `
+              <div class="openrouter-onboarding-divider" aria-hidden="true"><span>OR PASTE KEY MANUALLY</span></div>
+              <label class="openrouter-onboarding-inline-label" for="openrouter-onboarding-key-input">OPENROUTER_API_KEY</label>
+              <input
+                id="openrouter-onboarding-key-input"
+                class="openrouter-onboarding-key-input"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="sk-or-v1-..."
+                value="${current}"
+                ${submitDisabledAttr}
+              />
+            `
+          : ""
+      }
+      <p class="openrouter-onboarding-intro-copy openrouter-onboarding-key-note openrouter-onboarding-skip-note">
+        Skip for now keeps image generation disabled until you connect a key.
+      </p>
       ${
         statusText
-          ? `<div class="${statusClass}">${escapeHtml(statusText)}</div>`
+          ? `<div class="${statusClass}"><span>${escapeHtml(statusText)}</span>${statusActionsHtml}</div>`
           : ""
       }
     </section>
@@ -7455,11 +7628,11 @@ function buildOpenRouterOnboardingSuccessHtml() {
   const masked = profile?.keyMasked ? String(profile.keyMasked) : "saved";
   return `
     <section class="openrouter-onboarding-step openrouter-onboarding-step-confirm">
-      <h3 class="openrouter-onboarding-intro-title">OpenRouter key confirmed</h3>
+      <h3 class="openrouter-onboarding-intro-title">OpenRouter connected</h3>
       <p class="openrouter-onboarding-intro-copy">
-        Brood detected your OpenRouter key and setup is complete.
+        Setup complete. You can start generating on the canvas.
       </p>
-      <p class="openrouter-onboarding-intro-copy openrouter-onboarding-key-note">Key: <code>${escapeHtml(masked)}</code></p>
+      <p class="openrouter-onboarding-intro-copy openrouter-onboarding-key-note">Connected as <code>${escapeHtml(masked)}</code></p>
       <p class="openrouter-onboarding-intro-copy openrouter-onboarding-key-note">Confirmed: ${escapeHtml(when)}</p>
       <p class="openrouter-onboarding-intro-copy openrouter-onboarding-key-note">
         You can reopen this flow anytime from <strong>Settings → OpenRouter Onboarding</strong>.
@@ -7538,9 +7711,18 @@ function renderOpenRouterOnboardingStep({ animate = false } = {}) {
     els.openrouterOnboardingClose.textContent = stepIndex >= 1 ? "Close" : "Later";
     els.openrouterOnboardingClose.disabled = openrouterOnboardingState.submitting;
   }
+  const manualSaveVisible = stepIndex !== 0 || openrouterOnboardingState.manualEntryVisible;
   const nextText = stepIndex === 0 ? "Save key" : "Done";
-  const nextDisabled = openrouterOnboardingState.submitting;
+  const nextDisabled = openrouterOnboardingState.submitting || !manualSaveVisible;
   if (els.openrouterOnboardingNext) {
+    els.openrouterOnboardingNext.classList.toggle("openrouter-onboarding-footer-item-hidden", !manualSaveVisible);
+    if (manualSaveVisible) {
+      els.openrouterOnboardingNext.removeAttribute("aria-hidden");
+      els.openrouterOnboardingNext.removeAttribute("tabindex");
+    } else {
+      els.openrouterOnboardingNext.setAttribute("aria-hidden", "true");
+      els.openrouterOnboardingNext.setAttribute("tabindex", "-1");
+    }
     els.openrouterOnboardingNext.textContent = nextText;
     els.openrouterOnboardingNext.disabled = nextDisabled;
   }
@@ -7551,6 +7733,8 @@ function closeOpenRouterOnboardingModal() {
     clearTimeout(openrouterOnboardingState.transitionTimer);
     openrouterOnboardingState.transitionTimer = null;
   }
+  clearOpenRouterOnboardingOauthProgressTimer();
+  clearOpenRouterOnboardingAutoCloseTimer();
   if (els.openrouterOnboardingMediaVideo) {
     els.openrouterOnboardingMediaVideo.pause();
   }
@@ -7608,13 +7792,15 @@ function openOpenRouterOnboardingModal({ force = false, source = "first_run" } =
   if (!els.openrouterOnboardingModal) return false;
   const completed = localStorage.getItem(OPENROUTER_ONBOARDING_COMPLETED_KEY) === "1";
   if (!force && completed) return false;
+  clearOpenRouterOnboardingOauthProgressTimer();
+  clearOpenRouterOnboardingAutoCloseTimer();
   openrouterOnboardingState.open = true;
   openrouterOnboardingState.stepIndex = 0;
   openrouterOnboardingState.source = source;
   openrouterOnboardingState.draft = defaultOpenRouterOnboardingDraft();
+  openrouterOnboardingState.manualEntryVisible = false;
   openrouterOnboardingState.submitting = false;
-  openrouterOnboardingState.statusMessage = "";
-  openrouterOnboardingState.statusError = false;
+  openRouterOnboardingSetStatus();
   openrouterOnboardingState.keyMasked = null;
   openrouterOnboardingState.envPath = null;
   els.openrouterOnboardingModal.classList.remove("hidden");
@@ -7631,6 +7817,10 @@ function skipOpenRouterOnboarding() {
 function handleOpenRouterOnboardingNextAction() {
   if (!openrouterOnboardingState.open || openrouterOnboardingState.submitting) return;
   if (openrouterOnboardingState.stepIndex === 0) {
+    if (!openrouterOnboardingState.manualEntryVisible) {
+      revealOpenRouterOnboardingManualEntry();
+      return;
+    }
     submitOpenRouterOnboardingKey().catch((err) => {
       console.error(err);
     });
@@ -7676,12 +7866,13 @@ async function restartEngineAfterOpenRouterKeySave() {
 }
 
 async function finalizeOpenRouterOnboardingSuccess({ keyMasked = null, envPath = null } = {}) {
+  clearOpenRouterOnboardingOauthProgressTimer();
+  openRouterOnboardingSetStatus({ message: "Finishing setup…" });
+  renderOpenRouterOnboardingStep({ animate: false });
   await refreshKeyStatus().catch(() => {});
   if (!state?.keyStatus?.openrouter) {
     throw new Error("OPENROUTER_API_KEY was saved but key detection did not confirm yet.");
   }
-  openrouterOnboardingState.statusMessage = "Restarting engine to apply key…";
-  renderOpenRouterOnboardingStep({ animate: false });
   await restartEngineAfterOpenRouterKeySave();
   await refreshKeyStatus().catch(() => {});
   if (!state?.keyStatus?.openrouter) {
@@ -7697,10 +7888,10 @@ async function finalizeOpenRouterOnboardingSuccess({ keyMasked = null, envPath =
   // Ensure the confirm step renders with interactive controls enabled.
   openrouterOnboardingState.submitting = false;
   openrouterOnboardingState.stepIndex = 1;
-  openrouterOnboardingState.statusMessage = "";
-  openrouterOnboardingState.statusError = false;
+  openRouterOnboardingSetStatus();
   showToast("OpenRouter key connected.", "tip", 2200);
   renderOpenRouterOnboardingStep({ animate: true });
+  scheduleOpenRouterOnboardingAutoClose();
 }
 
 async function submitOpenRouterOnboardingKey() {
@@ -7710,15 +7901,19 @@ async function submitOpenRouterOnboardingKey() {
   const apiKey = raw.trim();
   openrouterOnboardingState.draft.apiKey = apiKey;
   if (!apiKey) {
-    openrouterOnboardingState.statusMessage = "Please paste your OPENROUTER_API_KEY.";
-    openrouterOnboardingState.statusError = true;
+    openRouterOnboardingSetStatus({
+      message: "Please paste your OPENROUTER_API_KEY.",
+      isError: true,
+      canRevealManual: true,
+    });
     renderOpenRouterOnboardingStep({ animate: false });
     return false;
   }
 
+  clearOpenRouterOnboardingOauthProgressTimer();
+  clearOpenRouterOnboardingAutoCloseTimer();
   openrouterOnboardingState.submitting = true;
-  openrouterOnboardingState.statusError = false;
-  openrouterOnboardingState.statusMessage = "Saving key and verifying detection…";
+  openRouterOnboardingSetStatus({ message: "Saving key and verifying detection…" });
   renderOpenRouterOnboardingStep({ animate: false });
 
   try {
@@ -7729,9 +7924,13 @@ async function submitOpenRouterOnboardingKey() {
     });
     return true;
   } catch (err) {
-    const message = normalizeErrorMessage(err, "Could not save OPENROUTER_API_KEY.");
-    openrouterOnboardingState.statusMessage = message;
-    openrouterOnboardingState.statusError = true;
+    const detail = openRouterOnboardingRawErrorDetail(err, "Could not save OPENROUTER_API_KEY.");
+    openRouterOnboardingSetStatus({
+      message: normalizeErrorMessage(detail, "Could not save OPENROUTER_API_KEY."),
+      isError: true,
+      detail,
+      canCopyDetail: true,
+    });
     renderOpenRouterOnboardingStep({ animate: false });
     return false;
   } finally {
@@ -7744,29 +7943,63 @@ async function submitOpenRouterOnboardingKey() {
 
 async function signInWithOpenRouterOauthPkce() {
   if (openrouterOnboardingState.submitting) return false;
+  clearOpenRouterOnboardingOauthProgressTimer();
+  clearOpenRouterOnboardingAutoCloseTimer();
   openrouterOnboardingState.submitting = true;
-  openrouterOnboardingState.statusError = false;
-  openrouterOnboardingState.statusMessage = "Opening OpenRouter sign-in in your browser…";
+  openRouterOnboardingSetStatus({ message: "Opening browser…" });
   renderOpenRouterOnboardingStep({ animate: false });
+  openrouterOnboardingState.oauthProgressTimer = setTimeout(() => {
+    openrouterOnboardingState.oauthProgressTimer = null;
+    if (!openrouterOnboardingState.open || !openrouterOnboardingState.submitting) return;
+    openRouterOnboardingSetStatus({ message: "Waiting for OpenRouter approval…" });
+    renderOpenRouterOnboardingStep({ animate: false });
+  }, OPENROUTER_OAUTH_WAITING_STATE_DELAY_MS);
 
   try {
     const result = await invoke("openrouter_oauth_pkce_sign_in", { timeoutSeconds: 240 });
+    clearOpenRouterOnboardingOauthProgressTimer();
+    openRouterOnboardingSetStatus({ message: "Finishing setup…" });
+    renderOpenRouterOnboardingStep({ animate: false });
     await finalizeOpenRouterOnboardingSuccess({
       keyMasked: result?.key_masked || null,
       envPath: result?.env_path || null,
     });
     return true;
   } catch (err) {
-    const message = normalizeErrorMessage(err, "Could not complete OpenRouter sign-in.");
-    openrouterOnboardingState.statusMessage = message;
-    openrouterOnboardingState.statusError = true;
+    clearOpenRouterOnboardingOauthProgressTimer();
+    const detail = openRouterOnboardingRawErrorDetail(err, "Could not complete OpenRouter sign-in.");
+    const classified = classifyOpenRouterOauthError(detail);
+    openRouterOnboardingSetStatus({
+      message: classified.message,
+      isError: true,
+      detail,
+      canRetryOauth: classified.canRetryOauth,
+      canRevealManual: classified.canRevealManual,
+      canCopyDetail: classified.canCopyDetail,
+    });
     renderOpenRouterOnboardingStep({ animate: false });
     return false;
   } finally {
+    clearOpenRouterOnboardingOauthProgressTimer();
     openrouterOnboardingState.submitting = false;
     if (openrouterOnboardingState.stepIndex === 0 && openrouterOnboardingState.open) {
       renderOpenRouterOnboardingStep({ animate: false });
     }
+  }
+}
+
+async function copyOpenRouterOnboardingErrorDetails() {
+  const detail = String(
+    openrouterOnboardingState.statusDetail || openrouterOnboardingState.statusMessage || ""
+  ).trim();
+  if (!detail) return false;
+  try {
+    await navigator.clipboard.writeText(detail);
+    showToast("OpenRouter error details copied.", "tip", 1800);
+    return true;
+  } catch {
+    showToast("Could not copy OpenRouter error details.", "error", 2200);
+    return false;
   }
 }
 
@@ -32124,9 +32357,22 @@ function installUi() {
         submitOpenRouterOnboardingKey().catch((err) => {
           console.error(err);
         });
+      } else if (action === "show_manual") {
+        bumpInteraction();
+        revealOpenRouterOnboardingManualEntry();
       } else if (action === "oauth_sign_in") {
         bumpInteraction();
         signInWithOpenRouterOauthPkce().catch((err) => {
+          console.error(err);
+        });
+      } else if (action === "oauth_retry") {
+        bumpInteraction();
+        signInWithOpenRouterOauthPkce().catch((err) => {
+          console.error(err);
+        });
+      } else if (action === "copy_error") {
+        bumpInteraction();
+        copyOpenRouterOnboardingErrorDetails().catch((err) => {
           console.error(err);
         });
       }
@@ -32153,8 +32399,7 @@ function installUi() {
       bumpInteraction();
       if (!openrouterOnboardingState.open || openrouterOnboardingState.stepIndex <= 0) return;
       openrouterOnboardingState.stepIndex -= 1;
-      openrouterOnboardingState.statusMessage = "";
-      openrouterOnboardingState.statusError = false;
+      openRouterOnboardingSetStatus();
       renderOpenRouterOnboardingStep({ animate: true });
     });
   }

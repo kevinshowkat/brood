@@ -7128,6 +7128,11 @@ button.ghost:hover {
   gap: 12px;
 }
 
+.openrouter-onboarding-step-key {
+  gap: 16px;
+  padding-top: 6px;
+}
+
 .openrouter-onboarding-step-title {
   margin: 0;
   font-size: clamp(26px, 2.8vw, 34px);
@@ -7155,12 +7160,59 @@ button.ghost:hover {
   color: rgba(230, 237, 243, 0.72);
 }
 
+.openrouter-onboarding-key-lede {
+  margin-top: 2px;
+  margin-bottom: 2px;
+  color: rgba(214, 226, 239, 0.84);
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.openrouter-onboarding-shell button.openrouter-onboarding-inline-link {
+  border: none;
+  background: none;
+  box-shadow: none;
+  padding: 0;
+  min-height: 0;
+  color: rgba(157, 192, 230, 0.92);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.openrouter-onboarding-shell button.openrouter-onboarding-inline-link:hover:not(:disabled) {
+  border: none;
+  background: none;
+  box-shadow: none;
+  color: rgba(199, 224, 251, 0.98);
+}
+
+.openrouter-onboarding-manual-label {
+  margin: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(230, 237, 243, 0.64);
+}
+
 .openrouter-onboarding-oauth-row {
   width: 100%;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.openrouter-onboarding-oauth-subsection {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 8px;
 }
 
 .openrouter-onboarding-oauth-button {
@@ -7192,11 +7244,14 @@ button.ghost:hover {
   height: 22px;
   display: grid;
   place-items: center;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(51, 65, 85, 0.9);
 }
 
 .openrouter-onboarding-oauth-logo {
-  width: 22px;
-  height: 22px;
+  width: 14px;
+  height: 14px;
   display: block;
 }
 
@@ -7217,7 +7272,7 @@ button.ghost:hover {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 2px 0;
+  margin: 8px 0 2px;
   color: rgba(178, 192, 209, 0.62);
   font-family: "IBM Plex Mono", monospace;
   font-size: 10px;
@@ -7234,7 +7289,7 @@ button.ghost:hover {
 }
 
 .openrouter-onboarding-inline-label {
-  margin-top: 6px;
+  margin-top: 10px;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -7383,12 +7438,33 @@ button.ghost:hover {
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
   line-height: 1.35;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .openrouter-onboarding-form-status.is-error {
   border-color: rgba(255, 107, 132, 0.7);
   background: rgba(62, 11, 20, 0.4);
   color: rgba(255, 193, 204, 0.98);
+}
+
+.openrouter-onboarding-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.openrouter-onboarding-shell button.openrouter-onboarding-status-action {
+  min-height: 30px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  font-size: 11px;
+}
+
+.openrouter-onboarding-skip-note {
+  margin-top: 4px;
+  color: rgba(200, 213, 228, 0.66);
 }
 
 .openrouter-onboarding-success {

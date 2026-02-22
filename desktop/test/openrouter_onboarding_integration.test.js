@@ -41,19 +41,35 @@ test("OpenRouter onboarding: key save invokes backend persistence + verification
   assert.match(app, /await restartEngineAfterOpenRouterKeySave\(\);/);
   assert.match(app, /invoke\("get_pty_status"\)/);
   assert.match(app, /engine did not report ready after restart/);
-  assert.match(app, /OpenRouter key confirmed/);
+  assert.match(app, /OpenRouter connected/);
 });
 
-test("OpenRouter onboarding: intro copy and bottom progress dots are concise", () => {
+test("OpenRouter onboarding: oauth-first copy, manual reveal, and bottom progress dots are concise", () => {
   assert.match(app, /Brood works best with OpenRouter/);
   assert.match(app, /const dotCount = 2;/);
   assert.doesNotMatch(app, /openrouter-onboarding-progress-dot-label/);
-  assert.match(app, /Sign in with OpenRouter below, or paste your OPENROUTER_API_KEY manually and click Save key\./);
-  assert.match(app, /Continue with OpenRouter/);
+  assert.match(app, /Sign in with OpenRouter to connect your key automatically\./);
+  assert.match(app, /Sign in with OpenRouter/);
   assert.match(app, /data-openrouter-action="oauth_sign_in"/);
-  assert.match(app, /Brood will open your browser, then finish setup automatically\./);
-  assert.match(app, /Saved to <code>~\/\.brood\/\.env<\/code> and applied for this app session\./);
+  assert.match(app, /Use API key manually instead/);
+  assert.match(app, /data-openrouter-action="show_manual"/);
+  assert.doesNotMatch(app, /Brood will open your browser, then finish setup automatically\./);
+  assert.doesNotMatch(app, /Stored locally in <code>~\/\.brood\/\.env<\/code>\./);
+  assert.match(app, /Skip for now keeps image generation disabled until you connect a key\./);
+  assert.match(app, /const manualSaveVisible = stepIndex !== 0 \|\| openrouterOnboardingState\.manualEntryVisible;/);
   assert.match(app, /const nextText = stepIndex === 0 \? "Save key" : "Done";/);
+});
+
+test("OpenRouter onboarding: OAuth progress and recovery actions are wired", () => {
+  assert.match(app, /Opening browser…/);
+  assert.match(app, /Waiting for OpenRouter approval…/);
+  assert.match(app, /Finishing setup…/);
+  assert.match(app, /Try again/);
+  assert.match(app, /Use manual key/);
+  assert.match(app, /Copy error details/);
+  assert.match(app, /data-openrouter-action="oauth_retry"/);
+  assert.match(app, /data-openrouter-action="copy_error"/);
+  assert.match(app, /function classifyOpenRouterOauthError\(/);
 });
 
 test("OpenRouter onboarding: progress row renders above footer buttons", () => {
@@ -76,5 +92,6 @@ test("OpenRouter onboarding: dark themed modal styles exist", () => {
   assert.match(css, /\.openrouter-onboarding-oauth-row\s*\{/);
   assert.match(css, /\.openrouter-onboarding-divider\s*\{/);
   assert.match(css, /\.openrouter-onboarding-success\s*\{/);
-  assert.match(app, /OPENROUTER_ONBOARDING_LOGO_SRC/);
+  assert.match(app, /OPENROUTER_ONBOARDING_LOGO_WHITE_SRC/);
+  assert.match(css, /\.openrouter-onboarding-key-lede\s*\{/);
 });
