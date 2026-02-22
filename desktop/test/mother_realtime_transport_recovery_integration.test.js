@@ -38,3 +38,14 @@ test("Mother confirm path clears stale pending realtime intent request before dr
   assert.match(app, /motherV2ClearPendingIntentRequest\(\{ reason: "confirm_takeover" \}\);/);
   assert.match(app, /if \(String\(latest\.phase \|\| ""\) !== MOTHER_IDLE_STATES\.INTENT_HYPOTHESIZING\) return null;/);
 });
+
+test("Mother intent setup cleanup prevents orphaned pending latch on reject/cancel", () => {
+  assert.match(
+    app,
+    /function motherV2ClearIntentAndDrafts\(\{ removeFiles = false \} = \{\}\) \{[\s\S]*idle\.pendingIntent = false;[\s\S]*clearTimeout\(idle\.pendingIntentTimeout\);[\s\S]*idle\.pendingIntentTimeout = null;/
+  );
+  assert.match(
+    app,
+    /if \(current && current\.pendingIntent && !String\(current\.pendingIntentRequestId \|\| ""\)\.trim\(\)\) \{[\s\S]*motherV2ClearPendingIntentRequest\(\{[\s\S]*reason: "intent_request_exit_orphaned",[\s\S]*clearBusy: true,[\s\S]*\}\);/
+  );
+});

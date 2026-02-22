@@ -14314,6 +14314,7 @@ function motherV2ClearIntentAndDrafts({ removeFiles = false } = {}) {
   idle.pendingVisionImageIds = [];
   clearTimeout(idle.pendingVisionRetryTimer);
   idle.pendingVisionRetryTimer = null;
+  idle.pendingIntent = false;
   idle.pendingIntentRequestId = null;
   idle.pendingIntentTransportRetryCount = 0;
   idle.pendingIntentStartedAt = 0;
@@ -14332,6 +14333,8 @@ function motherV2ClearIntentAndDrafts({ removeFiles = false } = {}) {
   idle.speculativePrefetchInFlight = false;
   idle.speculativePrefetchReadyMode = null;
   idle.promptMotionProfile = null;
+  clearTimeout(idle.pendingIntentTimeout);
+  idle.pendingIntentTimeout = null;
   state.pendingMotherDraft = null;
   idle.hintVisibleUntil = 0;
   idle.hintLevel = 0;
@@ -16616,10 +16619,18 @@ async function motherV2RequestIntentInference({
     return false;
   } finally {
     if (!keepPendingRequest) {
-      clearOwnedPendingRequest(state.motherIdle, {
+      const current = state.motherIdle;
+      clearOwnedPendingRequest(current, {
         clearBusy: true,
         busyReason: "intent_request_exit",
       });
+      // If another flow nulled the request id mid-setup (reject/cancel), avoid a stuck pending latch.
+      if (current && current.pendingIntent && !String(current.pendingIntentRequestId || "").trim()) {
+        motherV2ClearPendingIntentRequest({
+          reason: "intent_request_exit_orphaned",
+          clearBusy: true,
+        });
+      }
     }
   }
 }
