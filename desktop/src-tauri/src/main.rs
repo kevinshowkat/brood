@@ -3,11 +3,18 @@
     windows_subsystem = "windows"
 )]
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
+use rand::rngs::OsRng;
+use rand::RngCore;
+use reqwest::blocking::Client;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 #[cfg(target_family = "unix")]
 use std::io::{BufRead, BufReader};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::net::TcpListener;
 #[cfg(target_family = "unix")]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(target_family = "unix")]
@@ -16,8 +23,9 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{Manager, State};
+use url::Url;
 
 fn find_repo_root(start: &Path) -> Option<PathBuf> {
     let mut current = Some(start);
@@ -241,6 +249,262 @@ fn save_openrouter_api_key(api_key: String) -> Result<serde_json::Value, String>
         "key_masked": masked,
         "env_path": env_path.to_string_lossy().to_string(),
     }))
+}
+
+const OPENROUTER_OAUTH_AUTHORIZE_URL: &str = "https://openrouter.ai/auth";
+const OPENROUTER_OAUTH_EXCHANGE_URL: &str = "https://openrouter.ai/api/v1/auth/keys";
+
+fn oauth_random_urlsafe(len_bytes: usize) -> String {
+    let mut bytes = vec![0_u8; len_bytes.max(16)];
+    OsRng.fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn oauth_pkce_challenge(verifier: &str) -> String {
+    let digest = Sha256::digest(verifier.as_bytes());
+    URL_SAFE_NO_PAD.encode(digest)
+}
+
+fn oauth_write_browser_result_page(stream: &mut impl Write, status: &str, title: &str, body: &str) {
+    let page = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title>\
+         <style>body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;\
+         background:#090d13;color:#ecf2f8;padding:32px}}.card{{max-width:560px;margin:0 auto;\
+         border:1px solid #314357;border-radius:12px;padding:20px;background:#111924}}\
+         h1{{font-size:22px;margin:0 0 10px}}p{{line-height:1.45;color:#c4cfdb}}</style></head>\
+         <body><div class=\"card\"><h1>{title}</h1><p>{body}</p><p>You can close this window and return to Brood.</p></div></body></html>"
+    );
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        page.as_bytes().len(),
+        page
+    );
+    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.flush();
+}
+
+fn oauth_extract_callback_query(
+    request: &str,
+    port: u16,
+) -> Result<HashMap<String, String>, String> {
+    let first_line = request
+        .lines()
+        .next()
+        .ok_or("OAuth callback request was empty.")?;
+    let path = first_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or("OAuth callback request line missing path.")?;
+    let callback = Url::parse(&format!("http://127.0.0.1:{port}{path}"))
+        .map_err(|e| format!("Could not parse OAuth callback path: {e}"))?;
+    Ok(callback
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect())
+}
+
+fn oauth_error_message(payload: &serde_json::Value) -> Option<String> {
+    if let Some(message) = payload
+        .get("error")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(message.to_string());
+    }
+    if let Some(message) = payload
+        .get("error")
+        .and_then(|value| value.get("message"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(message.to_string());
+    }
+    if let Some(message) = payload
+        .get("message")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(message.to_string());
+    }
+    None
+}
+
+fn run_openrouter_oauth_pkce_sign_in(
+    app: &tauri::AppHandle,
+    timeout_seconds: u64,
+) -> Result<serde_json::Value, String> {
+    let timeout_seconds = timeout_seconds.clamp(30, 600);
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|e| format!("Could not start localhost callback listener: {e}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("Could not configure callback listener: {e}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("Could not read callback listener port: {e}"))?
+        .port();
+    let callback_url = format!("http://localhost:{port}");
+
+    let state = oauth_random_urlsafe(24);
+    let code_verifier = oauth_random_urlsafe(64);
+    let code_challenge = oauth_pkce_challenge(&code_verifier);
+
+    let mut auth_url = Url::parse(OPENROUTER_OAUTH_AUTHORIZE_URL)
+        .map_err(|e| format!("Could not build OpenRouter authorize URL: {e}"))?;
+    {
+        let mut query = auth_url.query_pairs_mut();
+        query.append_pair("callback_url", &callback_url);
+        query.append_pair("code_challenge", &code_challenge);
+        query.append_pair("code_challenge_method", "S256");
+        query.append_pair("state", &state);
+    }
+    tauri::api::shell::open(&app.shell_scope(), auth_url.as_str(), None)
+        .map_err(|e| format!("Could not open browser for OpenRouter sign-in: {e}"))?;
+
+    let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
+    let auth_code = loop {
+        if Instant::now() > deadline {
+            return Err("OpenRouter sign-in timed out. Please retry.".to_string());
+        }
+        match listener.accept() {
+            Ok((mut stream, _addr)) => {
+                let mut buf = [0_u8; 8192];
+                let bytes_read = stream.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..bytes_read]).to_string();
+                let query = oauth_extract_callback_query(&request, port).unwrap_or_default();
+                let returned_state = query
+                    .get("state")
+                    .map(|value| value.trim().to_string())
+                    .unwrap_or_default();
+                let returned_code = query
+                    .get("code")
+                    .map(|value| value.trim().to_string())
+                    .unwrap_or_default();
+                let oauth_error = query
+                    .get("error")
+                    .map(|value| value.trim().to_string())
+                    .unwrap_or_default();
+                let oauth_error_description = query
+                    .get("error_description")
+                    .map(|value| value.trim().to_string())
+                    .unwrap_or_default();
+
+                if !oauth_error.is_empty() {
+                    oauth_write_browser_result_page(
+                        &mut stream,
+                        "400 Bad Request",
+                        "OpenRouter Sign-in Failed",
+                        &oauth_error_description
+                            .chars()
+                            .take(300)
+                            .collect::<String>()
+                            .replace('<', "")
+                            .replace('>', ""),
+                    );
+                    return Err(if oauth_error_description.is_empty() {
+                        format!("OpenRouter sign-in failed: {oauth_error}")
+                    } else {
+                        format!("OpenRouter sign-in failed: {oauth_error_description}")
+                    });
+                }
+
+                if returned_state != state {
+                    oauth_write_browser_result_page(
+                        &mut stream,
+                        "400 Bad Request",
+                        "OpenRouter Sign-in Failed",
+                        "State validation failed. Please retry from Brood.",
+                    );
+                    return Err(
+                        "OpenRouter sign-in failed state validation. Please retry.".to_string()
+                    );
+                }
+
+                if returned_code.is_empty() {
+                    oauth_write_browser_result_page(
+                        &mut stream,
+                        "400 Bad Request",
+                        "OpenRouter Sign-in Failed",
+                        "Authorization code was missing. Please retry from Brood.",
+                    );
+                    return Err("OpenRouter sign-in returned no authorization code.".to_string());
+                }
+
+                oauth_write_browser_result_page(
+                    &mut stream,
+                    "200 OK",
+                    "OpenRouter Connected",
+                    "Authorization completed successfully.",
+                );
+                break returned_code;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(80));
+            }
+            Err(err) => {
+                return Err(format!("OpenRouter callback listener error: {err}"));
+            }
+        }
+    };
+    let client = Client::builder()
+        .timeout(Duration::from_secs(35))
+        .build()
+        .map_err(|e| format!("Could not initialize OpenRouter OAuth client: {e}"))?;
+    let payload = serde_json::json!({
+        "code": auth_code,
+        "code_verifier": code_verifier,
+        "code_challenge_method": "S256",
+    });
+    let response = client
+        .post(OPENROUTER_OAUTH_EXCHANGE_URL)
+        .json(&payload)
+        .send()
+        .map_err(|e| format!("OpenRouter OAuth exchange request failed: {e}"))?;
+    let status = response.status();
+    let raw = response
+        .text()
+        .unwrap_or_else(|_| "{\"error\":\"Could not read exchange response\"}".to_string());
+    let parsed: serde_json::Value =
+        serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({ "raw": raw }));
+    if !status.is_success() {
+        let detail = oauth_error_message(&parsed).unwrap_or_else(|| "Unknown error".to_string());
+        return Err(format!(
+            "OpenRouter OAuth exchange failed ({}): {detail}",
+            status.as_u16()
+        ));
+    }
+    let api_key = parsed
+        .get("key")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or("OpenRouter OAuth exchange succeeded but returned no key.")?;
+
+    let mut saved = save_openrouter_api_key(api_key.to_string())?;
+    if let Some(obj) = saved.as_object_mut() {
+        obj.insert(
+            "auth_method".to_string(),
+            serde_json::Value::String("oauth_pkce".to_string()),
+        );
+    }
+    Ok(saved)
+}
+
+#[tauri::command]
+async fn openrouter_oauth_pkce_sign_in(
+    app: tauri::AppHandle,
+    timeout_seconds: Option<u64>,
+) -> Result<serde_json::Value, String> {
+    let timeout_seconds = timeout_seconds.unwrap_or(180).clamp(30, 600);
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        run_openrouter_oauth_pkce_sign_in(&app_handle, timeout_seconds)
+    })
+    .await
+    .map_err(|err| format!("OpenRouter OAuth task failed: {err}"))?
 }
 
 #[derive(Debug, Clone)]
@@ -1287,6 +1551,7 @@ fn main() {
             export_run,
             get_key_status,
             save_openrouter_api_key,
+            openrouter_oauth_pkce_sign_in,
             get_pty_status,
             read_file_since,
         ])

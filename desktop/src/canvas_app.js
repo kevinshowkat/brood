@@ -77,6 +77,10 @@ const OPENROUTER_ONBOARDING_SORA_VIDEO_SRC = new URL(
   "./assets/onboarding/videos/openrouter_onboarding.mp4",
   import.meta.url
 ).href;
+const OPENROUTER_ONBOARDING_LOGO_SRC = new URL(
+  "./assets/onboarding/openrouter_logo_mark.svg",
+  import.meta.url
+).href;
 const MOTHER_REALTIME_MIN_MS = 4000;
 const MOTHER_USER_HOT_IDLE_MS = 10_000;
 // Avoid brief watch-phase spikes from flashing realtime chrome/video.
@@ -7381,7 +7385,7 @@ function renderOpenRouterOnboardingStatus() {
 
 function renderOpenRouterOnboardingProgress(stepIndex) {
   if (!els.openrouterOnboardingProgress) return;
-  const dotCount = 3;
+  const dotCount = 2;
   els.openrouterOnboardingProgress.innerHTML = Array.from({ length: dotCount }, (_, idx) => {
       const active = idx === stepIndex ? " is-active" : "";
       const complete = idx < stepIndex ? " is-complete" : "";
@@ -7393,32 +7397,37 @@ function renderOpenRouterOnboardingProgress(stepIndex) {
     }).join("");
 }
 
-function buildOpenRouterOnboardingIntroHtml() {
-  return `
-    <section class="openrouter-onboarding-step openrouter-onboarding-step-intro">
-      <h3 class="openrouter-onboarding-intro-title">Brood works best with OpenRouter</h3>
-      <p class="openrouter-onboarding-intro-copy">
-        On the next screen, we will ask for your OPENROUTER_API_KEY, then confirm the key is connected.
-      </p>
-      <p class="openrouter-onboarding-intro-copy">
-        Next: paste your key and click Save key. Brood stores it in ~/.brood/.env.
-      </p>
-    </section>
-  `;
-}
-
 function buildOpenRouterOnboardingKeyHtml() {
   const current = escapeHtml(openrouterOnboardingState.draft.apiKey || "");
   const statusText = String(openrouterOnboardingState.statusMessage || "").trim();
   const statusClass = openrouterOnboardingState.statusError
     ? "openrouter-onboarding-form-status is-error"
     : "openrouter-onboarding-form-status";
+  const submitDisabledAttr = openrouterOnboardingState.submitting ? " disabled" : "";
+  const keyStorageNote = "Saved to <code>~/.brood/.env</code> and applied for this app session.";
   return `
     <section class="openrouter-onboarding-step openrouter-onboarding-step-key">
-      <h3 class="openrouter-onboarding-intro-title">Connect your OpenRouter key</h3>
+      <h3 class="openrouter-onboarding-intro-title">Brood works best with OpenRouter</h3>
       <p class="openrouter-onboarding-intro-copy">
-        Paste your OPENROUTER_API_KEY below. Click Continue to save and verify.
+        Sign in with OpenRouter below, or paste your OPENROUTER_API_KEY manually and click Save key.
       </p>
+      <div class="openrouter-onboarding-oauth-row">
+        <button
+          type="button"
+          class="openrouter-onboarding-oauth-button"
+          data-openrouter-action="oauth_sign_in"
+          ${submitDisabledAttr}
+        >
+          <span class="openrouter-onboarding-oauth-logo-wrap" aria-hidden="true">
+            <img class="openrouter-onboarding-oauth-logo" src="${OPENROUTER_ONBOARDING_LOGO_SRC}" alt="" />
+          </span>
+          <span class="openrouter-onboarding-oauth-button-label">Continue with OpenRouter</span>
+        </button>
+        <p class="openrouter-onboarding-key-note openrouter-onboarding-oauth-note">
+          Brood will open your browser, then finish setup automatically.
+        </p>
+      </div>
+      <div class="openrouter-onboarding-divider" aria-hidden="true"><span>OR PASTE KEY MANUALLY</span></div>
       <label class="openrouter-onboarding-inline-label" for="openrouter-onboarding-key-input">OPENROUTER_API_KEY</label>
       <input
         id="openrouter-onboarding-key-input"
@@ -7428,8 +7437,9 @@ function buildOpenRouterOnboardingKeyHtml() {
         spellcheck="false"
         placeholder="sk-or-v1-..."
         value="${current}"
+        ${submitDisabledAttr}
       />
-      <p class="openrouter-onboarding-intro-copy openrouter-onboarding-key-note">Saved to <code>~/.brood/.env</code> and applied for this app session.</p>
+      <p class="openrouter-onboarding-intro-copy openrouter-onboarding-key-note">${keyStorageNote}</p>
       ${
         statusText
           ? `<div class="${statusClass}">${escapeHtml(statusText)}</div>`
@@ -7460,14 +7470,12 @@ function buildOpenRouterOnboardingSuccessHtml() {
 
 function renderOpenRouterOnboardingStep({ animate = false } = {}) {
   if (!els.openrouterOnboardingModal || !els.openrouterOnboardingBody) return;
-  const stepIndex = Math.max(0, Math.min(2, Number(openrouterOnboardingState.stepIndex) || 0));
-  const centeredBodyLayout = stepIndex <= 2;
+  const stepIndex = Math.max(0, Math.min(1, Number(openrouterOnboardingState.stepIndex) || 0));
+  const centeredBodyLayout = stepIndex <= 1;
   const bodyEl = els.openrouterOnboardingBody;
 
   const renderBody = () => {
     if (stepIndex === 0) {
-      bodyEl.innerHTML = buildOpenRouterOnboardingIntroHtml();
-    } else if (stepIndex === 1) {
       bodyEl.innerHTML = buildOpenRouterOnboardingKeyHtml();
     } else {
       bodyEl.innerHTML = buildOpenRouterOnboardingSuccessHtml();
@@ -7498,7 +7506,7 @@ function renderOpenRouterOnboardingStep({ animate = false } = {}) {
   renderOpenRouterOnboardingProgress(stepIndex);
 
   if (els.openrouterOnboardingBack) {
-    const hidden = stepIndex <= 0 || stepIndex >= 2;
+    const hidden = true;
     const disabled = openrouterOnboardingState.submitting || hidden;
     els.openrouterOnboardingBack.classList.toggle("openrouter-onboarding-footer-item-hidden", hidden);
     els.openrouterOnboardingBack.disabled = disabled;
@@ -7511,7 +7519,7 @@ function renderOpenRouterOnboardingStep({ animate = false } = {}) {
     }
   }
   if (els.openrouterOnboardingSkip) {
-    const hidden = stepIndex >= 2;
+    const hidden = stepIndex >= 1;
     const disabled = openrouterOnboardingState.submitting;
     const unavailable = hidden || disabled;
     els.openrouterOnboardingSkip.classList.toggle("openrouter-onboarding-footer-item-hidden", hidden);
@@ -7527,10 +7535,10 @@ function renderOpenRouterOnboardingStep({ animate = false } = {}) {
     }
   }
   if (els.openrouterOnboardingClose) {
-    els.openrouterOnboardingClose.textContent = stepIndex >= 2 ? "Close" : "Later";
+    els.openrouterOnboardingClose.textContent = stepIndex >= 1 ? "Close" : "Later";
     els.openrouterOnboardingClose.disabled = openrouterOnboardingState.submitting;
   }
-  const nextText = stepIndex === 0 ? "Continue" : stepIndex === 1 ? "Save key" : "Done";
+  const nextText = stepIndex === 0 ? "Save key" : "Done";
   const nextDisabled = openrouterOnboardingState.submitting;
   if (els.openrouterOnboardingNext) {
     els.openrouterOnboardingNext.textContent = nextText;
@@ -7623,11 +7631,6 @@ function skipOpenRouterOnboarding() {
 function handleOpenRouterOnboardingNextAction() {
   if (!openrouterOnboardingState.open || openrouterOnboardingState.submitting) return;
   if (openrouterOnboardingState.stepIndex === 0) {
-    openrouterOnboardingState.stepIndex = 1;
-    renderOpenRouterOnboardingStep({ animate: true });
-    return;
-  }
-  if (openrouterOnboardingState.stepIndex === 1) {
     submitOpenRouterOnboardingKey().catch((err) => {
       console.error(err);
     });
@@ -7672,6 +7675,34 @@ async function restartEngineAfterOpenRouterKeySave() {
   throw new Error("OPENROUTER_API_KEY saved, but engine did not report ready after restart. Start a new run or relaunch.");
 }
 
+async function finalizeOpenRouterOnboardingSuccess({ keyMasked = null, envPath = null } = {}) {
+  await refreshKeyStatus().catch(() => {});
+  if (!state?.keyStatus?.openrouter) {
+    throw new Error("OPENROUTER_API_KEY was saved but key detection did not confirm yet.");
+  }
+  openrouterOnboardingState.statusMessage = "Restarting engine to apply key…";
+  renderOpenRouterOnboardingStep({ animate: false });
+  await restartEngineAfterOpenRouterKeySave();
+  await refreshKeyStatus().catch(() => {});
+  if (!state?.keyStatus?.openrouter) {
+    throw new Error("OPENROUTER_API_KEY saved, but post-restart key detection is still unavailable.");
+  }
+  openrouterOnboardingState.keyMasked = keyMasked ? String(keyMasked) : null;
+  openrouterOnboardingState.envPath = envPath ? String(envPath) : null;
+  saveOpenRouterOnboardingCompletion({
+    success: true,
+    keyMasked: openrouterOnboardingState.keyMasked,
+    envPath: openrouterOnboardingState.envPath,
+  });
+  // Ensure the confirm step renders with interactive controls enabled.
+  openrouterOnboardingState.submitting = false;
+  openrouterOnboardingState.stepIndex = 1;
+  openrouterOnboardingState.statusMessage = "";
+  openrouterOnboardingState.statusError = false;
+  showToast("OpenRouter key connected.", "tip", 2200);
+  renderOpenRouterOnboardingStep({ animate: true });
+}
+
 async function submitOpenRouterOnboardingKey() {
   if (openrouterOnboardingState.submitting) return false;
   const inputEl = document.getElementById("openrouter-onboarding-key-input");
@@ -7692,31 +7723,10 @@ async function submitOpenRouterOnboardingKey() {
 
   try {
     const result = await invoke("save_openrouter_api_key", { apiKey });
-    await refreshKeyStatus().catch(() => {});
-    if (!state?.keyStatus?.openrouter) {
-      throw new Error("OPENROUTER_API_KEY was saved but key detection did not confirm yet.");
-    }
-    openrouterOnboardingState.statusMessage = "Restarting engine to apply key…";
-    renderOpenRouterOnboardingStep({ animate: false });
-    await restartEngineAfterOpenRouterKeySave();
-    await refreshKeyStatus().catch(() => {});
-    if (!state?.keyStatus?.openrouter) {
-      throw new Error("OPENROUTER_API_KEY saved, but post-restart key detection is still unavailable.");
-    }
-    openrouterOnboardingState.keyMasked = result?.key_masked ? String(result.key_masked) : null;
-    openrouterOnboardingState.envPath = result?.env_path ? String(result.env_path) : null;
-    saveOpenRouterOnboardingCompletion({
-      success: true,
-      keyMasked: openrouterOnboardingState.keyMasked,
-      envPath: openrouterOnboardingState.envPath,
+    await finalizeOpenRouterOnboardingSuccess({
+      keyMasked: result?.key_masked || null,
+      envPath: result?.env_path || null,
     });
-    // Ensure the confirm step renders with interactive controls enabled.
-    openrouterOnboardingState.submitting = false;
-    openrouterOnboardingState.stepIndex = 2;
-    openrouterOnboardingState.statusMessage = "";
-    openrouterOnboardingState.statusError = false;
-    showToast("OpenRouter key connected.", "tip", 2200);
-    renderOpenRouterOnboardingStep({ animate: true });
     return true;
   } catch (err) {
     const message = normalizeErrorMessage(err, "Could not save OPENROUTER_API_KEY.");
@@ -7726,7 +7736,35 @@ async function submitOpenRouterOnboardingKey() {
     return false;
   } finally {
     openrouterOnboardingState.submitting = false;
-    if (openrouterOnboardingState.stepIndex === 1 && openrouterOnboardingState.open) {
+    if (openrouterOnboardingState.stepIndex === 0 && openrouterOnboardingState.open) {
+      renderOpenRouterOnboardingStep({ animate: false });
+    }
+  }
+}
+
+async function signInWithOpenRouterOauthPkce() {
+  if (openrouterOnboardingState.submitting) return false;
+  openrouterOnboardingState.submitting = true;
+  openrouterOnboardingState.statusError = false;
+  openrouterOnboardingState.statusMessage = "Opening OpenRouter sign-in in your browser…";
+  renderOpenRouterOnboardingStep({ animate: false });
+
+  try {
+    const result = await invoke("openrouter_oauth_pkce_sign_in", { timeoutSeconds: 240 });
+    await finalizeOpenRouterOnboardingSuccess({
+      keyMasked: result?.key_masked || null,
+      envPath: result?.env_path || null,
+    });
+    return true;
+  } catch (err) {
+    const message = normalizeErrorMessage(err, "Could not complete OpenRouter sign-in.");
+    openrouterOnboardingState.statusMessage = message;
+    openrouterOnboardingState.statusError = true;
+    renderOpenRouterOnboardingStep({ animate: false });
+    return false;
+  } finally {
+    openrouterOnboardingState.submitting = false;
+    if (openrouterOnboardingState.stepIndex === 0 && openrouterOnboardingState.open) {
       renderOpenRouterOnboardingStep({ animate: false });
     }
   }
@@ -11071,7 +11109,7 @@ function buildMotherText() {
     if (isReelSizeLocked()) {
       return "Proposal ready. ✓ deploy, R reroll.";
     }
-    return "Proposal ready. ✓ deploy, ✕ dismiss, R reroll.";
+    return "Proposal ready. ✓ deploy, M dismiss, R reroll.";
   }
   if (phase === MOTHER_IDLE_STATES.COMMITTING) {
     return "Committing draft to canvas…";
@@ -18716,7 +18754,7 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
     proposal_confidence: Number(idle.intent?.confidence) || 0,
   }).catch(() => {});
   if (!isReelSizeLocked()) {
-    showToast("Mother proposal ready. ✓ deploy, ✕ dismiss, R reroll.", "tip", 2200);
+    showToast("Mother proposal ready. ✓ deploy, M dismiss, R reroll.", "tip", 2200);
   }
   requestRender();
   return true;
@@ -32086,6 +32124,11 @@ function installUi() {
         submitOpenRouterOnboardingKey().catch((err) => {
           console.error(err);
         });
+      } else if (action === "oauth_sign_in") {
+        bumpInteraction();
+        signInWithOpenRouterOauthPkce().catch((err) => {
+          console.error(err);
+        });
       }
     });
     els.openrouterOnboardingBody.addEventListener("input", (event) => {
@@ -32132,7 +32175,7 @@ function installUi() {
   if (els.openrouterOnboardingClose) {
     els.openrouterOnboardingClose.addEventListener("click", () => {
       bumpInteraction();
-      if (openrouterOnboardingState.stepIndex >= 2) {
+      if (openrouterOnboardingState.stepIndex >= 1) {
         closeOpenRouterOnboardingModal();
       } else {
         skipOpenRouterOnboarding();
@@ -32143,7 +32186,7 @@ function installUi() {
     els.openrouterOnboardingModal.addEventListener("pointerdown", (event) => {
       if (event?.target !== els.openrouterOnboardingModal) return;
       bumpInteraction();
-      if (openrouterOnboardingState.stepIndex >= 2) {
+      if (openrouterOnboardingState.stepIndex >= 1) {
         closeOpenRouterOnboardingModal();
       } else {
         skipOpenRouterOnboarding();

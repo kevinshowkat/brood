@@ -45,3 +45,9 @@ test("Mother intent replay in hypothesizing phase dispatches before consuming qu
     /if \(String\(idle\.phase \|\| ""\) === MOTHER_IDLE_STATES\.INTENT_HYPOTHESIZING\) \{[\s\S]*const dispatched = await motherV2RequestIntentInference\(\)\.catch\(\(\) => false\);[\s\S]*if \(dispatched\) \{[\s\S]*latest\.intentReplayQueued = false;[\s\S]*dispatch: "direct",/
   );
 });
+
+test("Mother proposal guidance consistently uses M dismiss", () => {
+  assert.match(app, /Proposal ready\. ✓ deploy, M dismiss, R reroll\./);
+  assert.match(app, /Mother proposal ready\. ✓ deploy, M dismiss, R reroll\./);
+  assert.doesNotMatch(app, /✕ dismiss/);
+});

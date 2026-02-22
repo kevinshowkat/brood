@@ -33,9 +33,11 @@ test("OpenRouter onboarding: first-run auto open and settings relaunch are wired
 
 test("OpenRouter onboarding: key save invokes backend persistence + verification", () => {
   assert.match(app, /invoke\(\"save_openrouter_api_key\", \{ apiKey \}\)/);
+  assert.match(app, /invoke\(\"openrouter_oauth_pkce_sign_in\", \{ timeoutSeconds: 240 \}\)/);
   assert.match(app, /await refreshKeyStatus\(\)\.catch\(\(\) => \{\}\);/);
   assert.match(app, /if \(!state\?\.keyStatus\?\.openrouter\)/);
   assert.match(app, /function restartEngineAfterOpenRouterKeySave\(\)/);
+  assert.match(app, /async function signInWithOpenRouterOauthPkce\(\)/);
   assert.match(app, /await restartEngineAfterOpenRouterKeySave\(\);/);
   assert.match(app, /invoke\("get_pty_status"\)/);
   assert.match(app, /engine did not report ready after restart/);
@@ -44,9 +46,14 @@ test("OpenRouter onboarding: key save invokes backend persistence + verification
 
 test("OpenRouter onboarding: intro copy and bottom progress dots are concise", () => {
   assert.match(app, /Brood works best with OpenRouter/);
-  assert.match(app, /const dotCount = 3;/);
+  assert.match(app, /const dotCount = 2;/);
   assert.doesNotMatch(app, /openrouter-onboarding-progress-dot-label/);
-  assert.match(app, /Next: paste your key and click Save key\. Brood stores it in ~\/\.brood\/\.env\./);
+  assert.match(app, /Sign in with OpenRouter below, or paste your OPENROUTER_API_KEY manually and click Save key\./);
+  assert.match(app, /Continue with OpenRouter/);
+  assert.match(app, /data-openrouter-action="oauth_sign_in"/);
+  assert.match(app, /Brood will open your browser, then finish setup automatically\./);
+  assert.match(app, /Saved to <code>~\/\.brood\/\.env<\/code> and applied for this app session\./);
+  assert.match(app, /const nextText = stepIndex === 0 \? "Save key" : "Done";/);
 });
 
 test("OpenRouter onboarding: progress row renders above footer buttons", () => {
@@ -66,5 +73,8 @@ test("OpenRouter onboarding: right-side portrait video placeholder is reserved",
 test("OpenRouter onboarding: dark themed modal styles exist", () => {
   assert.match(css, /\.openrouter-onboarding-modal\s*\{/);
   assert.match(css, /\.openrouter-onboarding-shell\s*\{/);
+  assert.match(css, /\.openrouter-onboarding-oauth-row\s*\{/);
+  assert.match(css, /\.openrouter-onboarding-divider\s*\{/);
   assert.match(css, /\.openrouter-onboarding-success\s*\{/);
+  assert.match(app, /OPENROUTER_ONBOARDING_LOGO_SRC/);
 });
