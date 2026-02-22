@@ -16,7 +16,7 @@ test("Mother generate payload uses minimal brood.mother.generate.v2 envelope", (
   const payloadText = fnMatch[1];
 
   assert.match(payloadText, /schema:\s*"brood\.mother\.generate\.v2"/);
-  assert.match(payloadText, /prompt:\s*promptLine/);
+  assert.match(payloadText, /prompt:\s*finalPromptLine/);
   assert.match(payloadText, /init_image:\s*imagePayload\.initImage/);
   assert.match(payloadText, /reference_images:\s*imagePayload\.referenceImages/);
 
