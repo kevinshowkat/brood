@@ -1,0 +1,144 @@
+name: update-homebrew-tap
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to sync (for example: v0.2.3)"
+        required: false
+        type: string
+
+concurrency:
+  group: update-homebrew-tap
+  cancel-in-progress: false
+
+jobs:
+  bump-tap-cask:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && !github.event.release.prerelease && !github.event.release.draft)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      SOURCE_REPO: ${{ github.repository }}
+      TAP_REPO: kevinshowkat/homebrew-brood
+      INPUT_TAG: ${{ github.event.inputs.tag }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      TAP_TOKEN: ${{ secrets.BROOD_HOMEBREW_TAP_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Validate configuration
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN}" ]; then
+            echo "BROOD_HOMEBREW_TAP_TOKEN is not set." >&2
+            exit 1
+          fi
+
+      - name: Resolve release tag and asset URL
+        id: release
+        run: |
+          set -euo pipefail
+
+          TAG="${INPUT_TAG:-$RELEASE_TAG}"
+          if [ -z "${TAG}" ]; then
+            TAG="$(gh api "repos/${SOURCE_REPO}/releases/latest" -q '.tag_name')"
+          fi
+          TAG="${TAG#refs/tags/}"
+
+          if [[ ! "${TAG}" =~ ^v[0-9] ]]; then
+            echo "Expected tag like v0.2.3, got '${TAG}'." >&2
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          RELEASE_JSON="$(gh api "repos/${SOURCE_REPO}/releases/tags/${TAG}")"
+
+          ASSET_URL="$(jq -r --arg version "${VERSION}" '
+            .assets[]
+            | select(.name == ("Brood_" + $version + "_universal.dmg"))
+            | .browser_download_url
+          ' <<<"${RELEASE_JSON}" | head -n 1)"
+
+          if [ -z "${ASSET_URL}" ] || [ "${ASSET_URL}" = "null" ]; then
+            ASSET_URL="$(jq -r '
+              .assets[]
+              | select(.name | test("^Brood_.*_universal\\.dmg$"))
+              | .browser_download_url
+            ' <<<"${RELEASE_JSON}" | head -n 1)"
+          fi
+
+          if [ -z "${ASSET_URL}" ] || [ "${ASSET_URL}" = "null" ]; then
+            echo "Could not find a universal DMG asset on release ${TAG}." >&2
+            exit 1
+          fi
+
+          echo "tag=${TAG}" >>"${GITHUB_OUTPUT}"
+          echo "version=${VERSION}" >>"${GITHUB_OUTPUT}"
+          echo "asset_url=${ASSET_URL}" >>"${GITHUB_OUTPUT}"
+
+      - name: Download DMG and compute SHA256
+        id: checksum
+        run: |
+          set -euo pipefail
+          dmg_file="$(mktemp /tmp/brood-release-XXXXXX)"
+          curl -fsSL "${{ steps.release.outputs.asset_url }}" -o "${dmg_file}"
+          sha256="$(sha256sum "${dmg_file}" | awk '{print $1}')"
+          rm -f "${dmg_file}"
+          echo "sha256=${sha256}" >>"${GITHUB_OUTPUT}"
+
+      - name: Checkout tap repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ env.TAP_REPO }}
+          token: ${{ secrets.BROOD_HOMEBREW_TAP_TOKEN }}
+          path: tap
+          fetch-depth: 0
+
+      - name: Update cask file
+        run: |
+          set -euo pipefail
+          mkdir -p tap/Casks
+          cat > tap/Casks/brood.rb <<RUBY
+          cask "brood" do
+            version "${{ steps.release.outputs.version }}"
+            sha256 "${{ steps.checksum.outputs.sha256 }}"
+
+            url "https://github.com/kevinshowkat/brood/releases/download/v#{version}/Brood_#{version}_universal.dmg"
+            name "Brood"
+            desc "Reference-first AI image editing desktop for developers"
+            homepage "https://github.com/kevinshowkat/brood"
+
+            livecheck do
+              url :url
+              strategy :github_latest
+            end
+
+            app "Brood.app"
+
+            zap trash: [
+              "~/.brood",
+              "~/Library/Caches/com.brood.app",
+              "~/Library/Preferences/com.brood.app.plist",
+              "~/Library/Saved Application State/com.brood.app.savedState",
+            ]
+          end
+          RUBY
+
+      - name: Commit and push cask bump
+        run: |
+          set -euo pipefail
+          cd tap
+          if git diff --quiet -- Casks/brood.rb; then
+            echo "No cask changes detected. Nothing to push."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/brood.rb
+          git commit -m "cask brood: bump to ${{ steps.release.outputs.version }}"
+          git push origin HEAD:main

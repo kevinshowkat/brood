@@ -9,6 +9,7 @@ When you push a tag like `v0.1.0`, GitHub Actions will:
 - code sign it (Developer ID Application)
 - notarize it
 - attach the signed/notarized `.dmg` to a draft GitHub Release for that tag
+- when the release is published, update `kevinshowkat/homebrew-brood` cask with the new version + SHA256
 
 Smoke details:
 - Workflow: `.github/workflows/desktop-clean-machine-smoke.yml`
@@ -26,6 +27,9 @@ Set these secrets in your GitHub repository:
 - `BROOD_RELEASE_TOKEN` (recommended): PAT used for GitHub Release create/upload calls in `publish.yml`.
   - Use a token with repo contents write access (`repo` scope for classic PAT, or equivalent fine-grained permission).
   - If omitted, workflow falls back to the default workflow token.
+- `BROOD_HOMEBREW_TAP_TOKEN`: PAT used by `.github/workflows/update-homebrew-tap.yml` to push cask updates to `kevinshowkat/homebrew-brood`.
+  - For a fine-grained PAT: grant `Contents: Read and write` on `kevinshowkat/homebrew-brood`.
+  - Classic PAT with `repo` scope also works.
 
 Notes:
 - The workflow imports the certificate into a temporary build keychain and auto-detects the `Developer ID Application` identity to use.
@@ -45,6 +49,7 @@ Notes:
    - `git push origin vX.Y.Z`
 5. Wait for the `publish` workflow to finish.
 6. Publish the draft release on GitHub (or change `releaseDraft` to `false` in the workflow once you're confident).
+7. After publishing, verify `update-homebrew-tap` succeeded and that `homebrew-brood/Casks/brood.rb` was bumped.
 
 ## Optional: Disposable Remote Mac Snapshot Run
 
