@@ -1300,6 +1300,7 @@ const state = {
   effectTokenDrag: null, // { tokenId, sourceImageId, targetImageId, moved, x, y }
   effectTokenApplyLocks: new Map(), // tokenId -> { dispatchId, targetImageId, queued, startedAt }
   motherOverlayUiHits: [], // [{ kind, targetId?, rect: {x,y,w,h} }]
+  motherRolePreviewHoverImageId: null, // imageId currently hovered in the mother role preview panel
   activeImageTransformUiHits: [], // [{ kind, edge?, cursor?, targetId, rect: {x,y,w,h} }]
   motherResultDetailsOpenId: null, // imageId currently showing provenance popover
   wheelMenu: {
@@ -9694,6 +9695,41 @@ function motherV2RolePreviewEntries() {
   return entries;
 }
 
+function motherRolePreviewImageIdFromEvent(event) {
+  const target = event?.target;
+  if (!(target instanceof Element)) return "";
+  const rectEl = target.closest(".mother-role-preview-rect[data-image-id]");
+  if (!rectEl) return "";
+  return String(rectEl?.dataset?.imageId || "").trim();
+}
+
+function syncMotherRolePreviewHoverState() {
+  const root = els.motherRolePreview;
+  if (!root) return;
+  const hoveredId = String(state.motherRolePreviewHoverImageId || "").trim();
+  const rectEls = root.querySelectorAll(".mother-role-preview-rect[data-image-id]");
+  let hasHoveredRect = false;
+  for (const rectEl of rectEls) {
+    const imageId = String(rectEl?.dataset?.imageId || "").trim();
+    const isHovered = Boolean(hoveredId && imageId && imageId === hoveredId);
+    rectEl.classList.toggle("is-live-tether-hover", isHovered);
+    if (isHovered) hasHoveredRect = true;
+  }
+  if (hoveredId && !hasHoveredRect) {
+    state.motherRolePreviewHoverImageId = null;
+  }
+}
+
+function setMotherRolePreviewHoverImageId(rawImageId, { requestFrame = true } = {}) {
+  const next = String(rawImageId || "").trim() || null;
+  const prev = String(state.motherRolePreviewHoverImageId || "").trim() || null;
+  if (next === prev) return false;
+  state.motherRolePreviewHoverImageId = next;
+  syncMotherRolePreviewHoverState();
+  if (requestFrame) requestRender();
+  return true;
+}
+
 function motherV2RolePreviewSignature(
   entries,
   { canvasCssW, canvasCssH, surfaceW, surfaceH, animationMode = "", promptMotionKey = "" } = {}
@@ -10700,6 +10736,7 @@ function motherV2RolePreviewHtml(
     const projected = rec.projected;
     const title = entry.roleLabel ? `${entry.roleLabel}: ${entry.imageLabel}` : entry.imageLabel;
     const roleClass = entry.roleKey ? ` is-${escapeHtml(entry.roleKey)}` : "";
+    const activeClass = entry.isActive ? " is-active" : "";
     const profile = motherV2RolePreviewMotionProfile({
       mode,
       roleKey: entry.roleKey,
@@ -10766,7 +10803,7 @@ function motherV2RolePreviewHtml(
     )}`;
     rects.push(`
       <div
-        class="mother-role-preview-rect${roleClass}"
+        class="mother-role-preview-rect${roleClass}${activeClass}"
         data-image-id="${escapeHtml(String(entry.imageId || entry.imagePath || entry.imageLabel || ""))}"
         data-anim="${escapeHtml(animKind)}"
         style="${outerStyle}"
@@ -10922,6 +10959,7 @@ function renderMotherRolePreview() {
     root.innerHTML = "";
     root.dataset.previewSig = "";
     root.classList.add("hidden");
+    setMotherRolePreviewHoverImageId("", { requestFrame: false });
     return;
   }
   const hasProposalImageSet = motherV2HasProposalImageSet();
@@ -10930,6 +10968,7 @@ function renderMotherRolePreview() {
     root.innerHTML = "";
     root.dataset.previewSig = "";
     root.classList.add("hidden");
+    setMotherRolePreviewHoverImageId("", { requestFrame: false });
     return;
   }
   const animationMode = motherV2RolePreviewAnimationMode();
@@ -10980,6 +11019,7 @@ function renderMotherRolePreview() {
   if (root.dataset.previewSig === sig) {
     motherV2SyncRolePreviewViewport(root, projection, { canvasCssW, canvasCssH });
     motherV2StopRolePreviewSankeyTicker();
+    syncMotherRolePreviewHoverState();
     return;
   }
 
@@ -10995,12 +11035,14 @@ function renderMotherRolePreview() {
     motherV2StopRolePreviewSankeyTicker();
     root.innerHTML = "";
     root.dataset.previewSig = "";
+    setMotherRolePreviewHoverImageId("", { requestFrame: false });
     return;
   }
   root.innerHTML = html;
   root.dataset.previewSig = sig;
   motherV2SyncRolePreviewViewport(root, projection, { canvasCssW, canvasCssH });
   motherV2StopRolePreviewSankeyTicker();
+  syncMotherRolePreviewHoverState();
 }
 
 function buildMotherText() {
@@ -15065,9 +15107,77 @@ function motherV2HasHumanSignal(hints = []) {
   return /(person|people|human|face|portrait|selfie|woman|man|child)/i.test(text);
 }
 
-function motherV2HasPhotorealSignal(hints = []) {
+const MOTHER_V2_PHOTOREAL_STYLE_PATTERNS = Object.freeze([
+  /\bphoto\b/i,
+  /\bphotograph(ic|y)?\b/i,
+  /\bphotoreal\b/i,
+  /\bphotorealistic\b/i,
+  /\brealistic\b/i,
+  /\bdslr\b/i,
+  /\b35mm\b/i,
+  /\bcinematic\b/i,
+  /\bfilm\s+still\b/i,
+  /\bbokeh\b/i,
+  /\bnatural\s+light(?:ing)?\b/i,
+]);
+
+const MOTHER_V2_STYLIZED_STYLE_PATTERNS = Object.freeze([
+  /\bcartoon\b/i,
+  /\btoon\b/i,
+  /\banime\b/i,
+  /\bmanga\b/i,
+  /\billustration\b/i,
+  /\billustrated\b/i,
+  /\bgraphic\b/i,
+  /\bvector\b/i,
+  /\bcomic\b/i,
+  /\bline\s*art\b/i,
+  /\bsketch\b/i,
+  /\bpainterly\b/i,
+  /\bpainting\b/i,
+  /\bcel[-\s]?shaded\b/i,
+  /\bcgi\b/i,
+  /\b3d\s+render(?:ed|ing)?\b/i,
+  /\bpixel\s*art\b/i,
+  /\blow[-\s]?poly\b/i,
+  /\bstylized\b/i,
+  /\bstylised\b/i,
+]);
+
+function motherV2CountStylePatternHits(text = "", patterns = []) {
+  let hits = 0;
+  const haystack = String(text || "");
+  for (const pattern of Array.isArray(patterns) ? patterns : []) {
+    if (!pattern || typeof pattern.test !== "function") continue;
+    if (pattern.test(haystack)) hits += 1;
+  }
+  return hits;
+}
+
+function motherV2StyleSignalsFromHints(hints = []) {
   const text = (Array.isArray(hints) ? hints : []).join(" ").toLowerCase();
-  return /\b(photo|photoreal|photorealistic|realistic|dslr|35mm|cinematic|film\s+still|bokeh|natural\s+light)\b/i.test(text);
+  return {
+    text,
+    photorealHits: motherV2CountStylePatternHits(text, MOTHER_V2_PHOTOREAL_STYLE_PATTERNS),
+    stylizedHits: motherV2CountStylePatternHits(text, MOTHER_V2_STYLIZED_STYLE_PATTERNS),
+  };
+}
+
+function motherV2HasPhotorealSignal(hints = []) {
+  const signals = motherV2StyleSignalsFromHints(hints);
+  return Number(signals.photorealHits) > 0;
+}
+
+function motherV2ActiveAnchorStyleProfile(hints = []) {
+  const signals = motherV2StyleSignalsFromHints(hints);
+  const photorealHits = Number(signals.photorealHits) || 0;
+  const stylizedHits = Number(signals.stylizedHits) || 0;
+  if (photorealHits <= 0 && stylizedHits <= 0) return "unknown";
+  if (stylizedHits > photorealHits) return "stylized";
+  if (photorealHits > stylizedHits) return "photoreal";
+  // Tie-breaker: preserve stylized rendering when both signals are equally strong.
+  if (stylizedHits > 0) return "stylized";
+  return "photoreal";
 }
 
 function motherV2RankImageIdsByProminence(images = []) {
@@ -15316,7 +15426,9 @@ function motherV2CompilePromptLocal(payload = {}) {
         String(activeAnchorImage?.file || "").trim(),
       ].filter(Boolean)
     : [];
-  const activeAnchorPhotoreal = motherV2HasPhotorealSignal(activeAnchorHints);
+  const activeAnchorStyleProfile = motherV2ActiveAnchorStyleProfile(activeAnchorHints);
+  const activeAnchorPhotoreal = activeAnchorStyleProfile === "photoreal";
+  const activeAnchorStylized = activeAnchorStyleProfile === "stylized";
   const multiImage = contextIds.length > 1;
   const imageHints = motherV2ImageHints(payload.images || []);
   const hasHumanInputs = motherV2HasHumanSignal(imageHints);
@@ -15347,6 +15459,11 @@ function motherV2CompilePromptLocal(payload = {}) {
   }
   if (activeAnchorPhotoreal) {
     constraints.push("Keep the output photorealistic with natural lighting, lens behavior, and realistic surface texture.");
+  }
+  if (activeAnchorStylized) {
+    constraints.push(
+      "Keep the output in the active anchor's stylized rendering language (illustration/cartoon/anime/graphic) and avoid forced photoreal conversion."
+    );
   }
   if (!hasHumanInputs) {
     constraints.push("No extra humans or faces unless clearly present in the input references.");
@@ -15386,6 +15503,11 @@ function motherV2CompilePromptLocal(payload = {}) {
   if (activeAnchorPhotoreal) {
     positiveLines.push("Style continuity: keep the anchor image photorealistic and avoid painterly/cartoon stylization.");
   }
+  if (activeAnchorStylized) {
+    positiveLines.push(
+      "Style continuity: keep the anchor image stylized (illustration/cartoon/anime/graphic) and avoid photoreal restyling."
+    );
+  }
   if (activeAnchorTransform) {
     const transformParts = [];
     if (Math.abs(Number(activeAnchorTransform.rotateDeg) || 0) > 0.2) {
@@ -15422,6 +15544,11 @@ function motherV2CompilePromptLocal(payload = {}) {
   positiveLines.push("Produce bold composition, emotional resonance, and production-grade lighting.");
   positiveLines.push("No text overlays, words, letters, logos-as-text, or watermarks.");
   positiveLines.push("Create one production-ready concept image.");
+  const styleContinuityAvoid = activeAnchorPhotoreal
+    ? "No painterly/cartoon restyling."
+    : activeAnchorStylized
+      ? "No forced photoreal conversion."
+      : "";
   return {
     action_version: Number(payload.action_version) || 0,
     creative_directive: creativeDirective,
@@ -15434,7 +15561,9 @@ function motherV2CompilePromptLocal(payload = {}) {
     alternate_lens_guidance: shotTypeHints.alternate_lens_guidance,
     shot_type_hints: shotTypeHints,
     positive_prompt: positiveLines.join(" "),
-    negative_prompt: `No collage split-screen. No text overlays. No watermark. No ghosted human overlays. No icon-overpaint artifacts. No low-detail artifacts. ${
+    negative_prompt: `No collage split-screen. No text overlays. No watermark. No ghosted human overlays. No icon-overpaint artifacts. No low-detail artifacts.${
+      styleContinuityAvoid ? ` ${styleContinuityAvoid}` : ""
+    } ${
       hasHumanInputs ? "No unintended extra faces." : "No extra humans/faces unless present in inputs."
     }`,
     compile_constraints: constraints,
@@ -16416,6 +16545,26 @@ async function motherV2RequestIntentInference({
   return true;
 }
 
+function motherV2PromptCompileImageRows() {
+  return motherIdleBaseImageItems().map((item) => {
+    const imageId = String(item?.id || "").trim();
+    const rect = imageId ? state.freeformRects.get(imageId) || null : null;
+    const rectTransform = readFreeformRectTransform(rect);
+    return {
+      id: imageId,
+      file: basename(item?.path || ""),
+      vision_desc: normalizeVisionHintForIntent(item?.visionDesc, { maxChars: REALTIME_VISION_LABEL_MAX_CHARS }) || "",
+      transform: rect
+        ? {
+            rotate_deg: rectTransform.rotateDeg,
+            skew_x_deg: rectTransform.skewXDeg,
+            user_resized: rect.autoAspect === false,
+          }
+        : null,
+    };
+  });
+}
+
 async function motherV2RequestPromptCompile({ speculative = false } = {}) {
   const idle = state.motherIdle;
   if (!idle || !idle.intent) return null;
@@ -16432,11 +16581,7 @@ async function motherV2RequestPromptCompile({ speculative = false } = {}) {
     intensity: clamp(Number(idle.intensity) || 62, 0, 100),
     active_id: activeId ? String(activeId) : null,
     selected_ids: selectedIds,
-    images: motherIdleBaseImageItems().map((item) => ({
-      id: String(item.id || ""),
-      file: basename(item.path || ""),
-      vision_desc: normalizeVisionHintForIntent(item?.visionDesc, { maxChars: REALTIME_VISION_LABEL_MAX_CHARS }) || "",
-    })),
+    images: motherV2PromptCompileImageRows(),
   };
   const payloadPath = await motherV2WritePayloadFile("mother_prompt_compile", payload);
   idle.pendingPromptCompile = true;
@@ -25418,11 +25563,7 @@ async function handleEventLegacy(event) {
       transformation_mode: motherV2NormalizeTransformationMode(idle.intent?.transformation_mode),
       intensity: clamp(Number(idle.intensity) || 62, 0, 100),
       active_id: getVisibleActiveId() || null,
-      images: motherIdleBaseImageItems().map((item) => ({
-        id: String(item.id || ""),
-        file: basename(item.path || ""),
-        vision_desc: normalizeVisionHintForIntent(item?.visionDesc, { maxChars: REALTIME_VISION_LABEL_MAX_CHARS }) || "",
-      })),
+      images: motherV2PromptCompileImageRows(),
     });
     idle.pendingPromptCompileSpeculative = compileWasSpeculative;
     await motherV2DispatchCompiledPrompt(compiled).catch((err) => {
@@ -27350,6 +27491,7 @@ function renderMultiCanvas(wctx, octx, canvasW, canvasH) {
     });
   }
 
+  renderMotherRolePreviewLiveTethers(octx, { ms, mox, moy, nowMs });
   renderMotherRoleGlyphs(octx, { ms, mox, moy });
 
   // Triplet insights overlays (Extract the Rule / Odd One Out).
@@ -27960,6 +28102,138 @@ function hitTestMotherRoleGlyph(ptCanvas) {
     if (ptCanvas.x >= x0 && ptCanvas.x <= x0 + w && ptCanvas.y >= y0 && ptCanvas.y <= y0 + h) return hit;
   }
   return null;
+}
+
+function motherV2RolePreviewPanelAnchorMapCanvasPx() {
+  const root = els.motherRolePreview;
+  const overlay = els.overlayCanvas;
+  if (!root || !overlay || root.classList.contains("hidden")) return null;
+  const rectEls = root.querySelectorAll(".mother-role-preview-rect[data-image-id]");
+  if (!rectEls.length) return null;
+  const overlayRect = overlay.getBoundingClientRect();
+  const cssW = Number(overlayRect.width) || 0;
+  const cssH = Number(overlayRect.height) || 0;
+  if (!(cssW > 0 && cssH > 0)) return null;
+  const scaleX = (Number(overlay.width) || 0) / cssW;
+  const scaleY = (Number(overlay.height) || 0) / cssH;
+  if (!(scaleX > 0 && scaleY > 0)) return null;
+  const byId = new Map();
+  for (const rectEl of rectEls) {
+    const imageId = String(rectEl?.dataset?.imageId || "").trim();
+    if (!imageId) continue;
+    const rect = rectEl.getBoundingClientRect();
+    const x = (Number(rect.left) + Number(rect.width) * 0.5 - Number(overlayRect.left)) * scaleX;
+    const y = (Number(rect.top) + Number(rect.height) * 0.5 - Number(overlayRect.top)) * scaleY;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    byId.set(imageId, { x, y });
+  }
+  return byId.size ? byId : null;
+}
+
+function renderMotherRolePreviewLiveTethers(octx, { ms = 1, mox = 0, moy = 0, nowMs = 0 } = {}) {
+  if (!octx || state.canvasMode !== "multi") return;
+  const panelAnchors = motherV2RolePreviewPanelAnchorMapCanvasPx();
+  if (!panelAnchors || !panelAnchors.size) return;
+  const pairs = [];
+  for (const [imageId, source] of panelAnchors.entries()) {
+    const rect = state.multiRects.get(imageId) || null;
+    if (!rect) continue;
+    const tx = (Number(rect.x) + Number(rect.w) * 0.5) * ms + mox;
+    const ty = (Number(rect.y) + Number(rect.h) * 0.5) * ms + moy;
+    if (!Number.isFinite(tx) || !Number.isFinite(ty)) continue;
+    pairs.push({
+      imageId,
+      source,
+      target: { x: tx, y: ty },
+      rect,
+    });
+  }
+  if (!pairs.length) {
+    if (state.motherRolePreviewHoverImageId) {
+      setMotherRolePreviewHoverImageId("", { requestFrame: false });
+    }
+    return;
+  }
+  const validIds = new Set(pairs.map((pair) => pair.imageId));
+  const hoveredId = String(state.motherRolePreviewHoverImageId || "").trim();
+  if (hoveredId && !validIds.has(hoveredId)) {
+    setMotherRolePreviewHoverImageId("", { requestFrame: false });
+  }
+  const activeId = String(getVisibleActiveId() || "").trim();
+  const focusImageId = validIds.has(hoveredId)
+    ? hoveredId
+    : validIds.has(activeId)
+      ? activeId
+      : "";
+  const dpr = getDpr();
+
+  octx.save();
+  octx.lineCap = "round";
+  octx.lineJoin = "round";
+  for (const pair of pairs) {
+    const isFocus = Boolean(focusImageId && pair.imageId === focusImageId);
+    const paletteIndex = motherV2PaletteIndexByImageId(pair.imageId);
+    const dx = pair.target.x - pair.source.x;
+    const dy = pair.target.y - pair.source.y;
+    const bend = clamp(Math.abs(dx) * 0.25 + Math.abs(dy) * 0.07, Math.round(12 * dpr), Math.round(180 * dpr));
+    const cx = pair.source.x + dx * 0.5;
+    const cy = pair.source.y + dy * 0.5 - bend;
+    octx.beginPath();
+    octx.moveTo(pair.source.x, pair.source.y);
+    octx.quadraticCurveTo(cx, cy, pair.target.x, pair.target.y);
+    octx.strokeStyle = googleBrandRectColorForIndex(paletteIndex, isFocus ? 0.88 : 0.34);
+    octx.lineWidth = Math.max(1, Math.round((isFocus ? 2.2 : 1.1) * dpr));
+    octx.shadowColor = googleBrandRectColorForIndex(paletteIndex, isFocus ? 0.46 : 0.2);
+    octx.shadowBlur = Math.round((isFocus ? 12 : 6) * dpr);
+    octx.stroke();
+
+    const sourceDotR = Math.max(2, Math.round((isFocus ? 3.4 : 2.3) * dpr));
+    octx.beginPath();
+    octx.arc(pair.source.x, pair.source.y, sourceDotR, 0, Math.PI * 2);
+    octx.shadowBlur = 0;
+    octx.fillStyle = googleBrandRectColorForIndex(paletteIndex, isFocus ? 0.94 : 0.64);
+    octx.fill();
+  }
+  octx.restore();
+
+  if (!focusImageId) return;
+  const focusPair = pairs.find((pair) => pair.imageId === focusImageId);
+  if (!focusPair) return;
+  const pulse = 0.5 + 0.5 * Math.sin((Number(nowMs) || 0) * 0.008);
+  const focusRect = focusPair.rect || null;
+  if (!focusRect) return;
+  const paletteIndex = motherV2PaletteIndexByImageId(focusImageId);
+  const x = Number(focusRect.x) * ms + mox;
+  const y = Number(focusRect.y) * ms + moy;
+  const w = Number(focusRect.w) * ms;
+  const h = Number(focusRect.h) * ms;
+  const transform = readFreeformRectTransform(state.freeformRects.get(focusImageId) || null);
+  const haloPad = Math.max(4, Math.round((6 + pulse * 6) * dpr));
+  const haloPoints = transformedRectPolygonPoints({
+    x: x - haloPad,
+    y: y - haloPad,
+    w: w + haloPad * 2,
+    h: h + haloPad * 2,
+    rotateDeg: transform.rotateDeg,
+    skewXDeg: transform.skewXDeg,
+  });
+
+  octx.save();
+  octx.lineJoin = "round";
+  octx.strokeStyle = googleBrandRectColorForIndex(paletteIndex, 0.78);
+  octx.lineWidth = Math.max(1, Math.round((1.6 + pulse * 1.8) * dpr));
+  octx.shadowColor = googleBrandRectColorForIndex(paletteIndex, 0.48);
+  octx.shadowBlur = Math.round((14 + pulse * 10) * dpr);
+  if (drawPolygonPath(octx, haloPoints)) octx.stroke();
+
+  const targetDotR = Math.max(3, Math.round((4 + pulse * 3) * dpr));
+  octx.beginPath();
+  octx.arc(focusPair.target.x, focusPair.target.y, targetDotR, 0, Math.PI * 2);
+  octx.fillStyle = googleBrandRectColorForIndex(paletteIndex, 0.9);
+  octx.shadowColor = googleBrandRectColorForIndex(paletteIndex, 0.64);
+  octx.shadowBlur = Math.round((10 + pulse * 8) * dpr);
+  octx.fill();
+  octx.restore();
 }
 
 function renderMotherDraftKeyboardHints(octx, rectPx, { dpr = 1, details = null } = {}) {
@@ -29564,6 +29838,26 @@ function installCanvasHandlers() {
     clearReelTouchPulse();
     requestRender();
   };
+
+  if (els.motherRolePreview && els.motherRolePreview.dataset.liveTetherHoverBound !== "1") {
+    els.motherRolePreview.dataset.liveTetherHoverBound = "1";
+    els.motherRolePreview.addEventListener("pointermove", (event) => {
+      const imageId = motherRolePreviewImageIdFromEvent(event);
+      setMotherRolePreviewHoverImageId(imageId, { requestFrame: true });
+    });
+    els.motherRolePreview.addEventListener("pointerleave", () => {
+      setMotherRolePreviewHoverImageId("", { requestFrame: true });
+    });
+    els.motherRolePreview.addEventListener("pointerdown", (event) => {
+      if (Number(event?.button) !== 0) return;
+      const imageId = motherRolePreviewImageIdFromEvent(event);
+      if (!imageId) return;
+      bumpInteraction({ semantic: false });
+      setMotherRolePreviewHoverImageId(imageId, { requestFrame: false });
+      selectCanvasImage(imageId, { toggle: false }).catch(() => {});
+      requestRender();
+    });
+  }
 
   const handleOverlayKeyDown = (event) => {
     const key = String(event?.key || "");

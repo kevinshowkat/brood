@@ -3389,7 +3389,8 @@ button.ghost:hover {
   border: 0;
   transform-origin: 50% 50%;
   transform: rotate(var(--mother-role-base-rot)) skewX(var(--mother-role-base-skew));
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 #mother-panel .mother-role-preview-rect-core {
@@ -3405,6 +3406,21 @@ button.ghost:hover {
   filter: saturate(1) brightness(1);
   opacity: 0.72;
   will-change: transform, filter, opacity;
+}
+
+#mother-panel .mother-role-preview-rect.is-active .mother-role-preview-rect-core {
+  opacity: 0.84;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--mother-role-accent) 44%, rgba(8, 12, 18, 0.42)),
+    0 0 8px color-mix(in srgb, var(--mother-role-accent) 28%, transparent);
+}
+
+#mother-panel .mother-role-preview-rect.is-live-tether-hover .mother-role-preview-rect-core,
+#mother-panel .mother-role-preview-rect:hover .mother-role-preview-rect-core {
+  opacity: 0.96;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--mother-role-accent) 66%, rgba(8, 12, 18, 0.28)),
+    0 0 14px color-mix(in srgb, var(--mother-role-accent) 44%, transparent);
 }
 
 #mother-panel .mother-role-preview-corner {
