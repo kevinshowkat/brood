@@ -25,6 +25,13 @@ test("Mother keypoint siphon: canvas app builds drafting scene payload and helpe
 
 test("Mother keypoint siphon: fallback keypoint path exists when image/keypoints unavailable", () => {
   assert.match(app, /function motherDraftingFallbackKeypoints\(/);
+  const fallbackMatch = app.match(/function motherDraftingFallbackKeypoints[\s\S]*?\n}/);
+  assert.ok(fallbackMatch, "motherDraftingFallbackKeypoints function not found");
+  assert.match(fallbackMatch[0], /const huePhase = rand01\(base \+ i \* 5\.19 \+ 0\.63\) \* Math\.PI \* 2;/);
+  assert.match(fallbackMatch[0], /const rCh = 164 \+ 84 \* \(0\.5 \+ 0\.5 \* Math\.sin\(huePhase\)\);/);
+  assert.match(fallbackMatch[0], /const gCh = 164 \+ 84 \* \(0\.5 \+ 0\.5 \* Math\.sin\(huePhase \+ 2\.09439510239\)\);/);
+  assert.match(fallbackMatch[0], /const bCh = 164 \+ 84 \* \(0\.5 \+ 0\.5 \* Math\.sin\(huePhase \+ 4\.18879020478\)\);/);
+  assert.doesNotMatch(fallbackMatch[0], /\blerp\(/);
   assert.match(app, /if \(!img \|\| !sourceW \|\| !sourceH\) \{\s*return motherDraftingFallbackKeypoints/);
   assert.match(app, /if \(!sampler\) return motherDraftingFallbackKeypoints/);
   assert.match(app, /if \(!candidates\.length\) return motherDraftingFallbackKeypoints/);
@@ -32,10 +39,22 @@ test("Mother keypoint siphon: fallback keypoint path exists when image/keypoints
   assert.match(app, /pending\.keypointCache = new Map\(\)/);
 });
 
+test("Mother keypoint siphon: source keypoints use synthetic fast path to avoid startup hitch", () => {
+  const resolveMatch = app.match(/function motherDraftingResolveSourceKeypoints[\s\S]*?\n}/);
+  assert.ok(resolveMatch, "motherDraftingResolveSourceKeypoints function not found");
+  assert.match(resolveMatch[0], /const fallback = motherDraftingFallbackKeypoints\(\{/);
+  assert.match(resolveMatch[0], /count:\s*MOTHER_DRAFTING_KEYPOINT_MAX_POINTS/);
+  assert.match(resolveMatch[0], /pending\.keypointCache\.set\(id,\s*\{/);
+  assert.match(resolveMatch[0], /keypoints:\s*fallback/);
+  assert.match(resolveMatch[0], /return fallback;/);
+  assert.doesNotMatch(resolveMatch[0], /motherDraftingScheduleSourceKeypointResolve\(/);
+  assert.doesNotMatch(resolveMatch[0], /requestIdleCallback/);
+});
+
 test("Mother keypoint siphon: runtime draws siphon from sources to target with uncertainty modulation", () => {
   assert.match(runtime, /function rand01\(seed\)/);
-  assert.match(runtime, /const MOTHER_SIPHON_PARTICLE_CAP = 240;/);
-  assert.match(runtime, /const MOTHER_SIPHON_PER_SOURCE_MAX = 68;/);
+  assert.match(runtime, /const MOTHER_SIPHON_PARTICLE_CAP = 168;/);
+  assert.match(runtime, /const MOTHER_SIPHON_PER_SOURCE_MAX = 52;/);
   assert.match(runtime, /function drawMotherDraftingSiphon\(nowMs\)/);
   assert.match(runtime, /const drafting = scene\.motherDrafting;/);
   assert.match(runtime, /const targetRect = normalizeRect\(drafting\.targetRect\);/);

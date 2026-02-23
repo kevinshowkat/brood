@@ -53,8 +53,8 @@ function normalizeColorInt(value, fallback = 0xc8d8f2) {
   return clamped;
 }
 
-const MOTHER_SIPHON_PARTICLE_CAP = 240;
-const MOTHER_SIPHON_PER_SOURCE_MAX = 68;
+const MOTHER_SIPHON_PARTICLE_CAP = 168;
+const MOTHER_SIPHON_PER_SOURCE_MAX = 52;
 
 function hasSceneWork(scene) {
   if (!scene) return false;
@@ -350,15 +350,15 @@ export function createEffectsRuntime({ canvas } = {}) {
         : [{ x: 0.5, y: 0.5, weight: 0.55, color: 0xc7d9f5 }];
       const emission = clamp(
         0.76 + progressNorm * 0.1 + Math.sin(phase * 1.8 + sourceSeed * 0.004) * 0.08 + (takingLongerThanUsual ? 0.16 : 0),
-        0.72,
-        1.62
+        0.68,
+        1.5
       );
-      const particleCount = clamp(Math.round(keypoints.length * (3.2 + emission * 1.7)), 20, perSourceCap);
+      const particleCount = clamp(Math.round(keypoints.length * (2.4 + emission * 1.2)), 14, perSourceCap);
       const laneGridCols = clamp(Math.round(Math.sqrt(particleCount)), 4, 10);
       const laneGridRows = clamp(Math.ceil(particleCount / laneGridCols), 4, 12);
       const laneSlots = laneGridCols * laneGridRows;
 
-      const guideCount = Math.min(4, keypoints.length);
+      const guideCount = Math.min(3, keypoints.length);
       for (let g = 0; g < guideCount; g += 1) {
         const keypoint = keypoints[g];
         const kx = clamp(Number(keypoint?.x) || 0.5, 0, 1);
@@ -392,11 +392,11 @@ export function createEffectsRuntime({ canvas } = {}) {
         const cx = lerp(sx, tx, 0.47) + px * arcMag * curveSign;
         const cy = lerp(sy, ty, 0.47) + py * arcMag * curveSign;
         const guideColor = normalizeColorInt(keypoint?.color, takingLongerThanUsual ? 0xffc18e : 0xc8daf6);
-        const guideAlpha = (takingLongerThanUsual ? 0.28 : 0.22) * visibilityGain * (0.82 + pulse * 0.18);
-        motherDraftingGfx.lineStyle(2.8, guideColor, guideAlpha);
+        const guideAlpha = (takingLongerThanUsual ? 0.24 : 0.18) * visibilityGain * (0.84 + pulse * 0.16);
+        motherDraftingGfx.lineStyle(2.2, guideColor, guideAlpha);
         motherDraftingGfx.moveTo(sx, sy);
         motherDraftingGfx.quadraticCurveTo(cx, cy, tx, ty);
-        motherDraftingGfx.lineStyle(1.5, 0xf0f5ff, guideAlpha * 0.42);
+        motherDraftingGfx.lineStyle(1.1, 0xf0f5ff, guideAlpha * 0.34);
         motherDraftingGfx.moveTo(sx, sy);
         motherDraftingGfx.quadraticCurveTo(cx, cy, tx, ty);
       }
@@ -429,37 +429,37 @@ export function createEffectsRuntime({ canvas } = {}) {
         const ny = dy / dist;
         const px = -ny;
         const py = nx;
-        const speed = (0.24 + Math.abs(Math.sin(laneSeed * 0.017)) * 0.3) * (takingLongerThanUsual ? 1.1 : 1);
+        const speed = (0.22 + Math.abs(Math.sin(laneSeed * 0.017)) * 0.28) * (takingLongerThanUsual ? 1.08 : 1);
         const phaseOffset = Math.abs(Math.sin(laneSeed * 0.031)) * 2.8;
         const t = (phase * speed + phaseOffset) % 1;
-        const jitterMag = (takingLongerThanUsual ? 3.2 : 1.7) * (0.75 + Math.abs(Math.sin(phase * 2.4 + laneSeed * 0.01)));
-        const arcMag = dist * (0.18 + Math.abs(Math.sin(laneSeed * 0.013)) * 0.19) * entropy;
+        const jitterMag = (takingLongerThanUsual ? 2.8 : 1.5) * (0.75 + Math.abs(Math.sin(phase * 2.2 + laneSeed * 0.01)));
+        const arcMag = dist * (0.17 + Math.abs(Math.sin(laneSeed * 0.013)) * 0.17) * entropy;
         const curveSign = (i % 2 === 0 ? 1 : -1) * (s % 2 === 0 ? 1 : -1);
-        const jitter = Math.sin(phase * 3.1 + laneSeed * 0.009) * jitterMag;
+        const jitter = Math.sin(phase * 3 + laneSeed * 0.009) * jitterMag;
         const cx = lerp(sx, tx, 0.46) + px * arcMag * curveSign + nx * jitter;
-        const cy = lerp(sy, ty, 0.46) + py * arcMag * curveSign + py * jitter * 0.6;
+        const cy = lerp(sy, ty, 0.46) + py * arcMag * curveSign + py * jitter * 0.58;
         const invT = 1 - t;
         const pxPos = invT * invT * sx + 2 * invT * t * cx + t * t * tx;
         const pyPos = invT * invT * sy + 2 * invT * t * cy + t * t * ty;
         const weight = clamp(Number(keypoint?.weight) || 0.55, 0.08, 1);
-        let alpha = (0.36 + weight * 0.66) * (0.72 + 0.28 * Math.sin(t * Math.PI));
-        if (takingLongerThanUsual) alpha *= 1.12;
+        let alpha = (0.34 + weight * 0.6) * (0.66 + 0.34 * Math.sin(t * Math.PI));
+        if (takingLongerThanUsual) alpha *= 1.1;
         const sourceFade = clamp((t - 0.08) / 0.26, 0, 1);
-        alpha *= 0.65 + sourceFade * 0.35;
-        alpha = clamp(alpha, 0.2, 0.96);
-        const radius = clamp(1 + weight * 2.2 + (t > 0.84 ? (t - 0.84) * 8.8 : 0), 1, 5.4);
+        alpha *= 0.6 + sourceFade * 0.4;
+        alpha = clamp(alpha, 0.14, 0.94);
+        const radius = clamp(1 + weight * 1.9 + (t > 0.86 ? (t - 0.86) * 6.2 : 0), 1, 4.4);
         const color = normalizeColorInt(keypoint?.color, takingLongerThanUsual ? 0xffc18e : 0xc8daf6);
         const trailT = clamp(t - (0.08 + 0.06 * (1 - weight)), 0, 1);
         const trailInvT = 1 - trailT;
         const trailX = trailInvT * trailInvT * sx + 2 * trailInvT * trailT * cx + trailT * trailT * tx;
         const trailY = trailInvT * trailInvT * sy + 2 * trailInvT * trailT * cy + trailT * trailT * ty;
         if (i % 2 === 0) {
-          motherDraftingGfx.lineStyle(Math.max(1.4, radius * 0.85), color, alpha * 0.52);
+          motherDraftingGfx.lineStyle(Math.max(1, radius * 0.56), color, alpha * 0.34);
           motherDraftingGfx.moveTo(trailX, trailY);
           motherDraftingGfx.lineTo(pxPos, pyPos);
         }
-        motherDraftingGfx.beginFill(color, alpha * 0.46);
-        motherDraftingGfx.drawCircle(pxPos, pyPos, radius * (1.85 + weight * 0.22));
+        motherDraftingGfx.beginFill(color, alpha * 0.34);
+        motherDraftingGfx.drawCircle(pxPos, pyPos, radius * (1.52 + weight * 0.16));
         motherDraftingGfx.endFill();
         motherDraftingGfx.beginFill(color, alpha);
         motherDraftingGfx.drawCircle(pxPos, pyPos, radius);

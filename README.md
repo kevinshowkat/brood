@@ -1,7 +1,7 @@
 # Brood: Reference-First AI Image Editing for macOS
 
 <p align="left">
-  <img src="media/features/readme/main_value_prop_v17_labels_20260221.gif" alt="Brood main value demo">
+  <img src="media/features/readme/main_value_prop_v18_labels_20260222.gif" alt="Brood main value demo">
 </p>
 
 Brood is a promptless, reference-first AI image generation and editing desktop for developers.

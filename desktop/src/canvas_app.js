@@ -2710,6 +2710,16 @@ const DESCRIBE_MAX_IN_FLIGHT = 3;
 const UPLOAD_DESCRIBE_PRIORITY_BURST = 3;
 const VISION_FALLBACK_REFRESH_MIN_MS = 20000;
 const motherDispatchTransformExportCache = new Map(); // signature -> exported image path
+const motherDispatchTransformExportInFlight = new Map(); // signature -> Promise<string|null>
+let motherDispatchPayloadWarmState = {
+  signature: "",
+  payload: null,
+  promise: null,
+  startedAt: 0,
+  reason: "",
+};
+let motherDispatchPayloadWarmTimer = null;
+let motherDispatchPayloadWarmToken = 0;
 let describeQueue = [];
 let describeQueued = new Set(); // path strings
 let describeForceRefresh = new Set(); // path strings queued to refresh existing labels
@@ -14637,6 +14647,7 @@ function motherV2ResetInteractionState() {
   motherIdleResetDispatchCorrelation({ rememberPendingVersion: false });
   state.pendingMotherDraft = null;
   idle.draftCommitRectCss = null;
+  motherV2ResetGenerationPayloadWarmState();
 }
 
 function motherV2ClearGlyphs() {
@@ -14701,6 +14712,7 @@ function motherV2ClearIntentAndDrafts({ removeFiles = false } = {}) {
   clearTimeout(idle.pendingIntentTimeout);
   idle.pendingIntentTimeout = null;
   state.pendingMotherDraft = null;
+  motherV2ResetGenerationPayloadWarmState();
   idle.hintVisibleUntil = 0;
   idle.hintLevel = 0;
   clearTimeout(idle.hintFadeTimer);
@@ -15053,6 +15065,7 @@ function motherIdleArmDispatchTimeout(timeoutMs, message, { allowExtension = fal
 function resetMotherIdleAndWheelState() {
   clearMotherIdleTimers({ first: true, takeover: true });
   clearMotherIdleDispatchTimeout();
+  motherV2ResetGenerationPayloadWarmState();
   if (state.motherIdle) {
     state.motherIdle.hasGeneratedSinceInteraction = false;
     state.motherIdle.generatedImageId = null;
@@ -16847,6 +16860,7 @@ function motherV2ApplyIntent(
     target_ids: motherV2NormalizeImageIdList(normalizedIntent?.target_ids || []).slice(0, 6),
     reference_ids: motherV2NormalizeImageIdList(normalizedIntent?.reference_ids || []).slice(0, 6),
   }).catch(() => {});
+  motherV2ScheduleGenerationPayloadWarmup({ reason: "intent_inferred" });
   renderMotherReadout();
   requestRender();
 }
@@ -17428,6 +17442,115 @@ function motherV2EnsureTransformLockPromptLine(promptLine = "", dispatchManifest
   return `${base}\n${lockLine}`;
 }
 
+function motherV2GenerationPayloadSignature(imagePayload = null) {
+  const payload = imagePayload && typeof imagePayload === "object" ? imagePayload : {};
+  const records = Array.isArray(payload.sourceRecords) ? payload.sourceRecords : [];
+  if (!records.length) return "";
+  const parts = [];
+  for (const record of records) {
+    const imageId = String(record?.id || "").trim();
+    const path = String(record?.path || "").trim();
+    if (!imageId || !path) continue;
+    if (motherV2ShouldExportGenerationImageTransform(record)) {
+      const sig = motherV2GenerationImageTransformSignature(record);
+      if (sig) {
+        parts.push(sig);
+        continue;
+      }
+    }
+    parts.push(`${imageId}|${path}`);
+  }
+  return parts.join("||");
+}
+
+function motherV2ResetGenerationPayloadWarmState() {
+  clearTimeout(motherDispatchPayloadWarmTimer);
+  motherDispatchPayloadWarmTimer = null;
+  motherDispatchPayloadWarmToken += 1;
+  motherDispatchPayloadWarmState = {
+    signature: "",
+    payload: null,
+    promise: null,
+    startedAt: 0,
+    reason: "",
+  };
+}
+
+function motherV2ScheduleGenerationPayloadWarmup({ reason = "intent_inferred", immediate = false } = {}) {
+  clearTimeout(motherDispatchPayloadWarmTimer);
+  motherDispatchPayloadWarmTimer = null;
+  const scheduleToken = motherDispatchPayloadWarmToken + 1;
+  motherDispatchPayloadWarmToken = scheduleToken;
+  const runWarmup = () => {
+    motherDispatchPayloadWarmTimer = null;
+    if (scheduleToken !== motherDispatchPayloadWarmToken) return;
+    void motherV2PrimeGenerationPayloadWarmup({ reason }).catch(() => {});
+  };
+  const useIdleCallback =
+    !immediate &&
+    typeof window !== "undefined" &&
+    typeof window.requestIdleCallback === "function";
+  if (useIdleCallback) {
+    window.requestIdleCallback(
+      () => {
+        runWarmup();
+      },
+      { timeout: 900 }
+    );
+    return;
+  }
+  const delayMs = immediate ? 0 : 40;
+  motherDispatchPayloadWarmTimer = setTimeout(runWarmup, delayMs);
+}
+
+async function motherV2PrimeGenerationPayloadWarmup({ reason = "intent_inferred", payload = null } = {}) {
+  const collected = payload && typeof payload === "object" ? payload : motherV2CollectGenerationImagePaths();
+  const signature = motherV2GenerationPayloadSignature(collected);
+  if (!signature) {
+    motherV2ResetGenerationPayloadWarmState();
+    return null;
+  }
+  if (motherDispatchPayloadWarmState.signature === signature) {
+    if (motherDispatchPayloadWarmState.payload && typeof motherDispatchPayloadWarmState.payload === "object") {
+      return motherDispatchPayloadWarmState.payload;
+    }
+    if (motherDispatchPayloadWarmState.promise) {
+      return motherDispatchPayloadWarmState.promise;
+    }
+  }
+  motherDispatchPayloadWarmState = {
+    signature,
+    payload: null,
+    promise: null,
+    startedAt: Date.now(),
+    reason: String(reason || "intent_inferred"),
+  };
+  const warmPromise = motherV2ResolveGenerationImagePayload(collected, { yieldForUi: true })
+    .catch(() => collected)
+    .then((resolved) => {
+      if (motherDispatchPayloadWarmState.signature !== signature) return null;
+      motherDispatchPayloadWarmState.payload = resolved && typeof resolved === "object" ? resolved : collected;
+      return motherDispatchPayloadWarmState.payload;
+    })
+    .finally(() => {
+      if (motherDispatchPayloadWarmState.signature === signature) {
+        motherDispatchPayloadWarmState.promise = null;
+      }
+    });
+  motherDispatchPayloadWarmState.promise = warmPromise;
+  return warmPromise;
+}
+
+function motherV2YieldForUiFrame() {
+  return new Promise((resolve) => {
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => setTimeout(resolve, 0));
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+}
+
 function motherV2CollectGenerationImagePaths() {
   const idle = state.motherIdle;
   const intent = idle?.intent && typeof idle.intent === "object" ? idle.intent : {};
@@ -17581,67 +17704,81 @@ async function motherV2ExportGenerationImageTransform(record = null) {
 
   const cachedPath = String(motherDispatchTransformExportCache.get(signature) || "").trim();
   if (cachedPath && (await exists(cachedPath).catch(() => false))) return cachedPath;
+  const inFlight = motherDispatchTransformExportInFlight.get(signature);
+  if (inFlight) {
+    return (await inFlight.catch(() => null)) || null;
+  }
 
-  const cacheKey = Math.abs(hash32(signature)).toString(16);
-  const outPath = `${state.runDir}/mother-src-${cacheKey}.png`;
-  if (await exists(outPath).catch(() => false)) {
+  const exportPromise = (async () => {
+    const cacheKey = Math.abs(hash32(signature)).toString(16);
+    const outPath = `${state.runDir}/mother-src-${cacheKey}.png`;
+    if (await exists(outPath).catch(() => false)) {
+      motherDispatchTransformExportCache.set(signature, outPath);
+      return outPath;
+    }
+
+    const imageId = String(record.id || "").trim();
+    const item = state.imagesById.get(imageId) || null;
+    let img = item?.img || null;
+    if (!img) {
+      img = await loadImage(record.path).catch(() => null);
+    }
+    if (!img) return null;
+    const transform = readFreeformRectTransform(record.transform || null);
+    const { baseW, baseH } = motherV2GenerationImageDispatchSize(record, img);
+    const points = transformedRectPolygonPoints({
+      x: 0,
+      y: 0,
+      w: baseW,
+      h: baseH,
+      rotateDeg: transform.rotateDeg,
+      skewXDeg: transform.skewXDeg,
+    });
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const pt of points) {
+      minX = Math.min(minX, Number(pt?.x) || 0);
+      minY = Math.min(minY, Number(pt?.y) || 0);
+      maxX = Math.max(maxX, Number(pt?.x) || 0);
+      maxY = Math.max(maxY, Number(pt?.y) || 0);
+    }
+    const outW = Math.max(1, Math.min(4096, Math.ceil(maxX - minX)));
+    const outH = Math.max(1, Math.min(4096, Math.ceil(maxY - minY)));
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.clearRect(0, 0, outW, outH);
+    drawImageRectWithTransform(ctx, img, {
+      x: -minX,
+      y: -minY,
+      w: baseW,
+      h: baseH,
+      rotateDeg: transform.rotateDeg,
+      skewXDeg: transform.skewXDeg,
+    });
+    await writeCanvasPngToPath(canvas, outPath);
     motherDispatchTransformExportCache.set(signature, outPath);
+    if (motherDispatchTransformExportCache.size > 96) {
+      const oldestKey = motherDispatchTransformExportCache.keys().next().value;
+      if (oldestKey) motherDispatchTransformExportCache.delete(oldestKey);
+    }
     return outPath;
+  })();
+  motherDispatchTransformExportInFlight.set(signature, exportPromise);
+  try {
+    return (await exportPromise) || null;
+  } finally {
+    if (motherDispatchTransformExportInFlight.get(signature) === exportPromise) {
+      motherDispatchTransformExportInFlight.delete(signature);
+    }
   }
-
-  const imageId = String(record.id || "").trim();
-  const item = state.imagesById.get(imageId) || null;
-  let img = item?.img || null;
-  if (!img) {
-    img = await loadImage(record.path).catch(() => null);
-  }
-  if (!img) return null;
-  const transform = readFreeformRectTransform(record.transform || null);
-  const { baseW, baseH } = motherV2GenerationImageDispatchSize(record, img);
-  const points = transformedRectPolygonPoints({
-    x: 0,
-    y: 0,
-    w: baseW,
-    h: baseH,
-    rotateDeg: transform.rotateDeg,
-    skewXDeg: transform.skewXDeg,
-  });
-  let minX = Number.POSITIVE_INFINITY;
-  let minY = Number.POSITIVE_INFINITY;
-  let maxX = Number.NEGATIVE_INFINITY;
-  let maxY = Number.NEGATIVE_INFINITY;
-  for (const pt of points) {
-    minX = Math.min(minX, Number(pt?.x) || 0);
-    minY = Math.min(minY, Number(pt?.y) || 0);
-    maxX = Math.max(maxX, Number(pt?.x) || 0);
-    maxY = Math.max(maxY, Number(pt?.y) || 0);
-  }
-  const outW = Math.max(1, Math.min(4096, Math.ceil(maxX - minX)));
-  const outH = Math.max(1, Math.min(4096, Math.ceil(maxY - minY)));
-  const canvas = document.createElement("canvas");
-  canvas.width = outW;
-  canvas.height = outH;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  ctx.clearRect(0, 0, outW, outH);
-  drawImageRectWithTransform(ctx, img, {
-    x: -minX,
-    y: -minY,
-    w: baseW,
-    h: baseH,
-    rotateDeg: transform.rotateDeg,
-    skewXDeg: transform.skewXDeg,
-  });
-  await writeCanvasPngToPath(canvas, outPath);
-  motherDispatchTransformExportCache.set(signature, outPath);
-  if (motherDispatchTransformExportCache.size > 96) {
-    const oldestKey = motherDispatchTransformExportCache.keys().next().value;
-    if (oldestKey) motherDispatchTransformExportCache.delete(oldestKey);
-  }
-  return outPath;
 }
 
-async function motherV2ResolveGenerationImagePayload(imagePayload = null) {
+async function motherV2ResolveGenerationImagePayload(imagePayload = null, { yieldForUi = false } = {}) {
   const payload = imagePayload && typeof imagePayload === "object" ? imagePayload : {};
   const records = Array.isArray(payload.sourceRecords) ? payload.sourceRecords : [];
   if (!records.length) return payload;
@@ -17659,6 +17796,7 @@ async function motherV2ResolveGenerationImagePayload(imagePayload = null) {
     let dispatchPath = sourcePath;
     let transformed = false;
     if (canTransform) {
+      if (yieldForUi) await motherV2YieldForUiFrame();
       const exportedPath = await motherV2ExportGenerationImageTransform(record).catch(() => null);
       if (exportedPath) {
         dispatchPath = exportedPath;
@@ -18844,7 +18982,32 @@ async function motherV2DispatchViaImagePayload(compiled = {}, promptLine = "", {
   const idle = state.motherIdle;
   if (!idle) return false;
   const collectedImagePayload = motherV2CollectGenerationImagePaths();
-  const imagePayload = await motherV2ResolveGenerationImagePayload(collectedImagePayload).catch(() => collectedImagePayload);
+  const payloadSignature = motherV2GenerationPayloadSignature(collectedImagePayload);
+  let imagePayload = null;
+  if (payloadSignature && motherDispatchPayloadWarmState.signature === payloadSignature) {
+    if (motherDispatchPayloadWarmState.payload && typeof motherDispatchPayloadWarmState.payload === "object") {
+      imagePayload = motherDispatchPayloadWarmState.payload;
+    } else if (motherDispatchPayloadWarmState.promise) {
+      imagePayload = await motherDispatchPayloadWarmState.promise.catch(() => null);
+    }
+  }
+  if (!imagePayload || typeof imagePayload !== "object") {
+    imagePayload = await motherV2ResolveGenerationImagePayload(collectedImagePayload, { yieldForUi: true })
+      .catch(() => collectedImagePayload);
+  }
+  if (!imagePayload || typeof imagePayload !== "object") {
+    imagePayload = collectedImagePayload;
+  }
+  const hasResolvedDispatchManifest = Array.isArray(imagePayload?.dispatchImageManifest);
+  if (payloadSignature && hasResolvedDispatchManifest) {
+    motherDispatchPayloadWarmState = {
+      signature: payloadSignature,
+      payload: imagePayload,
+      promise: null,
+      startedAt: motherDispatchPayloadWarmState.startedAt || Date.now(),
+      reason: "dispatch",
+    };
+  }
   const dispatchManifest = Array.isArray(imagePayload?.dispatchImageManifest) ? imagePayload.dispatchImageManifest : [];
   const finalPromptLine = motherV2EnsureTransformLockPromptLine(promptLine, dispatchManifest);
   const transformLockEntries = motherV2TransformLockManifestEntries(dispatchManifest);
@@ -19342,6 +19505,7 @@ function motherIdlePrimeDraftFx() {
     idle.draftCommitRectCss = previewPlacement.rectCss ? { ...previewPlacement.rectCss } : null;
   }
   setImageFxActive(true, "Mother Draft");
+  motherV2ScheduleGenerationPayloadWarmup({ reason: "draft_fx_primed", immediate: true });
   requestRender();
 }
 
@@ -20868,10 +21032,10 @@ function motherDraftingFallbackKeypoints({ imageId = "", seed = 0, count = MOTHE
     const jitterY = (rand01(base + i * 4.57 + 0.41) - 0.5) * 0.08;
     const x = clamp(0.5 + Math.cos(a) * r + jitterX, 0.05, 0.95);
     const y = clamp(0.5 + Math.sin(a) * r + jitterY, 0.05, 0.95);
-    const hueMix = rand01(base + i * 5.19 + 0.63);
-    const rCh = lerp(170, 230, hueMix);
-    const gCh = lerp(188, 242, hueMix);
-    const bCh = lerp(214, 255, hueMix);
+    const huePhase = rand01(base + i * 5.19 + 0.63) * Math.PI * 2;
+    const rCh = 164 + 84 * (0.5 + 0.5 * Math.sin(huePhase));
+    const gCh = 164 + 84 * (0.5 + 0.5 * Math.sin(huePhase + 2.09439510239));
+    const bCh = 164 + 84 * (0.5 + 0.5 * Math.sin(huePhase + 4.18879020478));
     points.push({
       x,
       y,
@@ -21005,26 +21169,17 @@ function motherDraftingResolveSourceKeypoints(imageId, pendingDraft = null) {
     return cached.keypoints;
   }
   const seed = Number(pending.keypointSeed) || hash32(`mother-siphon:${id}:seed`);
-  const keypoints = motherDraftingExtractImageKeypoints(item, {
+  // Keep drafting startup hitch-free: use deterministic synthetic keypoints only.
+  const fallback = motherDraftingFallbackKeypoints({
     imageId: id,
     seed,
-    maxPoints: MOTHER_DRAFTING_KEYPOINT_MAX_POINTS,
+    count: MOTHER_DRAFTING_KEYPOINT_MAX_POINTS,
   });
-  const normalized = Array.isArray(keypoints) && keypoints.length
-    ? keypoints
-        .slice(0, MOTHER_DRAFTING_KEYPOINT_MAX_POINTS)
-        .map((entry) => ({
-          x: clamp(Number(entry?.x) || 0.5, 0, 1),
-          y: clamp(Number(entry?.y) || 0.5, 0, 1),
-          weight: clamp(Number(entry?.weight) || 0.5, 0.08, 1),
-          color: Number.isFinite(Number(entry?.color)) ? Number(entry.color) : null,
-        }))
-    : motherDraftingFallbackKeypoints({ imageId: id, seed });
   pending.keypointCache.set(id, {
     signature: cacheSignature,
-    keypoints: normalized,
+    keypoints: fallback,
   });
-  return normalized;
+  return fallback;
 }
 
 function buildMotherDraftingEffectsScene(transform = getMultiViewTransform()) {
