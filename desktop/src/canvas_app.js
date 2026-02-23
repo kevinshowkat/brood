@@ -1252,7 +1252,7 @@ const state = {
   pendingTriforce: null, // { sourceIds: [string, string, string], startedAt: number }
   pendingCreateLayers: null, // { sourceId, sourcePath, layerSpecs, nextIndex, createdIds, startedAt }
   pendingPromptGenerate: null, // { prompt: string, model: string, startedAt: number, anchorCss?: {x,y}, anchorWorldCss?: {x,y} }
-  pendingMotherDraft: null, // { sourceIds: string[], startedAt: number }
+  pendingMotherDraft: null, // { sourceIds: string[], startedAt: number, previewPolicy?: string, previewTargetId?: string|null, previewRectCss?: {x,y,w,h}|null, timeoutCeilingMs?: number, keypointSeed?: number, keypointCache?: Map<string, {signature: string, keypoints: Array}> }
   pendingRecast: null, // { sourceId: string, startedAt: number }
   pendingGeneration: null, // { remaining: number, provider: string|null, model: string|null }
   pendingRecreate: null, // { startedAt: number } | null
@@ -1279,7 +1279,7 @@ const state = {
   tool: "pan",
   pointer: {
     active: false,
-    kind: null, // POINTER_KINDS.FREEFORM_MOVE | POINTER_KINDS.FREEFORM_RESIZE | POINTER_KINDS.FREEFORM_ROTATE | POINTER_KINDS.FREEFORM_SKEW | POINTER_KINDS.FREEFORM_IMPORT | POINTER_KINDS.FREEFORM_WHEEL | POINTER_KINDS.MOTHER_ROLE_DRAG | POINTER_KINDS.EFFECT_TOKEN_DRAG
+    kind: null, // POINTER_KINDS.FREEFORM_MOVE | POINTER_KINDS.FREEFORM_RESIZE | POINTER_KINDS.FREEFORM_ROTATE | POINTER_KINDS.FREEFORM_SKEW | POINTER_KINDS.FREEFORM_IMPORT | POINTER_KINDS.FREEFORM_WHEEL | POINTER_KINDS.MOTHER_ROLE_DRAG | POINTER_KINDS.MOTHER_DRAFT_PREVIEW_DRAG | POINTER_KINDS.EFFECT_TOKEN_DRAG
     imageId: null,
     role: null,
     corner: null, // "nw"|"ne"|"sw"|"se"
@@ -1430,6 +1430,7 @@ const state = {
     drafts: [], // [{ id, path, receiptPath, versionId, actionVersion, createdAt, img }]
     selectedDraftId: null,
     hoverDraftId: null,
+    draftCommitRectCss: null, // { x, y, w, h } | null (user-adjusted pending draft placement)
     commitMutationInFlight: false,
     roleGlyphHits: [], // [{ role, imageId, rect }]
     offerDetailsOpen: false,
@@ -1652,6 +1653,9 @@ const REEL_TOUCH_MOVE_VISIBLE_MS = 120;
 const REEL_TOUCH_TAP_VISIBLE_MS = 280;
 const REEL_TOUCH_RELEASE_VISIBLE_MS = 150;
 const PROMPT_GENERATE_SHIMMER_LOOP_MS = 1700;
+const MOTHER_DRAFTING_SHIMMER_LOOP_MS = 1900;
+const MOTHER_DRAFTING_KEYPOINT_SAMPLE_MAX_DIM = 56;
+const MOTHER_DRAFTING_KEYPOINT_MAX_POINTS = 24;
 
 // Intent onboarding overlay icon assets.
 // Keep a procedural fallback so the app still renders if assets fail to load.
@@ -12068,13 +12072,15 @@ async function motherV2CommitSelectedDraft() {
         before: beforeTarget,
       };
     } else {
-      const offerRect = motherV2OfferPreviewRectCss({ policy, targetId, draftIndex: 0 });
+      const manualRect = policy === "replace" ? null : motherDraftingNormalizeRectCss(idle.draftCommitRectCss);
+      const predictedOfferRect = motherV2OfferPreviewRectCss({ policy, targetId, draftIndex: 0 });
+      const offerRect = manualRect || predictedOfferRect;
       let rect = offerRect || motherIdleComputePlacementCss({ policy, targetId, draftIndex: 0 });
       if (rect) {
         const wrap = els.canvasWrap;
         const canvasCssW = Math.max(1, Number(wrap?.clientWidth) || 1);
         const canvasCssH = Math.max(1, Number(wrap?.clientHeight) || 1);
-        if (!offerRect) {
+        if (!manualRect && !predictedOfferRect) {
           const visibleRatio = rectVisibleRatioInViewport(rect);
           // Keep accepted Mother artifacts visible to the user.
           if (reelLocked || visibleRatio < 0.35) {
@@ -14629,6 +14635,8 @@ function motherV2ResetInteractionState() {
   idle.pendingDispatchToken = 0;
   idle.dispatchTimeoutExtensions = 0;
   motherIdleResetDispatchCorrelation({ rememberPendingVersion: false });
+  state.pendingMotherDraft = null;
+  idle.draftCommitRectCss = null;
 }
 
 function motherV2ClearGlyphs() {
@@ -14651,6 +14659,7 @@ function motherV2ClearDraftsOnly({ removeFiles = false } = {}) {
   idle.drafts = [];
   idle.selectedDraftId = null;
   idle.hoverDraftId = null;
+  idle.draftCommitRectCss = null;
   idle.speculativePrefetchReadyMode = null;
 }
 
@@ -14688,6 +14697,7 @@ function motherV2ClearIntentAndDrafts({ removeFiles = false } = {}) {
   idle.speculativePrefetchInFlight = false;
   idle.speculativePrefetchReadyMode = null;
   idle.promptMotionProfile = null;
+  idle.draftCommitRectCss = null;
   clearTimeout(idle.pendingIntentTimeout);
   idle.pendingIntentTimeout = null;
   state.pendingMotherDraft = null;
@@ -14916,6 +14926,9 @@ function motherIdleTrackVersionCreated(event = {}) {
   if (!versionId) return;
   if (!idle.pendingVersionId) {
     idle.pendingVersionId = versionId;
+    if (state.pendingMotherDraft && typeof state.pendingMotherDraft === "object") {
+      state.pendingMotherDraft.timeoutCeilingMs = motherDraftingTimeoutCeilingMs({ hasVersionBound: true });
+    }
     motherIdleArmDispatchTimeout(
       MOTHER_GENERATION_POST_VERSION_TIMEOUT_MS,
       `Mother draft timed out after ${Math.round(MOTHER_GENERATION_POST_VERSION_TIMEOUT_MS / 1000)}s while image generation was in progress.`,
@@ -15113,6 +15126,7 @@ function resetMotherIdleAndWheelState() {
     state.motherIdle.drafts = [];
     state.motherIdle.selectedDraftId = null;
     state.motherIdle.hoverDraftId = null;
+    state.motherIdle.draftCommitRectCss = null;
     state.motherIdle.commitMutationInFlight = false;
     state.motherIdle.roleGlyphHits = [];
     state.motherIdle.roleGlyphDrag = null;
@@ -15454,6 +15468,226 @@ function motherV2OfferPreviewRectCss({ policy = "adjacent", targetId = null, dra
   x = clamp(x, minX, Math.max(minX, maxX));
   y = clamp(y, minY, Math.max(minY, maxY));
   return clampFreeformRectCss({ x, y, w, h, autoAspect: false }, canvasCssW, canvasCssH);
+}
+
+function motherDraftingResolvePlacement(intent = null) {
+  const normalizedIntent = motherV2SanitizeIntentImageIds(
+    intent && typeof intent === "object"
+      ? intent
+      : state.motherIdle?.intent && typeof state.motherIdle.intent === "object"
+        ? state.motherIdle.intent
+        : {}
+  ) || {};
+  const policy = String(normalizedIntent.placement_policy || "adjacent").trim() || "adjacent";
+  const targetIds = Array.isArray(normalizedIntent.target_ids)
+    ? normalizedIntent.target_ids.map((v) => String(v || "").trim()).filter(Boolean)
+    : [];
+  const fallbackTargetId = String(getVisibleActiveId() || "").trim();
+  const targetId = targetIds[0] || fallbackTargetId || null;
+  if (policy === "replace") {
+    const replaceRect = targetId ? state.freeformRects.get(targetId) || null : null;
+    if (replaceRect) {
+      return {
+        policy,
+        targetId,
+        rectCss: {
+          x: Number(replaceRect.x) || 0,
+          y: Number(replaceRect.y) || 0,
+          w: Math.max(1, Number(replaceRect.w) || 1),
+          h: Math.max(1, Number(replaceRect.h) || 1),
+        },
+      };
+    }
+  }
+  const offerRect = motherV2OfferPreviewRectCss({ policy, targetId, draftIndex: 0 });
+  const rectCss = offerRect || motherIdleComputePlacementCss({ policy, targetId, draftIndex: 0 });
+  return {
+    policy,
+    targetId,
+    rectCss: rectCss ? { ...rectCss } : null,
+  };
+}
+
+function motherDraftingTimeoutCeilingMs({ hasVersionBound = false } = {}) {
+  const baseMs = Math.max(1_000, Number(MOTHER_GENERATION_TIMEOUT_MS) || 0);
+  const extensionMs = Math.max(0, Number(MOTHER_GENERATION_TIMEOUT_EXTENSION_MS) || 0);
+  const postVersionMs = Math.max(1_000, Number(MOTHER_GENERATION_POST_VERSION_TIMEOUT_MS) || 0);
+  const initialCeilingMs = baseMs + extensionMs;
+  if (!hasVersionBound) return initialCeilingMs;
+  return Math.max(initialCeilingMs, postVersionMs);
+}
+
+function motherDraftingQuantile(sortedValues = [], p = 0.5) {
+  if (!Array.isArray(sortedValues) || !sortedValues.length) return null;
+  const t = clamp(Number(p) || 0, 0, 1);
+  const idx = (sortedValues.length - 1) * t;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return sortedValues[lo];
+  const frac = idx - lo;
+  return sortedValues[lo] + (sortedValues[hi] - sortedValues[lo]) * frac;
+}
+
+function motherDraftingComputeUncertaintyEnvelope(pendingDraft = null, { nowMs = Date.now() } = {}) {
+  const pending = pendingDraft || state.pendingMotherDraft;
+  if (!pending) return null;
+  const startedAt = Number(pending.startedAt) || nowMs;
+  const elapsedMs = Math.max(0, nowMs - startedAt);
+  const hasVersionBound = Boolean(String(state.motherIdle?.pendingVersionId || "").trim());
+  const timeoutCeilingMs = Math.max(
+    8_000,
+    Number(pending.timeoutCeilingMs) || motherDraftingTimeoutCeilingMs({ hasVersionBound })
+  );
+
+  const metrics = state.topMetrics || null;
+  const renderDurationsS = Array.isArray(metrics?.renderDurationsS) ? metrics.renderDurationsS : [];
+  const samplesMs = renderDurationsS
+    .map((v) => Number(v) * 1000)
+    .filter((v) => Number.isFinite(v) && v > 0);
+  const recentLatencyS = Number(state.lastCostLatency?.latency_per_image_s);
+  const recentLatencyAt = Number(state.lastCostLatency?.at) || 0;
+  if (
+    Number.isFinite(recentLatencyS) &&
+    recentLatencyS > 0 &&
+    recentLatencyAt > 0 &&
+    nowMs - recentLatencyAt <= 12 * 60 * 1000
+  ) {
+    samplesMs.push(recentLatencyS * 1000);
+  }
+  const sortedSamples = samplesMs.slice().sort((a, b) => a - b);
+
+  let lowMs = 18_000;
+  let highMs = 42_000;
+  if (sortedSamples.length >= 5) {
+    lowMs = motherDraftingQuantile(sortedSamples, 0.25) || lowMs;
+    highMs = motherDraftingQuantile(sortedSamples, 0.8) || highMs;
+  } else if (sortedSamples.length >= 2) {
+    lowMs = motherDraftingQuantile(sortedSamples, 0.2) || lowMs;
+    highMs = motherDraftingQuantile(sortedSamples, 0.9) || highMs;
+  } else if (sortedSamples.length === 1) {
+    lowMs = sortedSamples[0] * 0.72;
+    highMs = sortedSamples[0] * 1.58;
+  }
+
+  const queue = topMetricQueueCounts();
+  const queueDepth = Math.max(0, Number(queue.pending) || 0) + Math.max(0, Number(queue.running) || 0);
+  const queuePenalty = Math.max(0, queueDepth - 1);
+  lowMs *= 1 + Math.min(0.4, queuePenalty * 0.08);
+  highMs *= 1 + Math.min(1.3, queuePenalty * 0.24);
+
+  const highCeilingMs = Math.max(8_000, Math.round(timeoutCeilingMs * 0.92));
+  lowMs = clamp(Math.round(lowMs), 4_000, Math.max(4_000, highCeilingMs - 2_000));
+  highMs = clamp(Math.round(highMs), Math.max(lowMs + 2_000, 7_000), Math.max(lowMs + 3_000, highCeilingMs));
+
+  return {
+    elapsedMs,
+    lowMs,
+    highMs,
+    timeoutCeilingMs,
+    queueDepth,
+    sampleCount: sortedSamples.length,
+    takingLongerThanUsual: elapsedMs > highMs,
+  };
+}
+
+function motherDraftingResolvePendingPreviewRectCss(pendingDraft = null) {
+  const pending = pendingDraft || state.pendingMotherDraft;
+  if (!pending) return null;
+  const existing = pending.previewRectCss;
+  if (
+    existing &&
+    Number.isFinite(Number(existing.x)) &&
+    Number.isFinite(Number(existing.y)) &&
+    Number.isFinite(Number(existing.w)) &&
+    Number.isFinite(Number(existing.h))
+  ) {
+    return {
+      x: Number(existing.x) || 0,
+      y: Number(existing.y) || 0,
+      w: Math.max(1, Number(existing.w) || 1),
+      h: Math.max(1, Number(existing.h) || 1),
+    };
+  }
+  const idleIntent = state.motherIdle?.intent && typeof state.motherIdle.intent === "object" ? state.motherIdle.intent : {};
+  const placement = motherDraftingResolvePlacement({
+    ...idleIntent,
+    placement_policy: pending.previewPolicy || idleIntent?.placement_policy || "adjacent",
+    target_ids: pending.previewTargetId ? [pending.previewTargetId] : idleIntent?.target_ids,
+  });
+  if (!placement.rectCss) return null;
+  pending.previewPolicy = placement.policy;
+  pending.previewTargetId = placement.targetId || null;
+  pending.previewRectCss = { ...placement.rectCss };
+  return { ...placement.rectCss };
+}
+
+function motherDraftingNormalizeRectCss(rectCss = null) {
+  if (!rectCss || typeof rectCss !== "object") return null;
+  const x = Number(rectCss.x);
+  const y = Number(rectCss.y);
+  const w = Number(rectCss.w);
+  const h = Number(rectCss.h);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return null;
+  let normalized = {
+    x,
+    y,
+    w: Math.max(1, w),
+    h: Math.max(1, h),
+    autoAspect: false,
+  };
+  const wrap = els.canvasWrap;
+  const canvasCssW = Number(wrap?.clientWidth) || 0;
+  const canvasCssH = Number(wrap?.clientHeight) || 0;
+  if (canvasCssW > 0 && canvasCssH > 0) {
+    normalized = clampFreeformRectCss(
+      normalized,
+      canvasCssW,
+      canvasCssH,
+      freeformWorkspaceClampOptions(canvasCssW, canvasCssH, { minSize: 44 })
+    );
+  }
+  return {
+    x: Number(normalized.x) || 0,
+    y: Number(normalized.y) || 0,
+    w: Math.max(1, Number(normalized.w) || 1),
+    h: Math.max(1, Number(normalized.h) || 1),
+  };
+}
+
+function motherDraftingRectCssToCanvasRectPx(rectCss = null) {
+  const normalized = motherDraftingNormalizeRectCss(rectCss);
+  if (!normalized) return null;
+  const dpr = getDpr();
+  const ms = state.canvasMode === "multi" ? Math.max(0.0001, Number(state.multiView?.scale) || 1) : 1;
+  const mox = state.canvasMode === "multi" ? Number(state.multiView?.offsetX) || 0 : 0;
+  const moy = state.canvasMode === "multi" ? Number(state.multiView?.offsetY) || 0 : 0;
+  return {
+    x: normalized.x * dpr * ms + mox,
+    y: normalized.y * dpr * ms + moy,
+    w: Math.max(1, normalized.w * dpr * ms),
+    h: Math.max(1, normalized.h * dpr * ms),
+  };
+}
+
+function hitTestMotherDraftingPreviewRect(ptCanvas, { padPx = 0 } = {}) {
+  if (!ptCanvas || state.canvasMode !== "multi") return null;
+  const idle = state.motherIdle;
+  const pending = state.pendingMotherDraft;
+  if (!idle || !pending || idle.phase !== MOTHER_IDLE_STATES.DRAFTING) return null;
+  if (String(pending.previewPolicy || "").trim().toLowerCase() === "replace") return null;
+  const rectCss = motherDraftingResolvePendingPreviewRectCss(pending);
+  if (!rectCss) return null;
+  const rectPx = motherDraftingRectCssToCanvasRectPx(rectCss);
+  if (!rectPx) return null;
+  const pad = Math.max(0, Number(padPx) || 0);
+  const x = Number(ptCanvas.x) || 0;
+  const y = Number(ptCanvas.y) || 0;
+  if (x < rectPx.x - pad || x > rectPx.x + rectPx.w + pad) return null;
+  if (y < rectPx.y - pad || y > rectPx.y + rectPx.h + pad) return null;
+  return {
+    rectCss: { ...rectCss },
+    rectPx,
+  };
 }
 
 function motherV2ImageHints(images = []) {
@@ -16478,6 +16712,11 @@ function motherV2BuildIntentRequestId(actionVersion = 0) {
   return `mother-intent-a${Number(actionVersion) || 0}-${stamp}-${rand}`;
 }
 
+function motherV2StopRealtimeIntentSession() {
+  if (!state.ptySpawned) return;
+  invoke("write_pty", { data: `${PTY_COMMANDS.INTENT_RT_MOTHER_STOP}\n` }).catch(() => {});
+}
+
 function motherV2ClearPendingIntentRequest({ reason = "intent_request_cleared", clearBusy = true } = {}) {
   const idle = state.motherIdle;
   if (!idle) return false;
@@ -16491,6 +16730,7 @@ function motherV2ClearPendingIntentRequest({ reason = "intent_request_cleared", 
       idle.pendingIntentPayload
   );
   if (!hadPending) return false;
+  motherV2StopRealtimeIntentSession();
   idle.pendingIntent = false;
   idle.pendingIntentRequestId = null;
   idle.pendingIntentTransportRetryCount = 0;
@@ -18793,14 +19033,30 @@ async function motherV2DispatchCompiledPrompt(compiled = {}) {
   if (effectiveSpeculative) {
     idle.speculativePrefetchInFlight = true;
     idle.speculativePrefetchReadyMode = null;
+    idle.draftCommitRectCss = null;
     state.lastAction = "Mother Suggestion";
     state.pendingMotherDraft = null;
     state.expectingArtifacts = false;
   } else {
+    const existingStartedAt = Number(state.pendingMotherDraft?.startedAt) || 0;
+    const existingKeypointSeed = Number(state.pendingMotherDraft?.keypointSeed) || 0;
+    const keypointSeed = existingKeypointSeed || hash32(`mother-siphon:${Date.now()}:${motherV2RoleContextIds().join(",")}`);
+    const keypointCache = state.pendingMotherDraft?.keypointCache instanceof Map
+      ? state.pendingMotherDraft.keypointCache
+      : new Map();
+    const previewPlacement = motherDraftingResolvePlacement(idle.intent);
+    const hasVersionBound = Boolean(String(idle.pendingVersionId || "").trim());
     state.pendingMotherDraft = {
       sourceIds: motherV2RoleContextIds(),
-      startedAt: Date.now(),
+      startedAt: existingStartedAt > 0 ? existingStartedAt : Date.now(),
+      previewPolicy: previewPlacement.policy,
+      previewTargetId: previewPlacement.targetId || null,
+      previewRectCss: previewPlacement.rectCss ? { ...previewPlacement.rectCss } : null,
+      timeoutCeilingMs: motherDraftingTimeoutCeilingMs({ hasVersionBound }),
+      keypointSeed,
+      keypointCache,
     };
+    idle.draftCommitRectCss = previewPlacement.rectCss ? { ...previewPlacement.rectCss } : null;
     state.lastAction = "Mother Suggestion";
     state.expectingArtifacts = true;
     setImageFxActive(true, "Mother Draft");
@@ -18849,6 +19105,7 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
     Boolean(idle.pendingDispatchSpeculative);
   if (!(idle.phase === MOTHER_IDLE_STATES.DRAFTING || isSpeculativeIntentDispatch)) return false;
   if (!idle.pendingDispatchToken && !idle.pendingGeneration) return false;
+  const pendingPreviewRectCss = motherDraftingResolvePendingPreviewRectCss(state.pendingMotherDraft);
 
   const dispatchWasSpeculative = Boolean(idle.pendingDispatchSpeculative);
   const dispatchMode = motherV2NormalizeTransformationMode(
@@ -18877,6 +19134,7 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
     idle.speculativePrefetchInFlight = false;
     idle.dispatchTimeoutExtensions = 0;
     state.pendingMotherDraft = null;
+    idle.draftCommitRectCss = null;
     state.expectingArtifacts = false;
     restoreEngineImageModelIfNeeded();
     setImageFxActive(false);
@@ -18895,6 +19153,7 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
   idle.speculativePrefetchInFlight = false;
   idle.dispatchTimeoutExtensions = 0;
   state.pendingMotherDraft = null;
+  idle.draftCommitRectCss = pendingPreviewRectCss ? { ...pendingPreviewRectCss } : null;
   idle.generatedImageId = id;
   idle.generatedVersionId = incomingVersionId || null;
   idle.lastSuggestionAt = Date.now();
@@ -19029,6 +19288,7 @@ function motherIdleHandleGenerationFailed(message = null, { speculative = false 
   idle.pendingDispatchProposalMode = null;
   idle.speculativePrefetchInFlight = false;
   state.pendingMotherDraft = null;
+  idle.draftCommitRectCss = null;
   state.expectingArtifacts = false;
   restoreEngineImageModelIfNeeded();
   setImageFxActive(false);
@@ -19059,12 +19319,30 @@ function motherIdleHandleGenerationFailed(message = null, { speculative = false 
 }
 
 function motherIdlePrimeDraftFx() {
+  const idle = state.motherIdle;
   const existingStartedAt = Number(state.pendingMotherDraft?.startedAt) || 0;
+  const existingKeypointSeed = Number(state.pendingMotherDraft?.keypointSeed) || 0;
+  const keypointSeed = existingKeypointSeed || hash32(`mother-siphon:${Date.now()}:${motherV2RoleContextIds().join(",")}`);
+  const keypointCache = state.pendingMotherDraft?.keypointCache instanceof Map
+    ? state.pendingMotherDraft.keypointCache
+    : new Map();
+  const previewPlacement = motherDraftingResolvePlacement(state.motherIdle?.intent || null);
+  const hasVersionBound = Boolean(String(state.motherIdle?.pendingVersionId || "").trim());
   state.pendingMotherDraft = {
     sourceIds: motherV2RoleContextIds(),
     startedAt: existingStartedAt > 0 ? existingStartedAt : Date.now(),
+    previewPolicy: previewPlacement.policy,
+    previewTargetId: previewPlacement.targetId || null,
+    previewRectCss: previewPlacement.rectCss ? { ...previewPlacement.rectCss } : null,
+    timeoutCeilingMs: motherDraftingTimeoutCeilingMs({ hasVersionBound }),
+    keypointSeed,
+    keypointCache,
   };
+  if (idle) {
+    idle.draftCommitRectCss = previewPlacement.rectCss ? { ...previewPlacement.rectCss } : null;
+  }
   setImageFxActive(true, "Mother Draft");
+  requestRender();
 }
 
 function motherIdleRollbackDraftFxIfDispatchUnarmed() {
@@ -19073,6 +19351,7 @@ function motherIdleRollbackDraftFxIfDispatchUnarmed() {
   if (idle.phase !== MOTHER_IDLE_STATES.DRAFTING) return;
   if (idle.pendingPromptCompile || idle.pendingGeneration || idle.pendingDispatchToken) return;
   state.pendingMotherDraft = null;
+  idle.draftCommitRectCss = null;
   setImageFxActive(false);
 }
 
@@ -19086,6 +19365,7 @@ async function motherIdleDispatchGeneration() {
     motherIdlePrimeDraftFx();
   } else {
     state.pendingMotherDraft = null;
+    idle.draftCommitRectCss = null;
   }
   const ok = await ensureEngineSpawned({ reason: "mother_drafting" });
   if (!ok) {
@@ -19216,6 +19496,7 @@ function motherV2CancelInFlight({ reason = "interaction" } = {}) {
     Boolean(idle.pendingGeneration) ||
     Boolean(idle.pendingDispatchToken);
   if (!hadPending) return;
+  motherV2StopRealtimeIntentSession();
   idle.cancelArtifactUntil = Date.now() + 14_000;
   idle.cancelArtifactReason = String(reason || "interaction");
   state.pendingMotherDraft = null;
@@ -20536,6 +20817,7 @@ function pendingExtractionKindForImageId(imageId) {
 
 function shouldAnimateEffectVisuals() {
   if (state.canvasMode !== "multi") return false;
+  if (state.pendingMotherDraft && state.motherIdle?.phase === MOTHER_IDLE_STATES.DRAFTING) return true;
   if (pendingEffectUnresolvedSlots(state.pendingExtractDna).length) return true;
   if (pendingEffectUnresolvedSlots(state.pendingSoulLeech).length) return true;
   for (const token of state.effectTokensById.values()) {
@@ -20547,8 +20829,261 @@ function shouldAnimateEffectVisuals() {
   return false;
 }
 
+let motherDraftingKeypointSampleCanvas = null;
+let motherDraftingKeypointSampleCtx = null;
+
+function motherDraftingEnsureKeypointSamplerCanvas() {
+  if (motherDraftingKeypointSampleCanvas && motherDraftingKeypointSampleCtx) {
+    return { canvas: motherDraftingKeypointSampleCanvas, ctx: motherDraftingKeypointSampleCtx };
+  }
+  try {
+    motherDraftingKeypointSampleCanvas = document.createElement("canvas");
+    motherDraftingKeypointSampleCtx = motherDraftingKeypointSampleCanvas.getContext("2d", {
+      alpha: false,
+      willReadFrequently: true,
+    });
+  } catch {
+    motherDraftingKeypointSampleCanvas = null;
+    motherDraftingKeypointSampleCtx = null;
+  }
+  if (!motherDraftingKeypointSampleCanvas || !motherDraftingKeypointSampleCtx) return null;
+  return { canvas: motherDraftingKeypointSampleCanvas, ctx: motherDraftingKeypointSampleCtx };
+}
+
+function motherDraftingPackRgb(r = 0, g = 0, b = 0) {
+  const rr = clamp(Math.round(Number(r) || 0), 0, 255);
+  const gg = clamp(Math.round(Number(g) || 0), 0, 255);
+  const bb = clamp(Math.round(Number(b) || 0), 0, 255);
+  return ((rr & 0xff) << 16) | ((gg & 0xff) << 8) | (bb & 0xff);
+}
+
+function motherDraftingFallbackKeypoints({ imageId = "", seed = 0, count = MOTHER_DRAFTING_KEYPOINT_MAX_POINTS } = {}) {
+  const maxPoints = clamp(Math.round(Number(count) || 0), 6, MOTHER_DRAFTING_KEYPOINT_MAX_POINTS);
+  const base = hash32(`${imageId}:${seed}:fallback`);
+  const points = [];
+  for (let i = 0; i < maxPoints; i += 1) {
+    const a = rand01(base + i * 1.37 + 0.19) * Math.PI * 2;
+    const r = Math.sqrt(rand01(base + i * 2.11 + 0.07)) * 0.44;
+    const jitterX = (rand01(base + i * 3.31 + 0.23) - 0.5) * 0.08;
+    const jitterY = (rand01(base + i * 4.57 + 0.41) - 0.5) * 0.08;
+    const x = clamp(0.5 + Math.cos(a) * r + jitterX, 0.05, 0.95);
+    const y = clamp(0.5 + Math.sin(a) * r + jitterY, 0.05, 0.95);
+    const hueMix = rand01(base + i * 5.19 + 0.63);
+    const rCh = lerp(170, 230, hueMix);
+    const gCh = lerp(188, 242, hueMix);
+    const bCh = lerp(214, 255, hueMix);
+    points.push({
+      x,
+      y,
+      weight: clamp(0.34 + rand01(base + i * 1.91 + 0.51) * 0.58, 0.16, 1),
+      color: motherDraftingPackRgb(rCh, gCh, bCh),
+    });
+  }
+  return points;
+}
+
+function motherDraftingExtractImageKeypoints(
+  item = null,
+  { imageId = "", seed = 0, maxPoints = MOTHER_DRAFTING_KEYPOINT_MAX_POINTS } = {}
+) {
+  const img = item?.img || null;
+  const sourceW = Math.max(1, Math.round(Number(img?.naturalWidth || item?.width) || 0));
+  const sourceH = Math.max(1, Math.round(Number(img?.naturalHeight || item?.height) || 0));
+  if (!img || !sourceW || !sourceH) {
+    return motherDraftingFallbackKeypoints({ imageId, seed, count: maxPoints });
+  }
+  const sampler = motherDraftingEnsureKeypointSamplerCanvas();
+  if (!sampler) return motherDraftingFallbackKeypoints({ imageId, seed, count: maxPoints });
+
+  const longest = Math.max(sourceW, sourceH);
+  const sampleScale = Math.min(1, MOTHER_DRAFTING_KEYPOINT_SAMPLE_MAX_DIM / Math.max(1, longest));
+  const sampleW = clamp(Math.round(sourceW * sampleScale), 8, MOTHER_DRAFTING_KEYPOINT_SAMPLE_MAX_DIM);
+  const sampleH = clamp(Math.round(sourceH * sampleScale), 8, MOTHER_DRAFTING_KEYPOINT_SAMPLE_MAX_DIM);
+  const { canvas, ctx } = sampler;
+  canvas.width = sampleW;
+  canvas.height = sampleH;
+
+  try {
+    ctx.clearRect(0, 0, sampleW, sampleH);
+    ctx.drawImage(img, 0, 0, sampleW, sampleH);
+    const imageData = ctx.getImageData(0, 0, sampleW, sampleH);
+    const pixels = imageData.data;
+    const pxCount = sampleW * sampleH;
+    const luminance = new Float32Array(pxCount);
+    const gradient = new Float32Array(pxCount);
+    for (let i = 0, p = 0; i < pxCount; i += 1, p += 4) {
+      const r = pixels[p] || 0;
+      const g = pixels[p + 1] || 0;
+      const b = pixels[p + 2] || 0;
+      luminance[i] = r * 0.299 + g * 0.587 + b * 0.114;
+    }
+    for (let y = 1; y < sampleH - 1; y += 1) {
+      const row = y * sampleW;
+      for (let x = 1; x < sampleW - 1; x += 1) {
+        const idx = row + x;
+        const gx = luminance[idx + 1] - luminance[idx - 1];
+        const gy = luminance[idx + sampleW] - luminance[idx - sampleW];
+        gradient[idx] = Math.abs(gx) + Math.abs(gy);
+      }
+    }
+
+    const candidates = [];
+    const gradientFloor = 18;
+    for (let y = 1; y < sampleH - 1; y += 1) {
+      const row = y * sampleW;
+      for (let x = 1; x < sampleW - 1; x += 1) {
+        const idx = row + x;
+        const score = gradient[idx];
+        if (!Number.isFinite(score) || score < gradientFloor) continue;
+        if (score < gradient[idx - 1]) continue;
+        if (score < gradient[idx + 1]) continue;
+        if (score < gradient[idx - sampleW]) continue;
+        if (score < gradient[idx + sampleW]) continue;
+        const p = idx * 4;
+        candidates.push({
+          x,
+          y,
+          score,
+          color: motherDraftingPackRgb(pixels[p], pixels[p + 1], pixels[p + 2]),
+        });
+      }
+    }
+    if (!candidates.length) return motherDraftingFallbackKeypoints({ imageId, seed, count: maxPoints });
+    candidates.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+
+    const selected = [];
+    const topScore = Math.max(1, Number(candidates[0]?.score) || 1);
+    const minDistance = Math.max(1, Math.min(sampleW, sampleH) / Math.max(3, Math.sqrt(maxPoints) * 1.05));
+    const minDistanceSq = minDistance * minDistance;
+    for (const candidate of candidates) {
+      if (selected.length >= maxPoints) break;
+      let tooClose = false;
+      for (const existing of selected) {
+        const dx = candidate.x - existing._sx;
+        const dy = candidate.y - existing._sy;
+        if (dx * dx + dy * dy < minDistanceSq) {
+          tooClose = true;
+          break;
+        }
+      }
+      if (tooClose && selected.length >= Math.round(maxPoints * 0.34)) continue;
+      selected.push({
+        _sx: candidate.x,
+        _sy: candidate.y,
+        x: clamp((candidate.x + 0.5) / sampleW, 0.03, 0.97),
+        y: clamp((candidate.y + 0.5) / sampleH, 0.03, 0.97),
+        weight: clamp((Number(candidate.score) || 0) / topScore, 0.12, 1),
+        color: candidate.color,
+      });
+    }
+    if (!selected.length) return motherDraftingFallbackKeypoints({ imageId, seed, count: maxPoints });
+    return selected.map((entry) => ({
+      x: entry.x,
+      y: entry.y,
+      weight: entry.weight,
+      color: entry.color,
+    }));
+  } catch {
+    return motherDraftingFallbackKeypoints({ imageId, seed, count: maxPoints });
+  }
+}
+
+function motherDraftingResolveSourceKeypoints(imageId, pendingDraft = null) {
+  const id = String(imageId || "").trim();
+  if (!id) return [];
+  const pending = pendingDraft && typeof pendingDraft === "object" ? pendingDraft : state.pendingMotherDraft;
+  if (!pending || typeof pending !== "object") return [];
+  if (!(pending.keypointCache instanceof Map)) pending.keypointCache = new Map();
+  const item = state.imagesById.get(id) || null;
+  const cacheSignature = [
+    item?.path ? String(item.path) : "",
+    Number(item?.img?.naturalWidth || item?.width) || 0,
+    Number(item?.img?.naturalHeight || item?.height) || 0,
+  ].join("|");
+  const cached = pending.keypointCache.get(id);
+  if (cached && cached.signature === cacheSignature && Array.isArray(cached.keypoints) && cached.keypoints.length) {
+    return cached.keypoints;
+  }
+  const seed = Number(pending.keypointSeed) || hash32(`mother-siphon:${id}:seed`);
+  const keypoints = motherDraftingExtractImageKeypoints(item, {
+    imageId: id,
+    seed,
+    maxPoints: MOTHER_DRAFTING_KEYPOINT_MAX_POINTS,
+  });
+  const normalized = Array.isArray(keypoints) && keypoints.length
+    ? keypoints
+        .slice(0, MOTHER_DRAFTING_KEYPOINT_MAX_POINTS)
+        .map((entry) => ({
+          x: clamp(Number(entry?.x) || 0.5, 0, 1),
+          y: clamp(Number(entry?.y) || 0.5, 0, 1),
+          weight: clamp(Number(entry?.weight) || 0.5, 0.08, 1),
+          color: Number.isFinite(Number(entry?.color)) ? Number(entry.color) : null,
+        }))
+    : motherDraftingFallbackKeypoints({ imageId: id, seed });
+  pending.keypointCache.set(id, {
+    signature: cacheSignature,
+    keypoints: normalized,
+  });
+  return normalized;
+}
+
+function buildMotherDraftingEffectsScene(transform = getMultiViewTransform()) {
+  const pending = state.pendingMotherDraft;
+  const idle = state.motherIdle;
+  if (!pending || !idle || idle.phase !== MOTHER_IDLE_STATES.DRAFTING) return null;
+  if (state.canvasMode !== "multi") return null;
+
+  const previewRectCss = motherDraftingResolvePendingPreviewRectCss(pending);
+  if (!previewRectCss) return null;
+  const targetRect = motherDraftingRectCssToCanvasRectPx(previewRectCss);
+  if (!targetRect) return null;
+
+  const sourceIds = Array.from(
+    new Set(
+      (Array.isArray(pending.sourceIds) ? pending.sourceIds : [])
+        .map((raw) => String(raw || "").trim())
+        .filter(Boolean)
+    )
+  );
+  const sources = [];
+  for (const imageId of sourceIds) {
+    const rect = state.multiRects.get(imageId) || null;
+    const screenRect = rect ? multiRectToScreenRect(rect, transform) : null;
+    if (!screenRect || !(Number(screenRect.w) > 0) || !(Number(screenRect.h) > 0)) continue;
+    const keypoints = motherDraftingResolveSourceKeypoints(imageId, pending);
+    sources.push({
+      imageId: String(imageId || ""),
+      rect: screenRect,
+      keypoints: Array.isArray(keypoints) ? keypoints.slice(0, MOTHER_DRAFTING_KEYPOINT_MAX_POINTS) : [],
+    });
+  }
+  if (!sources.length) return null;
+
+  let seed = Number(pending.keypointSeed) || 0;
+  if (!seed) {
+    seed = hash32(`mother-siphon:${Date.now()}:${sources.map((entry) => entry.imageId).join(",")}`);
+    pending.keypointSeed = seed;
+  }
+  const uncertaintyRaw = motherDraftingComputeUncertaintyEnvelope(pending) || null;
+  const uncertainty = uncertaintyRaw
+    ? {
+        elapsedMs: Math.max(0, Number(uncertaintyRaw.elapsedMs) || 0),
+        lowMs: Math.max(1_000, Number(uncertaintyRaw.lowMs) || 1_000),
+        highMs: Math.max(2_000, Number(uncertaintyRaw.highMs) || 2_000),
+        timeoutCeilingMs: Math.max(2_000, Number(uncertaintyRaw.timeoutCeilingMs) || 2_000),
+        takingLongerThanUsual: Boolean(uncertaintyRaw.takingLongerThanUsual),
+      }
+    : null;
+  return {
+    targetRect,
+    sources,
+    uncertainty,
+    seed,
+  };
+}
+
 function buildEffectsRuntimeScene() {
-  if (state.canvasMode !== "multi") return { extracting: [], tokens: [], drag: null };
+  if (state.canvasMode !== "multi") return { extracting: [], tokens: [], drag: null, motherDrafting: null };
   const transform = getMultiViewTransform();
   const extracting = [];
   const tokens = [];
@@ -20603,7 +21138,8 @@ function buildEffectsRuntimeScene() {
     };
   }
 
-  return { extracting, tokens, drag };
+  const motherDrafting = buildMotherDraftingEffectsScene(transform);
+  return { extracting, tokens, drag, motherDrafting };
 }
 
 function syncEffectsRuntimeScene() {
@@ -20611,7 +21147,7 @@ function syncEffectsRuntimeScene() {
   const suspended = document.hidden || state.canvasMode !== "multi";
   effectsRuntime.setSuspended(suspended);
   if (suspended) {
-    effectsRuntime.syncScene({ extracting: [], tokens: [], drag: null });
+    effectsRuntime.syncScene({ extracting: [], tokens: [], drag: null, motherDrafting: null });
     return;
   }
   effectsRuntime.syncScene(buildEffectsRuntimeScene());
@@ -26043,10 +26579,19 @@ async function handleEventLegacy(event) {
     }
     // Ignore late compile results after local fallback dispatch (prevents duplicate generation requests).
     if (!idle.pendingPromptCompile || idle.pendingGeneration || Boolean(idle.pendingDispatchToken)) {
+      let dispatchSkipReason = "unknown";
+      if (!idle.pendingPromptCompile) {
+        dispatchSkipReason = "pending_prompt_compile_false";
+      } else if (idle.pendingGeneration) {
+        dispatchSkipReason = "pending_generation_true";
+      } else if (Boolean(idle.pendingDispatchToken)) {
+        dispatchSkipReason = "pending_dispatch_token_active";
+      }
       appendMotherTraceLog({
-        kind: "prompt_compiled_ignored",
+        kind: "prompt_compiled_dispatch_skipped",
         traceId: idle.telemetry?.traceId || null,
         actionVersion,
+        reason: dispatchSkipReason,
         pending_prompt_compile: Boolean(idle.pendingPromptCompile),
         pending_generation: Boolean(idle.pendingGeneration),
         pending_dispatch_token: Number(idle.pendingDispatchToken) || 0,
@@ -29974,6 +30519,197 @@ function resolvePendingPromptGenerateAnchorCss(pendingPromptGenerate = null) {
   return currentPromptGenerateAnchorCss();
 }
 
+function renderMotherDraftingPlaceholder(octx, canvasW, canvasH) {
+  const pending = state.pendingMotherDraft;
+  if (!pending || !octx) return;
+  const idle = state.motherIdle;
+  if (!idle || idle.phase !== MOTHER_IDLE_STATES.DRAFTING) return;
+
+  const rectCss = motherDraftingResolvePendingPreviewRectCss(pending);
+  if (!rectCss) return;
+  const normalizedRectCss = motherDraftingNormalizeRectCss(rectCss);
+  if (!normalizedRectCss) return;
+  pending.previewRectCss = { ...normalizedRectCss };
+
+  const dpr = getDpr();
+  const px = motherDraftingRectCssToCanvasRectPx(normalizedRectCss);
+  if (!px) return;
+  if (!(px.w > 0 && px.h > 0)) return;
+
+  const nowMs = Date.now();
+  const envelope = motherDraftingComputeUncertaintyEnvelope(pending, { nowMs });
+  const elapsedMs = envelope ? envelope.elapsedMs : Math.max(0, nowMs - (Number(pending.startedAt) || nowMs));
+  const shimmerProgress = (elapsedMs % MOTHER_DRAFTING_SHIMMER_LOOP_MS) / MOTHER_DRAFTING_SHIMMER_LOOP_MS;
+  const pulse = 0.5 + 0.5 * Math.sin((elapsedMs / 1000) * Math.PI * 2 * 0.62);
+  const sweepCenter = px.x + (px.w + px.h * 1.6) * shimmerProgress - px.h * 0.8;
+
+  octx.save();
+  octx.globalCompositeOperation = "source-over";
+  octx.fillStyle = `rgba(112, 118, 130, ${(0.17 + pulse * 0.06).toFixed(3)})`;
+  octx.fillRect(Math.round(px.x), Math.round(px.y), Math.round(px.w), Math.round(px.h));
+  octx.lineWidth = Math.max(1, Math.round(2 * dpr));
+  octx.strokeStyle = `rgba(182, 189, 202, ${(0.58 + pulse * 0.16).toFixed(3)})`;
+  octx.strokeRect(Math.round(px.x), Math.round(px.y), Math.round(px.w), Math.round(px.h));
+  octx.restore();
+
+  octx.save();
+  octx.beginPath();
+  octx.rect(Math.round(px.x), Math.round(px.y), Math.round(px.w), Math.round(px.h));
+  octx.clip();
+  const shimmer = octx.createLinearGradient(
+    sweepCenter - px.h * 0.9,
+    px.y,
+    sweepCenter + px.h * 0.9,
+    px.y + px.h
+  );
+  shimmer.addColorStop(0, "rgba(214, 222, 236, 0)");
+  shimmer.addColorStop(0.45, "rgba(224, 232, 246, 0.1)");
+  shimmer.addColorStop(0.5, "rgba(238, 244, 255, 0.36)");
+  shimmer.addColorStop(0.55, "rgba(224, 232, 246, 0.1)");
+  shimmer.addColorStop(1, "rgba(214, 222, 236, 0)");
+  octx.fillStyle = shimmer;
+  octx.fillRect(Math.round(px.x - px.h), Math.round(px.y), Math.round(px.w + px.h * 2), Math.round(px.h));
+  octx.restore();
+
+  octx.save();
+  octx.strokeStyle = `rgba(212, 220, 234, ${(0.36 + pulse * 0.12).toFixed(3)})`;
+  octx.lineWidth = Math.max(1, Math.round(1.2 * dpr));
+  octx.strokeRect(
+    Math.round(px.x + Math.max(1, Math.round(1 * dpr))),
+    Math.round(px.y + Math.max(1, Math.round(1 * dpr))),
+    Math.round(px.w - Math.max(2, Math.round(2 * dpr))),
+    Math.round(px.h - Math.max(2, Math.round(2 * dpr)))
+  );
+  octx.restore();
+
+  const hasVersionBound = Boolean(String(state.motherIdle?.pendingVersionId || "").trim());
+  const timeoutCeilingMs = Math.max(
+    8_000,
+    Number(envelope?.timeoutCeilingMs) ||
+      Number(pending.timeoutCeilingMs) ||
+      motherDraftingTimeoutCeilingMs({ hasVersionBound })
+  );
+  const lowMs = Math.max(0, Number(envelope?.lowMs) || Math.round(timeoutCeilingMs * 0.22));
+  const highMs = Math.max(lowMs + 1_000, Number(envelope?.highMs) || Math.round(timeoutCeilingMs * 0.5));
+  const takingLongerThanUsual = Boolean(envelope?.takingLongerThanUsual) || elapsedMs > highMs;
+  const metrics = state.topMetrics || null;
+  const renderDurationsS = Array.isArray(metrics?.renderDurationsS) ? metrics.renderDurationsS : [];
+  const samplesMs = renderDurationsS
+    .map((v) => Number(v) * 1000)
+    .filter((v) => Number.isFinite(v) && v > 0);
+  const recentLatencyS = Number(state.lastCostLatency?.latency_per_image_s);
+  const recentLatencyAt = Number(state.lastCostLatency?.at) || 0;
+  if (
+    Number.isFinite(recentLatencyS) &&
+    recentLatencyS > 0 &&
+    recentLatencyAt > 0 &&
+    nowMs - recentLatencyAt <= 12 * 60 * 1000
+  ) {
+    samplesMs.push(recentLatencyS * 1000);
+  }
+  const sortedSamples = samplesMs.slice().sort((a, b) => a - b);
+  const historicalMaxMs = sortedSamples.length
+    ? Math.max(1_000, Math.round(sortedSamples[sortedSamples.length - 1]))
+    : Math.max(1_000, highMs);
+  const p50MsRaw = sortedSamples.length
+    ? motherDraftingQuantile(sortedSamples, 0.5)
+    : Math.round((lowMs + highMs) * 0.5);
+  const p95MsRaw = sortedSamples.length >= 2
+    ? motherDraftingQuantile(sortedSamples, 0.95)
+    : highMs;
+  const p50Ms = clamp(Math.round(Number(p50MsRaw) || 0), 1_000, historicalMaxMs);
+  const p95Ms = clamp(Math.round(Number(p95MsRaw) || 0), p50Ms, historicalMaxMs);
+
+  const dialDurationMs = Math.max(1_000, historicalMaxMs);
+  const progressRatioRaw = elapsedMs / dialDurationMs;
+  const progressRatio = clamp(progressRatioRaw, 0, 1);
+  const p50Ratio = clamp(p50Ms / dialDurationMs, 0, 1);
+  const p95Ratio = clamp(p95Ms / dialDurationMs, p50Ratio, 1);
+
+  const dialInset = Math.max(6, Math.round(10 * dpr));
+  const dialMinR = Math.max(6, Math.round(7 * dpr));
+  const dialRByRect = Math.max(dialMinR, Math.round(Math.min(px.w, px.h) * 0.075));
+  const dialRByCanvas = Math.max(dialMinR, Math.round(Math.min(Number(canvasW) || 0, Number(canvasH) || 0) * 0.06));
+  const dialR = clamp(dialRByRect, dialMinR, dialRByCanvas);
+  const ringTrackW = Math.max(3, Math.round(4.2 * dpr));
+  const ringBandW = Math.max(4, Math.round(5.4 * dpr));
+  const ringProgressW = Math.max(4, Math.round(5.1 * dpr));
+  const dialEdgePad = Math.max(2, Math.round(Math.max(ringTrackW, ringBandW, ringProgressW) * 0.5));
+  let dialCx = Math.round(px.x + px.w - dialInset - dialR);
+  let dialCy = Math.round(px.y + dialInset + dialR);
+  dialCx = clamp(dialCx, Math.round(px.x + dialR + dialEdgePad), Math.round(px.x + px.w - dialR - dialEdgePad));
+  dialCy = clamp(dialCy, Math.round(px.y + dialR + dialEdgePad), Math.round(px.y + px.h - dialR - dialEdgePad));
+  const ringStart = -Math.PI * 0.5;
+  const ringSweep = Math.PI * 2;
+  const p50Angle = ringStart + ringSweep * p50Ratio;
+  const p95Angle = ringStart + ringSweep * p95Ratio;
+  const progressAngle = ringStart + ringSweep * progressRatio;
+  let bandStart = p50Angle;
+  let bandEnd = p95Angle;
+  if (bandEnd - bandStart < 0.04) {
+    const half = 0.02;
+    bandStart = p50Angle - half;
+    bandEnd = p50Angle + half;
+  }
+  const progressDotX = dialCx + Math.cos(progressAngle) * dialR;
+  const progressDotY = dialCy + Math.sin(progressAngle) * dialR;
+
+  octx.save();
+  octx.lineCap = "round";
+  octx.lineJoin = "round";
+  octx.lineWidth = ringTrackW;
+  octx.strokeStyle = "rgba(152, 160, 176, 0.34)";
+  octx.beginPath();
+  octx.arc(dialCx, dialCy, dialR, ringStart, ringStart + ringSweep);
+  octx.stroke();
+
+  octx.lineWidth = ringBandW;
+  octx.strokeStyle = takingLongerThanUsual
+    ? `rgba(255, 202, 146, ${(0.58 + pulse * 0.16).toFixed(3)})`
+    : `rgba(218, 230, 255, ${(0.58 + pulse * 0.14).toFixed(3)})`;
+  octx.beginPath();
+  octx.arc(dialCx, dialCy, dialR, bandStart, bandEnd);
+  octx.stroke();
+
+  octx.lineWidth = ringProgressW;
+  octx.strokeStyle = takingLongerThanUsual
+    ? `rgba(255, 166, 92, ${(0.76 + pulse * 0.16).toFixed(3)})`
+    : `rgba(120, 210, 255, ${(0.76 + pulse * 0.14).toFixed(3)})`;
+  octx.beginPath();
+  octx.arc(dialCx, dialCy, dialR, ringStart, progressAngle);
+  octx.stroke();
+
+  const p50DotX = dialCx + Math.cos(p50Angle) * dialR;
+  const p50DotY = dialCy + Math.sin(p50Angle) * dialR;
+  const p95DotX = dialCx + Math.cos(p95Angle) * dialR;
+  const p95DotY = dialCy + Math.sin(p95Angle) * dialR;
+  const endpointR = Math.max(1, Math.round(1.8 * dpr));
+  octx.fillStyle = takingLongerThanUsual ? "rgba(255, 220, 190, 0.9)" : "rgba(236, 244, 255, 0.86)";
+  octx.beginPath();
+  octx.arc(p50DotX, p50DotY, endpointR, 0, Math.PI * 2);
+  octx.arc(p95DotX, p95DotY, endpointR, 0, Math.PI * 2);
+  octx.fill();
+
+  octx.beginPath();
+  octx.arc(progressDotX, progressDotY, Math.max(2, Math.round(2.9 * dpr)), 0, Math.PI * 2);
+  octx.fillStyle = takingLongerThanUsual
+    ? "rgba(255, 184, 116, 0.98)"
+    : "rgba(126, 218, 255, 0.98)";
+  octx.fill();
+
+  if (takingLongerThanUsual && elapsedMs > dialDurationMs) {
+    const hotR = Math.max(4, Math.round((5 + pulse * 2.4) * dpr));
+    octx.beginPath();
+    octx.arc(progressDotX, progressDotY, hotR, 0, Math.PI * 2);
+    octx.strokeStyle = `rgba(255, 188, 126, ${(0.38 + pulse * 0.22).toFixed(3)})`;
+    octx.lineWidth = Math.max(1, Math.round(1.1 * dpr));
+    octx.stroke();
+  }
+  octx.restore();
+
+  requestRender();
+}
+
 function renderPromptGeneratePlaceholder(octx, canvasW, canvasH) {
   const pending = state.pendingPromptGenerate;
   if (!pending || !octx) return;
@@ -30317,6 +31053,7 @@ function render() {
 
   renderIntentOverlay(octx, work.width, work.height);
   renderAmbientIntentNudges(octx, work.width, work.height);
+  renderMotherDraftingPlaceholder(octx, work.width, work.height);
   renderPromptGeneratePlaceholder(octx, work.width, work.height);
   renderReelTouchIndicator(octx, work.width, work.height);
   renderMotherRolePreview();
@@ -30535,6 +31272,28 @@ function installCanvasHandlers() {
               requestRender();
               return;
             }
+          }
+          const draftingPreviewHit = state.tool === "pan"
+            ? hitTestMotherDraftingPreviewRect(p, { padPx: Math.round(8 * getDpr()) })
+            : null;
+          if (draftingPreviewHit && event.button === 0) {
+            bumpInteraction({ semantic: false });
+            els.overlayCanvas.setPointerCapture(event.pointerId);
+            state.pointer.active = true;
+            state.pointer.kind = POINTER_KINDS.MOTHER_DRAFT_PREVIEW_DRAG;
+            state.pointer.imageId = null;
+            state.pointer.corner = null;
+            state.pointer.startX = p.x;
+            state.pointer.startY = p.y;
+            state.pointer.lastX = p.x;
+            state.pointer.lastY = p.y;
+            state.pointer.startCssX = pCss.x;
+            state.pointer.startCssY = pCss.y;
+            state.pointer.startRectCss = draftingPreviewHit.rectCss ? { ...draftingPreviewHit.rectCss } : null;
+            state.pointer.wheelOnTap = false;
+            state.pointer.moved = false;
+            requestRender();
+            return;
           }
           // Initial pointer-down in multi-canvas is often a focus change (selection). Treat as
           // non-semantic; real arrangement changes are still marked semantic during pointermove.
@@ -30921,6 +31680,11 @@ function installCanvasHandlers() {
         setOverlayCursor(String(transformUiHit.cursor || "pointer"));
         return;
       }
+      const draftingPreviewHit = hitTestMotherDraftingPreviewRect(p, { padPx: Math.round(8 * getDpr()) });
+      if (draftingPreviewHit) {
+        setOverlayCursor("grab");
+        return;
+      }
       const ambientHit = intentAmbientActive() ? hitTestAmbientIntentNudge(p) : null;
       if (ambientHit) {
         setOverlayCursor("pointer");
@@ -30985,6 +31749,8 @@ function installCanvasHandlers() {
       setOverlayCursor("grabbing");
     } else if (state.pointer.kind === POINTER_KINDS.FREEFORM_SKEW) {
       setOverlayCursor("ew-resize");
+    } else if (state.pointer.kind === POINTER_KINDS.MOTHER_DRAFT_PREVIEW_DRAG) {
+      setOverlayCursor("grabbing");
     } else if (state.pointer.kind === POINTER_KINDS.EFFECT_TOKEN_DRAG) {
       setOverlayCursor("grabbing");
     } else if (state.pointer.kind === POINTER_KINDS.FREEFORM_IMPORT || state.pointer.kind === POINTER_KINDS.FREEFORM_WHEEL) {
@@ -31031,6 +31797,47 @@ function installCanvasHandlers() {
           });
         }
       }
+      requestRender();
+      return;
+    }
+    if (state.pointer.kind === POINTER_KINDS.MOTHER_DRAFT_PREVIEW_DRAG) {
+      bumpInteraction({ semantic: false });
+      const idle = state.motherIdle;
+      const pending = state.pendingMotherDraft;
+      if (!idle || !pending || idle.phase !== MOTHER_IDLE_STATES.DRAFTING) return;
+      const startRect = state.pointer.startRectCss || motherDraftingResolvePendingPreviewRectCss(pending) || null;
+      if (!startRect) return;
+      const wrap = els.canvasWrap;
+      const canvasCssW = Number(wrap?.clientWidth) || 0;
+      const canvasCssH = Number(wrap?.clientHeight) || 0;
+      const clampOpts = freeformWorkspaceClampOptions(canvasCssW, canvasCssH, { minSize: 44 });
+      const ms = state.multiView?.scale || 1;
+      const dxCss = (Number(pCss.x) || 0) - state.pointer.startCssX;
+      const dyCss = (Number(pCss.y) || 0) - state.pointer.startCssY;
+      const dragDistCss = Math.hypot(dxCss, dyCss);
+      if (!state.pointer.moved && dragDistCss <= MOTHER_SELECTION_SEMANTIC_DRAG_PX) return;
+      const dxWorld = dxCss / Math.max(ms, 0.0001);
+      const dyWorld = dyCss / Math.max(ms, 0.0001);
+      const nextRect = clampFreeformRectCss(
+        {
+          x: (Number(startRect.x) || 0) + dxWorld,
+          y: (Number(startRect.y) || 0) + dyWorld,
+          w: Math.max(1, Number(startRect.w) || 1),
+          h: Math.max(1, Number(startRect.h) || 1),
+          autoAspect: false,
+        },
+        canvasCssW,
+        canvasCssH,
+        clampOpts
+      );
+      pending.previewRectCss = {
+        x: Number(nextRect.x) || 0,
+        y: Number(nextRect.y) || 0,
+        w: Math.max(1, Number(nextRect.w) || 1),
+        h: Math.max(1, Number(nextRect.h) || 1),
+      };
+      idle.draftCommitRectCss = { ...pending.previewRectCss };
+      state.pointer.moved = true;
       requestRender();
       return;
     }
@@ -31319,7 +32126,8 @@ function installCanvasHandlers() {
         // Arm Mother idle timers against the settled interaction state (pointer no longer active).
         const motherRoleDrag = isMotherRolePath(kind);
         const effectTokenDrag = isEffectTokenPath(kind);
-        if (!motherRoleDrag && !effectTokenDrag) {
+        const motherDraftPreviewDrag = kind === POINTER_KINDS.MOTHER_DRAFT_PREVIEW_DRAG;
+        if (!motherRoleDrag && !effectTokenDrag && !motherDraftPreviewDrag) {
           const selectionOnly =
             (kind === POINTER_KINDS.FREEFORM_MOVE ||
               kind === POINTER_KINDS.FREEFORM_RESIZE ||

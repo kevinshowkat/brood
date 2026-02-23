@@ -37,12 +37,24 @@ test("effects runtime wiring: initialized once, resized, and synced from render 
   assert.match(app, /effectsRuntime\.resize\(\{\s*width,\s*height,\s*dpr\s*\}\);/);
   assert.match(app, /function syncEffectsRuntimeScene\(\)/);
   assert.match(app, /syncEffectsRuntimeScene\(\);\s*updateImageFxRect\(\);/);
+  assert.match(app, /function buildEffectsRuntimeScene\(\)/);
+  assert.match(app, /const motherDrafting = buildMotherDraftingEffectsScene\(transform\);/);
+  assert.match(app, /return \{ extracting, tokens, drag, motherDrafting \};/);
+  assert.match(app, /effectsRuntime\.syncScene\(\{ extracting: \[\], tokens: \[\], drag: null, motherDrafting: null \}\);/);
   assert.match(runtime, /function createEffectsRuntime\(/);
   assert.match(runtime, /function presentNow\(\)/);
   assert.match(runtime, /function resolveDropAnimation\(\)/);
   assert.match(runtime, /clearVisuals\(\);\s*presentNow\(\);\s*stopTicker\(\);/);
   assert.match(runtime, /if \(suspended\) \{[\s\S]*resolveDropAnimation\(\);[\s\S]*stopTicker\(\);/);
   assert.match(runtime, /function resize\(\{ width, height, dpr \} = \{\}\)/);
+  assert.match(runtime, /let scene = \{ extracting: \[\], tokens: \[\], drag: null, motherDrafting: null \};/);
+  assert.match(
+    runtime,
+    /if \(motherDrafting\?\.targetRect && Array\.isArray\(motherDrafting\.sources\) && motherDrafting\.sources\.length\) return true;/
+  );
+  assert.match(runtime, /function drawMotherDraftingSiphon\(nowMs\)/);
+  assert.match(runtime, /drawMotherDraftingSiphon\(nowMs\);/);
+  assert.match(runtime, /motherDrafting:\s*nextScene\.motherDrafting \|\| null,/);
 });
 
 test("effect token drag lifecycle: drag follows pointer coordinates and valid target enters drop preview", () => {

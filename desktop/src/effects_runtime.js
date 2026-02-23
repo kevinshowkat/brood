@@ -11,6 +11,12 @@ function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
+function rand01(seed) {
+  const n = Number(seed) || 0;
+  const hashed = Math.sin(n * 12.9898 + 78.233) * 43758.5453123;
+  return hashed - Math.floor(hashed);
+}
+
 function easeInCubic(t) {
   const x = clamp(Number(t) || 0, 0, 1);
   return x * x * x;
@@ -40,11 +46,23 @@ function hardRect(gfx, x, y, w, h) {
   gfx.drawRect(x, y, w, h);
 }
 
+function normalizeColorInt(value, fallback = 0xc8d8f2) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  const clamped = Math.max(0, Math.min(0xffffff, Math.round(n)));
+  return clamped;
+}
+
+const MOTHER_SIPHON_PARTICLE_CAP = 240;
+const MOTHER_SIPHON_PER_SOURCE_MAX = 68;
+
 function hasSceneWork(scene) {
   if (!scene) return false;
   if (Array.isArray(scene.extracting) && scene.extracting.length) return true;
   if (Array.isArray(scene.tokens) && scene.tokens.length) return true;
   if (scene.drag) return true;
+  const motherDrafting = scene.motherDrafting;
+  if (motherDrafting?.targetRect && Array.isArray(motherDrafting.sources) && motherDrafting.sources.length) return true;
   return false;
 }
 
@@ -53,11 +71,12 @@ export function createEffectsRuntime({ canvas } = {}) {
   let tickerAttached = false;
   let suspended = false;
   let viewport = { width: 1, height: 1, dpr: 1 };
-  let scene = { extracting: [], tokens: [], drag: null };
+  let scene = { extracting: [], tokens: [], drag: null, motherDrafting: null };
   let tokenHitZones = [];
   let dropAnimation = null;
 
   const extractionLayer = new Container();
+  const motherDraftingLayer = new Container();
   const tokenLayer = new Container();
   const dragLayer = new Container();
 
@@ -66,7 +85,9 @@ export function createEffectsRuntime({ canvas } = {}) {
   const dragTokenGfx = new Graphics();
   const dragTargetGfx = new Graphics();
   const dropAnimGfx = new Graphics();
+  const motherDraftingGfx = new Graphics();
 
+  motherDraftingLayer.addChild(motherDraftingGfx);
   dragLayer.addChild(dragTargetGfx);
   dragLayer.addChild(dragTokenGfx);
   dragLayer.addChild(dropAnimGfx);
@@ -81,6 +102,7 @@ export function createEffectsRuntime({ canvas } = {}) {
       resolution: 1,
     });
     app.stage.addChild(extractionLayer);
+    app.stage.addChild(motherDraftingLayer);
     app.stage.addChild(tokenLayer);
     app.stage.addChild(dragLayer);
     return true;
@@ -278,6 +300,174 @@ export function createEffectsRuntime({ canvas } = {}) {
     );
   }
 
+  function drawMotherDraftingSiphon(nowMs) {
+    motherDraftingGfx.clear();
+    const drafting = scene.motherDrafting;
+    if (!drafting || typeof drafting !== "object") return;
+    const targetRect = normalizeRect(drafting.targetRect);
+    if (!targetRect) return;
+    const rawSources = Array.isArray(drafting.sources) ? drafting.sources : [];
+    if (!rawSources.length) return;
+
+    const uncertainty = drafting.uncertainty && typeof drafting.uncertainty === "object" ? drafting.uncertainty : {};
+    const elapsedMs = Math.max(0, Number(uncertainty.elapsedMs) || 0);
+    const lowMs = Math.max(1_000, Number(uncertainty.lowMs) || 18_000);
+    const highMs = Math.max(lowMs + 1_000, Number(uncertainty.highMs) || 42_000);
+    const takingLongerThanUsual = Boolean(uncertainty.takingLongerThanUsual) || elapsedMs > highMs;
+    const uncertaintySpan = Math.max(1_000, highMs - lowMs);
+    const phase = nowMs * 0.001;
+    const seed = Number(drafting.seed) || 1;
+    const progressNorm = clamp((elapsedMs - lowMs) / uncertaintySpan, -0.6, 1.8);
+    const entropy = takingLongerThanUsual ? 1.35 : 1;
+    const pulse = 0.5 + 0.5 * Math.sin(phase * 2.2 + seed * 0.0009);
+    const visibilityGain = takingLongerThanUsual ? 1.34 : 1.22;
+
+    const liveSources = [];
+    for (const source of rawSources) {
+      const rect = normalizeRect(source?.rect);
+      if (!rect) continue;
+      const keypoints = Array.isArray(source?.keypoints) ? source.keypoints : [];
+      liveSources.push({
+        imageId: String(source?.imageId || ""),
+        rect,
+        keypoints,
+      });
+    }
+    if (!liveSources.length) return;
+
+    const perSourceCap = clamp(
+      Math.floor(MOTHER_SIPHON_PARTICLE_CAP / Math.max(1, liveSources.length)),
+      12,
+      MOTHER_SIPHON_PER_SOURCE_MAX
+    );
+
+    for (let s = 0; s < liveSources.length; s += 1) {
+      const source = liveSources[s];
+      const rect = source.rect;
+      const sourceSeed = seed + (s + 1) * 97;
+      const keypoints = source.keypoints.length
+        ? source.keypoints
+        : [{ x: 0.5, y: 0.5, weight: 0.55, color: 0xc7d9f5 }];
+      const emission = clamp(
+        0.76 + progressNorm * 0.1 + Math.sin(phase * 1.8 + sourceSeed * 0.004) * 0.08 + (takingLongerThanUsual ? 0.16 : 0),
+        0.72,
+        1.62
+      );
+      const particleCount = clamp(Math.round(keypoints.length * (3.2 + emission * 1.7)), 20, perSourceCap);
+      const laneGridCols = clamp(Math.round(Math.sqrt(particleCount)), 4, 10);
+      const laneGridRows = clamp(Math.ceil(particleCount / laneGridCols), 4, 12);
+      const laneSlots = laneGridCols * laneGridRows;
+
+      const guideCount = Math.min(4, keypoints.length);
+      for (let g = 0; g < guideCount; g += 1) {
+        const keypoint = keypoints[g];
+        const kx = clamp(Number(keypoint?.x) || 0.5, 0, 1);
+        const ky = clamp(Number(keypoint?.y) || 0.5, 0, 1);
+        const sx = rect.x + kx * rect.w;
+        const sy = rect.y + ky * rect.h;
+        const guideSeed = sourceSeed + (g + 1) * 41 + (Number(keypoint?.weight) || 0) * 113;
+        const guideSlot = (g * 5 + s * 7 + Math.floor(rand01(guideSeed * 0.071 + seed * 0.01) * 13)) % 16;
+        const guideCol = guideSlot % 4;
+        const guideRow = Math.floor(guideSlot / 4);
+        const stratNormX = (guideCol + 0.2 + rand01(guideSeed * 0.029 + seed * 0.0012) * 0.6) / 4;
+        const stratNormY = (guideRow + 0.2 + rand01(guideSeed * 0.037 + seed * 0.0017 + 0.19) * 0.6) / 4;
+        const randomNormX = 0.08 + rand01(guideSeed * 0.019 + seed * 0.002) * 0.84;
+        const randomNormY = 0.08 + rand01(guideSeed * 0.023 + seed * 0.004 + 0.31) * 0.84;
+        const strategicNormX = lerp(kx, stratNormX, takingLongerThanUsual ? 0.72 : 0.64);
+        const strategicNormY = lerp(ky, stratNormY, takingLongerThanUsual ? 0.72 : 0.64);
+        const guideSpreadMix = takingLongerThanUsual ? 0.68 : 0.56;
+        const targetNormX = clamp(lerp(strategicNormX, randomNormX, guideSpreadMix * 0.58), 0.06, 0.94);
+        const targetNormY = clamp(lerp(strategicNormY, randomNormY, guideSpreadMix * 0.58), 0.06, 0.94);
+        const tx = targetRect.x + targetNormX * targetRect.w;
+        const ty = targetRect.y + targetNormY * targetRect.h;
+        const dx = tx - sx;
+        const dy = ty - sy;
+        const dist = Math.max(1, Math.hypot(dx, dy));
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const px = -ny;
+        const py = nx;
+        const arcMag = dist * (0.16 + 0.08 * ((g + 1) / (guideCount + 1))) * entropy;
+        const curveSign = (g % 2 === 0 ? 1 : -1) * (s % 2 === 0 ? 1 : -1);
+        const cx = lerp(sx, tx, 0.47) + px * arcMag * curveSign;
+        const cy = lerp(sy, ty, 0.47) + py * arcMag * curveSign;
+        const guideColor = normalizeColorInt(keypoint?.color, takingLongerThanUsual ? 0xffc18e : 0xc8daf6);
+        const guideAlpha = (takingLongerThanUsual ? 0.28 : 0.22) * visibilityGain * (0.82 + pulse * 0.18);
+        motherDraftingGfx.lineStyle(2.8, guideColor, guideAlpha);
+        motherDraftingGfx.moveTo(sx, sy);
+        motherDraftingGfx.quadraticCurveTo(cx, cy, tx, ty);
+        motherDraftingGfx.lineStyle(1.5, 0xf0f5ff, guideAlpha * 0.42);
+        motherDraftingGfx.moveTo(sx, sy);
+        motherDraftingGfx.quadraticCurveTo(cx, cy, tx, ty);
+      }
+
+      for (let i = 0; i < particleCount; i += 1) {
+        const keypoint = keypoints[i % keypoints.length] || keypoints[0];
+        const kx = clamp(Number(keypoint?.x) || 0.5, 0, 1);
+        const ky = clamp(Number(keypoint?.y) || 0.5, 0, 1);
+        const sx = rect.x + kx * rect.w;
+        const sy = rect.y + ky * rect.h;
+        const laneSeed = sourceSeed + (i + 1) * 37 + (Number(keypoint?.weight) || 0) * 190;
+        const laneSlot = (i * 7 + s * 11 + Math.floor(rand01(laneSeed * 0.071 + seed * 0.003) * laneSlots)) % laneSlots;
+        const laneCol = laneSlot % laneGridCols;
+        const laneRow = Math.floor(laneSlot / laneGridCols);
+        const stratNormX = (laneCol + 0.17 + rand01(laneSeed * 0.033 + seed * 0.0011 + 0.13) * 0.66) / laneGridCols;
+        const stratNormY = (laneRow + 0.17 + rand01(laneSeed * 0.039 + seed * 0.0015 + 0.47) * 0.66) / laneGridRows;
+        const randomNormX = 0.08 + rand01(laneSeed * 0.017 + seed * 0.0013) * 0.84;
+        const randomNormY = 0.08 + rand01(laneSeed * 0.021 + seed * 0.0021 + 0.51) * 0.84;
+        const strategicNormX = lerp(kx, stratNormX, takingLongerThanUsual ? 0.74 : 0.66);
+        const strategicNormY = lerp(ky, stratNormY, takingLongerThanUsual ? 0.74 : 0.66);
+        const spreadMix = clamp(0.24 + Math.max(0, progressNorm) * 0.1 + (takingLongerThanUsual ? 0.1 : 0), 0.18, 0.5);
+        const targetNormX = clamp(lerp(strategicNormX, randomNormX, spreadMix), 0.06, 0.94);
+        const targetNormY = clamp(lerp(strategicNormY, randomNormY, spreadMix), 0.06, 0.94);
+        const tx = targetRect.x + targetNormX * targetRect.w;
+        const ty = targetRect.y + targetNormY * targetRect.h;
+        const dx = tx - sx;
+        const dy = ty - sy;
+        const dist = Math.max(1, Math.hypot(dx, dy));
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const px = -ny;
+        const py = nx;
+        const speed = (0.24 + Math.abs(Math.sin(laneSeed * 0.017)) * 0.3) * (takingLongerThanUsual ? 1.1 : 1);
+        const phaseOffset = Math.abs(Math.sin(laneSeed * 0.031)) * 2.8;
+        const t = (phase * speed + phaseOffset) % 1;
+        const jitterMag = (takingLongerThanUsual ? 3.2 : 1.7) * (0.75 + Math.abs(Math.sin(phase * 2.4 + laneSeed * 0.01)));
+        const arcMag = dist * (0.18 + Math.abs(Math.sin(laneSeed * 0.013)) * 0.19) * entropy;
+        const curveSign = (i % 2 === 0 ? 1 : -1) * (s % 2 === 0 ? 1 : -1);
+        const jitter = Math.sin(phase * 3.1 + laneSeed * 0.009) * jitterMag;
+        const cx = lerp(sx, tx, 0.46) + px * arcMag * curveSign + nx * jitter;
+        const cy = lerp(sy, ty, 0.46) + py * arcMag * curveSign + py * jitter * 0.6;
+        const invT = 1 - t;
+        const pxPos = invT * invT * sx + 2 * invT * t * cx + t * t * tx;
+        const pyPos = invT * invT * sy + 2 * invT * t * cy + t * t * ty;
+        const weight = clamp(Number(keypoint?.weight) || 0.55, 0.08, 1);
+        let alpha = (0.36 + weight * 0.66) * (0.72 + 0.28 * Math.sin(t * Math.PI));
+        if (takingLongerThanUsual) alpha *= 1.12;
+        const sourceFade = clamp((t - 0.08) / 0.26, 0, 1);
+        alpha *= 0.65 + sourceFade * 0.35;
+        alpha = clamp(alpha, 0.2, 0.96);
+        const radius = clamp(1 + weight * 2.2 + (t > 0.84 ? (t - 0.84) * 8.8 : 0), 1, 5.4);
+        const color = normalizeColorInt(keypoint?.color, takingLongerThanUsual ? 0xffc18e : 0xc8daf6);
+        const trailT = clamp(t - (0.08 + 0.06 * (1 - weight)), 0, 1);
+        const trailInvT = 1 - trailT;
+        const trailX = trailInvT * trailInvT * sx + 2 * trailInvT * trailT * cx + trailT * trailT * tx;
+        const trailY = trailInvT * trailInvT * sy + 2 * trailInvT * trailT * cy + trailT * trailT * ty;
+        if (i % 2 === 0) {
+          motherDraftingGfx.lineStyle(Math.max(1.4, radius * 0.85), color, alpha * 0.52);
+          motherDraftingGfx.moveTo(trailX, trailY);
+          motherDraftingGfx.lineTo(pxPos, pyPos);
+        }
+        motherDraftingGfx.beginFill(color, alpha * 0.46);
+        motherDraftingGfx.drawCircle(pxPos, pyPos, radius * (1.85 + weight * 0.22));
+        motherDraftingGfx.endFill();
+        motherDraftingGfx.beginFill(color, alpha);
+        motherDraftingGfx.drawCircle(pxPos, pyPos, radius);
+        motherDraftingGfx.endFill();
+      }
+    }
+  }
+
   function drawDropAnimation(nowMs) {
     dropAnimGfx.clear();
     const anim = dropAnimation;
@@ -344,6 +534,7 @@ export function createEffectsRuntime({ canvas } = {}) {
       node.gfx.clear();
       node.mask.clear();
     }
+    motherDraftingGfx.clear();
     for (const node of tokenNodes.values()) {
       node.gfx.clear();
       node.container.visible = false;
@@ -370,6 +561,7 @@ export function createEffectsRuntime({ canvas } = {}) {
     }
     const nowMs = performance.now ? performance.now() : Date.now();
     drawExtraction(nowMs);
+    drawMotherDraftingSiphon(nowMs);
     drawStaticTokens(nowMs);
     drawDragPreview(nowMs);
     drawDropAnimation(nowMs);
@@ -397,6 +589,7 @@ export function createEffectsRuntime({ canvas } = {}) {
       extracting: Array.isArray(nextScene.extracting) ? nextScene.extracting : [],
       tokens: Array.isArray(nextScene.tokens) ? nextScene.tokens : [],
       drag: nextScene.drag || null,
+      motherDrafting: nextScene.motherDrafting || null,
     };
     if (suspended) {
       resolveDropAnimation();
@@ -490,7 +683,7 @@ export function createEffectsRuntime({ canvas } = {}) {
   function destroy() {
     resolveDropAnimation();
     tokenHitZones = [];
-    scene = { extracting: [], tokens: [], drag: null };
+    scene = { extracting: [], tokens: [], drag: null, motherDrafting: null };
     if (!app) return;
     if (tickerAttached) {
       app.ticker.remove(onTick);
