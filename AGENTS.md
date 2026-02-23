@@ -69,6 +69,25 @@ Tests:
 - `main` is branch-protected and requires the `smoke-install` status check before merge.
 - `.github/workflows/desktop-clean-machine-smoke.yml` always emits `smoke-install` on PRs/pushes; expensive DMG smoke steps are skipped automatically when no desktop-related files changed.
 
+## Kevin Maintainer Workflow: README Discipline (Internal)
+- Scope: this section is for Kevin Showkat's internal workflow only.
+- Trigger rule: when cutting a release (or doing release-adjacent work), agents must update `README.md` in the same branch before handoff.
+- Release-adjacent work includes:
+  - version bumps in `desktop/package.json`, `desktop/src-tauri/tauri.conf.json`, or `desktop/src-tauri/Cargo.toml`
+  - release tags, release branches, publish workflow changes, installer naming/path changes
+  - major onboarding/setup flow changes, key docs path changes, or headline feature changes
+- Required `README.md` structure:
+  - Hero image
+  - One non-jargony sentence describing Brood and its unique capability vs alternatives
+  - `How to set up in 5m` with exactly 3 bullets
+  - `Key docs` with 5-7 bullets
+  - `Highlights` with exactly 3 ICP-relevant features and GIFs
+  - `Roadmap` with exactly 3 bullets
+- Release checklist:
+  - verify all README links and media paths resolve
+  - ensure setup steps and key docs are current
+  - ensure highlights and roadmap reflect what is shipping/next
+
 ## Configuration & Tips
 - Memory is opt-in: set `BROOD_MEMORY=1` for the engine.
 - Pricing overrides live at `~/.brood/pricing_overrides.json`.

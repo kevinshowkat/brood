@@ -1,32 +1,31 @@
 # Brood: Reference-First AI Image Editing for macOS
 
 <p align="left">
-  <img src="media/features/readme/main_value_prop_v17_labels_20260221.gif" alt="Brood main value demo">
+  <img src="media/features/readme/main_value_prop_v17_labels_20260221.gif" alt="Brood hero demo">
 </p>
 
-Brood is a promptless, reference-first AI image generation and editing desktop for developers.
-Use existing brand/reference images to generate high-quality creative variants quickly without prompt engineering.
-Brood is local-first on macOS: run artifacts stay on your machine under `~/brood_runs/run-*`.
+Brood helps developers turn existing images into new high-quality variants without prompt writing, while keeping every run reproducible on their Mac.
 
-## Key Docs
+## How to set up in 5m
 
-- Reference-first workflow: `docs/reference-first-image-editing.md`
-- macOS local/private model: `docs/macos-local-private-image-editing.md`
-- Reproducible benchmark template: `docs/benchmark-playbook.md`
+- Install the latest macOS app from Releases, open it, and complete the in-app OpenRouter onboarding.
+- Import one or more images to the canvas and arrange/resize them to communicate intent.
+- Let Mother propose the next edit, then confirm, reject, or reroll from the same canvas loop.
+
+## Key docs
+
+- Desktop product + workflows: `docs/desktop.md`
+- Reference-first workflow overview: `docs/reference-first-image-editing.md`
+- Local/private model and run data model: `docs/macos-local-private-image-editing.md`
+- Benchmarking and repeatability playbook: `docs/benchmark-playbook.md`
 - Capability-to-outcome matrix: `docs/why-brood-matrix.md`
-- Technical entrypoints: `llms.txt`
+- Docs index: `docs/README.md`
+- Agent/dev entrypoints: `llms.txt`
 
-## Live Workflow Highlights
+## Highlights
 
-### OpenRouter-First Onboarding
-Brood now ships a first-run OpenRouter onboarding flow in-app. It guides users through key setup, stores `OPENROUTER_API_KEY` in `~/.brood/.env`, verifies connectivity, and unlocks OpenRouter-first runtime paths (including Gemini realtime intent/canvas routing).
-
-<p align="left">
-  <img src="media/features/readme/openrouter_onboarding_v2.gif" alt="OpenRouter-first onboarding flow">
-</p>
-
-### Realtime Canvas Proposals
-Mother watches your on-canvas edits (move/resize/select), infers what you are emphasizing, and proposes the next best transformation without requiring a typed prompt.
+### 1) Realtime Canvas Proposals
+Mother watches your on-canvas edits and proposes the next best transformation without requiring typed prompts.
 
 <p align="left">
   <a href="media/features/readme/realtime_canvas_proposals.gif">
@@ -34,21 +33,8 @@ Mother watches your on-canvas edits (move/resize/select), infers what you are em
   </a>
 </p>
 
-### Set Vibe (Mood Steering)
-Mother now includes a top-left canvas `Set Vibe` control with four mood presets: `Joyous`, `Nefarious`, `Somber`, and `Angry`.  
-Changing vibe updates Mother's creative steering for proposals in-session, so users can shift tone without rewriting prompts.
-
-### Top Panel Telemetry Metrics
-The top panel shows four live chips users can read at a glance: `TOK` (30m in/out token sparklines + API calls), `COST` (estimated session spend), `QUEUE` (pending/running actions + queue trend), and `AVG` (rolling render time), each heat-coded from cool to hot.
-
-<p align="left">
-  <a href="media/features/readme/top_panel_telemetry.gif">
-    <img src="media/features/readme/top_panel_telemetry_thumb.png" alt="Top panel telemetry metrics (click to view GIF)">
-  </a>
-</p>
-
-### Proposal Drafting
-Mother (Brood's realtime proposal copilot) enters a drafting phase, assembles proposal context from the canvas state, then renders a candidate you can confirm, reject, or iterate.
+### 2) Proposal Drafting and Fast Accept/Deploy Loop
+Mother drafts a concrete proposal, then you can accept and deploy in-place with deterministic run artifacts.
 
 <p align="left">
   <a href="media/features/readme/proposal_drafting.gif">
@@ -56,24 +42,24 @@ Mother (Brood's realtime proposal copilot) enters a drafting phase, assembles pr
   </a>
 </p>
 
+### 3) Live Cost/Token/Queue Telemetry While You Work
+Top-panel telemetry keeps model usage, latency, queue depth, and cost visible as you iterate.
+
+<p align="left">
+  <a href="media/features/readme/top_panel_telemetry.gif">
+    <img src="media/features/readme/top_panel_telemetry_thumb.png" alt="Top panel telemetry metrics (click to view GIF)">
+  </a>
+</p>
+
+## Roadmap
+
+- Reduce time-to-first-draft by parallelizing more of Mother's compile + generate path and trimming avoidable queue waits.
+- Expand multi-image operation specs and effect-token workflows to make complex edits more controllable.
+- Increase provider parity and release hardening while keeping artifacts and receipts stable and reproducible.
+
 ## Status
 
-Brood is currently a **macOS-only desktop app** (Tauri).
-There is no web app, and Windows/Linux builds are not supported yet.
-
-## Rust Runtime Status
-
-### Current State (v0.2.3)
-
-- Desktop runtime is native Rust (`brood-rs`) by default.
-- macOS release packaging/signing/notarization includes the staged Rust engine binary.
-- Legacy Python runtime fallback paths are retired from desktop runtime.
-
-### Near-Term (Next Milestones)
-
-- Expand provider parity coverage for desktop-critical image/edit/reference flows.
-- Keep event/artifact compatibility stable (`events.jsonl`, receipt/thread/summary payload shapes).
-- Continue live-probe validation and eliminate remaining migration-era edge cases.
+Brood is currently a **macOS-only desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
 
 ## Download (macOS)
 
@@ -85,70 +71,11 @@ Install:
 2. Open the DMG and drag `Brood.app` into `/Applications`.
 3. If macOS blocks launch, right-click `Brood.app` and choose **Open**.
 
-## Current App Surface
-
-- Canvas-first desktop with `Single view` and `Multi view`, plus pan/zoom/fit controls.
-- Action Grid + bottom HUD workflow for tooling and execution feedback.
-- Built-in local file-browser dock import flow, plus canvas import drag/drop.
-- Multi-provider model support: OpenAI, Gemini, Imagen, Flux, SDXL.
-
-### Abilities by Image Selection
-
-- 1 image: `Recast`, `Create Layers`, `Background: White`, `Background: Sweep`, `Crop: Square`, `Variations`.
-- 2 images: `Combine`, `Swap DNA`, `Bridge`.
-- Multi-view effect-token pipeline: `Extract DNA`, `Soul Leech`, then drag token onto a target image.
-
-### Mother Workflow
-
-- Mother observes your canvas and proposes edits.
-- `Set Vibe` lets you steer proposal tone (`Joyous` / `Nefarious` / `Somber` / `Angry`) in real time.
-- Proposal loop supports next/propose, confirm/deploy, reject/stop, and reroll-style follow-ups.
-- Proposal intent and generation are fed by structured context packets (see below).
-
-## First 5 Minutes (Desktop)
-
-1. Import one or more images.
-2. Arrange/resize on canvas to communicate intent.
-3. Let Mother propose, then confirm or reject.
-4. Run direct Abilities as needed and inspect HUD output.
-
-More usage details: `docs/desktop.md`.
-
-## Mother Context Packets
-
-Brood now ships compact context packets for both proposal inference and Gemini generation:
-- `brood.mother.proposal_context.v1` (intent/proposal soft priors)
-- `brood.gemini.context_packet.v2` (generation-time proposal lock + spatial hints)
-
-Details and scoring math:
-- `docs/desktop.md#mother-proposal--gemini-context-v2`
-
-## Run Artifacts and Debugging
-
-Each desktop run writes artifacts under `~/brood_runs/run-*`, including:
-- `events.jsonl` (desktop/engine event stream)
-- `mother_intent_infer-*.json`, `mother_prompt_compile-*.json`, `mother_generate-*.json`
-- `receipt-*.json` (generation/edit receipts)
-
-For Gemini wire-level inspection:
-- set `BROOD_DEBUG_GEMINI_WIRE=1` before launching the app
-- inspect `_raw_provider_outputs/gemini-send-message-*.json` and `gemini-receipt-*.json`
-
-## Hotkeys
-
-- `L` lasso
-- `F` fit-to-view
-- `Esc` clear selection
-- `1`-`9` activate HUD tools
-
-## Run From Source (Desktop)
+## Run from source
 
 ```bash
 ./scripts/dev_desktop.sh
 ```
-
-This runs the Tauri app in dev mode (`desktop/`) with the native Rust engine path.
-Desktop runtime no longer includes Python compat fallback paths.
 
 Build desktop app:
 
@@ -158,96 +85,9 @@ npm install
 npm run tauri build
 ```
 
-## Engine / CLI Quickstart
+## Local-first run artifacts
 
-The native Rust CLI powers the desktop app and can also run standalone.
-
-### Rust CLI (default)
-
-```bash
-cd rust_engine
-
-# Chat loop
-cargo run -p brood-cli -- chat --out /tmp/brood-run --events /tmp/brood-run/events.jsonl
-
-# Single run
-cargo run -p brood-cli -- run --prompt "hero image for Series A" --out /tmp/brood-run
-
-# Recreate flow
-cargo run -p brood-cli -- recreate --reference path/to/image.png --out /tmp/brood-recreate
-```
-
-## API Keys
-
-- Copy `.env.example` to `.env` and fill provider keys.
-- Supported key families: OpenAI, OpenRouter, Anthropic, Gemini/Google, Imagen/Vertex, Flux/BFL.
-- For OpenAI image models:
-  - set `OPENAI_API_KEY` (or `OPENAI_API_KEY_BACKUP`)
-  - use `/image_model gpt-image-1` in chat or `--image-model gpt-image-1` on CLI
-  - optional: `OPENAI_IMAGE_USE_RESPONSES=1`, `OPENAI_IMAGE_STREAM=1`
-- Realtime intent/canvas provider routing:
-  - set `BROOD_REALTIME_PROVIDER` to `openai_realtime` or `gemini_flash`
-  - optional scoped overrides:
-    - `BROOD_CANVAS_CONTEXT_REALTIME_PROVIDER`
-    - `BROOD_INTENT_REALTIME_PROVIDER`
-    - `BROOD_MOTHER_INTENT_REALTIME_PROVIDER`
-  - default behavior:
-    - OpenAI key present -> `openai_realtime`
-    - otherwise, OpenRouter/Gemini presence -> `gemini_flash`
-  - OpenRouter-first setup for realtime intent/canvas:
-    - set `OPENROUTER_API_KEY` (sufficient for realtime via OpenRouter `responses` with chat fallback)
-    - if both OpenRouter and Gemini keys are present, realtime `gemini_flash` prefers OpenRouter transport
-    - to force direct Gemini transport, leave `OPENROUTER_API_KEY` unset and set `GEMINI_API_KEY` or `GOOGLE_API_KEY`
-    - Brood normalizes common aliases to provider IDs (e.g., `gemini-3.0-flash` -> `google/gemini-3-flash-preview` on OpenRouter)
-    - `gemini_flash` hard-errors if a non-Gemini realtime model override is configured
-  - if you force `openai_realtime`, you must provide `OPENAI_API_KEY` (or backup key)
-  - optional OpenRouter endpoint headers: `OPENROUTER_API_BASE`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_X_TITLE`
-- Flux provider auth:
-  - preferred: `BFL_API_KEY` or `FLUX_API_KEY` (native BFL endpoint)
-  - OpenRouter-first fallback: `OPENROUTER_API_KEY` (uses OpenRouter image generation path)
-
-## Optional Configuration
-
-Enable local memory:
-
-```bash
-export BROOD_MEMORY=1
-```
-
-Pricing/latency override file:
-
-- `~/.brood/pricing_overrides.json`
-
-## Troubleshooting (Desktop)
-
-- **App failed to initialize: Importing binding name ... not found**  
-  Repo expects Tauri v1 APIs (`@tauri-apps/api` v1 and v1 CLI).
-- **Images not rendering**  
-  Tauri must allow file access under `$HOME/**` (see `desktop/src-tauri/tauri.conf.json`).
-- **Import Photos fails or does nothing**  
-  Selected files must be inside allowed FS scope (`$HOME/**` by default).
-
-## Project Layout
-
-- `rust_engine/` native engine and CLI (default desktop runtime)
-- `desktop/` Tauri desktop app
-- `desktop/test/` desktop JS tests
-- `docs/param_forge_reference.md` Param Forge reference notes
-- `docs/desktop.md` desktop UI notes (abilities + workflows)
-
-## Agent / LLM Entrypoints
-
-- `llms.txt` high-signal entrypoints and task routing
-- `llms-full.txt` expanded inlined context
-- `agent-intake.json` optional Agent Intake Protocol (AIP) contract
-- `docs/agent_intake_status.md` deterministic intake health/fallback cue
-- `docs/agent_intake_roundtrip.sample.json` compact request/response/next-action bundle
-
-## Parallel Agent Worktrees
-
-- If multiple Codex/LLM agents are running at the same time, develop each feature in its own git worktree.
-- Do not run concurrent agents in the same worktree/branch.
-- Example: `git worktree add ../brood-my-feature -b feature/my-feature`
+Each run writes artifacts under `~/brood_runs/run-*` (for example: `events.jsonl`, `mother_trace.jsonl`, generation payloads, and receipts).
 
 ## License
 
