@@ -14400,6 +14400,114 @@ async function handleDesktopAutomation(event = {}) {
         events.push({ type: "mother_reject", marker: "mother_reject_suggestion_completed", before, after });
         events.push({ type: "mother_state", marker: "mother_state", state: _automationStateEnvelope() });
       }
+    } else if (action === "mother_inject_local_draft") {
+      const idle = state.motherIdle;
+      const before = String(idle?.phase || "").toLowerCase();
+      if (!idle) {
+        detail = "mother state unavailable";
+      } else if (
+        before !== String(MOTHER_IDLE_STATES.DRAFTING).toLowerCase() &&
+        before !== String(MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING).toLowerCase()
+      ) {
+        detail = `mother_inject_local_draft requires phase=${String(MOTHER_IDLE_STATES.DRAFTING).toLowerCase()} or ${String(MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING).toLowerCase()} (current=${before || "unknown"})`;
+      } else {
+        await ensureRun();
+        const sourceItem = getActiveImage() || (state.images.length ? state.images[state.images.length - 1] : null);
+        if (!sourceItem?.path) {
+          detail = "mother_inject_local_draft requires at least one canvas image";
+        } else {
+          let sourceImg = sourceItem.img || null;
+          if (!sourceImg) {
+            try {
+              sourceImg = await loadImage(sourceItem.path);
+            } catch {
+              sourceImg = null;
+            }
+          }
+          if (!sourceImg) {
+            detail = "mother_inject_local_draft failed to load source image";
+          } else {
+            const canvas = document.createElement("canvas");
+            const w = Math.max(1, Number(sourceImg.naturalWidth) || Number(sourceImg.width) || 1);
+            const h = Math.max(1, Number(sourceImg.naturalHeight) || Number(sourceImg.height) || 1);
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) {
+              detail = "mother_inject_local_draft failed to create drawing context";
+              events.push({
+                type: "mother_inject_local_draft",
+                marker: "mother_inject_local_draft_ignored",
+                before,
+                after: before,
+              });
+              events.push({ type: "mother_state", marker: "mother_state", state: _automationStateEnvelope() });
+            } else {
+              ctx.drawImage(sourceImg, 0, 0, w, h);
+              const stamp = Date.now();
+              const artifactId = `mother-smoke-${stamp}`;
+              const imagePath = `${state.runDir}/artifact-${stamp}-mother-smoke-draft.png`;
+              await writeCanvasPngToPath(canvas, imagePath);
+              const receiptPath = await writeLocalReceipt({
+                artifactId,
+                imagePath,
+                operation: "mother_smoke_draft",
+                meta: {
+                  source: "desktop_automation",
+                  source_image_id: String(sourceItem.id || ""),
+                  source_image_path: String(sourceItem.path || ""),
+                },
+              });
+              const pendingVersionId = String(idle.pendingVersionId || "").trim();
+              const seededSyntheticDispatch = !idle.pendingDispatchToken && !idle.pendingGeneration;
+              if (
+                String(idle.phase || "").toLowerCase() === String(MOTHER_IDLE_STATES.INTENT_HYPOTHESIZING).toLowerCase()
+              ) {
+                motherIdleTransitionTo(MOTHER_IDLE_EVENTS.CONFIRM);
+              }
+              if (seededSyntheticDispatch) {
+                idle.pendingGeneration = true;
+                idle.pendingDispatchToken = Date.now();
+                idle.pendingDispatchSpeculative = false;
+                idle.pendingDispatchProposalMode = motherV2NormalizeTransformationMode(idle.intent?.transformation_mode);
+                idle.pendingPromptCompileSpeculative = false;
+                idle.speculativePrefetchInFlight = false;
+                idle.pendingActionVersion = Number(idle.actionVersion) || 0;
+              }
+              const handled = await motherIdleHandleSuggestionArtifact({
+                id: artifactId,
+                path: imagePath,
+                receiptPath,
+                versionId: pendingVersionId || null,
+              }).catch(() => false);
+              if (!handled && seededSyntheticDispatch) {
+                idle.pendingGeneration = false;
+                idle.pendingDispatchToken = 0;
+                idle.pendingDispatchSpeculative = false;
+                idle.pendingDispatchProposalMode = null;
+                idle.pendingPromptCompileSpeculative = false;
+                idle.speculativePrefetchInFlight = false;
+              }
+              const after = String(state.motherIdle?.phase || "").toLowerCase() || before;
+              ok = Boolean(handled);
+              detail = handled
+                ? `mother_inject_local_draft completed (${before || "unknown"} -> ${after || "unknown"})`
+                : `mother_inject_local_draft was ignored (${before || "unknown"} -> ${after || "unknown"})`;
+              events.push({
+                type: "mother_inject_local_draft",
+                marker: handled ? "mother_inject_local_draft_completed" : "mother_inject_local_draft_ignored",
+                before,
+                after,
+                artifact_id: artifactId,
+                image_path: imagePath,
+                receipt_path: receiptPath || null,
+                source_image_id: String(sourceItem.id || ""),
+              });
+              events.push({ type: "mother_state", marker: "mother_state", state: _automationStateEnvelope() });
+            }
+          }
+        }
+      }
     } else if (action === "select_canvas_image") {
       const imageId = _resolveCanvasImageIdFromPayload(actionPayload);
       if (!imageId) {

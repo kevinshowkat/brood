@@ -19,6 +19,9 @@ test("Install funnel telemetry: first proposal lifecycle events are wired", () =
 
 test("Install funnel telemetry: smoke automation import and local ability paths are wired", () => {
   assert.match(app, /else if \(action === "import_local_paths"\)/);
+  assert.match(app, /else if \(action === "mother_inject_local_draft"\)/);
+  assert.match(app, /seededSyntheticDispatch = !idle\.pendingDispatchToken && !idle\.pendingGeneration/);
+  assert.match(app, /motherIdleTransitionTo\(MOTHER_IDLE_EVENTS\.CONFIRM\)/);
   assert.match(app, /importLocalPathsAtCanvasPoint\(/);
   assert.match(app, /reason: "import_local_paths"/);
   assert.match(app, /maybeEmitFirstAbilitySuccess\(\{\s*source: "local_artifact"/);

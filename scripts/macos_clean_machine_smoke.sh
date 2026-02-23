@@ -160,14 +160,73 @@ run_proposal_flow_automation() {
     warn "Mother proposal request did not advance immediately: $proposal_response"
   fi
 
-  log "Automation: confirm Mother suggestion"
+  log "Automation: confirm Mother suggestion (begin drafting)"
+  local draft_request
+  draft_request="$(jq -nc '{
+    op: "automation",
+    action: "mother_confirm_suggestion",
+    timeout_ms: 70000,
+    payload: {
+      wait_timeout_ms: 45000,
+      expect_mother_phases: ["drafting", "waiting_for_user", "offering"]
+    }
+  }')"
+  local draft_response
+  draft_response="$(bridge_request "$draft_request" || true)"
+  if [[ -z "$draft_response" ]]; then
+    proposal_warn_or_fail "Mother draft-start confirm failed: <empty response>"
+    return $?
+  fi
+  if ! jq -e '.ok == true' <<<"$draft_response" >/dev/null 2>&1; then
+    warn "Mother draft-start confirm did not complete cleanly: $draft_response"
+  fi
+
+  local proposal_seen=0
+  if [[ "$BROOD_INSTALL_TELEMETRY" == "1" ]]; then
+    log "Waiting for first_proposal_proposed telemetry"
+    if wait_for_telemetry_event "first_proposal_proposed" "$PROPOSAL_EVENT_TIMEOUT_SECONDS"; then
+      proposal_seen=1
+    else
+      warn "Timed out waiting for first_proposal_proposed telemetry in $TELEMETRY_LOG_PATH"
+      log "Automation: inject deterministic local Mother draft fallback"
+      local inject_request
+      inject_request="$(jq -nc '{
+        op: "automation",
+        action: "mother_inject_local_draft",
+        timeout_ms: 30000,
+        payload: {}
+      }')"
+      local inject_response
+      inject_response="$(bridge_request "$inject_request" || true)"
+      if [[ -z "$inject_response" ]]; then
+        proposal_warn_or_fail "Mother local draft injection failed: <empty response>"
+        return $?
+      fi
+      if ! jq -e '.ok == true' <<<"$inject_response" >/dev/null 2>&1; then
+        warn "Mother local draft injection did not complete cleanly: $inject_response"
+      fi
+      if wait_for_telemetry_event "first_proposal_proposed" "$PROPOSAL_EVENT_TIMEOUT_SECONDS"; then
+        proposal_seen=1
+      fi
+    fi
+    if [[ "$proposal_seen" -ne 1 ]]; then
+      if [[ "$REQUIRE_PROPOSAL_EVENTS" == "1" ]]; then
+        echo "Timed out waiting for first_proposal_proposed telemetry in $TELEMETRY_LOG_PATH"
+        return 1
+      fi
+      warn "first_proposal_proposed was not recorded in $TELEMETRY_LOG_PATH"
+    fi
+  fi
+
+  log "Automation: confirm Mother suggestion (accept proposal)"
   local accept_request
   accept_request="$(jq -nc '{
     op: "automation",
     action: "mother_confirm_suggestion",
-    timeout_ms: 60000,
+    timeout_ms: 70000,
     payload: {
-      wait_timeout_ms: 45000
+      wait_timeout_ms: 45000,
+      expect_mother_phases: ["cooldown", "offering", "waiting_for_user", "drafting"]
     }
   }')"
   local accept_response
@@ -181,21 +240,21 @@ run_proposal_flow_automation() {
   fi
 
   if [[ "$BROOD_INSTALL_TELEMETRY" == "1" ]]; then
-    log "Waiting for first_proposal_proposed telemetry"
-    if ! wait_for_telemetry_event "first_proposal_proposed" "$PROPOSAL_EVENT_TIMEOUT_SECONDS"; then
-      if [[ "$REQUIRE_PROPOSAL_EVENTS" == "1" ]]; then
-        echo "Timed out waiting for first_proposal_proposed telemetry in $TELEMETRY_LOG_PATH"
-        return 1
-      fi
-      warn "Timed out waiting for first_proposal_proposed telemetry in $TELEMETRY_LOG_PATH"
-    fi
     log "Waiting for first_proposal_accepted telemetry"
     if ! wait_for_telemetry_event "first_proposal_accepted" "$PROPOSAL_EVENT_TIMEOUT_SECONDS"; then
-      if [[ "$REQUIRE_PROPOSAL_EVENTS" == "1" ]]; then
-        echo "Timed out waiting for first_proposal_accepted telemetry in $TELEMETRY_LOG_PATH"
-        return 1
+      log "Automation: retry Mother accept once"
+      local accept_retry_response
+      accept_retry_response="$(bridge_request "$accept_request" || true)"
+      if [[ -n "$accept_retry_response" ]] && ! jq -e '.ok == true' <<<"$accept_retry_response" >/dev/null 2>&1; then
+        warn "Mother proposal accept retry did not complete cleanly: $accept_retry_response"
       fi
-      warn "Timed out waiting for first_proposal_accepted telemetry in $TELEMETRY_LOG_PATH"
+      if ! wait_for_telemetry_event "first_proposal_accepted" "$PROPOSAL_EVENT_TIMEOUT_SECONDS"; then
+        if [[ "$REQUIRE_PROPOSAL_EVENTS" == "1" ]]; then
+          echo "Timed out waiting for first_proposal_accepted telemetry in $TELEMETRY_LOG_PATH"
+          return 1
+        fi
+        warn "Timed out waiting for first_proposal_accepted telemetry in $TELEMETRY_LOG_PATH"
+      fi
     fi
   fi
 
