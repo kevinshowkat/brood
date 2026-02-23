@@ -44,7 +44,7 @@ import {
   motherIdleUsesRealtimeVisual,
 } from "./mother_idle_flow.js";
 import { DESKTOP_EVENT_TYPES, PTY_COMMANDS, quoteForPtyArg as quoteForPtyArgUtil } from "./canvas_protocol.js";
-import { appendTextWithFallback } from "./jsonl_io.js";
+import { appendJsonlWithFallback, appendTextWithFallback } from "./jsonl_io.js";
 import {
   classifyIntentIconsRouting as classifyIntentIconsRoutingUtil,
   intentIconsPayloadChecksum as intentIconsPayloadChecksumUtil,
@@ -104,6 +104,14 @@ const AESTHETIC_ONBOARDING_COMPLETED_KEY = "brood.aestheticOnboarding.completed.
 const AESTHETIC_ONBOARDING_PROFILE_KEY = "brood.aestheticOnboarding.profile.v1";
 const OPENROUTER_ONBOARDING_COMPLETED_KEY = "brood.openrouterOnboarding.completed.v1";
 const OPENROUTER_ONBOARDING_PROFILE_KEY = "brood.openrouterOnboarding.profile.v1";
+const INSTALL_TELEMETRY_OPT_IN_KEY = "brood.installTelemetry.optIn.v1";
+const INSTALL_TELEMETRY_INSTALL_ID_KEY = "brood.installTelemetry.installId.v1";
+const INSTALL_TELEMETRY_ENDPOINT_KEY = "brood.installTelemetry.endpoint.v1";
+const INSTALL_TELEMETRY_CONFIG_FILE = "install_telemetry_config.json";
+const INSTALL_TELEMETRY_LOG_FILE = "install_events.jsonl";
+const INSTALL_TELEMETRY_SCHEMA_VERSION = "brood.install_telemetry.v1";
+const INSTALL_TELEMETRY_LOG_MAX_BYTES = 5 * 1024 * 1024;
+const INSTALL_TELEMETRY_UPLOAD_TIMEOUT_MS = 4500;
 const OPENROUTER_ONBOARDING_SUCCESS_AUTO_CLOSE_MS = 1500;
 const OPENROUTER_OAUTH_WAITING_STATE_DELAY_MS = 900;
 const AESTHETIC_ONBOARDING_PROMPT =
@@ -497,6 +505,8 @@ const els = {
   promptRepeatFullToggle: document.getElementById("prompt-repeat-full-toggle"),
   promptBenchmarkReadout: document.getElementById("prompt-benchmark-readout"),
   promptBenchmarkReset: document.getElementById("prompt-benchmark-reset"),
+  installTelemetryToggle: document.getElementById("install-telemetry-toggle"),
+  installTelemetryStatus: document.getElementById("install-telemetry-status"),
   aestheticOnboardingStatus: document.getElementById("aesthetic-onboarding-status"),
   aestheticOnboardingOpen: document.getElementById("aesthetic-onboarding-open"),
   aestheticOnboardingClear: document.getElementById("aesthetic-onboarding-clear"),
@@ -1158,7 +1168,344 @@ const settings = {
   })(),
   promptStrategyMode: normalizePromptStrategyMode(localStorage.getItem(PROMPT_STRATEGY_MODE_KEY) || "auto"),
   promptRepeatFull: localStorage.getItem(PROMPT_REPEAT_FULL_KEY) === "1",
+  installTelemetryOptIn: localStorage.getItem(INSTALL_TELEMETRY_OPT_IN_KEY) === "1",
 };
+
+function telemetryRandomHex(bytes = 10) {
+  const size = Math.max(4, Math.floor(Number(bytes) || 10));
+  try {
+    const arr = new Uint8Array(size);
+    crypto.getRandomValues(arr);
+    return Array.from(arr, (value) => value.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`;
+  }
+}
+
+function telemetryMakeId(prefix = "id") {
+  return `${String(prefix || "id").trim() || "id"}-${Date.now().toString(36)}-${telemetryRandomHex(6)}`;
+}
+
+function telemetryNormalizeBool(raw, fallback = false) {
+  if (typeof raw === "boolean") return raw;
+  const lower = String(raw || "").trim().toLowerCase();
+  if (lower === "1" || lower === "true" || lower === "yes" || lower === "on") return true;
+  if (lower === "0" || lower === "false" || lower === "no" || lower === "off") return false;
+  return Boolean(fallback);
+}
+
+function telemetryClassifyErrorCode(err) {
+  const text = String(err?.message || err || "").toLowerCase();
+  if (!text) return "unknown_error";
+  if (text.includes("timeout")) return "timeout";
+  if (text.includes("network")) return "network_error";
+  if (text.includes("lock")) return "backend_lock_error";
+  if (text.includes("missing")) return "missing_prerequisite";
+  if (text.includes("denied") || text.includes("permission")) return "permission_denied";
+  return "unknown_error";
+}
+
+function telemetrySanitizeFields(fields = {}) {
+  const out = {};
+  for (const [key, value] of Object.entries(fields || {})) {
+    if (!key) continue;
+    if (value === null) {
+      out[key] = null;
+      continue;
+    }
+    if (typeof value === "boolean") {
+      out[key] = value;
+      continue;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      out[key] = value;
+      continue;
+    }
+    if (typeof value === "string") {
+      out[key] = value.slice(0, 200);
+    }
+  }
+  return out;
+}
+
+async function resolveInstallTelemetryPaths() {
+  const telemetry = state.installTelemetry;
+  if (telemetry.configPath && telemetry.logPath) return true;
+  try {
+    const home = await homeDir();
+    if (!home) return false;
+    const broodDir = await join(home, ".brood");
+    await createDir(broodDir, { recursive: true }).catch(() => {});
+    telemetry.configPath = await join(broodDir, INSTALL_TELEMETRY_CONFIG_FILE);
+    telemetry.logPath = await join(broodDir, INSTALL_TELEMETRY_LOG_FILE);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function loadInstallTelemetryDiskConfig() {
+  const telemetry = state.installTelemetry;
+  if (!telemetry.configPath) return null;
+  try {
+    const present = await exists(telemetry.configPath).catch(() => false);
+    if (!present) return null;
+    const raw = await readTextFile(telemetry.configPath);
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function persistInstallTelemetryDiskConfig() {
+  const telemetry = state.installTelemetry;
+  if (!telemetry.configPath) return;
+  try {
+    const payload = {
+      version: 1,
+      opt_in: Boolean(telemetry.optIn),
+      force_opt_in: Boolean(telemetry.forceOptIn),
+      install_id: telemetry.installId ? String(telemetry.installId) : null,
+      endpoint: telemetry.endpoint ? String(telemetry.endpoint) : null,
+      updated_at: new Date().toISOString(),
+    };
+    await writeTextFile(telemetry.configPath, JSON.stringify(payload, null, 2));
+  } catch {
+    // ignore config write failures
+  }
+}
+
+function renderInstallTelemetryStatus() {
+  if (els.installTelemetryToggle) {
+    els.installTelemetryToggle.checked = Boolean(state.installTelemetry?.optIn);
+  }
+  if (!els.installTelemetryStatus) return;
+  const telemetry = state.installTelemetry;
+  if (!telemetry.ready) {
+    els.installTelemetryStatus.textContent = "Initializing…";
+    return;
+  }
+  if (!telemetry.optIn) {
+    els.installTelemetryStatus.textContent = "Off (opt-in required).";
+    return;
+  }
+  const id = String(telemetry.installId || "").trim();
+  const shortId = id ? id.slice(0, 14) : "unset";
+  const channel = String(telemetry.runtimeChannel || "unknown");
+  const endpoint = telemetry.endpoint ? "on" : "off";
+  els.installTelemetryStatus.textContent = `On\nInstall: ${shortId}\nChannel: ${channel}\nUpload endpoint: ${endpoint}`;
+}
+
+async function maybeUploadInstallTelemetry(payload) {
+  const telemetry = state.installTelemetry;
+  const endpoint = String(telemetry.endpoint || "").trim();
+  if (!endpoint) return;
+  let timer = null;
+  let controller = null;
+  try {
+    if (typeof AbortController === "function") {
+      controller = new AbortController();
+      timer = setTimeout(() => controller.abort(), INSTALL_TELEMETRY_UPLOAD_TIMEOUT_MS);
+    }
+    await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller?.signal,
+      keepalive: true,
+    });
+  } catch {
+    // ignore upload errors; local log remains source of truth
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function emitInstallTelemetryReady(eventName, fields = {}) {
+  const telemetry = state.installTelemetry;
+  if (!telemetry.ready || !telemetry.optIn) return Promise.resolve(false);
+  const event = String(eventName || "").trim();
+  if (!event) return Promise.resolve(false);
+  const payload = {
+    schema: INSTALL_TELEMETRY_SCHEMA_VERSION,
+    event,
+    at: new Date().toISOString(),
+    at_ms: Date.now(),
+    install_id: String(telemetry.installId || ""),
+    session_id: String(telemetry.sessionId || ""),
+    runtime_channel: String(telemetry.runtimeChannel || ""),
+    app_version: String(telemetry.appVersion || ""),
+    ...telemetrySanitizeFields(fields),
+  };
+  telemetry.writeQueue = telemetry.writeQueue
+    .then(async () => {
+      let wrote = false;
+      try {
+        await invoke("append_install_telemetry_event", {
+          payload,
+          maxBytes: INSTALL_TELEMETRY_LOG_MAX_BYTES,
+        });
+        wrote = true;
+      } catch {
+        wrote = false;
+      }
+      if (!wrote && telemetry.logPath) {
+        await appendJsonlWithFallback(telemetry.logPath, payload, {
+          maxBytes: INSTALL_TELEMETRY_LOG_MAX_BYTES,
+        });
+      }
+      await maybeUploadInstallTelemetry(payload);
+    })
+    .catch(() => {});
+  return telemetry.writeQueue.then(() => true);
+}
+
+async function ensureInstallTelemetryReady() {
+  const telemetry = state.installTelemetry;
+  if (telemetry.ready) return true;
+  if (telemetry.initPromise) return telemetry.initPromise;
+  telemetry.initPromise = (async () => {
+    let defaults = null;
+    try {
+      defaults = await invoke("get_install_telemetry_defaults");
+    } catch {
+      defaults = null;
+    }
+    await resolveInstallTelemetryPaths();
+    const disk = await loadInstallTelemetryDiskConfig();
+    const lsOptRaw = localStorage.getItem(INSTALL_TELEMETRY_OPT_IN_KEY);
+    const lsInstallId = String(localStorage.getItem(INSTALL_TELEMETRY_INSTALL_ID_KEY) || "").trim();
+    const lsEndpoint = String(localStorage.getItem(INSTALL_TELEMETRY_ENDPOINT_KEY) || "").trim();
+    const forceOptIn = telemetryNormalizeBool(disk?.force_opt_in, telemetryNormalizeBool(defaults?.force_opt_in, false));
+    telemetry.forceOptIn = Boolean(forceOptIn);
+
+    const optIn = telemetry.forceOptIn
+      ? true
+      : lsOptRaw !== null
+        ? telemetryNormalizeBool(lsOptRaw, false)
+        : telemetryNormalizeBool(
+            disk?.opt_in,
+            telemetryNormalizeBool(defaults?.opt_in_default, settings.installTelemetryOptIn)
+          );
+    telemetry.optIn = Boolean(optIn);
+    settings.installTelemetryOptIn = telemetry.optIn;
+    localStorage.setItem(INSTALL_TELEMETRY_OPT_IN_KEY, telemetry.optIn ? "1" : "0");
+
+    let installId = lsInstallId || String(telemetry.installId || "").trim();
+    if (!installId) installId = String(disk?.install_id || "").trim();
+    if (!installId) installId = String(defaults?.install_id || "").trim();
+    if (!installId) installId = telemetryMakeId("install");
+    telemetry.installId = installId;
+    localStorage.setItem(INSTALL_TELEMETRY_INSTALL_ID_KEY, installId);
+
+    let endpoint = lsEndpoint;
+    if (!endpoint) endpoint = String(disk?.endpoint || "").trim();
+    if (!endpoint) endpoint = String(defaults?.endpoint || "").trim();
+    telemetry.endpoint = endpoint;
+    if (endpoint) localStorage.setItem(INSTALL_TELEMETRY_ENDPOINT_KEY, endpoint);
+
+    const runtimeChannel = String(defaults?.runtime_channel || "").trim();
+    if (runtimeChannel) telemetry.runtimeChannel = runtimeChannel;
+    telemetry.appVersion = String(defaults?.app_version || "").trim();
+    telemetry.sessionId = telemetryMakeId("session");
+    telemetry.ready = true;
+    await persistInstallTelemetryDiskConfig();
+    renderInstallTelemetryStatus();
+    if (!telemetry.appFirstLaunchLogged && telemetry.optIn) {
+      telemetry.appFirstLaunchLogged = true;
+      await emitInstallTelemetryReady("app_first_launch", {
+        source: "boot",
+      });
+    }
+    return true;
+  })()
+    .catch((err) => {
+      console.warn("install telemetry init failed", err);
+      telemetry.ready = false;
+      renderInstallTelemetryStatus();
+      return false;
+    })
+    .finally(() => {
+      telemetry.initPromise = null;
+    });
+  return telemetry.initPromise;
+}
+
+async function emitInstallTelemetry(eventName, fields = {}) {
+  const ready = await ensureInstallTelemetryReady();
+  if (!ready) return false;
+  return emitInstallTelemetryReady(eventName, fields);
+}
+
+async function setInstallTelemetryOptIn(enabled, { source = "settings" } = {}) {
+  const ready = await ensureInstallTelemetryReady();
+  if (!ready) return false;
+  const telemetry = state.installTelemetry;
+  const next = Boolean(enabled);
+  if (telemetry.forceOptIn && !next) {
+    renderInstallTelemetryStatus();
+    return false;
+  }
+  const changed = telemetry.optIn !== next;
+  telemetry.optIn = next;
+  settings.installTelemetryOptIn = next;
+  localStorage.setItem(INSTALL_TELEMETRY_OPT_IN_KEY, next ? "1" : "0");
+  await persistInstallTelemetryDiskConfig();
+  renderInstallTelemetryStatus();
+  if (next && !telemetry.appFirstLaunchLogged) {
+    telemetry.appFirstLaunchLogged = true;
+    await emitInstallTelemetryReady("app_first_launch", {
+      source: "opt_in_toggle",
+    });
+  }
+  if (next && changed) {
+    await emitInstallTelemetryReady("telemetry_opt_in", {
+      source: String(source || "settings"),
+    });
+  }
+  return changed;
+}
+
+function emitInstallTelemetryAsync(eventName, fields = {}) {
+  emitInstallTelemetry(eventName, fields).catch(() => {});
+}
+
+function maybeEmitFirstImportOk(fields = {}) {
+  const telemetry = state.installTelemetry;
+  if (telemetry.firstImportLogged) return;
+  telemetry.firstImportLogged = true;
+  emitInstallTelemetryAsync("first_import_ok", fields);
+}
+
+function maybeEmitFirstAbilitySuccess(fields = {}) {
+  const telemetry = state.installTelemetry;
+  if (telemetry.firstAbilitySuccessLogged) return;
+  telemetry.firstAbilitySuccessLogged = true;
+  emitInstallTelemetryAsync("first_ability_success", fields);
+}
+
+function maybeEmitFirstAbilityFail(fields = {}) {
+  const telemetry = state.installTelemetry;
+  if (telemetry.firstAbilitySuccessLogged || telemetry.firstAbilityFailureLogged) return;
+  telemetry.firstAbilityFailureLogged = true;
+  emitInstallTelemetryAsync("first_ability_fail", fields);
+}
+
+function maybeEmitFirstProposalProposed(fields = {}) {
+  const telemetry = state.installTelemetry;
+  if (telemetry.firstProposalProposedLogged) return;
+  telemetry.firstProposalProposedLogged = true;
+  emitInstallTelemetryAsync("first_proposal_proposed", fields);
+}
+
+function maybeEmitFirstProposalAccepted(fields = {}) {
+  const telemetry = state.installTelemetry;
+  if (telemetry.firstProposalAcceptedLogged) return;
+  telemetry.firstProposalAcceptedLogged = true;
+  emitInstallTelemetryAsync("first_proposal_accepted", fields);
+}
 
 function defaultAestheticAnswers() {
   return {
@@ -1216,6 +1563,29 @@ const state = {
   eventsByteOffset: 0,
   eventsTail: "",
   eventsDecoder: new TextDecoder("utf-8"),
+  installTelemetry: {
+    ready: false,
+    initPromise: null,
+    optIn: Boolean(settings.installTelemetryOptIn),
+    installId: String(localStorage.getItem(INSTALL_TELEMETRY_INSTALL_ID_KEY) || "").trim(),
+    sessionId: "",
+    runtimeChannel: import.meta.env?.DEV ? "source_cloner" : "dmg_installer",
+    appVersion: "",
+    configPath: "",
+    logPath: "",
+    forceOptIn: false,
+    endpoint: String(localStorage.getItem(INSTALL_TELEMETRY_ENDPOINT_KEY) || "").trim(),
+    appFirstLaunchLogged: false,
+    providerCheckLogged: false,
+    firstRunLogged: false,
+    firstImportLogged: false,
+    firstAbilitySuccessLogged: false,
+    firstAbilityFailureLogged: false,
+    firstProposalProposedLogged: false,
+    firstProposalAcceptedLogged: false,
+    runSequence: 0,
+    writeQueue: Promise.resolve(),
+  },
   images: [],
   imagesById: new Map(),
   imagePaletteSeed: 0, // monotonic assignment for rotating Google palette accents
@@ -7800,6 +8170,17 @@ function saveOpenRouterOnboardingCompletion({
   saveOpenRouterOnboardingProfile(profile);
   markOpenRouterOnboardingCompleted(true);
   renderOpenRouterOnboardingStatus();
+  if (profile.skipped) {
+    emitInstallTelemetryAsync("onboarding_skipped", {
+      onboarding: "openrouter",
+      source: String(profile.source || "unknown"),
+    });
+  } else if (successFinal) {
+    emitInstallTelemetryAsync("onboarding_completed", {
+      onboarding: "openrouter",
+      source: String(profile.source || "unknown"),
+    });
+  }
 }
 
 function openOpenRouterOnboardingModal({ force = false, source = "first_run" } = {}) {
@@ -7820,6 +8201,10 @@ function openOpenRouterOnboardingModal({ force = false, source = "first_run" } =
   els.openrouterOnboardingModal.classList.remove("hidden");
   playOpenRouterOnboardingMediaVideo({ restart: true });
   renderOpenRouterOnboardingStep({ animate: false });
+  emitInstallTelemetryAsync("onboarding_started", {
+    onboarding: "openrouter",
+    source: String(source || "unknown"),
+  });
   return true;
 }
 
@@ -7883,13 +8268,21 @@ async function finalizeOpenRouterOnboardingSuccess({ keyMasked = null, envPath =
   clearOpenRouterOnboardingOauthProgressTimer();
   openRouterOnboardingSetStatus({ message: "Finishing setup…" });
   renderOpenRouterOnboardingStep({ animate: false });
-  await refreshKeyStatus().catch(() => {});
+  await refreshKeyStatus({ reason: "openrouter_onboarding" }).catch(() => {});
   if (!state?.keyStatus?.openrouter) {
+    emitInstallTelemetryAsync("provider_check_fail", {
+      provider: "openrouter",
+      reason: "post_save_detection_missing",
+    });
     throw new Error("OPENROUTER_API_KEY was saved but key detection did not confirm yet.");
   }
   await restartEngineAfterOpenRouterKeySave();
-  await refreshKeyStatus().catch(() => {});
+  await refreshKeyStatus({ reason: "openrouter_onboarding" }).catch(() => {});
   if (!state?.keyStatus?.openrouter) {
+    emitInstallTelemetryAsync("provider_check_fail", {
+      provider: "openrouter",
+      reason: "post_restart_detection_missing",
+    });
     throw new Error("OPENROUTER_API_KEY saved, but post-restart key detection is still unavailable.");
   }
   openrouterOnboardingState.keyMasked = keyMasked ? String(keyMasked) : null;
@@ -7906,6 +8299,10 @@ async function finalizeOpenRouterOnboardingSuccess({ keyMasked = null, envPath =
   showToast("OpenRouter key connected.", "tip", 2200);
   renderOpenRouterOnboardingStep({ animate: true });
   scheduleOpenRouterOnboardingAutoClose();
+  emitInstallTelemetryAsync("provider_check_ok", {
+    provider: "openrouter",
+    reason: "onboarding_success",
+  });
 }
 
 async function submitOpenRouterOnboardingKey() {
@@ -8364,6 +8761,10 @@ function openAestheticOnboardingModal({ force = false, source = "first_run" } = 
   aestheticOnboardingState.applying = false;
   els.aestheticOnboardingModal.classList.remove("hidden");
   renderAestheticOnboardingStep({ animate: false });
+  emitInstallTelemetryAsync("onboarding_started", {
+    onboarding: "aesthetic",
+    source: String(source || "unknown"),
+  });
   return true;
 }
 
@@ -8387,6 +8788,17 @@ function saveAestheticOnboardingCompletion({
   saveAestheticOnboardingProfile(profile);
   markAestheticOnboardingCompleted(true);
   renderAestheticOnboardingStatus();
+  if (profile.skipped) {
+    emitInstallTelemetryAsync("onboarding_skipped", {
+      onboarding: "aesthetic",
+      source: String(profile.source || "unknown"),
+    });
+  } else {
+    emitInstallTelemetryAsync("onboarding_completed", {
+      onboarding: "aesthetic",
+      source: String(profile.source || "unknown"),
+    });
+  }
 }
 
 async function applyImageModelSetting(nextValue, { announce = false } = {}) {
@@ -9399,17 +9811,41 @@ function renderKeyStatus(status) {
   els.keyStatus.textContent = lines.join("\n");
 }
 
-async function refreshKeyStatus() {
+async function refreshKeyStatus({ reason = "general" } = {}) {
   try {
     const status = await invoke("get_key_status");
     state.keyStatus = status;
     renderKeyStatus(status);
+    const telemetry = state.installTelemetry;
+    const shouldEmit = reason !== "general" || !telemetry.providerCheckLogged;
+    if (shouldEmit) {
+      if (reason === "general") telemetry.providerCheckLogged = true;
+      emitInstallTelemetryAsync("provider_check_ok", {
+        provider: "key_status",
+        reason: String(reason || "general"),
+        openrouter: Boolean(status?.openrouter),
+        openai: Boolean(status?.openai),
+        gemini: Boolean(status?.gemini),
+        realtime_ready: Boolean(status?.realtime_ready),
+      });
+    }
   } catch (err) {
     console.warn("Key detection failed:", err);
     state.keyStatus = null;
     renderKeyStatus(null);
+    const telemetry = state.installTelemetry;
+    const shouldEmit = reason !== "general" || !telemetry.providerCheckLogged;
+    if (shouldEmit) {
+      if (reason === "general") telemetry.providerCheckLogged = true;
+      emitInstallTelemetryAsync("provider_check_fail", {
+        provider: "key_status",
+        reason: String(reason || "general"),
+        error_code: telemetryClassifyErrorCode(err),
+      });
+    }
   } finally {
     renderOpenRouterOnboardingStatus();
+    renderInstallTelemetryStatus();
     updateAlwaysOnVisionReadout();
   }
 }
@@ -12331,6 +12767,11 @@ async function startMotherTakeover() {
       motherIdleTransitionTo(MOTHER_IDLE_EVENTS.CONFIRM);
       motherIdleTransitionTo(MOTHER_IDLE_EVENTS.DRAFT_READY);
       setStatus("Mother: proposal ready.");
+      maybeEmitFirstProposalProposed({
+        source: "mother_prefetched_draft_ready",
+        proposal_mode: motherV2NormalizeTransformationMode(idle.intent?.transformation_mode),
+        proposal_confidence: Number(idle.intent?.confidence) || 0,
+      });
       renderMotherReadout();
       requestRender();
       return;
@@ -12356,11 +12797,21 @@ async function startMotherTakeover() {
       showToast("Mother is still drafting.", "tip", 1400);
       return;
     }
+    maybeEmitFirstProposalAccepted({
+      source: "mother_confirm_waiting_for_user",
+      proposal_mode: motherV2NormalizeTransformationMode(idle.intent?.transformation_mode),
+      proposal_confidence: Number(idle.intent?.confidence) || 0,
+    });
     motherV2ForcePhase(MOTHER_IDLE_STATES.OFFERING, "confirm_waiting_for_user");
     await motherV2CommitSelectedDraft();
     return;
   }
   if (phase === MOTHER_IDLE_STATES.OFFERING) {
+    maybeEmitFirstProposalAccepted({
+      source: "mother_confirm_offering",
+      proposal_mode: motherV2NormalizeTransformationMode(idle.intent?.transformation_mode),
+      proposal_confidence: Number(idle.intent?.confidence) || 0,
+    });
     await motherV2CommitSelectedDraft();
     return;
   }
@@ -14015,6 +14466,74 @@ async function handleDesktopAutomation(event = {}) {
         ok = true;
         detail = result.detail;
         if (result.event) events.push(result.event);
+        events.push({ type: "canvas_state", marker: "canvas_state", state: _automationStateEnvelope() });
+      }
+    } else if (action === "import_local_paths") {
+      const rawPaths = Array.isArray(actionPayload.paths)
+        ? actionPayload.paths
+        : actionPayload.path
+          ? [actionPayload.path]
+          : [];
+      const normalizedPaths = rawPaths
+        .map((value) => normalizeLocalFsPath(typeof value === "string" ? value : ""))
+        .filter(Boolean);
+      if (!normalizedPaths.length) {
+        detail = "import_local_paths requires payload.path or payload.paths";
+      } else {
+        const defaultPoint = _defaultImportPointCss();
+        const pointCssRaw =
+          actionPayload.point_css && typeof actionPayload.point_css === "object"
+            ? actionPayload.point_css
+            : {};
+        const pointCss = {
+          x: _coerceAutomationPayloadNumber(
+            pointCssRaw.x,
+            _coerceAutomationPayloadNumber(actionPayload.x, defaultPoint.x)
+          ),
+          y: _coerceAutomationPayloadNumber(
+            pointCssRaw.y,
+            _coerceAutomationPayloadNumber(actionPayload.y, defaultPoint.y)
+          ),
+        };
+        const source = String(actionPayload.source || "automation").trim() || "automation";
+        const rawPrefix = String(actionPayload.id_prefix || "autoimport")
+          .trim()
+          .toLowerCase();
+        const idPrefix = rawPrefix.replace(/[^a-z0-9_-]+/g, "").slice(0, 24) || "autoimport";
+        const importResult = await importLocalPathsAtCanvasPoint(
+          normalizedPaths,
+          canvasScreenCssToWorldCss(pointCss),
+          {
+            source,
+            idPrefix,
+            enforceIntentLimit: actionPayload.enforce_intent_limit !== false,
+            focusImported: actionPayload.focus_imported !== false,
+          }
+        );
+        const importedCount = Math.max(0, Number(importResult?.ok) || 0);
+        const failedCount = Math.max(0, Number(importResult?.failed) || 0);
+        const importedIds = Array.isArray(importResult?.importedIds)
+          ? importResult.importedIds.map((value) => String(value || "").trim()).filter(Boolean)
+          : [];
+        if (importedIds.length) {
+          await setActiveImage(importedIds[0], {
+            source: "automation",
+            reason: "import_local_paths",
+            actor: "system",
+          }).catch(() => {});
+        }
+        ok = importedCount > 0;
+        detail = ok
+          ? `import_local_paths imported=${importedCount} failed=${failedCount}`
+          : `import_local_paths imported=0 failed=${failedCount}`;
+        events.push({
+          type: "import_local_paths",
+          marker: ok ? "import_local_paths_completed" : "import_local_paths_failed",
+          imported_count: importedCount,
+          failed_count: failedCount,
+          imported_ids: importedIds,
+          source,
+        });
         events.push({ type: "canvas_state", marker: "canvas_state", state: _automationStateEnvelope() });
       }
     } else if (action === "action_grid") {
@@ -19396,6 +19915,11 @@ async function motherIdleHandleSuggestionArtifact({ id, path, receiptPath = null
   }
   motherIdleTransitionTo(MOTHER_IDLE_EVENTS.DRAFT_READY);
   setStatus("Mother: proposal ready.");
+  maybeEmitFirstProposalProposed({
+    source: "mother_draft_ready",
+    proposal_mode: motherV2NormalizeTransformationMode(idle.intent?.transformation_mode),
+    proposal_confidence: Number(idle.intent?.confidence) || 0,
+  });
   renderMotherReadout();
   appendMotherTraceLog({
     kind: "draft_ready",
@@ -25046,6 +25570,12 @@ async function importLocalPathsAtCanvasPoint(
     return { ok, failed, importedIds };
   }
 
+  maybeEmitFirstImportOk({
+    source: String(source || "unknown"),
+    imported_count: ok,
+    failed_count: failed,
+  });
+
   const motherIdle = state.motherIdle;
   if (motherIdle) {
     motherIdle.lastUploadCompletedAt = Date.now();
@@ -25740,6 +26270,11 @@ async function saveCanvasAsArtifact(
       { select: Boolean(select) }
     );
   }
+  maybeEmitFirstAbilitySuccess({
+    source: "local_artifact",
+    route: replaceActive ? "replace" : "add_image",
+    action: String(label || operation || "local"),
+  });
   setStatus("Engine: ready");
 }
 
@@ -26208,6 +26743,12 @@ async function createRun() {
   announceRunTransition("new", previous);
   const payload = await invoke("create_run_dir");
   state.runDir = payload.run_dir;
+  state.installTelemetry.runSequence = (Number(state.installTelemetry.runSequence) || 0) + 1;
+  emitInstallTelemetryAsync("new_run_created", {
+    run_sequence: Number(state.installTelemetry.runSequence) || 1,
+    source: "new_run",
+  });
+  state.installTelemetry.firstRunLogged = true;
   state.eventsPath = payload.events_path;
   state.eventsByteOffset = 0;
   state.eventsTail = "";
@@ -26809,7 +27350,14 @@ async function handleEventLegacy(event) {
         finishCreateLayersFailure(`Create Layers failed (${err?.message || err}).`);
         return true;
       });
-      if (handledCreateLayers) return;
+      if (handledCreateLayers) {
+        maybeEmitFirstAbilitySuccess({
+          source: "artifact_created",
+          route: "create_layers",
+          action: String(state.lastAction || "unknown"),
+        });
+        return;
+      }
     }
     const idleForCancel = state.motherIdle;
     const noForegroundPendingForCancel =
@@ -26894,6 +27442,11 @@ async function handleEventLegacy(event) {
         return false;
       });
       if (handled) {
+        maybeEmitFirstAbilitySuccess({
+          source: "artifact_created",
+          route: "mother_suggestion",
+          action: String(state.lastAction || "Mother Suggestion"),
+        });
         state.expectingArtifacts = false;
         restoreEngineImageModelIfNeeded();
         setStatus("Engine: ready");
@@ -27171,6 +27724,11 @@ async function handleEventLegacy(event) {
         await removeImageFromCanvas(imageId).catch(() => {});
       }
     }
+    maybeEmitFirstAbilitySuccess({
+      source: "artifact_created",
+      route: pending?.targetId ? "replace" : "add_image",
+      action: String(timelineAction || state.lastAction || "unknown"),
+    });
     state.expectingArtifacts = false;
     restoreEngineImageModelIfNeeded();
     setStatus("Engine: ready");
@@ -27258,6 +27816,11 @@ async function handleEventLegacy(event) {
         }
       }
       const msg = event.error ? `Mother suggestion failed: ${event.error}` : "Mother suggestion failed.";
+      maybeEmitFirstAbilityFail({
+        source: "generation_failed",
+        route: "mother_suggestion",
+        error_code: telemetryClassifyErrorCode(event.error || msg),
+      });
       setStatus(`Engine: ${msg}`, true);
       state.expectingArtifacts = false;
       restoreEngineImageModelIfNeeded();
@@ -27293,6 +27856,11 @@ async function handleEventLegacy(event) {
       const msg = event.error
         ? `Create Layers failed while generating ${stageLabel}: ${event.error}`
         : `Create Layers failed while generating ${stageLabel}.`;
+      maybeEmitFirstAbilityFail({
+        source: "generation_failed",
+        route: "create_layers",
+        error_code: telemetryClassifyErrorCode(event.error || msg),
+      });
       finishCreateLayersFailure(msg);
       return;
     }
@@ -27345,6 +27913,11 @@ async function handleEventLegacy(event) {
       return;
     }
     const msg = event.error ? `Generation failed: ${event.error}` : "Generation failed.";
+    maybeEmitFirstAbilityFail({
+      source: "generation_failed",
+      route: "general",
+      error_code: telemetryClassifyErrorCode(event.error || msg),
+    });
     setStatus(`Engine: ${msg}`, true);
     showToast(msg, "error", 3200);
     state.expectingArtifacts = false;
@@ -33272,6 +33845,8 @@ function installUi() {
       refreshKeyStatus().catch(() => {});
       refreshPortraitsDirReadout().catch(() => {});
       renderAestheticOnboardingStatus();
+      ensureInstallTelemetryReady().catch(() => {});
+      renderInstallTelemetryStatus();
       promptBenchmarkRenderReadout();
     });
   }
@@ -33528,6 +34103,21 @@ function installUi() {
       setStatus("Engine: memory applies next run");
     });
   }
+  if (els.installTelemetryToggle) {
+    els.installTelemetryToggle.checked = Boolean(settings.installTelemetryOptIn);
+    els.installTelemetryToggle.addEventListener("change", () => {
+      bumpInteraction();
+      const next = Boolean(els.installTelemetryToggle.checked);
+      setInstallTelemetryOptIn(next, { source: "settings_toggle" })
+        .then(() => {
+          renderInstallTelemetryStatus();
+        })
+        .catch(() => {
+          renderInstallTelemetryStatus();
+        });
+    });
+  }
+  renderInstallTelemetryStatus();
   if (els.alwaysOnVisionToggle) {
     els.alwaysOnVisionToggle.checked = settings.alwaysOnVision;
     if (!ALWAYS_ON_CANVAS_CONTEXT_ENABLED) {
@@ -34074,6 +34664,8 @@ async function boot() {
 
   setStatus("Engine: booting…");
   setRunInfo("No run");
+  ensureInstallTelemetryReady().catch(() => {});
+  renderInstallTelemetryStatus();
   ensureIntentUiIconsLoaded().catch(() => {});
   refreshKeyStatus().catch(() => {});
   updateAlwaysOnVisionReadout();

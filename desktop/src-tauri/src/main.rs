@@ -1192,6 +1192,137 @@ fn get_key_status() -> Result<serde_json::Value, String> {
     }))
 }
 
+fn env_flag(raw: Option<&String>) -> Option<bool> {
+    let value = raw?.trim().to_ascii_lowercase();
+    match value.as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn runtime_channel_label() -> &'static str {
+    if find_repo_root_best_effort().is_some() {
+        "source_cloner"
+    } else {
+        "dmg_installer"
+    }
+}
+
+fn install_telemetry_log_path_from_env() -> Result<PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME env is unavailable".to_string())?;
+    let trimmed = home.trim();
+    if trimmed.is_empty() {
+        return Err("HOME env is empty".to_string());
+    }
+    Ok(PathBuf::from(trimmed)
+        .join(".brood")
+        .join("install_events.jsonl"))
+}
+
+fn install_telemetry_config_path_from_env() -> Result<PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME env is unavailable".to_string())?;
+    let trimmed = home.trim();
+    if trimmed.is_empty() {
+        return Err("HOME env is empty".to_string());
+    }
+    Ok(PathBuf::from(trimmed)
+        .join(".brood")
+        .join("install_telemetry_config.json"))
+}
+
+#[tauri::command]
+fn get_install_telemetry_defaults() -> Result<serde_json::Value, String> {
+    let vars = collect_brood_env_snapshot();
+    let disk_config = install_telemetry_config_path_from_env()
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
+    let disk_opt_in = disk_config
+        .as_ref()
+        .and_then(|row| row.get("opt_in"))
+        .and_then(|row| row.as_bool());
+    let disk_force_opt_in = disk_config
+        .as_ref()
+        .and_then(|row| row.get("force_opt_in"))
+        .and_then(|row| row.as_bool());
+    let disk_endpoint = disk_config
+        .as_ref()
+        .and_then(|row| row.get("endpoint"))
+        .and_then(|row| row.as_str())
+        .map(|row| row.trim().to_string())
+        .filter(|row| !row.is_empty());
+    let disk_install_id = disk_config
+        .as_ref()
+        .and_then(|row| row.get("install_id"))
+        .and_then(|row| row.as_str())
+        .map(|row| row.trim().to_string())
+        .filter(|row| !row.is_empty());
+
+    let opt_in = env_flag(vars.get("BROOD_INSTALL_TELEMETRY"))
+        .or_else(|| env_flag(vars.get("BROOD_TELEMETRY")))
+        .or(disk_opt_in)
+        .unwrap_or(false);
+    let force_opt_in = env_flag(vars.get("BROOD_INSTALL_TELEMETRY_FORCE"))
+        .or(disk_force_opt_in)
+        .unwrap_or(false);
+    let endpoint = vars
+        .get("BROOD_INSTALL_TELEMETRY_ENDPOINT")
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .or(disk_endpoint);
+    let install_id = vars
+        .get("BROOD_INSTALL_TELEMETRY_INSTALL_ID")
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .or(disk_install_id);
+
+    Ok(serde_json::json!({
+        "opt_in_default": opt_in,
+        "force_opt_in": force_opt_in,
+        "endpoint": endpoint,
+        "install_id": install_id,
+        "runtime_channel": runtime_channel_label(),
+        "app_version": env!("CARGO_PKG_VERSION"),
+    }))
+}
+
+#[tauri::command]
+fn append_install_telemetry_event(
+    payload: serde_json::Value,
+    max_bytes: Option<u64>,
+) -> Result<(), String> {
+    let log_path = install_telemetry_log_path_from_env()?;
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let mut line = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+    line.push('\n');
+
+    let default_limit = 5_u64 * 1024 * 1024;
+    let limit_u64 = max_bytes
+        .unwrap_or(default_limit)
+        .clamp(8 * 1024, 50 * 1024 * 1024);
+    let limit = usize::try_from(limit_u64).unwrap_or(default_limit as usize);
+
+    let existing = std::fs::read_to_string(&log_path).unwrap_or_default();
+    let mut merged = existing;
+    merged.push_str(&line);
+    if merged.len() > limit {
+        let start = merged.len().saturating_sub(limit);
+        let bytes = &merged.as_bytes()[start..];
+        let mut trimmed = String::from_utf8_lossy(bytes).to_string();
+        if let Some(first_newline) = trimmed.find('\n') {
+            trimmed = trimmed[first_newline + 1..].to_string();
+        }
+        merged = trimmed;
+    }
+
+    std::fs::write(log_path, merged).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 fn get_pty_status(state: State<'_, SharedPtyState>) -> Result<serde_json::Value, String> {
     let mut state = state.inner().lock().map_err(|_| "Lock poisoned")?;
@@ -1583,6 +1714,8 @@ fn main() {
             get_repo_root,
             export_run,
             get_key_status,
+            get_install_telemetry_defaults,
+            append_install_telemetry_event,
             save_openrouter_api_key,
             openrouter_oauth_pkce_sign_in,
             get_pty_status,

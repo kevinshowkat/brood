@@ -1,0 +1,65 @@
+name: install-funnel
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 9 * * *"
+  release:
+    types: [published]
+
+jobs:
+  macos-install-funnel:
+    runs-on: macos-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            desktop/src-tauri -> target
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build macOS DMG (unsigned)
+        working-directory: desktop
+        run: npm run tauri build -- --bundles dmg --ci -v
+
+      - name: Run clean-machine install smoke
+        env:
+          BROOD_INSTALL_TELEMETRY: "1"
+          BROOD_INSTALL_TELEMETRY_RESET: "1"
+          AUTOMATE_PROPOSAL_FLOW: "1"
+          REQUIRE_PROPOSAL_EVENTS: "0"
+          PROPOSAL_EVENT_TIMEOUT_SECONDS: "60"
+          WAIT_SECONDS: "45"
+          POST_LAUNCH_WAIT_SECONDS: "35"
+        run: scripts/macos_clean_machine_smoke.sh
+
+      - name: Collect install funnel
+        run: scripts/collect_install_funnel.sh artifacts/install_funnel.json
+
+      - name: Print install funnel
+        run: cat artifacts/install_funnel.json
+
+      - name: Upload install funnel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-funnel-${{ github.run_id }}
+          path: artifacts/install_funnel.json
+          if-no-files-found: error
