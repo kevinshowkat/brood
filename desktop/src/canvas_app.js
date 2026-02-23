@@ -17793,9 +17793,10 @@ async function motherV2ResolveGenerationImagePayload(imagePayload = null, { yiel
     const skewXDeg = normalizeFreeformSkewDeg(record?.transform?.skewXDeg);
     const userResized = record?.rect?.autoAspect === false;
     const canTransform = i < MOTHER_V2_DISPATCH_TRANSFORM_EXPORT_LIMIT;
+    const shouldTransform = canTransform && motherV2ShouldExportGenerationImageTransform(record);
     let dispatchPath = sourcePath;
     let transformed = false;
-    if (canTransform) {
+    if (shouldTransform) {
       if (yieldForUi) await motherV2YieldForUiFrame();
       const exportedPath = await motherV2ExportGenerationImageTransform(record).catch(() => null);
       if (exportedPath) {

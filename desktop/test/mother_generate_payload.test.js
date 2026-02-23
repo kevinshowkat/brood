@@ -86,6 +86,13 @@ test("Mother generation transform export dedupes in-flight writes by signature",
   assert.match(exportFn[0], /motherDispatchTransformExportInFlight\.delete\(signature\)/);
 });
 
+test("Mother payload resolve yields UI frame only for records requiring transform export", () => {
+  const resolveFn = app.match(/async function motherV2ResolveGenerationImagePayload[\s\S]*?\n}/);
+  assert.ok(resolveFn, "motherV2ResolveGenerationImagePayload function not found");
+  assert.match(resolveFn[0], /const shouldTransform = canTransform && motherV2ShouldExportGenerationImageTransform\(record\);/);
+  assert.match(resolveFn[0], /if \(shouldTransform\) \{\s*if \(yieldForUi\) await motherV2YieldForUiFrame\(\);/);
+});
+
 test("Mother model context envelopes normalize SDXL provider key to replicate", () => {
   const fnMatch = app.match(/function motherV2BuildModelContextEnvelopes[\s\S]*?\n}\n\nfunction motherV2BuildGeminiContextPacket/);
   assert.ok(fnMatch, "motherV2BuildModelContextEnvelopes block not found");
