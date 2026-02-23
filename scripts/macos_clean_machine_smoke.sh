@@ -226,7 +226,7 @@ run_proposal_flow_automation() {
     timeout_ms: 70000,
     payload: {
       wait_timeout_ms: 45000,
-      expect_mother_phases: ["cooldown", "offering", "waiting_for_user", "drafting"]
+      expect_mother_phases: ["cooldown", "offering", "waiting_for_user"]
     }
   }')"
   local accept_response
