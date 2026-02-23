@@ -1,6 +1,9 @@
 name: install-funnel
 
 on:
+  push:
+    branches:
+      - chore/install-funnel-automation
   workflow_dispatch:
   schedule:
     - cron: "15 9 * * *"
