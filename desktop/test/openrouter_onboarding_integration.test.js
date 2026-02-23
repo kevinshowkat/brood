@@ -34,7 +34,7 @@ test("OpenRouter onboarding: first-run auto open and settings relaunch are wired
 test("OpenRouter onboarding: key save invokes backend persistence + verification", () => {
   assert.match(app, /invoke\(\"save_openrouter_api_key\", \{ apiKey \}\)/);
   assert.match(app, /invoke\(\"openrouter_oauth_pkce_sign_in\", \{ timeoutSeconds: 240 \}\)/);
-  assert.match(app, /await refreshKeyStatus\(\)\.catch\(\(\) => \{\}\);/);
+  assert.match(app, /await refreshKeyStatus\(\{\s*reason:\s*"openrouter_onboarding"\s*\}\)\.catch\(\(\) => \{\}\);/);
   assert.match(app, /if \(!state\?\.keyStatus\?\.openrouter\)/);
   assert.match(app, /function restartEngineAfterOpenRouterKeySave\(\)/);
   assert.match(app, /async function signInWithOpenRouterOauthPkce\(\)/);
