@@ -50,6 +50,7 @@ test("Mother dispatch primes image FX immediately and rolls back when dispatch d
   assert.match(primeMatch[0], /state\.pendingMotherDraft = \{/);
   assert.match(primeMatch[0], /sourceIds:\s*motherV2RoleContextIds\(\)/);
   assert.match(primeMatch[0], /setImageFxActive\(true,\s*"Mother Draft"\)/);
+  assert.match(primeMatch[0], /motherV2ScheduleGenerationPayloadWarmup\(\{ reason: "draft_fx_primed", immediate: true \}\)/);
 
   const fnMatch = app.match(/async function motherIdleDispatchGeneration\(\)[\s\S]*?return true;\n}/);
   assert.ok(fnMatch, "motherIdleDispatchGeneration function not found");
@@ -60,6 +61,36 @@ test("Mother dispatch primes image FX immediately and rolls back when dispatch d
   assert.match(fnText, /if \(!ok\) \{\s*motherIdleRollbackDraftFxIfDispatchUnarmed\(\);/);
   assert.match(fnText, /const dispatchArmed = Boolean\(idle\.pendingPromptCompile \|\| idle\.pendingGeneration \|\| idle\.pendingDispatchToken\);/);
   assert.match(fnText, /if \(!dispatchArmed\) \{\s*motherIdleRollbackDraftFxIfDispatchUnarmed\(\);/);
+});
+
+test("Mother dispatch prewarms and reuses generation payload transform exports to avoid accept-time hitch", () => {
+  const warmHelpers = app.match(
+    /function motherV2GenerationPayloadSignature[\s\S]*?async function motherV2PrimeGenerationPayloadWarmup[\s\S]*?\n}/
+  );
+  assert.ok(warmHelpers, "generation payload warmup helpers not found");
+  assert.match(warmHelpers[0], /motherV2ResolveGenerationImagePayload\(collected,\s*\{ yieldForUi: true \}\)/);
+  assert.match(warmHelpers[0], /motherDispatchPayloadWarmState\.signature === signature/);
+
+  const dispatchFn = app.match(/async function motherV2DispatchViaImagePayload[\s\S]*?return true;\n}/);
+  assert.ok(dispatchFn, "motherV2DispatchViaImagePayload function not found");
+  assert.match(dispatchFn[0], /const payloadSignature = motherV2GenerationPayloadSignature\(collectedImagePayload\);/);
+  assert.match(dispatchFn[0], /motherDispatchPayloadWarmState\.signature === payloadSignature/);
+  assert.match(dispatchFn[0], /motherV2ResolveGenerationImagePayload\(collectedImagePayload,\s*\{ yieldForUi: true \}\)/);
+});
+
+test("Mother generation transform export dedupes in-flight writes by signature", () => {
+  const exportFn = app.match(/async function motherV2ExportGenerationImageTransform[\s\S]*?\n}/);
+  assert.ok(exportFn, "motherV2ExportGenerationImageTransform function not found");
+  assert.match(exportFn[0], /const inFlight = motherDispatchTransformExportInFlight\.get\(signature\);/);
+  assert.match(exportFn[0], /motherDispatchTransformExportInFlight\.set\(signature,\s*exportPromise\);/);
+  assert.match(exportFn[0], /motherDispatchTransformExportInFlight\.delete\(signature\)/);
+});
+
+test("Mother payload resolve yields UI frame only for records requiring transform export", () => {
+  const resolveFn = app.match(/async function motherV2ResolveGenerationImagePayload[\s\S]*?\n}/);
+  assert.ok(resolveFn, "motherV2ResolveGenerationImagePayload function not found");
+  assert.match(resolveFn[0], /const shouldTransform = canTransform && motherV2ShouldExportGenerationImageTransform\(record\);/);
+  assert.match(resolveFn[0], /if \(shouldTransform\) \{\s*if \(yieldForUi\) await motherV2YieldForUiFrame\(\);/);
 });
 
 test("Mother model context envelopes normalize SDXL provider key to replicate", () => {

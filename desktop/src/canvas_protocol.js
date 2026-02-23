@@ -38,6 +38,7 @@ export const PTY_COMMANDS = Object.freeze({
   INTENT_RT_STOP: "/intent_rt_stop",
   INTENT_RT: "/intent_rt",
   INTENT_RT_MOTHER_START: "/intent_rt_mother_start",
+  INTENT_RT_MOTHER_STOP: "/intent_rt_mother_stop",
   INTENT_RT_MOTHER: "/intent_rt_mother",
   INTENT_INFER: "/intent_infer",
   PROMPT_COMPILE: "/prompt_compile",

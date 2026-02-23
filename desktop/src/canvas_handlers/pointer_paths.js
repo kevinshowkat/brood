@@ -2,6 +2,7 @@ export const POINTER_KINDS = Object.freeze({
   FREEFORM_IMPORT: "freeform_import",
   FREEFORM_WHEEL: "freeform_wheel",
   MOTHER_ROLE_DRAG: "mother_role_drag",
+  MOTHER_DRAFT_PREVIEW_DRAG: "mother_draft_preview_drag",
   EFFECT_TOKEN_DRAG: "effect_token_drag",
   FREEFORM_RESIZE: "freeform_resize",
   FREEFORM_MOVE: "freeform_move",

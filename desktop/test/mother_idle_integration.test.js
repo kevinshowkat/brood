@@ -35,10 +35,20 @@ test("Canvas app keeps role/effect path guards in finalize pointer flow", () => 
   assert.match(app, /const effectTokenDrag = isEffectTokenPath\(kind\);/);
 });
 
+test("Mother cancel/clear paths stop realtime intent session and trace compile dispatch skips", () => {
+  assert.match(app, /function motherV2StopRealtimeIntentSession\(\)/);
+  assert.match(app, /PTY_COMMANDS\.INTENT_RT_MOTHER_STOP/);
+  assert.match(app, /function motherV2ClearPendingIntentRequest[\s\S]*motherV2StopRealtimeIntentSession\(\);/);
+  assert.match(app, /function motherV2CancelInFlight[\s\S]*motherV2StopRealtimeIntentSession\(\);/);
+  assert.match(app, /kind: "prompt_compiled_dispatch_skipped"/);
+  assert.match(app, /reason: dispatchSkipReason/);
+});
+
 test("Protocol constants keep stable event and command contracts", () => {
   assert.equal(DESKTOP_EVENT_TYPES.INTENT_ICONS, "intent_icons");
   assert.equal(DESKTOP_EVENT_TYPES.ARTIFACT_CREATED, "artifact_created");
   assert.equal(PTY_COMMANDS.INTENT_RT_MOTHER, "/intent_rt_mother");
+  assert.equal(PTY_COMMANDS.INTENT_RT_MOTHER_STOP, "/intent_rt_mother_stop");
   assert.equal(PTY_COMMANDS.CANVAS_CONTEXT_RT_START, "/canvas_context_rt_start");
 });
 
@@ -51,6 +61,7 @@ test("PTY command helpers preserve quoting and newline semantics", () => {
 test("Pointer path helpers classify drag kinds", () => {
   assert.equal(isMotherRolePath(POINTER_KINDS.MOTHER_ROLE_DRAG), true);
   assert.equal(isEffectTokenPath(POINTER_KINDS.EFFECT_TOKEN_DRAG), true);
+  assert.equal(POINTER_KINDS.MOTHER_DRAFT_PREVIEW_DRAG, "mother_draft_preview_drag");
   assert.equal(isPanPath(POINTER_KINDS.SINGLE_PAN), true);
   assert.equal(isPanPath("unknown"), false);
 });
