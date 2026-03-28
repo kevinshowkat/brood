@@ -1,21 +1,37 @@
 # Docs
 
-- Brood is currently a **macOS-only Desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
-- `docs/desktop.md`: how to use the current desktop app (Abilities, HUD, multi-view).
-- `docs/agent_quickstart.md`: practical task-routing examples for coding agents.
-- `docs/agent_intake_status.md`: deterministic intake health/fallback cue for intake-first routing.
-- `docs/agent_intake_roundtrip.sample.json`: compact intake request/response/next-action example bundle.
-- `docs/reference-first-image-editing.md`: positioning and workflow guide for reference-first image editing.
-- `docs/macos-local-private-image-editing.md`: macOS local-first and privacy-oriented deployment model.
-- `docs/benchmark-playbook.md`: reproducible benchmark table + artifact-linking template.
-- `docs/why-brood-matrix.md`: capability-to-outcome matrix for evaluating Brood fit.
-- `docs/visibility-kpis.md`: weekly repository signal metrics and review cadence.
-- `docs/prompt-diet-prd-internal.md`: internal PRD for image-first prompt simplification (move fallback policy from prompt prose into intent/envelope + runtime).
-- `docs/realtime_canvas_user_benefits_story.md`: simplified, slide-ready product narrative (with one-slide visual, value chain, and circular benefit loop).
-- `docs/assets/diagrams/realtime_canvas_intent_generation_flow/`: pre-rendered SVG/PNG exports for sharing the realtime flow diagrams.
-- `docs/assets/diagrams/realtime_canvas_user_benefits_story/`: pre-rendered SVG/PNG exports for the user-benefit value-chain and flywheel visuals.
-- `docs/features/effect-token-runtime/README.md`: Pixi extraction runtime + DNA/Soul effect-token lifecycle and drag/drop pipeline.
-- `docs/visual_prompting_v0.md`: visual prompt serialization (`visual_prompt.json`) and mark/layout semantics.
-- `docs/aesthetic.md`: planned aesthetic-capture workflow (not implemented).
-- `docs/param_forge_reference.md`: Param Forge compatibility notes (historical reference context).
-- `docs/skills/`: Action Grid skill contracts (requirements + intended effect).
+Brood is a **macOS-only desktop app**. There is no web app, and Windows/Linux builds are not supported yet.
+
+## Start here
+
+- `docs/desktop.md`: how to use the app
+- `docs/reference-first-image-editing.md`: core workflow
+- `docs/macos-local-private-image-editing.md`: local storage and privacy notes
+- `docs/brood-fit-guide.md`: quick fit guide
+
+## Product and workflow notes
+
+- `docs/benchmark-playbook.md`: repeatable benchmark checklist
+- `docs/visual_prompting_v0.md`: current visual prompt file format
+- `docs/realtime_canvas_overview.md`: short overview of the realtime canvas flow
+- `docs/aesthetic.md`: placeholder note for a planned feature
+- `docs/param_forge_reference.md`: archived reference notes
+
+## Agent and repo docs
+
+- `docs/agent_quickstart.md`: task routing for coding agents
+- `docs/agent_intake_status.md`: intake health and fallback rules
+- `docs/agent_intake_roundtrip.sample.json`: intake request/response example
+- `docs/aip-1.schema.json`: intake schema
+
+## Feature notes
+
+- `docs/features/`: short notes for shipped or planned features
+- `docs/skills/`: short descriptions of Brood tools
+
+## Extra notes
+
+- `docs/prompt-diet-notes.md`
+- `docs/style-fit-screening-outline.md`
+- `docs/realtime_intent_notes_2026-02-21.md`
+- `docs/realtime_intent_review_prompt.md`

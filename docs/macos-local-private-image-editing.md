@@ -1,39 +1,30 @@
 # macOS Local and Private Image Editing
 
-Brood is a macOS-only desktop app designed for local-first image workflows.
+Brood runs as a desktop app on your Mac.
 
-## Platform Scope
+## Platform
 
-- Supported: macOS desktop (Tauri)
-- Not supported: web app, Windows, Linux
+- Supported: macOS
+- Not supported: web, Windows, Linux
 
-## Local-First Runtime Model
+## What stays on your Mac
 
-- The app runs locally on your Mac.
-- Session artifacts are written under `~/brood_runs/run-*`.
-- API keys are stored locally in `.env` or `~/.brood/.env` based on your setup.
+- the app itself
+- imported file paths
+- run folders under `~/brood_runs/run-*`
+- receipts and event logs
 
-## What Stays Local
+## What can leave your Mac
 
-- Canvas state and session artifacts (`events.jsonl`, payload snapshots, receipts)
-- Imported local file paths and generated output files in run directories
+Only the requests sent to the model providers you choose, based on your keys and settings.
 
-## What Goes To Providers
+## Good practice
 
-Only requests needed for selected model providers (OpenAI, Gemini, Imagen, Flux, etc.), based on your configured keys and runtime settings.
+- Keep a separate run folder for each project.
+- Keep API keys in a local `.env`.
+- Avoid sharing raw run folders unless you mean to share the artifacts inside them.
 
-## Privacy-Oriented Workflow Tips
-
-- Use a dedicated local run directory per project and archive completed runs.
-- Rotate API keys and avoid sharing raw run folders outside your team.
-- Keep automated telemetry opt-in and coarse-grained where possible.
-
-## Operational Checks
-
-- Verify Tauri file scope allows required local paths (`desktop/src-tauri/tauri.conf.json`).
-- Confirm provider routing env vars before running production-sensitive sessions.
-
-## See Also
+## See also
 
 - `README.md`
 - `docs/desktop.md`
