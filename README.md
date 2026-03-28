@@ -1,31 +1,31 @@
-# Brood: Reference-First AI Image Editing for macOS
+# Brood: AI Image Editing From References on macOS
 
 <p align="left">
   <img src="media/features/readme/main_value_prop_v18_labels_20260222.gif" alt="Brood main value demo">
 </p>
 
-Brood helps developers turn existing images into new high-quality variants without prompt writing, while keeping every run reproducible on their Mac.
+Brood is a macOS desktop app that helps you turn existing images into new versions by arranging references on a canvas instead of writing long prompts.
 
 ## How to set up in 5m
 
-- Install the latest macOS app from Releases, open it, and complete the in-app OpenRouter onboarding.
-- Import one or more images to the canvas and arrange/resize them to communicate intent.
-- Let Mother propose the next edit, then confirm, reject, or reroll from the same canvas loop.
+- Download the latest macOS build from [GitHub Releases](https://github.com/kevinshowkat/brood/releases) and finish the in-app OpenRouter setup.
+- Import one or more images onto the canvas.
+- Run a tool or accept a Mother suggestion to make the next edit.
 
 ## Key docs
 
-- Desktop product + workflows: `docs/desktop.md`
-- Reference-first workflow overview: `docs/reference-first-image-editing.md`
-- Local/private model and run data model: `docs/macos-local-private-image-editing.md`
-- Benchmarking and repeatability playbook: `docs/benchmark-playbook.md`
-- Capability-to-outcome matrix: `docs/why-brood-matrix.md`
-- Docs index: `docs/README.md`
-- Agent/dev entrypoints: `llms.txt`
+- `docs/desktop.md`: quick guide to the desktop app
+- `docs/reference-first-image-editing.md`: what the reference-first workflow looks like
+- `docs/macos-local-private-image-editing.md`: local storage and privacy notes
+- `docs/benchmark-playbook.md`: how to compare runs in a repeatable way
+- `docs/brood-fit-guide.md`: quick fit guide for Brood
+- `docs/README.md`: docs index
+- `llms.txt`: agent entrypoints
 
 ## Highlights
 
-### 1) Realtime Canvas Proposals
-Mother watches your on-canvas edits and proposes the next best transformation without requiring typed prompts.
+### 1) Canvas-first editing
+Move, resize, and combine images on the canvas to show what you want.
 
 <p align="left">
   <a href="media/features/readme/realtime_canvas_proposals.gif">
@@ -33,8 +33,8 @@ Mother watches your on-canvas edits and proposes the next best transformation wi
   </a>
 </p>
 
-### 2) Proposal Drafting and Fast Accept/Deploy Loop
-Mother drafts a concrete proposal, then you can accept and deploy in-place with deterministic run artifacts.
+### 2) Suggested next steps
+Mother can look at the current canvas and suggest the next edit.
 
 <p align="left">
   <a href="media/features/readme/proposal_drafting.gif">
@@ -42,8 +42,8 @@ Mother drafts a concrete proposal, then you can accept and deploy in-place with 
   </a>
 </p>
 
-### 3) Live Cost/Token/Queue Telemetry While You Work
-Top-panel telemetry keeps model usage, latency, queue depth, and cost visible as you iterate.
+### 3) Local run history
+Every run saves outputs, receipts, and events in a folder on your Mac.
 
 <p align="left">
   <a href="media/features/readme/top_panel_telemetry.gif">
@@ -53,13 +53,13 @@ Top-panel telemetry keeps model usage, latency, queue depth, and cost visible as
 
 ## Roadmap
 
-- Reduce time-to-first-draft by parallelizing more of Mother's compile + generate path and trimming avoidable queue waits.
-- Expand multi-image operation specs and effect-token workflows to make complex edits more controllable.
-- Increase provider parity and release hardening while keeping artifacts and receipts stable and reproducible.
+- Faster first drafts
+- Better multi-image editing controls
+- More stable provider coverage and release quality
 
 ## Status
 
-Brood is currently a **macOS-only desktop app** (Tauri). There is no web app, and Windows/Linux builds are not supported yet.
+Brood is currently a **macOS-only desktop app** built with Tauri. There is no web app, and Windows/Linux builds are not supported yet.
 
 ## Download (macOS)
 
@@ -77,7 +77,7 @@ Install:
 ./scripts/dev_desktop.sh
 ```
 
-Build desktop app:
+Build the desktop app:
 
 ```bash
 cd desktop
@@ -85,9 +85,9 @@ npm install
 npm run tauri build
 ```
 
-## Local-first run artifacts
+## Local run files
 
-Each run writes artifacts under `~/brood_runs/run-*` (for example: `events.jsonl`, `mother_trace.jsonl`, generation payloads, and receipts).
+Each run writes files under `~/brood_runs/run-*`, including `events.jsonl`, receipts, and output files.
 
 ## License
 

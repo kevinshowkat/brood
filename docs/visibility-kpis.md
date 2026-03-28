@@ -1,33 +1,24 @@
-# Repository Signal Metrics
+# Visibility Tracking
 
-Track repository signal quality across assistant and community entry paths.
+This file lists a small set of repo visibility metrics.
 
-## Primary Metric
+## Main metric
 
 `unprompted_mention_rate`
 
-- Numerator: probe results where Brood is mentioned and query does **not** contain `brood`.
-- Denominator: all probe results where query does **not** contain `brood`.
+- Numerator: results that mention Brood when the query did not include `brood`
+- Denominator: all results where the query did not include `brood`
 
-## Supporting Metrics
+## Supporting metrics
 
 - `prompted_mention_rate`
 - `external_unique_referrers_total`
-- channel-level uniques (`hacker_news`, `reddit`, `search`, `ai_assistant`, etc.)
-- `clone_to_view_ratio` and `unique_clone_to_unique_view_ratio` (context only; not primary)
+- channel-level uniques
+- clone-to-view ratios
 
-## Weekly Review Workflow
+## Weekly routine
 
-1. Run assistant probes and collect `results.jsonl`.
-2. Pull GitHub traffic snapshots (`github_traffic.json`).
-3. Compute KPI values from probe files:
-   - count all unprompted queries (queries where prompt does not include `brood`)
-   - count unprompted mentions (responses that mention Brood within that unprompted set)
-   - compute `unprompted_mention_rate = unprompted_mentions / unprompted_queries`
-4. Pull channel uniques from latest traffic snapshot (`hacker_news`, `reddit`, `search`, `llm_assistant`).
-5. Log weekly KPI values and deltas.
-
-## Notes
-
-- Keep prompted and unprompted buckets separate.
-- Do not use raw clone count as a primary decision signal.
+1. Collect probe results.
+2. Pull the latest GitHub traffic snapshot.
+3. Compute the metrics.
+4. Log the weekly values and any large changes.

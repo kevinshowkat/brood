@@ -1,73 +1,51 @@
 # Releasing Brood (macOS)
 
-This repo ships via GitHub Releases.
+Brood ships through GitHub Releases.
 
-When you push a tag like `v0.1.0`, GitHub Actions will:
-- run a remote macOS **clean-machine smoke install** (build DMG, install, launch)
-- build a universal macOS app bundle
-- stage the native Rust engine binary at `desktop/src-tauri/resources/brood-rs`
-- code sign it (Developer ID Application)
-- notarize it
-- attach the signed/notarized `.dmg` to a draft GitHub Release for that tag
-- when the release is published, update `kevinshowkat/homebrew-brood` cask with the new version + SHA256
+When a tag such as `v0.1.0` is pushed, GitHub Actions:
+- runs the macOS smoke install workflow
+- builds the universal macOS app
+- stages the native Rust engine binary at `desktop/src-tauri/resources/brood-rs`
+- signs and notarizes the app
+- uploads a DMG to a draft GitHub Release
+- updates `kevinshowkat/homebrew-brood` after the release is published
 
-Smoke details:
-- Workflow: `.github/workflows/desktop-clean-machine-smoke.yml`
-- Script: `scripts/macos_clean_machine_smoke.sh`
+## Required repo secrets
 
-## One-Time Setup (GitHub Repo Secrets)
+Set these in the GitHub repository before cutting releases:
 
-Set these secrets in your GitHub repository:
+- `APPLE_CERTIFICATE`
+- `APPLE_CERTIFICATE_PASSWORD`
+- `APPLE_ID`
+- `APPLE_PASSWORD`
+- `APPLE_TEAM_ID`
+- `BROOD_RELEASE_TOKEN`
+- `BROOD_HOMEBREW_TAP_TOKEN`
 
-- `APPLE_CERTIFICATE`: Base64-encoded `.p12` containing your **Developer ID Application** certificate.
-- `APPLE_CERTIFICATE_PASSWORD`: Password for the `.p12`.
-- `APPLE_ID`: Apple ID email used for notarization.
-- `APPLE_PASSWORD`: App-specific password (or notarization password) for `APPLE_ID`.
-- `APPLE_TEAM_ID`: Your Apple Team ID (example: `JU3DQ69K6R`).
-- `BROOD_RELEASE_TOKEN` (recommended): PAT used for GitHub Release create/upload calls in `publish.yml`.
-  - Use a token with repo contents write access (`repo` scope for classic PAT, or equivalent fine-grained permission).
-  - If omitted, workflow falls back to the default workflow token.
-- `BROOD_HOMEBREW_TAP_TOKEN`: PAT used by `.github/workflows/update-homebrew-tap.yml` to push cask updates to `kevinshowkat/homebrew-brood`.
-  - For a fine-grained PAT: grant `Contents: Read and write` on `kevinshowkat/homebrew-brood`.
-  - Classic PAT with `repo` scope also works.
+## Release steps
 
-Notes:
-- The workflow imports the certificate into a temporary build keychain and auto-detects the `Developer ID Application` identity to use.
-- Release staging signs `resources/brood-rs` with hardened runtime + secure timestamp before notarization.
-- The workflow enforces `tag == v${tauri.conf.json package.version}` to avoid accidental mismatches.
-
-## Cut A Release
-
-1. Update versions (must match):
-   - `desktop/package.json` `version`
-   - `desktop/src-tauri/tauri.conf.json` `package.version`
-   - `desktop/src-tauri/Cargo.toml` `[package].version`
+1. Update the version in:
+   - `desktop/package.json`
+   - `desktop/src-tauri/tauri.conf.json`
+   - `desktop/src-tauri/Cargo.toml`
 2. Update `CHANGELOG.md`.
-3. Commit the changes.
-4. Tag and push:
+3. Commit the release changes.
+4. Create and push a tag:
    - `git tag vX.Y.Z`
    - `git push origin vX.Y.Z`
 5. Wait for the `publish` workflow to finish.
-6. Publish the draft release on GitHub (or change `releaseDraft` to `false` in the workflow once you're confident).
-7. After publishing, verify `update-homebrew-tap` succeeded and that `homebrew-brood/Casks/brood.rb` was bumped.
+6. Publish the draft release on GitHub.
+7. Confirm the Homebrew tap update completed.
 
-## Optional: Disposable Remote Mac Snapshot Run
+## Checks
 
-If you use a cloud Mac provider, keep one machine snapshot in a clean state and run:
+- The release workflow expects the tag to match the desktop app version.
+- `main` requires the `smoke-install` status check.
+- The smoke workflow lives in `.github/workflows/desktop-clean-machine-smoke.yml`.
 
-```bash
-git clone <repo-url>
-cd brood
-npm --prefix desktop ci
-npm --prefix desktop run tauri build -- --bundles dmg --ci -v
-scripts/macos_clean_machine_smoke.sh
-```
+## Troubleshooting
 
-Then discard/revert the snapshot. This gives repeatable install confidence without using multiple physical Macs.
-
-## Notarization Troubleshooting
-
-If notarization fails with messages referencing `Contents/Resources/resources/brood-rs` (unsigned, missing timestamp, or no hardened runtime), confirm:
-- `APPLE_SIGNING_IDENTITY` is detected in the workflow.
-- `scripts/stage_rust_engine_binary.sh` ran during `beforeBuildCommand`.
-- The release is built from a commit that includes the signing step for staged `brood-rs`.
+If notarization fails for `resources/brood-rs`, confirm:
+- the signing identity was detected
+- `scripts/stage_rust_engine_binary.sh` ran
+- the release commit includes the binary signing step

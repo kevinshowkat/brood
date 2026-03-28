@@ -1,39 +1,31 @@
 # Reference-First Image Editing
 
-Brood is built for reference-first image editing: you start from real images, not long prompts.
+Brood starts from images, not from long text prompts.
 
-## Who This Is For
-
-- Developers shipping image workflows inside products
-- Creative technologists running fast concept/variant loops
-- Teams that need consistent brand variants from existing assets
-
-## Core Job To Be Done
-
-Turn existing brand/reference images into many high-quality creative variants quickly, without prompt engineering.
-
-## How It Works In Brood
+## Typical flow
 
 1. Import one or more reference images.
-2. Arrange, resize, and select to express intent on canvas.
-3. Use abilities (`Combine`, `Swap DNA`, `Bridge`, `Extract DNA`, `Soul Leech`) or accept Mother proposals.
-4. Keep or reject results; iterate from committed outputs.
+2. Move, resize, and select them on the canvas.
+3. Run a tool or accept a Mother suggestion.
+4. Keep the result or keep iterating from it.
 
-## Why Reference-First Matters
+## Why this matters
 
-- Better control: image relationships are explicit (target/reference/selection state).
-- Faster iteration: intent comes from canvas actions, not repeated prompt rewrites.
-- Better reproducibility: run artifacts and events are stored per session.
+- The images on the canvas show intent directly.
+- Multi-image work stays easier to control.
+- Each run saves receipts and events for later review.
 
-## Reproducibility Artifacts
+## Saved run files
 
-Each run writes to `~/brood_runs/run-*` with:
+Each run folder under `~/brood_runs/run-*` can include:
 
 - `events.jsonl`
-- payload snapshots (`mother_intent_infer-*.json`, `mother_prompt_compile-*.json`, `mother_generate-*.json`)
+- `mother_intent_infer-*.json`
+- `mother_prompt_compile-*.json`
+- `mother_generate-*.json`
 - `receipt-*.json`
 
-## See Also
+## See also
 
 - `docs/desktop.md`
 - `docs/benchmark-playbook.md`
