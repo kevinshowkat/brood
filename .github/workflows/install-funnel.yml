@@ -12,12 +12,12 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Setup node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: lts/*
           cache: npm
@@ -37,8 +37,7 @@ jobs:
         run: npm ci
 
       - name: Build macOS DMG (unsigned)
-        working-directory: desktop
-        run: npm run tauri build -- --bundles dmg --ci -v
+        run: scripts/ci_build_desktop_dmg.sh --ci -v
 
       - name: Run clean-machine install smoke
         env:
@@ -58,7 +57,7 @@ jobs:
         run: cat artifacts/install_funnel.json
 
       - name: Upload install funnel artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: install-funnel-${{ github.run_id }}
           path: artifacts/install_funnel.json

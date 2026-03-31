@@ -12,7 +12,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -53,7 +53,7 @@ jobs:
 
       - name: Setup node
         if: steps.changes.outputs.should_run == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: lts/*
           cache: npm
@@ -77,8 +77,7 @@ jobs:
 
       - name: Build macOS DMG (unsigned smoke build)
         if: steps.changes.outputs.should_run == 'true'
-        working-directory: desktop
-        run: npm run tauri build -- --bundles dmg --ci -v
+        run: scripts/ci_build_desktop_dmg.sh --ci -v
 
       - name: Run clean-machine install smoke
         if: steps.changes.outputs.should_run == 'true'
